@@ -218,11 +218,11 @@ export default function ContactsPage() {
         <Card className="mb-4">
           <CardContent className="flex flex-wrap items-end gap-3 p-4">
             <div className="space-y-1">
-              <Label>Bulk tag / وسم جماعي</Label>
+              <Label>{t('وسم جماعي')}</Label>
               <Input value={bulkTag} onChange={(event) => setBulkTag(event.target.value)} placeholder="priority-customer" />
             </div>
             <div className="w-56 space-y-1">
-              <Label>Assign / تعيين</Label>
+              <Label>{t('تعيين')}</Label>
               <Select value={bulkAssigneeId} onValueChange={setBulkAssigneeId}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -291,7 +291,7 @@ export default function ContactsPage() {
                 </TableRow>
               ))}
               {!loading && contacts.length === 0 && (
-                <TableRow><TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">No contacts / لا توجد جهات اتصال</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">{t('لا توجد جهات اتصال')}</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -305,7 +305,7 @@ export default function ContactsPage() {
       <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle className="text-sm">Contact details / تفاصيل جهة الاتصال</DialogTitle>
+            <DialogTitle className="text-sm">{t('تفاصيل جهة الاتصال')}</DialogTitle>
           </DialogHeader>
           {selected && (
             <div className="grid max-h-[70vh] gap-3 overflow-y-auto md:grid-cols-2">

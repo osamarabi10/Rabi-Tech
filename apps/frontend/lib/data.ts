@@ -841,3 +841,57 @@ export async function saveAutoReply(
 export async function deleteAutoReply(kind: AutoReplyKind): Promise<void> {
   await api.delete(`/api/templates/auto-replies/${kind}`);
 }
+
+/** Plan entitlements as published in the backend's plans.ts. */
+export type PlanEntitlements = {
+  code: string;
+  name: string;
+  monthlyPriceCents: number;
+  monthlyActiveContactsLimit: number | null;
+  monthlyOutboundMessagesLimit: number | null;
+  monthlyCampaignSendsLimit: number | null;
+  customFieldsLimit: number | null;
+  usersLimit: number | null;
+  autoProvisionGateway: boolean;
+  customDomain: boolean;
+  whiteLabel: boolean;
+};
+
+export type BillingSummary = {
+  plan: { code: string; name: string; monthlyPriceCents: number };
+  entitlements: PlanEntitlements;
+  subscription: {
+    status: string;
+    planCode: string;
+    currentPeriodEnd: string | null;
+    provider: string;
+  } | null;
+  organization: {
+    id: string;
+    name: string;
+    status: string;
+    tier: string;
+    downgradeGraceEndsAt: string | null;
+    downgradeGraceReason: string | null;
+  };
+  seats: { used: number; limit: number | null; remaining: number | null; atLimit: boolean };
+  usage: CurrentUsage;
+  invoices: Array<{
+    id: string;
+    status: string;
+    amountDueCents: number;
+    amountPaidCents: number;
+    currency: string;
+    hostedInvoiceUrl: string | null;
+    createdAt: string;
+    paidAt: string | null;
+  }>;
+  plans: Array<{ code: string; name: string; monthlyPriceCents: number }>;
+  /** Non-empty means enforced quotas no longer match the named plan. */
+  quotaDrift: Array<{ metric: string; planAllows: number | null; enforced: number | null }>;
+};
+
+export async function fetchBillingSummary(): Promise<BillingSummary> {
+  const { data } = await api.get('/api/billing/summary');
+  return data;
+}

@@ -5,7 +5,7 @@ import { prisma } from '../../prisma';
 import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { queueGatewayAction } from '../../workers/gateway-provisioning.queue';
 import logger from '../../lib/logger';
-import { getMetricUsage } from '../usage/usage.service';
+import { getCurrentUsage, getMetricUsage } from '../usage/usage.service';
 import { getPaymentProvider } from './provider-registry';
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode } from './plans';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
@@ -534,4 +534,82 @@ export async function reconcileBilling(): Promise<{ checked: number; repaired: n
     }
     return { checked: subscriptions.length, repaired, alerted };
   });
+}
+
+/**
+ * Everything the tenant subscription panel needs, in one call.
+ *
+ * Deliberately one endpoint rather than three: the panel shows plan, usage and
+ * invoices as a single unit, and three round-trips would let them render out of
+ * sync with each other (a meter from before an upgrade beside the new plan name).
+ *
+ * `entitlements` is what the UI gates features on. It is the plan's published
+ * allowance — the server still enforces independently via assertMetricAvailable
+ * and assertSeatAvailable, because a UI gate is a courtesy, not a control.
+ */
+
+/** Config stores 'unlimited' as this sentinel; the plan stores it as null. */
+const UNLIMITED_SENTINEL = 1_000_000_000;
+
+/**
+ * Compares the plan's published allowance against the quota actually enforced.
+ *
+ * These are two stores that can drift: `Organization.tier` names the plan, but
+ * `OrganizationConfig` holds the numbers `assertMetricAvailable` enforces.
+ * applyPlanLimits() writes both together, so they only diverge if a tier is
+ * changed out-of-band — and then the tenant silently keeps quotas they are no
+ * longer paying for. Surfacing it makes that visible instead of invisible.
+ */
+function detectQuotaDrift(
+  plan: (typeof PLAN_ENTITLEMENTS)[PlanCode],
+  usage: { items: Array<{ metric: string; limit: string | null }> },
+) {
+  const expected: Record<string, number | null> = {
+    active_contacts: plan.monthlyActiveContactsLimit,
+    messages_outbound: plan.monthlyOutboundMessagesLimit,
+    campaign_sends: plan.monthlyCampaignSendsLimit,
+  };
+  const drift: Array<{ metric: string; planAllows: number | null; enforced: number | null }> = [];
+  for (const item of usage.items) {
+    if (!(item.metric in expected)) continue;
+    const planAllows = expected[item.metric];
+    const raw = item.limit === null ? null : Number(item.limit);
+    const enforced = raw === null || raw >= UNLIMITED_SENTINEL ? null : raw;
+    if (planAllows !== enforced) drift.push({ metric: item.metric, planAllows, enforced });
+  }
+  return drift;
+}
+
+export async function getBillingSummary(organizationId: string) {
+  // Usage is tenant-scoped; billing detail needs platform scope. Read usage
+  // first so we are not inside runAsPlatform when getTenantId() is called.
+  const [usage, seatsUsed] = await Promise.all([
+    getCurrentUsage(),
+    prisma.user.count({ where: { isActive: true } }),
+  ]);
+
+  const detail = await getCurrentBilling(organizationId);
+  const plan = PLAN_ENTITLEMENTS[normalizePlanCode(detail.organization.tier || 'FREE')];
+
+  return {
+    plan: {
+      code: plan.code,
+      name: plan.name,
+      monthlyPriceCents: plan.monthlyPriceCents,
+    },
+    entitlements: plan,
+    subscription: detail.subscription,
+    organization: detail.organization,
+    seats: {
+      used: seatsUsed,
+      limit: plan.usersLimit,
+      remaining: plan.usersLimit === null ? null : Math.max(0, plan.usersLimit - seatsUsed),
+      atLimit: plan.usersLimit !== null && seatsUsed >= plan.usersLimit,
+    },
+    usage,
+    invoices: detail.invoices,
+    plans: detail.plans,
+    /** Non-empty means enforced quotas no longer match the named plan. */
+    quotaDrift: detectQuotaDrift(plan, usage),
+  };
 }

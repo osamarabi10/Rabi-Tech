@@ -143,7 +143,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
             <p className="truncate text-[13px] font-bold tracking-wide text-nav-foreground">
               {branding.productName}
             </p>
-            <p className="text-[10px] text-nav-muted">لوحة التحكم</p>
+            <p className="text-[10px] text-nav-muted">{t('لوحة التحكم')}</p>
           </div>
         </Link>
 

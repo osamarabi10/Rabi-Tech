@@ -5,8 +5,10 @@ import { Bell } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { fetchNotifications, markAllNotificationsRead, markNotificationRead, type AppNotification } from '@/lib/data';
 import { getSocket } from '@/lib/socket';
+import { useT } from '@/lib/i18n';
 
 export function NotificationBell() {
+  const { t } = useT();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
@@ -82,7 +84,7 @@ export function NotificationBell() {
       {open && (
         <div className="absolute left-0 top-10 z-50 w-80 rounded-xl border border-border bg-card shadow-xl" dir="rtl">
           <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-            <span className="text-sm font-semibold">الإشعارات</span>
+            <span className="text-sm font-semibold">{t('الإشعارات')}</span>
             {unread > 0 && (
               <button onClick={handleReadAll} className="text-[11px] text-primary hover:underline">
                 قراءة الكل
@@ -92,7 +94,7 @@ export function NotificationBell() {
 
           <div className="max-h-80 overflow-y-auto">
             {notifications.length === 0 && (
-              <p className="py-8 text-center text-xs text-muted-foreground">لا توجد إشعارات</p>
+              <p className="py-8 text-center text-xs text-muted-foreground">{t('لا توجد إشعارات')}</p>
             )}
             {notifications.map((n) => (
               <button

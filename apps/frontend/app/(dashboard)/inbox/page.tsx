@@ -80,14 +80,21 @@ const MEDIA_ICONS: Record<string, string> = {
   image: '🖼️', sticker: '🖼️', video: '🎬', audio: '🎵', ptt: '🎤', document: '📄',
 };
 
+/** Arabic source keys; resolved through t() like every other label. */
+const MEDIA_LABELS: Record<string, string> = {
+  image: 'صورة', sticker: 'ملصق', video: 'فيديو',
+  audio: 'صوت', ptt: 'رسالة صوتية', document: 'ملف',
+};
+
 function MessageMedia({ mediaUrl, mediaType }: { mediaUrl?: string | null; mediaType?: string | null }) {
+  const { t } = useT();
   const type = (mediaType || '').toLowerCase();
   if (!mediaUrl) {
     if (!mediaType) return null;
     return (
       <div className="mb-1 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
         <span>{MEDIA_ICONS[type] || '📎'}</span>
-        <span>{{ image: 'صورة', sticker: 'ملصق', video: 'فيديو', audio: 'صوت', ptt: 'رسالة صوتية', document: 'ملف' }[type] || 'مرفق'}</span>
+        <span>{t(MEDIA_LABELS[type] || 'مرفق')}</span>
       </div>
     );
   }
@@ -98,7 +105,7 @@ function MessageMedia({ mediaUrl, mediaType }: { mediaUrl?: string | null; media
   if (type === 'audio' || type === 'ptt') return <audio src={src} controls className="mb-1 w-full" />;
   return (
     <a href={src} target="_blank" rel="noopener noreferrer" className="mb-1 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-accent">
-      <span>📎</span><span>ملف مرفق</span>
+      <span>📎</span><span>{t('ملف مرفق')}</span>
     </a>
   );
 }
@@ -723,7 +730,7 @@ export default function InboxPage() {
                           </button>
                         ))}
                         {PREDEFINED_LABELS.every((l) => sel.labels.includes(l.text)) && (
-                          <p className="px-2 py-1 text-[10px] text-muted-foreground">كل التصنيفات مضافة</p>
+                          <p className="px-2 py-1 text-[10px] text-muted-foreground">{t('كل التصنيفات مضافة')}</p>
                         )}
                       </div>
                     )}

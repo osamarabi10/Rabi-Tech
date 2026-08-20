@@ -6,6 +6,7 @@ import { AutoRepliesCard } from '@/components/settings/auto-replies-card';
 import { TeamRouting } from '@/components/settings/team-routing';
 import { TeamMembers } from '@/components/settings/team-members';
 import { SnippetsCard } from '@/components/settings/snippets-card';
+import { SubscriptionCard } from '@/components/settings/subscription-card';
 import {
   fetchSessions,
   fetchSessionQR,
@@ -99,7 +100,8 @@ const DAY_OPTIONS = [
 /** Section anchors for the sticky settings navigation. Order matches page order. */
 const SETTINGS_SECTIONS = [
   { id: 'branding',      label: 'العلامة التجارية', adminOnly: true },
-  { id: 'usage',         label: 'الاستخدام والاشتراك', adminOnly: false },
+  { id: 'subscription',  label: 'الاشتراك', adminOnly: false },
+  { id: 'usage',         label: 'الاستخدام الشهري', adminOnly: false },
   { id: 'working-hours', label: 'أوقات الدوام', adminOnly: false },
   { id: 'team-members',  label: 'أعضاء الفريق', adminOnly: false },
   { id: 'snippets',      label: 'القوالب', adminOnly: false },
@@ -117,7 +119,7 @@ const SETTINGS_SECTIONS = [
  */
 const TAB_TO_SECTION: Record<string, string> = {
   users: 'team-members',
-  billing: 'usage',
+  billing: 'subscription',
   templates: 'snippets',
   snippets: 'snippets',
 };
@@ -544,7 +546,7 @@ export default function SettingsPage() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Logo upload / رفع الشعار</Label>
+                <Label>{t('رفع الشعار')}</Label>
                 <Input
                   type="file"
                   accept="image/png,image/jpeg,image/svg+xml,image/webp"
@@ -553,7 +555,7 @@ export default function SettingsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Favicon upload / رفع أيقونة المتصفح</Label>
+                <Label>{t('رفع أيقونة المتصفح')}</Label>
                 <Input
                   type="file"
                   accept="image/png,image/jpeg,image/svg+xml,image/webp"
@@ -609,7 +611,7 @@ export default function SettingsPage() {
 
             {branding.customDomain && (
               <div className="space-y-2 rounded-lg border border-border p-3">
-                <p className="text-xs font-semibold">Domain verification / توثيق النطاق</p>
+                <p className="text-xs font-semibold">{t('توثيق النطاق')}</p>
                 <p className="font-mono text-xs" dir="ltr">
                   {domainVerification?.record || branding.customDomainVerificationRecord || t('احفظ النطاق لتوليد سجل TXT')}
                 </p>
@@ -628,6 +630,10 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       )}
+
+      <div id="subscription" className="mb-4 scroll-mt-16">
+        <SubscriptionCard />
+      </div>
 
       <Card id="usage" className="mb-4 scroll-mt-16">
         <CardHeader>

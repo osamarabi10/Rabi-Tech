@@ -3,6 +3,7 @@ import {
   cancelCurrentSubscription,
   createSignup,
   getCheckoutStatus,
+  getBillingSummary,
   getCurrentBilling,
   listPlans,
   requestGatewayForCurrentOrganization,
@@ -66,6 +67,18 @@ router.get('/checkout-status/:externalRef', async (req, res) => {
 router.get('/current', async (req, res) => {
   try {
     res.json(await getCurrentBilling(req.user!.organizationId));
+  } catch (error) {
+    handleRouteError(res, error);
+  }
+});
+
+/**
+ * GET /api/billing/summary — plan, entitlements, seats, usage meters and
+ * invoices for the signed-in organization, in one call.
+ */
+router.get('/summary', async (req, res) => {
+  try {
+    res.json(await getBillingSummary(req.user!.organizationId));
   } catch (error) {
     handleRouteError(res, error);
   }

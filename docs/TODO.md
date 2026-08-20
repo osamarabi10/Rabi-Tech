@@ -31,14 +31,30 @@ explicitly or they don't exist in the container.
 
 ## P8-b — Tenant subscription panel · ~3 days
 
-- [ ] **1. Backend: `GET /api/billing/summary`** (tenant-scoped): plan name +
+- [x] **1. Backend: `GET /api/billing/summary`** (tenant-scoped): plan name +
   code, price, period end, MAC used/limit (from usage service), invoice list
   via `provider.listInvoices(customerRef)`
-  — verify: curl as tenant admin returns plan + meters + invoices JSON
-- [ ] **2. Settings "الاشتراك" card** in the `usage` section: plan badge, MAC
+  — **done 2026-08-20.** Verified: FREE org returns plan FREE, seats 7/1
+  atLimit, six usage meters, entitlements, invoices, plans. One call rather
+  than three so the panel cannot render a stale meter beside a new plan name.
+  — **Bonus: `quotaDrift` detection.** `Organization.tier` and
+  `OrganizationConfig` are two stores that can silently diverge, and
+  enforcement follows the config — so a tenant can keep quotas they no longer
+  pay for. Proven both ways: injected drift reported
+  `{planAllows:100, enforced:10000}`, cleared to `[]` on repair; ENTERPRISE
+  unlimited-sentinel path also `[]`.
+  — **Repaired live data**: rabitech-demo was FREE tier holding GROWTH quotas
+  (2500/10000/5000), left over from an earlier webhook test. Now 100/100/0.
+- [x] **2. Settings "الاشتراك" card** in the `usage` section: plan badge, MAC
   progress bar, invoice table (date/amount/status/hosted link), upgrade CTA
   (→ `/pricing` until payments live)
-  — verify: browser, FREE org shows 1-seat + MAC meter and CTA
+  — **done 2026-08-20.** `components/settings/subscription-card.tsx`, its own
+  `#subscription` section above the existing usage meters (deliberately does not
+  repeat them). Shows plan + price + renewal, seats with at-limit warning,
+  invoice list, upgrade CTA hidden on ENTERPRISE, quotaDrift banner, and the
+  downgrade-grace notice. `/billing` now redirects here rather than to `usage`.
+  — Verified in browser: FREE org renders "Free / مجاني / 7 / 1 / وصلت للحد
+  الأقصى / لا توجد فواتير بعد", and the same card in en/he.
 - [ ] **3. Gated-features-shown-not-hidden**: central `useEntitlements()` hook
   reading plan from `/api/billing/summary`
   — verify: hook returns campaign/API-key gates for FREE vs ENTERPRISE
