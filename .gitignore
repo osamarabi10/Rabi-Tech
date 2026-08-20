@@ -1,0 +1,37 @@
+# Secrets — never commit. If any of these were ever committed, the value must be
+# rotated, not just removed from the tree.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local operational scratch: live Postgres data files, a bundled pgsql
+# install, connection secrets (pgpass.txt), and run logs that can contain
+# phone numbers and message bodies. None of this is project source.
+.tools/
+*.dump
+logs/
+*.log
+
+# Dependencies / build output
+node_modules/
+dist/
+.next/
+out/
+build/
+
+# WhatsApp session state
+openwa_data/
+*.qr.png
+qr-*.png
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# TypeScript incremental build cache
+*.tsbuildinfo

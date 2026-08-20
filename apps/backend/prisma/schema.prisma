@@ -1,0 +1,859 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Global, non-tenant models
+model Organization {
+  id                   String    @id @default(cuid())
+  name                 String
+  slug                 String    @unique // for Phase 1.5 subdomain routing
+  status               String    @default("ACTIVE") // ACTIVE|SUSPENDED|PROVISIONING
+  tier                 String    @default("FREE") // FREE|GROWTH|BUSINESS|ENTERPRISE
+  paymentProvider      String    @default("manual")
+  paymentCustomerRef   String?
+  emailVerifiedAt      DateTime?
+  downgradeGraceEndsAt DateTime?
+  downgradeGraceReason String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  users                   User[]
+  teams                   Team[]
+  userTeams               UserTeam[]
+  contacts                Contact[]
+  conversations           Conversation[]
+  campaigns               Campaign[]
+  templates               MessageTemplate[]
+  whatsappSessions        WhatsappSession[]
+  csatResponses           CsatSurveyResponse[]
+  auditLogs               AuditLog[]
+  campaignRecipients      CampaignRecipient[]
+  keywords                Keyword[]
+  notifications           Notification[]
+  configuration           OrganizationConfig?
+  branding                OrganizationBranding?
+  workingHours            WorkingHours?
+  sequences               OrgSequence[]
+  channels                OrganizationChannel[]
+  usageEvents             UsageEvent[]
+  dailyMetrics            PlatformDailyMetric[]
+  platformAlerts          PlatformAlert[]
+  tags                    Tag[]
+  contactTags             ContactTag[]
+  customFieldDefinitions  CustomFieldDefinition[]
+  customFieldValues       CustomFieldValue[]
+  subscriptions           Subscription[]
+  invoices                Invoice[]
+  emailVerificationTokens EmailVerificationToken[]
+  signupThrottleEvents    SignupThrottleEvent[]
+}
+
+model Plan {
+  id                String   @id @default(cuid())
+  code              String   @unique
+  name              String
+  monthlyPriceCents Int
+  currency          String   @default("USD")
+  isActive          Boolean  @default(true)
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                 String    @id @default(cuid())
+  organizationId     String
+  planCode           String
+  provider           String    @default("manual")
+  subscriptionRef    String?   @unique
+  customerRef        String?
+  externalRef        String?
+  status             String    @default("PENDING") // PENDING|ACTIVE|PAST_DUE|CANCELED|TRIALING|MANUAL_REVIEW
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean   @default(false)
+  trialEndsAt        DateTime?
+  activatedAt        DateTime?
+  canceledAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planCode], references: [code], onDelete: Restrict)
+  invoices     Invoice[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status])
+  @@index([provider, customerRef])
+  @@index([provider, subscriptionRef])
+  @@index([provider, externalRef])
+}
+
+model Invoice {
+  id               String    @id @default(cuid())
+  organizationId   String
+  subscriptionId   String?
+  provider         String    @default("manual")
+  invoiceRef       String?
+  customerRef      String?
+  status           String    @default("OPEN")
+  amountDueCents   Int       @default(0)
+  amountPaidCents  Int       @default(0)
+  currency         String    @default("USD")
+  hostedInvoiceUrl String?
+  dueAt            DateTime?
+  paidAt           DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([provider, invoiceRef])
+  @@index([organizationId, createdAt])
+  @@index([provider, customerRef])
+}
+
+model PaymentEvent {
+  id          String   @id @default(cuid())
+  provider    String
+  eventId     String
+  type        String
+  processedAt DateTime @default(now())
+  payload     Json?
+
+  @@unique([provider, eventId])
+  @@index([processedAt])
+}
+
+model EmailVerificationToken {
+  id             String    @id @default(cuid())
+  organizationId String
+  email          String
+  tokenHash      String    @unique
+  consumedAt     DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, consumedAt])
+  @@index([email, createdAt])
+}
+
+model SignupThrottleEvent {
+  id             String   @id @default(cuid())
+  organizationId String?
+  ipAddress      String
+  emailDomain    String
+  createdAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([ipAddress, createdAt])
+  @@index([emailDomain, createdAt])
+}
+
+model Identity {
+  id           String   @id @default(cuid())
+  email        String   @unique // globally unique for login
+  passwordHash String
+  platformRole String   @default("NONE") // NONE|SUPPORT|OWNER (optional: cross-org role)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  users User[]
+}
+
+model OrganizationConfig {
+  organizationId               String   @id
+  itSessionName                String   @default("it-support")
+  marketingSessionName         String   @default("marketing")
+  itNumber                     String?
+  marketingNumber              String?
+  sharedLine                   Boolean  @default(false)
+  monthlyActiveContactsLimit   Int      @default(1000)
+  monthlyInboundMessagesLimit  Int?
+  monthlyOutboundMessagesLimit Int      @default(10000)
+  monthlyCampaignSendsLimit    Int      @default(5000)
+  monthlyAiTokensInLimit       BigInt?
+  monthlyAiTokensOutLimit      BigInt?
+  updatedAt                    DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model Team {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  description    String?
+  isDefault      Boolean  @default(false)
+  color          String   @default("#6366F1")
+  emoji          String?
+
+  /// NONE | ROUND_ROBIN | LEAST_OPEN. Automatic assignment for new conversations.
+  assignmentStrategy String @default("NONE")
+  /// Max concurrent open conversations per agent. Null means unlimited.
+  /// Without a cap, round-robin buries the fastest agent: they close quickly,
+  /// so they always look free and keep receiving more.
+  maxConcurrentPerAgent Int?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members       UserTeam[]
+  primaryUsers  User[]            @relation("UserPrimaryTeam")
+  conversations Conversation[]
+  sessions      WhatsappSession[]
+  templates     MessageTemplate[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, slug])
+  @@index([organizationId, isDefault])
+}
+
+model UserTeam {
+  organizationId String
+  userId         String
+  teamId         String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  team         Team         @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@id([organizationId, userId, teamId])
+  @@index([organizationId, teamId])
+}
+
+model OrganizationBranding {
+  organizationId                String    @id
+  productName                   String    @default("RabiTech")
+  logoUrl                       String?
+  faviconUrl                    String?
+  primaryHsl                    String    @default("262 83% 63%")
+  accentHsl                     String    @default("195 90% 60%")
+  defaultLocale                 String    @default("ar")
+  direction                     String    @default("rtl")
+  customFooter                  String?
+  customDomain                  String?   @unique
+  customDomainVerificationToken String?
+  customDomainVerifiedAt        DateTime?
+  createdAt                     DateTime  @default(now())
+  updatedAt                     DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([customDomain])
+}
+
+model OrgSequence {
+  organizationId String
+  kind           String
+  value          BigInt @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, kind])
+}
+
+enum UsageMetric {
+  messages_inbound
+  messages_outbound
+  active_contacts
+  ai_tokens_in
+  ai_tokens_out
+  campaign_sends
+}
+
+// Immutable usage ledger. Application code permits create/createMany and reads only.
+model UsageEvent {
+  id             String      @id @default(cuid())
+  organizationId String
+  metric         UsageMetric
+  quantity       BigInt      @default(1)
+  subjectId      String?
+  occurredAt     DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, metric, occurredAt])
+  @@index([organizationId, metric, subjectId, occurredAt])
+}
+
+// Daily values are replaceable rollups. active_contacts is a month-to-date distinct snapshot.
+model PlatformDailyMetric {
+  organizationId String
+  date           DateTime    @db.Date
+  metric         UsageMetric
+  value          BigInt
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, date, metric])
+  @@index([date, metric])
+}
+
+model PlatformAuditLog {
+  id        String   @id @default(cuid())
+  reason    String
+  timestamp DateTime @default(now())
+
+  @@index([timestamp])
+}
+
+enum GatewayProvisioningState {
+  PENDING
+  PROVISIONING
+  AWAITING_QR
+  ACTIVE
+  SUSPENDED
+  FAILED
+}
+
+enum GatewayProvisioningStep {
+  ALLOCATE_RESOURCES
+  START_GATEWAY
+  WAIT_FOR_PROVIDER
+  CREATE_SESSION
+  REGISTER_WEBHOOK
+  AWAIT_CONNECTION
+  SUSPEND_GATEWAY
+  RESUME_GATEWAY
+  RESTART_GATEWAY
+  DESTROY_GATEWAY
+  COMPLETE
+}
+
+model PlatformAlert {
+  id             String    @id @default(cuid())
+  organizationId String?
+  type           String
+  severity       String    @default("ERROR")
+  message        String
+  metadata       Json?
+  resolvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([resolvedAt, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model OrganizationChannel {
+  id                    String                   @id @default(cuid())
+  organizationId        String
+  kind                  String                   @default("OPENWA")
+  baseUrl               String
+  apiKeyEnc             String
+  webhookToken          String                   @unique
+  status                String                   @default("PENDING")
+  provisioningState     GatewayProvisioningState @default(PENDING)
+  provisioningStep      GatewayProvisioningStep?
+  failureReason         String?
+  failureStep           GatewayProvisioningStep?
+  managedByProvisioner  Boolean                  @default(false)
+  deploymentName        String?                  @unique
+  apiPort               Int?                     @unique
+  dashboardPort         Int?                     @unique
+  dataVolumeName        String?                  @unique
+  redisVolumeName       String?                  @unique
+  provisioningStartedAt DateTime?
+  provisionedAt         DateTime?
+  connectedAt           DateTime?
+  suspendedAt           DateTime?
+  deletionRequestedAt   DateTime?
+  lastCheckedAt         DateTime?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, kind])
+  @@index([organizationId, status])
+  @@index([managedByProvisioner, provisioningState])
+}
+
+
+enum Role {
+  ADMIN // Full access, manages users/config
+  SUPERVISOR // Can assign/close tickets, view team performance
+  AGENT // Can send messages, create tickets (default)
+  VIEWER // Read-only access to conversations
+  FINANCE // View-only analytics/reports
+}
+
+
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  AWAITING_CLIENT
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+
+enum NotificationType {
+  NEW_MESSAGE
+  CONVERSATION_ASSIGNED
+  CONVERSATION_RESOLVED
+  MENTION
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+}
+
+
+enum AutoReplyKind {
+  WELCOME
+  OUT_OF_HOURS
+  CSAT_PROMPT
+  CSAT_THANKS
+  CONVERSATION_CLOSED
+  AWAITING_CLIENT
+  KEYWORD_CRITICAL
+  KEYWORD_HIGH
+  KEYWORD_MEDIUM
+  KEYWORD_LOW
+}
+
+enum TemplateCategory {
+  QUICK_REPLY
+  AUTO_REPLY
+  CAMPAIGN
+  OUTAGE
+  OUT_OF_HOURS
+  CSAT
+}
+
+model User {
+  id             String @id @default(cuid())
+  organizationId String
+  identityId     String
+
+  name          String
+  role          Role       @default(AGENT) // org-specific role
+  /// Deprecated legacy ISP routing column. Team/UserTeam is the source of truth.
+  primaryTeamId String?
+  isActive      Boolean    @default(true)
+  isAway        Boolean    @default(false)
+  awayAt        DateTime?
+  phone         String?
+  tokenVersion  Int        @default(0) // Increment to invalidate all tokens on logout-all
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  identity              Identity             @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  primaryTeam           Team?                @relation("UserPrimaryTeam", fields: [primaryTeamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  teams                 UserTeam[]
+  assignedConversations Conversation[]
+  sentMessages          Message[]
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+  csatResponses         CsatSurveyResponse[]
+  assignedContacts      Contact[]            @relation("ContactAssignee")
+
+  // Composite unique: one identity per org
+  @@unique([id, organizationId])
+  @@unique([organizationId, identityId])
+  @@index([organizationId])
+  @@index([organizationId, primaryTeamId])
+}
+
+model WhatsappSession {
+  id             String     @id @default(cuid())
+  organizationId String
+  sessionName    String
+  phoneNumber    String?
+  teamId         String?
+  label          String
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team          Team?          @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  conversations Conversation[]
+  campaigns     Campaign[]
+
+  // Composite unique constraints: session name and phone per org
+  @@unique([id, organizationId])
+  @@unique([organizationId, sessionName])
+  @@unique([organizationId, phoneNumber])
+  @@index([organizationId])
+  @@index([organizationId, teamId])
+}
+
+
+model Contact {
+  id             String   @id @default(cuid())
+  organizationId String
+  phone          String
+  name           String?
+  firstName      String?
+  lastName       String?
+  email          String?
+  language       String?
+  profilePic     String?
+  countryCode    String?
+  lifecycleStage String?
+  assigneeId     String?
+  tags           String[] @default([])
+  notes          String?
+  isArchived     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversations      Conversation[]
+  campaignRecipients CampaignRecipient[]
+  csatResponses      CsatSurveyResponse[]
+  assignee           User?                @relation("ContactAssignee", fields: [assigneeId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  contactTags        ContactTag[]
+  customFieldValues  CustomFieldValue[]
+
+  // Composite unique: phone per org
+  @@unique([id, organizationId])
+  @@unique([organizationId, phone])
+  @@unique([organizationId, email])
+  @@index([organizationId, name])
+  @@index([organizationId, assigneeId])
+  @@index([organizationId, lifecycleStage])
+}
+
+model Tag {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  colorCode      String?
+  emoji          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contacts     ContactTag[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model ContactTag {
+  organizationId String
+  contactId      String
+  tagId          String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  tag          Tag          @relation(fields: [tagId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@id([organizationId, contactId, tagId])
+  @@index([organizationId, tagId])
+}
+
+model CustomFieldDefinition {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  description    String?
+  dataType       String
+  allowedValues  String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  values       CustomFieldValue[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+model CustomFieldValue {
+  id                String   @id @default(cuid())
+  organizationId    String
+  contactId         String
+  fieldDefinitionId String
+  value             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization    Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact         Contact               @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  fieldDefinition CustomFieldDefinition @relation(fields: [fieldDefinitionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, contactId, fieldDefinitionId])
+  @@index([organizationId, fieldDefinitionId])
+}
+
+model Conversation {
+  id                String             @id @default(cuid())
+  organizationId    String
+  displayId         Int
+  contactId         String
+  sessionId         String
+  status            ConversationStatus @default(OPEN)
+  teamId            String?
+  assignedToId      String?
+  lastMessageAt     DateTime?
+  isArchived        Boolean            @default(false)
+  labels            String[]           @default([])
+  pendingMenuChoice String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact       Contact             @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  session       WhatsappSession     @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  team          Team?               @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  assignee      User?               @relation(fields: [assignedToId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  messages      Message[]
+  csatResponse  CsatSurveyResponse?
+  notifications Notification[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, displayId])
+  @@index([organizationId, isArchived, status, lastMessageAt])
+  @@index([organizationId, contactId, sessionId])
+  @@index([organizationId, teamId])
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  organizationId String
+  conversationId String
+  waMessageId    String?
+  direction      MessageDirection
+  status         MessageStatus    @default(PENDING)
+  body           String?
+  mediaUrl       String?
+  mediaType      String?
+  isAuto         Boolean          @default(false)
+  autoType       String?
+  isInternal     Boolean          @default(false)
+  isRead         Boolean          @default(false)
+  sentById       String?
+  timestamp      DateTime         @default(now())
+
+  conversation Conversation @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  sentBy       User?        @relation(fields: [sentById, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  // Composite unique: waMessageId per org
+  @@unique([organizationId, waMessageId])
+  @@index([organizationId, conversationId, timestamp])
+  @@index([organizationId, conversationId, direction, isRead])
+}
+
+
+
+
+model Campaign {
+  id             String         @id @default(cuid())
+  organizationId String
+  sessionId      String
+  title          String
+  message        String
+  mediaUrl       String?
+  status         CampaignStatus @default(DRAFT)
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  createdAt      DateTime       @default(now())
+  /// ContactFilterDsl used to resolve recipients. Null = every non-archived contact.
+  /// Stored so a campaign's audience stays auditable after the fact.
+  audienceFilter Json?
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  session      WhatsappSession     @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  recipients   CampaignRecipient[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId])
+}
+
+model MessageTemplate {
+  id             String           @id @default(cuid())
+  organizationId String
+  title          String
+  body           String
+  shortCode      String?
+  category       TemplateCategory @default(QUICK_REPLY)
+  /// When set, this template IS the organization's configured auto-reply for that event.
+  /// No kind configured (or inactive) means the auto-reply is simply not sent.
+  autoReplyKind  AutoReplyKind?
+  /// Deprecated legacy ISP template column. teamId is the source of truth.
+  teamId         String?
+  sortOrder      Int              @default(0)
+  isActive       Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization        Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team                Team?          @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  workingHoursOoh     WorkingHours[] @relation("OutOfHoursTemplate")
+  workingHoursWelcome WorkingHours[] @relation("WelcomeTemplate")
+
+  // Composite unique: shortCode per org
+  @@unique([id, organizationId])
+  @@unique([organizationId, shortCode])
+  @@unique([organizationId, autoReplyKind])
+  @@index([organizationId, category, isActive])
+  @@index([organizationId, teamId, category, isActive])
+}
+
+model WorkingHours {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  enabled              Boolean  @default(true)
+  autoReplyEnabled     Boolean  @default(true)
+  timezone             String   @default("Asia/Jerusalem")
+  workDays             Int[]    @default([0, 1, 2, 3, 4])
+  startTime            String   @default("08:00")
+  endTime              String   @default("20:00")
+  outOfHoursTemplateId String?
+  welcomeTemplateId    String?
+  updatedAt            DateTime @updatedAt
+
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  outOfHoursTemplate MessageTemplate? @relation("OutOfHoursTemplate", fields: [outOfHoursTemplateId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  welcomeTemplate    MessageTemplate? @relation("WelcomeTemplate", fields: [welcomeTemplateId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([organizationId])
+}
+
+model CampaignRecipient {
+  id             String    @id @default(cuid())
+  organizationId String
+  campaignId     String
+  contactId      String
+  status         String    @default("pending")
+  sentAt         DateTime?
+  error          String?
+  /// WhatsApp message id of this recipient's send. Delivery/read acks arrive
+  /// later keyed by it — without this a campaign report can never move past "sent".
+  waMessageId    String?
+  deliveredAt    DateTime?
+  readAt         DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign     Campaign     @relation(fields: [campaignId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([organizationId, campaignId, contactId])
+  @@index([organizationId])
+  // Acks are looked up by waMessageId on every delivery callback.
+  @@index([organizationId, waMessageId])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String // e.g., "conversation.opened", "ticket.created", "message.sent"
+  resource       String // e.g., "conversation", "ticket", "contact"
+  resourceId     String // e.g., the conversation ID, ticket ID
+  changes        Json? // { before: ..., after: ... }
+  description    String? // human-readable summary
+  ipAddress      String?
+  userAgent      String?
+  timestamp      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, userId, timestamp])
+  @@index([organizationId, action, timestamp])
+  @@index([organizationId, resourceId])
+}
+
+// User-managed keywords that augment the built-in keyword lists used for
+// ticket priority detection (IT) and lead categorization (marketing).
+model Keyword {
+  id             String   @id @default(cuid())
+  organizationId String
+  category       String // e.g. CRITICAL, HIGH, MEDIUM, LOW, LEAD_SALES, LEAD_INSTALL, LEAD_UPGRADE, LEAD_INQUIRY
+  phrase         String
+  createdAt      DateTime @default(now())
+  createdBy      String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Composite unique: category + phrase per org
+  @@unique([organizationId, category, phrase])
+  @@index([organizationId, category])
+}
+
+model CsatSurveyResponse {
+  id             String    @id @default(cuid())
+  organizationId String
+  conversationId String
+  contactId      String
+  assignedToId   String?
+  rating         Int? // 1–5, null until customer replies
+  feedback       String?
+  sentAt         DateTime  @default(now())
+  respondedAt    DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  assignedTo   User?        @relation(fields: [assignedToId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([conversationId, organizationId])
+  @@index([organizationId])
+}
+
+
+model Notification {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String
+  type           NotificationType
+  conversationId String?
+  title          String
+  body           String
+  isRead         Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, userId, isRead, createdAt])
+}

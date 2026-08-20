@@ -1,0 +1,146 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ─────────────────────────────────────────────────────────
+       Respond.io-style palette: light content canvas, dark navy
+       navigation. Values are HSL triples (no hsl() wrapper) so
+       Tailwind can apply opacity modifiers like bg-primary/10.
+       ───────────────────────────────────────────────────────── */
+
+    --background:     210 40% 98%;   /* #F8FAFC — main workspace canvas */
+    --foreground:     222 47% 11%;   /* #0F172A — primary text */
+
+    --card:             0  0% 100%;  /* #FFFFFF — panels, bubbles, modals */
+    --card-foreground: 222 47% 11%;
+
+    --popover:          0  0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Primary action blue */
+    --primary:        217 100% 50%;  /* #0066FF */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary:      210 40% 96%;   /* #F1F5F9 */
+    --secondary-foreground: 222 47% 11%;
+
+    --muted:          210 40% 96%;
+    /* Darkened from #64748B: that value cleared AA on white but fell to 4.29:1
+       on the --muted / --secondary surface it is most often used against. */
+    --muted-foreground: 215 19% 41%; /* #55637A — timestamps, metadata */
+
+    --accent:         210 40% 94%;   /* hover fills on light surfaces */
+    --accent-foreground: 222 47% 11%;
+
+    --destructive:      0 84% 60%;   /* #EF4444 */
+    --destructive-foreground: 0 0% 100%;
+
+    --border:         214 32% 91%;   /* #E2E8F0 — dividers, input borders */
+    --input:          214 32% 91%;
+    --ring:           217 100% 50%;
+
+    --radius: 0.5rem;
+
+    /* ── Navigation surfaces (stay dark against the light canvas) ── */
+    --nav:             222 47% 11%;  /* #0F172A — left rail, dark headers */
+    --nav-foreground:  210 40% 98%;
+    --nav-muted:       215 20% 65%;  /* inactive rail text */
+    --nav-accent:      217 33% 17%;  /* #1E293B — rail hover / active tab */
+    --nav-border:      217 33% 20%;
+
+    /* ── Semantic surfaces, light → slightly recessed ── */
+    --surface-1: 0 0% 100%;
+    --surface-2: 210 40% 96%;
+    --surface-3: 214 32% 91%;
+
+    /* ── Functional status tokens ──
+       Darker than the canonical #10B981 / #F59E0B / #EF4444 on purpose: these
+       are used as `text-*` on white, where the bright versions land at 2.2–3.8:1
+       and fail AA. The *-vivid variants keep the original hues for fills and
+       dots, where contrast rules don't apply. */
+    --success: 163 94% 24%;          /* #047857 — 4.9:1 on white */
+    --warning:  32 94% 37%;          /* #B45309 — 4.8:1 on white */
+    --danger:    0 74% 50%;          /* #DC2626 — 4.5:1 on white */
+    --note:     55 97% 77%;          /* #FEF08A — internal note tint */
+
+    --success-vivid: 160 84% 39%;    /* #10B981 — fills, status dots */
+    --warning-vivid:  38 92% 50%;    /* #F59E0B */
+    --danger-vivid:    0 84% 60%;    /* #EF4444 */
+
+    /* ── Channel brand tokens ── */
+    --ch-whatsapp:  142 70% 49%;     /* #25D366 */
+    --ch-telegram:  200 72% 49%;     /* #229ED9 */
+    --ch-messenger: 213 100% 50%;    /* #0084FF */
+    --ch-instagram: 336 74% 55%;     /* #E1306C */
+    --ch-viber:     249 86% 66%;     /* #7360F2 */
+    --ch-line:      132 100% 36%;    /* #00B900 */
+    --ch-sms:        38 92% 50%;     /* #F59E0B */
+
+    /* Retained for existing consumers. `--brand-gradient-to` is referenced by
+       the logo mark and the settings brand tile — dropping it silently breaks
+       both gradients, so it stays as an alias rather than being deleted. */
+    --brand-accent: 217 100% 50%;
+    --brand-gradient-to: 200 72% 49%;
+    --cyan:    200 72% 49%;
+    --emerald: 160 84% 39%;
+    --amber:    38 92% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.18);
+    color: hsl(var(--foreground));
+  }
+}
+
+/* ── Scrollbars ──────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 8px; height: 8px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  {
+  background: hsl(var(--muted-foreground) / 0.28);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.45); }
+
+/* Dark navigation keeps its own scrollbar treatment. */
+.nav-surface ::-webkit-scrollbar-thumb {
+  background: hsl(var(--nav-muted) / 0.3);
+}
+
+@layer utilities {
+  /* Dark navigation surface — the rail and any dark header. */
+  .nav-surface {
+    background: hsl(var(--nav));
+    color: hsl(var(--nav-foreground));
+  }
+
+  /* Cards on a light canvas need elevation, not glow, to read as raised. */
+  .surface-glass {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    box-shadow: 0 1px 2px 0 hsl(222 47% 11% / 0.04);
+  }
+  .glow-ring {
+    box-shadow: 0 0 0 1px hsl(var(--border)), 0 0 0 3px hsl(var(--primary) / 0.12);
+  }
+
+  .text-cyan    { color: hsl(var(--cyan)); }
+  .text-emerald { color: hsl(var(--emerald)); }
+  .bg-emerald\/10 { background: hsl(var(--emerald) / 0.1); }
+  .bg-cyan\/10    { background: hsl(var(--cyan) / 0.1); }
+}

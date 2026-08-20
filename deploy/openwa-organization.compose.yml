@@ -1,0 +1,29 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+
+  openwa:
+    image: ghcr.io/rmyndharis/openwa:latest
+    restart: always
+    environment:
+      NODE_ENV: production
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QUEUE_ENABLED: "true"
+      API_KEY: "${OPENWA_API_KEY}"
+    ports:
+      - "${OPENWA_API_PORT}:2785"
+      - "${OPENWA_DASHBOARD_PORT}:2886"
+    depends_on:
+      - redis
+    volumes:
+      - openwa_data:/app/data
+
+volumes:
+  redis_data:
+    name: "${OPENWA_REDIS_VOLUME}"
+  openwa_data:
+    name: "${OPENWA_DATA_VOLUME}"

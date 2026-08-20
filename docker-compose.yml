@@ -1,0 +1,105 @@
+name: rabitech
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: rabitech
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+
+  openwa:
+    image: ghcr.io/rmyndharis/openwa:latest
+    restart: always
+    ports:
+      - "3000:2785"   # REST API
+      - "3001:2886"   # Web dashboard (QR scanning)
+    environment:
+      - API_KEY=${OPENWA_API_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_ENABLED=true
+      # The gateway's SSRF guard (added in newer images) blocks webhook delivery
+      # to private addresses — which is exactly where our backend lives. Allow
+      # only the backend's own alias rather than turning the guard off.
+      - SSRF_ALLOWED_HOSTS=backend.local,host.docker.internal
+    depends_on:
+      - redis
+    volumes:
+      - openwa_data:/app/data
+
+  backend:
+    build: ./apps/backend
+    restart: always
+    ports:
+      - "4000:4000"
+    depends_on:
+      - postgres
+      - redis
+      - openwa
+    environment:
+      - DATABASE_URL=postgresql://admin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/rabitech
+      - REDIS_URL=redis://redis:6379
+      - OPENWA_URL=http://openwa:2785
+      - OPENWA_API_KEY=${OPENWA_API_KEY}
+      - CHANNEL_ENCRYPTION_KEY=${CHANNEL_ENCRYPTION_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=7d
+      # Stale LAN IP removed. Set FRONTEND_URL in .env to the real origin —
+      # https:// once TLS is terminated in front of these services.
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8080}
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - NODE_ENV=production
+      # TEMPORARY: the database password is still the shipped default. Rotate it,
+      # then delete this line. The backend logs a loud error on every boot until
+      # you do. See docs/SECURITY-ROTATION.md
+      - ALLOW_INSECURE_SECRETS=${ALLOW_INSECURE_SECRETS:-0}
+      # How the gateway container reaches this backend to deliver webhooks.
+      # Must be a dotted host (the gateway's URL validator rejects single-label
+      # names like "backend") — hence the backend.local network alias below.
+      # Not host.docker.internal: that is Docker-Desktop-only and would break
+      # silently on a Linux VPS.
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://backend.local:4000}
+      # Billing. Without PAYMENT_WEBHOOK_SECRET every provider webhook is
+      # rejected as unsigned, so activation never happens.
+      - PAYMENT_PROVIDER=${PAYMENT_PROVIDER:-manual}
+      - PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET}
+      - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
+      - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-http://localhost:8080}
+      # Broadcast pacing. OpenWA drives WhatsApp Web, so blasting risks a ban.
+      - CAMPAIGN_SEND_SPACING_MS=${CAMPAIGN_SEND_SPACING_MS:-1200}
+      - CAMPAIGN_RATE_MAX=${CAMPAIGN_RATE_MAX:-1}
+      - CAMPAIGN_RATE_DURATION_MS=${CAMPAIGN_RATE_DURATION_MS:-1000}
+    networks:
+      default:
+        aliases:
+          - backend.local
+
+  frontend:
+    build: ./apps/frontend
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+    environment:
+      - NEXT_SERVER_API_URL=http://backend:4000
+      - NEXT_PUBLIC_API_URL=
+      - NEXT_PUBLIC_SOCKET_URL=
+
+volumes:
+  pgdata:
+    name: rabitech_pgdata
+  openwa_data:
+    name: rabitech_openwa_data
