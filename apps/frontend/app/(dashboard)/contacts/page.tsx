@@ -48,12 +48,12 @@ import { ContactFilterBuilder } from '@/components/contacts/contact-filter-build
 import { useT } from '@/lib/i18n';
 
 const COLUMNS = [
-  { id: 'name', label: 'Name / الاسم' },
-  { id: 'phone', label: 'Phone / الهاتف' },
-  { id: 'email', label: 'Email / البريد' },
-  { id: 'stage', label: 'Stage / المرحلة' },
-  { id: 'assignee', label: 'Assignee / المسؤول' },
-  { id: 'tags', label: 'Tags / الوسوم' },
+  { id: 'name', label: 'الاسم' },
+  { id: 'phone', label: 'الهاتف' },
+  { id: 'email', label: 'البريد الإلكتروني' },
+  { id: 'stage', label: 'المرحلة' },
+  { id: 'assignee', label: 'المسؤول' },
+  { id: 'tags', label: 'الوسوم' },
 ] as const;
 
 type ColumnId = (typeof COLUMNS)[number]['id'];
@@ -189,7 +189,7 @@ export default function ContactsPage() {
                     checked={visibleColumns[column.id]}
                     onChange={(event) => setVisibleColumns((current) => ({ ...current, [column.id]: event.target.checked }))}
                   />
-                  {column.label}
+                  {t(column.label)}
                 </label>
               </DropdownMenuItem>
             ))}
@@ -204,7 +204,7 @@ export default function ContactsPage() {
               <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 className="pr-9"
-                placeholder="Search contacts / بحث في جهات الاتصال"
+                placeholder={t('بحث في جهات الاتصال')}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -241,19 +241,19 @@ export default function ContactsPage() {
 
       <Card>
         <CardHeader className="border-b border-border py-3 text-xs text-muted-foreground">
-          {loading ? 'Loading / جاري التحميل' : `${contacts.length} contacts / جهة اتصال`}
+          {loading ? t('جاري التحميل...') : `${contacts.length} ${t('جهة اتصال')}`}
         </CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10" />
-                {visibleColumns.name && <TableHead>Name</TableHead>}
-                {visibleColumns.phone && <TableHead>Phone</TableHead>}
-                {visibleColumns.email && <TableHead>Email</TableHead>}
-                {visibleColumns.stage && <TableHead>Stage</TableHead>}
-                {visibleColumns.assignee && <TableHead>Assignee</TableHead>}
-                {visibleColumns.tags && <TableHead>Tags</TableHead>}
+                {visibleColumns.name && <TableHead>{t('الاسم')}</TableHead>}
+                {visibleColumns.phone && <TableHead>{t('الهاتف')}</TableHead>}
+                {visibleColumns.email && <TableHead>{t('البريد الإلكتروني')}</TableHead>}
+                {visibleColumns.stage && <TableHead>{t('المرحلة')}</TableHead>}
+                {visibleColumns.assignee && <TableHead>{t('المسؤول')}</TableHead>}
+                {visibleColumns.tags && <TableHead>{t('الوسوم')}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>

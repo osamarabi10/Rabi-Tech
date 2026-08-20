@@ -76,14 +76,14 @@ const USAGE_LABELS: Record<UsageMetric, string> = {
 };
 
 const KEYWORD_CATEGORY_LABELS: Record<KeywordCategory, string> = {
-  CRITICAL: 'Urgent / complaints',
-  HIGH: 'High priority',
-  MEDIUM: 'Questions / help',
-  LOW: 'Low priority',
-  LEAD_SALES: 'Sales intent',
-  LEAD_INSTALL: 'Service request',
-  LEAD_UPGRADE: 'Upgrade / expansion',
-  LEAD_INQUIRY: 'General inquiry',
+  CRITICAL:     'عاجل وشكاوى',
+  HIGH:         'أولوية عالية',
+  MEDIUM:       'أسئلة ومساعدة',
+  LOW:          'أولوية منخفضة',
+  LEAD_SALES:   'نية شراء',
+  LEAD_INSTALL: 'طلب خدمة',
+  LEAD_UPGRADE: 'ترقية أو توسعة',
+  LEAD_INQUIRY: 'استفسار عام',
 };
 
 const DAY_OPTIONS = [
@@ -391,9 +391,9 @@ export default function SettingsPage() {
     try {
       const saved = await uploadBrandingAsset(kind, file);
       setBranding((current) => (current ? { ...current, ...saved } : saved));
-      toast.success(kind === 'logo' ? 'Logo uploaded / تم رفع الشعار' : 'Favicon uploaded / تم رفع الأيقونة');
+      toast.success(kind === 'logo' ? t('تم رفع الشعار') : t('تم رفع الأيقونة'));
     } catch (err: any) {
-      toast.error(err?.response?.data?.error || 'Upload failed / فشل الرفع');
+      toast.error(err?.response?.data?.error || t('فشل الرفع'));
     } finally {
       setUploadingAsset(null);
     }
@@ -440,7 +440,7 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
               <Palette className="h-4 w-4 text-primary" />
-              Branding / إعدادات العلامة
+              {t('إعدادات العلامة التجارية')}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -456,7 +456,7 @@ export default function SettingsPage() {
               }
             >
               <div className="min-w-0 space-y-3">
-                <p className="text-xs font-semibold text-muted-foreground">Live preview / معاينة مباشرة</p>
+                <p className="text-xs font-semibold text-muted-foreground">{t('معاينة مباشرة')}</p>
                 <div className="flex items-center gap-3">
                   <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-primary to-[hsl(var(--brand-gradient-to))] text-white">
                     {branding.logoUrl ? (
@@ -486,25 +486,25 @@ export default function SettingsPage() {
                 )}
               </div>
               <div className="space-y-2 text-xs text-muted-foreground">
-                <p className="font-semibold text-foreground">Plan / الخطة: {branding.tier}</p>
+                <p className="font-semibold text-foreground">{t('الباقة')}: {branding.tier}</p>
                 <p>
                   {branding.canCustomizeFooter
-                    ? 'Footer customization enabled / يمكن تعديل التذييل'
-                    : 'Powered by RabiTech is required on this plan / يلزم عرض Powered by RabiTech في هذه الخطة'}
+                    ? t('يمكنك تعديل التذييل في باقتك')
+                    : t('باقتك الحالية تُلزم بعرض تذييل المنصة')}
                 </p>
               </div>
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-2">
-                <Label>Product name / اسم المنتج</Label>
+                <Label>{t('اسم المنتج')}</Label>
               <Input
                 value={branding.productName}
                 onChange={(event) => setBranding({ ...branding, productName: event.target.value })}
               />
               </div>
               <div className="space-y-2">
-                <Label>Custom domain / النطاق المخصص</Label>
+                <Label>{t('النطاق المخصص')}</Label>
               <Input
                 dir="ltr"
                 value={branding.customDomain || ''}
@@ -512,7 +512,7 @@ export default function SettingsPage() {
               />
               </div>
               <div className="space-y-2">
-                <Label>Primary color / اللون الأساسي</Label>
+                <Label>{t('اللون الأساسي')}</Label>
                 <div className="flex gap-2">
                   <Input
                     type="color"
@@ -528,7 +528,7 @@ export default function SettingsPage() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Secondary color / اللون الثانوي</Label>
+                <Label>{t('اللون الثانوي')}</Label>
                 <div className="flex gap-2">
                   <Input
                     type="color"
@@ -562,7 +562,7 @@ export default function SettingsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Default locale / اللغة الافتراضية</Label>
+                <Label>{t('اللغة الافتراضية')}</Label>
               <Select
                 value={branding.defaultLocale}
                 onValueChange={(value) =>
@@ -578,7 +578,7 @@ export default function SettingsPage() {
               </Select>
               </div>
               <div className="space-y-2">
-                <Label>Direction / الاتجاه</Label>
+                <Label>{t('الاتجاه')}</Label>
               <Select
                 value={branding.direction}
                 onValueChange={(value) =>
@@ -593,7 +593,7 @@ export default function SettingsPage() {
               </Select>
               </div>
               <div className="space-y-2 md:col-span-2">
-                <Label>Custom footer / التذييل المخصص</Label>
+                <Label>{t('التذييل المخصص')}</Label>
                 <Input
                   value={branding.customFooter || ''}
                   disabled={!branding.canCustomizeFooter}
@@ -611,10 +611,10 @@ export default function SettingsPage() {
               <div className="space-y-2 rounded-lg border border-border p-3">
                 <p className="text-xs font-semibold">Domain verification / توثيق النطاق</p>
                 <p className="font-mono text-xs" dir="ltr">
-                  {domainVerification?.record || branding.customDomainVerificationRecord || 'Save the domain to generate a TXT record'}
+                  {domainVerification?.record || branding.customDomainVerificationRecord || t('احفظ النطاق لتوليد سجل TXT')}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Status / الحالة: {domainVerification?.verified || branding.customDomainVerified ? 'verified' : 'pending DNS'}
+                  {t('الحالة')}: {domainVerification?.verified || branding.customDomainVerified ? t('موثّق') : t('بانتظار DNS')}
                 </p>
               </div>
             )}
@@ -622,7 +622,7 @@ export default function SettingsPage() {
             <div className="flex flex-wrap gap-2">
               <Button onClick={handleSaveBranding} disabled={savingBranding}>
                 {savingBranding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palette className="h-4 w-4" />}
-                {savingBranding ? 'Saving...' : 'Save branding / حفظ العلامة'}
+                {savingBranding ? t('جاري الحفظ...') : t('حفظ العلامة التجارية')}
               </Button>
             </div>
           </CardContent>
