@@ -1,8 +1,18 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { seedDefaultAutoReplies } from '../src/utils/seed-auto-replies';
 
 const prisma = new PrismaClient();
 
+/**
+ * Local/demo bootstrap data — NOT a production fixture.
+ *
+ * Creates one demo subscriber ("rabitech-demo") with a couple of teams, a
+ * generic WhatsApp session, an admin, a few agents, and the platform's default
+ * (editable, white-label-safe) auto-replies. Nothing here should carry a real
+ * business's branding, phone numbers, or industry-specific copy — see
+ * constants/default-auto-replies.ts for why.
+ */
 async function main() {
   console.log('Seeding RabiTech database...');
 
@@ -21,58 +31,41 @@ async function main() {
     create: { email: ownerEmail, passwordHash: ownerHash, platformRole: 'OWNER' },
   });
 
-  // Zones
-  await prisma.zone.createMany({
-    skipDuplicates: true,
-    data: [
-      { id: 'kfar-qasim', nameAr: 'كفر قاسم', nameHe: 'כפר קאסם', color: '#3B82F6' },
-      { id: 'kfar-bara',  nameAr: 'كفر برا',   nameHe: 'כפר ברא',  color: '#8B5CF6' },
-      { id: 'jaljulia',   nameAr: 'جلجولية',   nameHe: "ג'לג'וליה",color: '#EC4899' },
-      { id: 'tayibe',     nameAr: 'الطيبة',    nameHe: 'טייבה',    color: '#F59E0B' },
-      { id: 'tira',       nameAr: 'الطيرة',    nameHe: 'טירה',     color: '#10B981' },
-    ],
-  });
+  // Teams — generic roles, no industry-specific naming. Upsert matches an
+  // existing team by slug and returns *its* id, which will not be the literal
+  // string below if this org was seeded before — so every later reference to a
+  // team uses the id upsert actually returned, never an assumed constant.
+  const teamSeeds = [
+    { id: 'team-demo-admin',   name: 'Administration', slug: 'admin',   color: '#475569', isDefault: false },
+    { id: 'team-demo-support', name: 'Support',        slug: 'support', color: '#2563EB', isDefault: true },
+    { id: 'team-demo-sales',   name: 'Sales',           slug: 'sales',   color: '#DB2777', isDefault: false },
+  ];
+  const teamIdBySlug: Record<string, string> = {};
+  for (const t of teamSeeds) {
+    const team = await prisma.team.upsert({
+      where: { organizationId_slug: { organizationId, slug: t.slug } },
+      update: { name: t.name, color: t.color },
+      create: { id: t.id, organizationId, name: t.name, slug: t.slug, color: t.color, isDefault: t.isDefault },
+    });
+    teamIdBySlug[t.slug] = team.id;
+  }
 
-  // WhatsApp Sessions — IT line is the live RabiTech office number
-  const itPhone = process.env.IT_NUMBER || '972524141422';
+  // One demo WhatsApp session on the Support team, deliberately unlinked.
+  //
+  // A freshly seeded session starts with no phone number — the admin links a
+  // real one by scanning its own QR code. Pre-filling this from IT_NUMBER (a
+  // leftover single-tenant env var) would silently attach someone else's
+  // WhatsApp number to a brand-new demo organization.
   await prisma.whatsappSession.upsert({
     where: { organizationId_sessionName: { organizationId, sessionName: 'rabitech-demo-primary' } },
-    update: { phoneNumber: itPhone, label: 'الدعم التقني', isActive: true },
+    update: { label: 'الدعم', isActive: true, teamId: teamIdBySlug.support },
     create: {
       organizationId,
       sessionName: 'rabitech-demo-primary',
-      phoneNumber: itPhone,
-      department: 'IT',
-      label: 'الدعم التقني',
+      teamId: teamIdBySlug.support,
+      label: 'الدعم',
     },
   });
-  const mktPhone = process.env.MARKETING_NUMBER;
-  if (mktPhone && mktPhone !== itPhone) {
-    await prisma.whatsappSession.upsert({
-      where: { organizationId_sessionName: { organizationId, sessionName: 'rabitech-demo-marketing' } },
-      update: { phoneNumber: mktPhone, label: 'التسويق', isActive: true },
-      create: {
-        organizationId,
-        sessionName: 'rabitech-demo-marketing',
-        phoneNumber: mktPhone,
-        department: 'MARKETING',
-        label: 'التسويق',
-      },
-    });
-  } else {
-    // Same WhatsApp line — marketing tab uses it-support session (see whatsapp-sessions.ts)
-    await prisma.whatsappSession.upsert({
-      where: { organizationId_sessionName: { organizationId, sessionName: 'rabitech-demo-marketing' } },
-      update: { phoneNumber: mktPhone || itPhone, label: 'التسويق', isActive: true },
-      create: {
-        organizationId,
-        sessionName: 'rabitech-demo-marketing',
-        phoneNumber: mktPhone || itPhone,
-        department: 'MARKETING',
-        label: 'التسويق',
-      },
-    });
-  }
 
   // Admin user
   const adminHash = await bcrypt.hash('admin123', 10);
@@ -83,245 +76,58 @@ async function main() {
   });
   await prisma.user.upsert({
     where: { organizationId_identityId: { organizationId, identityId: adminIdentity.id } },
-    update: { role: 'ADMIN' },
+    update: { role: 'ADMIN', primaryTeamId: teamIdBySlug.admin },
     create: {
       organizationId,
       identityId: adminIdentity.id,
       name: 'مدير النظام',
-      department: 'ADMIN',
       role: 'ADMIN',
+      primaryTeamId: teamIdBySlug.admin,
     },
   });
 
-  // IT users (technicians)
-  const itHash = await bcrypt.hash('rabitech2026', 10);
-  const itUsers = [
-    { name: 'أحمد صالح',  email: 'ahmed@rabitech.co.il',  phone: '0501234567' },
-    { name: 'محمد علي',   email: 'mohammed@rabitech.co.il',phone: '0502345678' },
-    { name: 'يوسف كريم', email: 'yousef@rabitech.co.il',  phone: '0503456789' },
-    { name: 'كمال نصر',  email: 'kamal@rabitech.co.il',   phone: '0504567890' },
+  // A few demo agents split across Support and Sales.
+  const agentHash = await bcrypt.hash('rabitech2026', 10);
+  const agents = [
+    { name: 'أحمد صالح',   email: 'ahmed@rabitech.co.il',    phone: '0501234567', teamId: teamIdBySlug.support },
+    { name: 'محمد علي',    email: 'mohammed@rabitech.co.il', phone: '0502345678', teamId: teamIdBySlug.support },
+    { name: 'يوسف كريم',   email: 'yousef@rabitech.co.il',   phone: '0503456789', teamId: teamIdBySlug.support },
+    { name: 'فريق المبيعات', email: 'sales@rabitech.co.il',   phone: '0504567890', teamId: teamIdBySlug.sales },
   ];
-  for (const u of itUsers) {
+  for (const a of agents) {
     const identity = await prisma.identity.upsert({
-      where: { email: u.email },
-      update: { passwordHash: itHash },
-      create: { email: u.email, passwordHash: itHash },
+      where: { email: a.email },
+      update: { passwordHash: agentHash },
+      create: { email: a.email, passwordHash: agentHash },
     });
     await prisma.user.upsert({
       where: { organizationId_identityId: { organizationId, identityId: identity.id } },
-      update: {},
+      update: { primaryTeamId: a.teamId },
       create: {
         organizationId,
         identityId: identity.id,
-        name: u.name,
-        phone: u.phone,
-        department: 'IT',
+        name: a.name,
+        phone: a.phone,
+        role: 'AGENT',
+        primaryTeamId: a.teamId,
       },
     });
   }
 
-  // Marketing user
-  const mktHash = await bcrypt.hash('rabitech2026', 10);
-  const marketingIdentity = await prisma.identity.upsert({
-    where: { email: 'marketing@rabitech.co.il' },
-    update: { passwordHash: mktHash },
-    create: { email: 'marketing@rabitech.co.il', passwordHash: mktHash },
+  // Auto-replies: the platform's own starter set, editable per-organization,
+  // never platform-branded. See constants/default-auto-replies.ts.
+  await prisma.$transaction((tx) => seedDefaultAutoReplies(tx, organizationId));
+
+  // Working hours, pointed at the OUT_OF_HOURS auto-reply we just seeded.
+  const oohTemplate = await prisma.messageTemplate.findFirst({
+    where: { organizationId, autoReplyKind: 'OUT_OF_HOURS' },
+    select: { id: true },
   });
-  await prisma.user.upsert({
-    where: { organizationId_identityId: { organizationId, identityId: marketingIdentity.id } },
-    update: {},
-    create: {
-      organizationId,
-      identityId: marketingIdentity.id,
-      name: 'فريق التسويق',
-      department: 'MARKETING',
-    },
-  });
-
-  // Message templates
-  const templates = [
-    {
-      title: 'تذكرة عاجلة',
-      category: 'AUTO_REPLY' as const,
-      dept: 'IT' as const,
-      sortOrder: 1,
-      body: `🚨 مرحباً، تم استلام رسالتك وفتح تذكرة عاجلة *#{{ticketId}}*
-
-نعتذر عن هذا الإزعاج. سيتواصل معك فريقنا خلال *30 دقيقة*.
-
-RabiTech 🌐`,
-    },
-    {
-      title: 'تذكرة دعم',
-      category: 'AUTO_REPLY' as const,
-      dept: 'IT' as const,
-      sortOrder: 2,
-      body: `مرحباً 👋 تم فتح تذكرة دعم *#{{ticketId}}*
-
-جرب أولاً:
-1️⃣ أوقف الراوتر 30 ثانية وأعد تشغيله
-2️⃣ تحقق من أضواء الجهاز
-
-إذا استمرت المشكلة سيتصل بك فريقنا خلال ساعتين.
-RabiTech 🌐`,
-    },
-    {
-      title: 'تذكرة متوسطة',
-      category: 'AUTO_REPLY' as const,
-      dept: 'IT' as const,
-      sortOrder: 3,
-      body: `مرحباً بك في دعم RabiTech 🌐
-
-تم تسجيل مشكلتك برقم *#{{ticketId}}*
-
-سيتواصل معك فريقنا خلال *4 ساعات*.
-أوقات الدعم: الأحد–الخميس | ٨ص–٨م`,
-    },
-    {
-      title: 'تذكرة عادية',
-      category: 'AUTO_REPLY' as const,
-      dept: 'IT' as const,
-      sortOrder: 4,
-      body: `مرحباً 😊 تم استلام طلبك *#{{ticketId}}*
-
-سيتواصل معك فريقنا قريباً.
-RabiTech 🌐`,
-    },
-    {
-      title: 'رسالة إغلاق + تقييم',
-      category: 'QUICK_REPLY' as const,
-      dept: 'IT' as const,
-      sortOrder: 10,
-      body: `✅ تم حل تذكرتك *#{{ticketId}}*
-
-نأمل أن الخدمة عادت بشكل طبيعي 🙏
-كيف تقيّم خدمتنا؟ أرسل رقماً من 1 إلى 5`,
-    },
-    {
-      title: 'إرسال تقني',
-      category: 'QUICK_REPLY' as const,
-      dept: 'IT' as const,
-      sortOrder: 11,
-      body: `👨‍🔧 تم إرسال التقني *{{techName}}* إليك
-
-الوصول المتوقع: *{{eta}}*
-سيتصل بك التقني قبل الوصول.`,
-    },
-    {
-      title: 'خارج أوقات الدعم',
-      category: 'OUT_OF_HOURS' as const,
-      dept: 'IT' as const,
-      sortOrder: 12,
-      body: `مرحباً! 🌙
-
-شكراً على تواصلك مع RabiTech.
-
-أوقات الدعم: {{workDays}}
-من {{startTime}} حتى {{endTime}}
-
-سيتواصل معك فريقنا في أول وقت عمل. شكراً لتفهمك 🙏
-RabiTech 🌐`,
-    },
-    {
-      title: 'إعادة تشغيل الراوتر',
-      category: 'QUICK_REPLY' as const,
-      dept: 'IT' as const,
-      sortOrder: 13,
-      body: `مرحباً 👋
-
-جرب إعادة تشغيل الراوتر:
-1️⃣ افصل الكهرباء 30 ثانية
-2️⃣ أعد التشغيل وانتظر دقيقتين
-3️⃣ تحقق من أضواء الجهاز
-
-إذا لم تُحل المشكلة أخبرنا وسنساعدك فوراً.`,
-    },
-    {
-      title: 'إشعار عطل منطقة',
-      category: 'OUTAGE' as const,
-      dept: 'IT' as const,
-      sortOrder: 20,
-      body: `⚠️ إشعار عطل — RabiTech
-
-عزيزنا مشترك منطقة *{{zone}}*،
-يوجد عطل مؤقت في الشبكة يؤثر على منطقتكم.
-
-فريقنا يعمل على الحل.
-الوقت المتوقع للإصلاح: *{{eta}}*
-
-نعتذر عن الإزعاج 🙏
-RabiTech`,
-    },
-    {
-      title: 'عرض جديد',
-      category: 'CAMPAIGN' as const,
-      dept: 'MARKETING' as const,
-      sortOrder: 30,
-      body: `🎉 عرض جديد من RabiTech!
-
-📦 *{{plan}}*
-⚡ السرعة: {{speed}}
-💰 السعر: {{price}} ₪/شهر
-
-للاشتراك أو الاستفسار رد على هذه الرسالة 📞`,
-    },
-    {
-      title: 'ترحيب مشترك جديد',
-      category: 'CAMPAIGN' as const,
-      dept: 'MARKETING' as const,
-      sortOrder: 31,
-      body: `مرحباً بك في RabiTech 🌐
-
-يسعدنا انضمامك لعائلة RabiTech!
-لأي استفسار أو دعم فني، رد على هذه الرسالة وسنساعدك فوراً.`,
-    },
-    {
-      title: 'متابعة عميل',
-      category: 'QUICK_REPLY' as const,
-      dept: 'MARKETING' as const,
-      sortOrder: 40,
-      body: `مرحباً 👋
-
-شكراً لتواصلك مع RabiTech.
-كيف يمكننا مساعدتك اليوم؟`,
-    },
-  ];
-
-  for (const t of templates) {
-    await prisma.messageTemplate.upsert({
-      where: { id: `seed-${t.sortOrder}` },
-      update: { title: t.title, body: t.body, category: t.category, dept: t.dept, sortOrder: t.sortOrder },
-      create: { id: `seed-${t.sortOrder}`, organizationId, ...t },
-    });
-  }
-
-  await prisma.messageTemplate.upsert({
-    where: { id: 'seed-welcome-start' },
-    update: {
-      title: 'ترحيب فتح محادثة',
-      body: 'مرحبا، بحكي معك من شركة RabiTech 🌐\nكيف بقدر أساعدك؟',
-      category: 'AUTO_REPLY',
-      dept: 'IT',
-      sortOrder: 0,
-      isActive: true,
-    },
-    create: {
-      id: 'seed-welcome-start',
-      organizationId,
-      title: 'ترحيب فتح محادثة',
-      category: 'AUTO_REPLY',
-      dept: 'IT',
-      sortOrder: 0,
-      body: 'مرحبا، بحكي معك من شركة RabiTech 🌐\nكيف بقدر أساعدك؟',
-    },
-  });
-
-  const oohTemplate = await prisma.messageTemplate.findUnique({ where: { id: 'seed-12' } });
   await prisma.workingHours.upsert({
-    where: { id: 'default' },
+    where: { organizationId },
     update: { outOfHoursTemplateId: oohTemplate?.id },
     create: {
-      id: 'default',
+      organizationId,
       enabled: true,
       timezone: 'Asia/Jerusalem',
       workDays: [0, 1, 2, 3, 4],
@@ -335,5 +141,8 @@ RabiTech`,
 }
 
 main()
-  .catch(console.error)
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
   .finally(() => prisma.$disconnect());

@@ -132,7 +132,7 @@ Keyword          @@unique([organizationId, category, phrase])    :469
 5. **No `new PrismaClient()`** outside `src/prisma/` except the reviewed lint exception list.
 6. **No module-scope mutable caches holding tenant data.**
 7. **Every socket room name carries the org.** No inline room-name concatenation.
-8. **Arabic copy stays Palestinian/Arab48 colloquial.** Match `constants/arabic-templates.ts`.
+8. **Arabic copy stays Palestinian/Arab48 colloquial.** Match `constants/default-auto-replies.ts`.
 9. **Frontend uses logical CSS properties** (`inline-start`/`inline-end`), not `left`/`right` — the
    app is RTL today but will have LTR tenants.
 10. **404, not 403,** for cross-tenant resource requests. Never confirm existence.

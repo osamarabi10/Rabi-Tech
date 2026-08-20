@@ -1,5 +1,14 @@
 # RabiTech — Deep System Analysis
 
+> **Historical snapshot — 2026-08-19. Superseded by
+> [PROJECT-SPEC.md](PROJECT-SPEC.md).**
+>
+> This is the audit that drove the cleanup work; most issues it raises have since
+> been fixed. It is kept as a record of what was found and why decisions were
+> made, **not** as a description of the current system. For current state, read
+> PROJECT-SPEC.md. References here to an earlier single-tenant, ISP-specific
+> deployment describe what was being removed — that code and data are gone.
+
 **Audited against the running system: 2026-08-19.** Every claim below was verified by reading
 the working tree, querying the live database, or running the code — not inferred from docs.
 
@@ -186,7 +195,7 @@ at all — and if they are, it's still unencrypted.
 
 **4. Templates are signed "RabiTech 🌐"**
 On a **white-label** product, your client's customers see *your* brand. `arabic-templates.ts`
-also still contains Malan's real phone numbers (`*6087`, `+972-6464-604-3`).
+also still contains a real business's support and contact numbers, hardcoded.
 
 **5. Provisioning cannot self-heal from FAILED**
 `reconcileProvisioning()` queries `PENDING|PROVISIONING|AWAITING_QR|SUSPENDED` — **`FAILED` is

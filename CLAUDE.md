@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-RabiTech is a multi-tenant WhatsApp operations platform for customer support and marketing. Customers message via WhatsApp; the system auto-routes, auto-replies, creates IT tickets, and lets agents respond from a web dashboard.
+RabiTech is a multi-tenant, white-label WhatsApp customer-conversation platform. Independent businesses (subscribers) each get a branded workspace: customers message their WhatsApp number, and the system auto-routes, auto-replies, and lets their agents respond from a shared web inbox. A separate platform-owner console manages subscribers, plans, and billing.
 
 ## Roadmap
 
@@ -71,7 +71,7 @@ cd apps/backend && npx tsc --noEmit -p .
 cd apps/backend && npm run test:tenancy
 ```
 
-The gate uses a disposable PostgreSQL schema and is intentionally red until the P1-B through P1-E findings in `docs/TENANCY-BLEED-HARNESS.md` are resolved.
+The gate uses a disposable PostgreSQL schema and must stay **green (45/45)**. Treat a red gate as a release blocker, not a known issue.
 
 ### Check migration status
 ```bash
@@ -99,8 +99,9 @@ WhatsApp → OpenWA webhook → POST /webhook/message
       → getOrCreateActiveConversation() ← core thread logic
       → handleClientFeedback()           ← CSAT ratings intercept
       → maybeSendOutOfHoursReply()
-      → maybeCreateTicketAndAutoReply()  ← keyword detection + ticket
-      → Socket.io emit to dept room      ← live inbox update
+      → keyword detection → configurable auto-reply (or silence)
+      → autoAssignConversation()         ← round-robin / least-open
+      → Socket.io emit to team room      ← live inbox update
 ```
 
 ### Thread management (`utils/conversation-session.ts`)
@@ -109,24 +110,24 @@ One thread per contact per session. `getOrCreateActiveConversation`:
 - Reopens a RESOLVED thread (same ID, history preserved) — sets `reopenedFromResolved: true`
 - Creates a new thread only when the contact has never chatted before
 
-### IT/Marketing shared line
-`IT_NUMBER` and `MARKETING_NUMBER` in `.env` may point at the **same** WhatsApp number. `isSharedWhatsAppLine()` in `utils/whatsapp-sessions.ts` detects this. When true, all inbound traffic arrives on the `it-support` OpenWA session; the Marketing tab shows the same conversation list. Always use `dbSessionForRoute()` / `openWaSessionForRoute()` instead of hardcoding session names.
+### WhatsApp sessions
+Each organization owns its own `WhatsappSession` rows, linked to a `Team`. A session starts unlinked and gets a real number when an admin scans its QR code. Never hardcode a session name — resolve it from the organization.
 
 ### Keyword detection + auto-reply
 - Priority levels: `CRITICAL / HIGH / MEDIUM / LOW` — defined in `constants/keywords.ts`
 - Categories: `network / hardware / speed / service / other`
-- `alreadyTried` flag: escalates MEDIUM→HIGH and swaps in `ALREADY_TRIED` template
-- Marketing leads (`detectMarketingLead`) short-circuit before IT ticket creation
-- Add new keywords to `keywords.ts`, add reply text to `arabic-templates.ts`, wire trigger in `conversation-session.ts` — never scatter logic into the webhook itself
+- Add new keywords to `keywords.ts`, add reply text as an editable `MessageTemplate` row (see `constants/default-auto-replies.ts` for the seed set), wire trigger in `conversation-session.ts` — never scatter logic into the webhook itself
 
 ### Socket.io rooms
+All rooms are namespaced by organization — see `socket/rooms.ts`, never build a room string by hand.
+
 | Room | Purpose |
 |---|---|
-| `dept:it` / `dept:marketing` | Live inbox updates per department |
-| `conv:{id}` | Agents watching a specific conversation |
-| `user:{id}` | Per-user bell notifications |
-| `group:{groupId}` | WhatsApp group messages |
-| `alerts` | Network alert broadcasts |
+| `org:{orgId}` | Org-wide events (campaign progress, session status) |
+| `org:{orgId}:team:{teamId}` | Live inbox updates per team |
+| `org:{orgId}:conv:{id}` | Agents watching a specific conversation |
+| `org:{orgId}:user:{id}` | Per-user bell notifications |
+| `org:{orgId}:alerts` | Alert broadcasts |
 
 Events are defined in `socket/index.ts` → `SocketEvents` const.
 
@@ -134,13 +135,13 @@ Events are defined in `socket/index.ts` → `SocketEvents` const.
 Roles: `ADMIN > SUPERVISOR > AGENT > VIEWER / FINANCE`. Use `requirePermission('operation:action')` middleware — never inline role checks. Permissions matrix is in `ROLE_PERMISSIONS` in that file.
 
 ### Media proxy (`src/index.ts` → `/media-proxy`)
-WhatsApp media URLs are internal to the OpenWA container. The backend proxies them so any browser on the LAN can load images/audio/video. MIME type is detected by magic bytes (not upstream header) because OpenWA sometimes returns wrong MIME for voice notes (OGG/Opus).
+WhatsApp media URLs are internal to the OpenWA container. The backend proxies them so a browser can load images/audio/video. MIME type is detected by magic bytes (not upstream header) because OpenWA sometimes returns wrong MIME for voice notes (OGG/Opus).
 
 ### Frontend (`apps/frontend`)
 - Next.js 14 App Router, RTL Arabic UI, Tailwind CSS v3
 - All API calls and types live in `lib/data.ts`
 - Socket connection and inbox state live in `app/(dashboard)/inbox/page.tsx`
-- Arabic dialect: Palestinian/Arab48 colloquial — "أهلين" not "مرحباً", "شو" not "ماذا", "فيني/فيك" for can. Match the tone in `arabic-templates.ts`.
+- Arabic dialect: Palestinian/Arab48 colloquial — "أهلين" not "مرحباً", "شو" not "ماذا", "فيني/فيك" for can. Match the tone in `constants/default-auto-replies.ts`.
 
 ### Key enums (Prisma schema)
 - `ConversationStatus`: `OPEN | PENDING | RESOLVED`
@@ -153,11 +154,11 @@ WhatsApp media URLs are internal to the OpenWA container. The backend proxies th
 - `workers/incoming-message.worker.ts` — BullMQ, processes inbound WhatsApp messages with retry. `DISABLE_MESSAGE_WORKER=1` env var skips it.
 - `workers/campaign.worker.ts` — BullMQ, sends bulk campaign messages with ~1.2s delay between sends. `DISABLE_CAMPAIGN_WORKER=1` skips it.
 
-### Zone broadcasts (`modules/alerts/alerts.routes.ts`)
-`POST /zone-outage` and `POST /zone-resolved` loop over all contacts in a zone and send via OpenWA. Zones are seeded in `constants/zones.ts` (Kfar Qasim, Kfar Bara, Jaljulia, Tayibe, Tira).
+### Broadcasts
+Campaigns target an audience via the contact filter DSL (`lib/contact-filter-dsl.ts`), stored on `Campaign.audienceFilter`. Sends are throttled — see `workers/campaign.worker.ts` and the `CAMPAIGN_*` env vars.
 
-### Group messages
-Group IDs **must** be normalized with `normalizeGroupId()` (`utils/group-id.ts`) before use in storage, room names, or comparisons — raw payloads sometimes include a `:device` suffix that causes silent mismatches.
+### WhatsApp groups are not supported
+RabiTech is a **1:1 conversation platform**. Inbound group messages (`@g.us`) are explicitly ignored in the webhook. Do not reintroduce group handling without a product decision.
 
 ## Environment variables (key ones)
 ```

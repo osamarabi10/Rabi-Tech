@@ -1,118 +1,88 @@
 ---
 name: rabitech-guide
-description: Architecture and conventions guide for the RabiTech WhatsApp operations platform (Express + Prisma backend, Next.js frontend). Use this whenever working on this codebase — adding/changing conversation flows, ticket auto-creation, Arabic auto-reply templates, WhatsApp webhook/group handling, zone broadcasts, or the IT/Marketing shared-line setup. Also consult before running Prisma migrations or typechecking the backend.
+description: Architecture and conventions guide for RabiTech, a multi-tenant white-label WhatsApp conversation platform (Express + Prisma backend, Next.js frontend). Use this whenever working on this codebase — tenant isolation, conversation flows, auto-replies, campaigns, the WhatsApp gateway, or billing. Also consult before running Prisma migrations or typechecking the backend.
 ---
 
 # RabiTech guide
 
-A WhatsApp-based customer support + marketing inbox for an ISP based in Kfar Qasim
-(Arab48 / Palestinian-Israeli community). Backend: Express + Prisma (Postgres) in
-`apps/backend/src`. Frontend: Next.js in `apps/frontend`. WhatsApp connectivity goes
-through OpenWA (gateway service), driven via webhooks.
+A **multi-tenant, white-label WhatsApp customer-conversation platform** — many
+independent businesses ("subscribers") each get their own branded workspace,
+team inbox, contacts, and broadcasts on their own WhatsApp number. A separate
+platform-owner console manages subscribers, plans, and billing.
+
+Backend: Express + Prisma (Postgres) in `apps/backend/src`. Frontend: Next.js in
+`apps/frontend`. WhatsApp connectivity runs through a self-hosted OpenWA gateway
+driven by webhooks.
+
+> **Read [`docs/PROJECT-SPEC.md`](../../../docs/PROJECT-SPEC.md) first** for verified
+> current state, and [`CLAUDE.md`](../../../CLAUDE.md) for the full conventions
+> reference. This file is the short orientation.
+
+## The two rules that override everything
+
+1. **Fail-closed tenancy.** Every tenant query runs inside an AsyncLocalStorage
+   scope; a query with no scope *throws* rather than reading across tenants.
+   Every tenant table carries `organizationId` and a composite FK
+   `[id, organizationId]`, so the database rejects a cross-tenant write —
+   app-level checks are not the boundary. Never add a tenant table without both.
+2. **Nothing customer-facing is hardcoded.** Every message a subscriber's
+   customer can receive resolves from that subscriber's own row. If unconfigured,
+   **send nothing** — never fall back to placeholder or platform-branded text.
+   Defaults live in `constants/default-auto-replies.ts` as *provisioning seed
+   data*, never as runtime fallbacks. A subscriber's customers must never see
+   "RabiTech".
 
 ## Architecture map
 
 | Concern | File |
 |---|---|
-| Inbound WhatsApp webhook (messages, groups, session status) | `apps/backend/src/webhooks/openwa.webhook.ts` |
-| One-thread-per-contact, ticket auto-creation, auto-replies | `apps/backend/src/utils/conversation-session.ts` |
-| Priority/category keyword detection | `apps/backend/src/constants/keywords.ts` |
-| Arabic auto-reply text | `apps/backend/src/constants/arabic-templates.ts` |
-| Shared-line / IT vs Marketing routing helpers | `apps/backend/src/utils/whatsapp-sessions.ts` |
-| Group id normalization + group message handling | `apps/backend/src/utils/group-id.ts`, `webhooks/openwa.webhook.ts` |
-| Zone broadcasts (outage/resolved) | `apps/backend/src/modules/alerts/alerts.routes.ts` |
-| Client feedback / star-rating after resolve | `apps/backend/src/utils/client-feedback.ts` |
-| Conversation/ticket REST API | `apps/backend/src/modules/conversations/`, `modules/tickets/` |
-| Prisma schema | `apps/backend/prisma/schema.prisma` |
+| Inbound WhatsApp webhook (messages, acks, session status) | `src/webhooks/openwa.webhook.ts` |
+| Tenant scope helpers (`runAsOrganization`, `runAsPlatform`) | `src/lib/tenant-context.ts` |
+| One-thread-per-contact, reopen-preserving | `src/utils/conversation-session.ts` |
+| Auto-reply resolution (resolve-or-send-nothing) | `src/utils/auto-reply.ts` |
+| Keyword detection | `src/constants/keywords.ts` |
+| Auto-assignment (round-robin / least-open + caps) | `src/modules/routing/assignment.service.ts` |
+| Gateway webhook self-healing | `src/utils/webhook-reconcile.ts` |
+| RBAC permission matrix | `src/middleware/rbac.middleware.ts` |
+| Plan entitlements / seat limits | `src/modules/billing/plans.ts`, `src/modules/usage/entitlements.ts` |
+| Frontend API calls + types (single source) | `apps/frontend/lib/data.ts` |
 
-## Shared WhatsApp line (IT + Marketing)
+## Hard-won invariants — do not relearn these
 
-`IT_NUMBER` and `MARKETING_NUMBER` in `.env` may point at the **same** WhatsApp number.
-`isSharedWhatsAppLine()` in `whatsapp-sessions.ts` detects this. When true:
-
-- All inbound messages arrive under the `it-support` OpenWA session — there is no
-  separate `marketing` session to query.
-- The Marketing tab deliberately shows the **same conversation list** as IT
-  (`conversationFilterForDept`) — this is intentional, not a bug.
-- `Conversation.department` (`IT` | `MARKETING`, nullable) tags which tab a
-  conversation was *initiated from* (set in `conversations.routes.ts` `/start`).
-  Use this to gate department-specific automation — e.g.
-  `maybeCreateTicketAndAutoReply` skips ticket creation entirely when
-  `department === 'MARKETING'`, so marketing replies don't spawn IT tickets.
-- `dbSessionForRoute()` / `openWaSessionForRoute()` redirect "marketing route"
-  actions to the `it-support` session row when the line is shared. Always go
-  through these helpers rather than hardcoding `it-support` / `marketing`.
-
-If `MARKETING_NUMBER` is ever set to a *different* number, all of the above
-short-circuits to normal per-department behavior automatically — don't special-case
-the non-shared path separately.
-
-## Conversation / ticket auto-flow
-
-For every inbound 1:1 message (`handleInboundMessage` in the webhook):
-
-1. `getOrCreateActiveConversation` — finds/reopens/creates the one thread for this
-   contact+session. Reopens RESOLVED threads rather than creating duplicates.
-2. `handleClientFeedback` — if the customer recently got a "resolved" message
-   (within 72h, tracked via `hadRecentResolvePrompt`), a short reply (1-5, "شكراً",
-   etc.) is treated as a CSAT rating/thanks and does **not** open a ticket. This
-   check runs *before* ticket logic and short-circuits it.
-3. If not handled as feedback and outside working hours → `maybeSendOutOfHoursReply`.
-4. `maybeCreateTicketAndAutoReply`:
-   - Runs `detectPriority(body)` from `keywords.ts` → CRITICAL/HIGH/MEDIUM/LOW +
-     category (`network`/`hardware`/`speed`/`service`/`other`) + `alreadyTried`
-     flag (customer says they already restarted/retried — escalates MEDIUM→HIGH
-     and swaps in the `ALREADY_TRIED` template instead of basic troubleshooting
-     steps).
-   - Skips entirely for `department === 'MARKETING'` conversations.
-   - Creates or reopens a `Ticket`, sends the matching `TEMPLATES[priority]` (or
-     `ALREADY_TRIED`) reply via `pickReplyTemplate`.
-   - `pickFollowUp` may send a second message: `SPEED_TEST` for `category ===
-     'speed'`, or `UPGRADE_LEAD` if the matched keyword is an upgrade request
-     ("ترقية"/"تغيير باقة").
-   - CRITICAL tickets also notify `IT_ALERT_GROUP_ID` via `OpenWAService.sendGroup`.
-
-When adding a new auto-reply scenario, follow this pattern: add keywords to
-`keywords.ts`, add the message text to `arabic-templates.ts`, and wire the
-trigger into `conversation-session.ts` (or `client-feedback.ts` for post-resolve
-flows) — don't scatter new logic into the webhook itself.
-
-## Group messages
-
-Group payloads are detected via `isGroupPayload`/`resolveGroupId` (`group-id.ts`),
-stored in `GroupMessage` (separate from `Message`/`Conversation`), and broadcast on
-socket room `group:${normalizedGroupId}`. **Always normalize the group id with
-`normalizeGroupId()` before using it for storage, room names, or comparisons** —
-raw payloads sometimes include a `:device` suffix that must be stripped, and a
-mismatch between the stored/joined id and the emitted room id silently breaks
-live updates (this has been a real bug before).
-
-## Zone broadcasts
-
-`alerts.routes.ts` has `POST /zone-outage` and `POST /zone-resolved`, which loop
-over all `Contact`s with a given `zoneId` and send `TEMPLATES.ZONE_OUTAGE` /
-`ZONE_RESOLVED` via `OpenWAService.sendText`, with a ~1.2s delay between sends to
-avoid WhatsApp rate limits. Zones are defined in `constants/zones.ts`
-(`RABITECH_ZONES` — Kfar Qasim, Kfar Bara, Jaljulia, Tayibe, Tira).
+- **BullMQ job ids cannot contain `:`** — it is the queue's own key separator.
+  Use `--`. Colons here silently broke all inbound *and* all campaign sends.
+- **Persist before sending.** Create the `Message` row, then call the gateway.
+  Otherwise a gateway failure loses the message while the customer received it.
+- **Delivery acks are monotonic** (`sent → delivered → read`). WhatsApp
+  redelivers out of order; never let a late duplicate walk status backwards.
+- **New env vars must be added to `docker-compose.yml` explicitly** — the
+  backend service lists them one by one, so anything missing silently falls back
+  to its default inside the container.
+- **WhatsApp groups are not supported.** Inbound `@g.us` messages are ignored by
+  design; this is a 1:1 platform.
 
 ## Arabic dialect convention
 
-This is **not** MSA (Modern Standard Arabic). The company is in Kfar Qasim
-(Arab48 / Palestinian dialect). Customer-facing text should sound like a local
-person texting — e.g. "أهلين" not "مرحباً", "بدي/بدك" not "أريد/تريد", "شو" not
-"ماذا", "فيني/فيك" for "I/you can". When writing or editing anything in
-`arabic-templates.ts`, match the existing colloquial tone (see `WELCOME_START`,
-`RESOLVED`, `ALREADY_TRIED` for reference) rather than formal/Gulf/Egyptian Arabic.
+Customer-facing text is **Palestinian / Arab48 colloquial**, not MSA — it should
+read like a local person texting: "أهلين" not "مرحباً", "بدي/بدك" not
+"أريد/تريد", "شو" not "ماذا", "فيني/فيك" for "I/you can". Match the tone in
+`constants/default-auto-replies.ts`.
+
+Keep seed copy deliberately minimal and free of business specifics (no phone
+numbers, prices, or addresses) — a subscriber should feel they need to
+personalise it, not that the platform already spoke for them.
 
 ## Required commands after backend changes
 
-- **Schema changes**: edit `prisma/schema.prisma`, write a migration under
-  `prisma/migrations/<timestamp>_<name>/migration.sql` (DB may not be reachable
-  from the dev sandbox — write the SQL by hand if `prisma migrate dev` can't
-  reach `localhost:5432`), then run `npx prisma generate`. When the live DB *is*
-  reachable, run `npx prisma migrate deploy` — forgetting this causes every
-  query touching the new column to fail at runtime even though `tsc` is clean.
-- **Typecheck**: `cd apps/backend && npx tsc --noEmit -p .` — run this after any
-  backend `.ts` edit, it's fast and catches most mistakes before runtime.
-- If the backend dev server (`npm run dev`, port 4000) appears to have crashed
-  after a schema change, restart it with `npm run dev` from `apps/backend`.
+```bash
+cd apps/backend && npx tsc --noEmit -p .   # typecheck
+cd apps/backend && npm run test:tenancy    # isolation gate — must stay green
+```
+
+Schema changes: hand-write the SQL migration under
+`prisma/migrations/<timestamp>_<name>/`, then `npx prisma generate`, then
+`docker compose exec backend npx prisma migrate deploy`.
+
+When WhatsApp "isn't working", read
+[`docs/WHATSAPP-GATEWAY-RUNBOOK.md`](../../../docs/WHATSAPP-GATEWAY-RUNBOOK.md) —
+inbound-broken and outbound-broken are separate faults with separate causes.
