@@ -55,14 +55,27 @@ explicitly or they don't exist in the container.
   downgrade-grace notice. `/billing` now redirects here rather than to `usage`.
   — Verified in browser: FREE org renders "Free / مجاني / 7 / 1 / وصلت للحد
   الأقصى / لا توجد فواتير بعد", and the same card in en/he.
-- [ ] **3. Gated-features-shown-not-hidden**: central `useEntitlements()` hook
+- [x] **3. Gated-features-shown-not-hidden**: central `useEntitlements()` hook
   reading plan from `/api/billing/summary`
-  — verify: hook returns campaign/API-key gates for FREE vs ENTERPRISE
-- [ ] **4. Apply to Broadcasts**: FREE tenant sees the campaigns page with an
+  — **done 2026-08-21.** `lib/entitlements.tsx`: provider mounted in the
+  dashboard layout so one fetch serves every page. Gates `broadcasts`,
+  `customDomain`, `whiteLabel`, `autoGateway`. **Fails open** while loading or
+  on error — hiding UI on a failed fetch would look like a broken product, and
+  the server is the real gate.
+  — Verified: FREE → campaignSends 0 = GATED, all flags false;
+  ENTERPRISE → campaignSends null = ALLOWED, all flags true.
+- [x] **4. Apply to Broadcasts**: FREE tenant sees the campaigns page with an
   upsell panel "البث — متوفر في باقة Growth" + upgrade button, NOT a missing
   nav item; server still enforces via `assertMetricAvailable` (never trust UI)
-  — verify: browser as FREE org shows upsell; ENTERPRISE unchanged
-- [ ] **5. Docs**: tick this block in TODO, update spec ledger
+  — **done 2026-08-21.** `components/upgrade-gate.tsx` wraps the campaigns page.
+  Browser as FREE org: nav still lists البث, page renders
+  "البث — متوفر في باقة Growth" + description + "باقتك الحالية: Free" + CTA.
+  — **Server enforcement proven independently.** Ran `assertMetricAvailable`
+  in tenant scope inside the container rather than through the send route,
+  because the demo org is linked to a real WhatsApp number and a broken gate
+  would have messaged real contacts. Both qty=1 and qty=8 returned
+  `USAGE_QUOTA_EXCEEDED`; nothing was sent.
+- [x] **5. Docs**: tick this block in TODO, update spec ledger — done 2026-08-21.
 
 ## P9 — Platform owner pricing control · ~1 week
 

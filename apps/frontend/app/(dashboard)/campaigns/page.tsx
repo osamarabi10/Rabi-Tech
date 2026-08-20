@@ -19,6 +19,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { useT } from '@/lib/i18n';
+import { UpgradeGate } from '@/components/upgrade-gate';
 import { cn } from '@/lib/utils';
 
 export default function CampaignsPage() {
@@ -64,6 +65,13 @@ export default function CampaignsPage() {
     : [];
 
   return (
+    // The nav entry and page stay; only the contents are gated. A missing menu
+    // item reads as broken, a priced feature reads as something to buy.
+    <UpgradeGate
+      feature="broadcasts"
+      title="البث"
+      description="أرسل رسالة لمجموعة من جهات الاتصال دفعة واحدة، مع تقرير تسليم لكل مستلم."
+    >
     <div className="flex-1 overflow-y-auto p-5">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-base font-extrabold">{t('الحملات والبث')}</h1>
@@ -175,5 +183,6 @@ export default function CampaignsPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </UpgradeGate>
   );
 }

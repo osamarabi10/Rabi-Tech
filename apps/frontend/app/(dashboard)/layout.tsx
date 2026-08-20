@@ -6,6 +6,7 @@ import api from '@/lib/api';
 import { Menu } from 'lucide-react';
 import { AppSidebar } from '@/components/app-sidebar';
 import { BrandLogo } from '@/components/brand-logo';
+import { EntitlementsProvider } from '@/lib/entitlements';
 import { DashboardFooter } from '@/components/dashboard-footer';
 import { useT } from '@/lib/i18n';
 
@@ -52,6 +53,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
+    <EntitlementsProvider>
     <div className="flex h-screen overflow-hidden bg-background">
       <AppSidebar open={navOpen} onClose={() => setNavOpen(false)} />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -73,5 +75,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <DashboardFooter />
       </main>
     </div>
+    </EntitlementsProvider>
   );
 }

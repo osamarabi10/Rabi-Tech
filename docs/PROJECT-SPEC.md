@@ -178,12 +178,18 @@ numbers (display-only; the shared number now lives on `ostudio-primary`).
 
 ### Remaining — in build order, with definitions of done
 
-**P8-b · Tenant subscription panel** — ~3 days
+**P8-b · Tenant subscription panel** — ✅ **DELIVERED 2026-08-21**
 Settings tab: plan name, live MAC meter, invoice list (`listInvoices`), upgrade
 CTA (→ checkout when payments land; → contact page until then). Gated features
 **shown, not hidden**: Free admin sees "البث — متوفر في باقة Growth" + upgrade
 button, never a missing menu item. Entitlements read from `plans.ts` only.
 *Done when:* a Free admin can see exactly what upgrading buys, from inside the app.
+**Met.** `GET /api/billing/summary` (one call: plan, entitlements, seats, meters,
+invoices) · subscription card · `useEntitlements()` + `UpgradeGate`, broadcasts
+shown-not-hidden. Server enforcement verified independently of the UI gate.
+Also added `quotaDrift`: `Organization.tier` and `OrganizationConfig` are two
+stores that can silently diverge with enforcement following the config, letting
+a tenant keep quotas they no longer pay for.
 
 **P9 · Platform pricing control** — ~1 week
 `Organization`: `planOverride, macQuotaOverride, discountPercent, creditCents,

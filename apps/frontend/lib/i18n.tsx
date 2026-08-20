@@ -588,6 +588,9 @@ const D: Dict = {
   "رفع الشعار": { he: "העלאת לוגו", en: "Logo upload" },
   "رفع أيقونة المتصفح": { he: "העלאת אייקון דפדפן", en: "Favicon upload" },
   "توثيق النطاق": { he: "אימות דומיין", en: "Domain verification" },
+  "متوفر في باقة": { he: "זמין בחבילת", en: "available on" },
+  "باقتك الحالية": { he: "החבילה הנוכחית שלך", en: "Your current plan" },
+  "أرسل رسالة لمجموعة من جهات الاتصال دفعة واحدة، مع تقرير تسليم لكل مستلم.": { he: "שלח הודעה לקבוצת אנשי קשר בבת אחת, עם דוח מסירה לכל נמען.", en: "Send one message to a group of contacts at once, with a delivery report per recipient." },
 };
 
 type I18nCtx = {
