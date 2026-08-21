@@ -18,6 +18,7 @@ import {
   Sun,
   CreditCard,
   Building2,
+  Workflow,
 } from 'lucide-react';
 import { NotificationBell } from '@/components/notification-bell';
 import { BrandLogo } from '@/components/brand-logo';
@@ -49,6 +50,7 @@ const NAV_ITEMS = [
   { href: '/inbox',      icon: MessageSquare,   label: 'المحادثات' },
   { href: '/contacts',   icon: Users,           label: 'جهات الاتصال' },
   { href: '/campaigns',  icon: Megaphone,       label: 'البث' },
+  { href: '/automations', icon: Workflow,       label: 'الأتمتة' },
   { href: '/reports',    icon: LayoutDashboard, label: 'التقارير' },
   { href: '/settings',   icon: Settings,        label: 'الإعدادات' },
 ];

@@ -7,6 +7,8 @@
  * offering things the server rejects.
  */
 
+import { checkWebhookUrlShape } from './outbound-url';
+
 export const TRIGGER_TYPES = [
   'CONVERSATION_CREATED',
   'KEYWORD_MATCHED',
@@ -159,9 +161,16 @@ export function validateWorkflowConfig(
       case 'UPDATE_CONTACT_FIELD':
         requireText(action.field, 'a field', errors, path);
         break;
-      case 'HTTP_WEBHOOK':
+      case 'HTTP_WEBHOOK': {
         requireText(action.url, 'a URL', errors, path);
+        if (typeof action.url === 'string' && action.url.trim()) {
+          // Shape only — no DNS in a request handler. The resolved-address check
+          // still runs at execution time and remains the authority.
+          const problem = checkWebhookUrlShape(action.url);
+          if (problem) errors.push(`${path}: ${problem}`);
+        }
         break;
+      }
       case 'WAIT_DELAY': {
         const minutes = Number(action.minutes);
         if (!Number.isFinite(minutes) || !Number.isInteger(minutes) || minutes <= 0) {

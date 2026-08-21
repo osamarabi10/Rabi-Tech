@@ -101,7 +101,29 @@ export type SafeTarget = {
  * approved. Re-resolving at request time would reopen the rebinding window it
  * just closed.
  */
-export async function assertSafeWebhookUrl(raw: string): Promise<SafeTarget> {
+/**
+ * The half of the guard that needs no network.
+ *
+ * Split out so a workflow can be rejected **when it is saved** rather than
+ * silently at 3am when it first runs: an internal URL is a misconfiguration the
+ * author should learn about while they are still looking at the form. The
+ * resolved-address half stays in `assertSafeWebhookUrl` and remains
+ * authoritative, because DNS can change between saving and running.
+ *
+ * Returns an error message, or null when the shape is acceptable.
+ */
+export function checkWebhookUrlShape(raw: string): string | null {
+  try {
+    parseWebhookUrl(raw);
+    return null;
+  } catch (error) {
+    if (error instanceof BlockedUrlError) return error.message;
+    throw error;
+  }
+}
+
+/** Scheme, credential, host and port checks. No DNS. */
+function parseWebhookUrl(raw: string): { parsed: URL; hostname: string } {
   let parsed: URL;
   try {
     parsed = new URL(String(raw || '').trim());
@@ -132,6 +154,12 @@ export async function assertSafeWebhookUrl(raw: string): Promise<SafeTarget> {
   if (BLOCKED_PORTS.has(port)) {
     throw new BlockedUrlError(`Webhook URL port ${port} is not allowed`);
   }
+
+  return { parsed, hostname };
+}
+
+export async function assertSafeWebhookUrl(raw: string): Promise<SafeTarget> {
+  const { parsed, hostname } = parseWebhookUrl(raw);
 
   let addresses: string[];
   if (net.isIP(hostname)) {

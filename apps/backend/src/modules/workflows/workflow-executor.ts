@@ -45,6 +45,14 @@ export type ExecutionContext = {
   depth: number;
   /** Set by the trigger, available to actions for interpolation. */
   payload: Record<string, unknown>;
+  /**
+   * Events this run produced, for the caller to dispatch once it finishes.
+   *
+   * Collected rather than dispatched here so the executor stays free of the
+   * queue — and so a workflow's own tag writes go back through the dispatcher
+   * at depth + 1, where the loop guard can see them.
+   */
+  emitted: Array<{ type: 'TAG_ADDED' | 'TAG_REMOVED'; tag: string }>;
 };
 
 export type LogEntry = {
@@ -239,10 +247,13 @@ async function runAction(
         create: { organizationId: context.organizationId, name },
         update: {},
       });
-      await prisma.contactTag.createMany({
+      const { count } = await prisma.contactTag.createMany({
         data: [{ organizationId: context.organizationId, contactId: context.contactId, tagId: tag.id }],
         skipDuplicates: true,
       });
+      // Only a real change emits. Re-tagging an already-tagged contact must not
+      // wake every TAG_ADDED workflow in the organization.
+      if (count > 0) context.emitted.push({ type: 'TAG_ADDED', tag: name });
       return entry(stepIndex, action.type, 'ok', name);
     }
 
@@ -252,6 +263,7 @@ async function runAction(
       const { count } = await prisma.contactTag.deleteMany({
         where: { contactId: context.contactId, tag: { name } },
       });
+      if (count > 0) context.emitted.push({ type: 'TAG_REMOVED', tag: name });
       return entry(stepIndex, action.type, 'ok', `${name} (${count})`);
     }
 

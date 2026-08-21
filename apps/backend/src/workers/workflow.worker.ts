@@ -110,6 +110,7 @@ export function startWorkflowWorker(): Worker | null {
         }
 
         const config = (workflow.configJson || {}) as unknown as WorkflowConfig;
+        const emitted: Array<{ type: 'TAG_ADDED' | 'TAG_REMOVED'; tag: string }> = [];
         const result = await runWorkflowActions(
           config,
           {
@@ -120,9 +121,23 @@ export function startWorkflowWorker(): Worker | null {
             conversationId: execution.conversationId,
             depth: execution.depth,
             payload: data.payload || {},
+            emitted,
           },
           data.fromStep,
         );
+
+        // A workflow's own tag writes feed the tag triggers, one level deeper.
+        // This is the case the depth cap exists for: ADD_TAG firing a TAG_ADDED
+        // workflow that adds another tag, and so on.
+        for (const event of emitted) {
+          await dispatchWorkflowEvent({
+            triggerType: event.type,
+            contactId: execution.contactId,
+            conversationId: execution.conversationId,
+            payload: { tag: event.tag },
+            depth: execution.depth + 1,
+          });
+        }
 
         if (result.status === 'WAITING' && result.resumeAtStep !== undefined) {
           await workflowQueue.add(

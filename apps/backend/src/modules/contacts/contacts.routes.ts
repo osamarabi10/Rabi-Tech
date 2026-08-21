@@ -12,6 +12,7 @@ import {
 import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
 import { setContactConsent } from '../../utils/consent';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
 
 /** Accepted marketing-consent values, validated before any write. */
 const CONSENT_VALUES = ['UNKNOWN', 'OPTED_IN', 'OPTED_OUT'] as const;
@@ -244,10 +245,23 @@ router.post('/bulk', async (req, res) => {
         update: {},
       });
       const contacts = await prisma.contact.findMany({ where: { id: { in: ids } }, select: { id: true } });
-      await prisma.contactTag.createMany({
+      const { count } = await prisma.contactTag.createMany({
         data: contacts.map((contact) => ({ organizationId: req.user!.organizationId, contactId: contact.id, tagId: tag.id })),
         skipDuplicates: true,
       });
+
+      // TAG_ADDED workflow trigger. Fires per contact, and only when the tag was
+      // actually new — re-tagging an already-tagged contact must not wake every
+      // automation in the organization.
+      if (count > 0) {
+        for (const contact of contacts) {
+          await dispatchWorkflowEvent({
+            triggerType: 'TAG_ADDED',
+            contactId: contact.id,
+            payload: { tag: name },
+          });
+        }
+      }
     }
 
     res.json({ ok: true });

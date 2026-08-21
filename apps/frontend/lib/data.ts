@@ -1006,3 +1006,89 @@ export async function fetchSegmentCount(id: string): Promise<number> {
   const { data } = await api.get(`/api/segments/${id}/count`);
   return (data as { count: number }).count;
 }
+
+// ---------------------------------------------------------------------------
+// Automations (P11)
+// ---------------------------------------------------------------------------
+
+export type WorkflowAction = { type: string; [key: string]: unknown };
+export type WorkflowCondition = { type: string; value?: string; field?: string };
+export type WorkflowConfig = {
+  trigger?: { keyword?: string; tag?: string };
+  conditions?: WorkflowCondition[];
+  actions: WorkflowAction[];
+};
+
+export type Workflow = {
+  id: string;
+  name: string;
+  description: string | null;
+  isActive: boolean;
+  triggerType: string;
+  configJson: WorkflowConfig;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { executions: number };
+};
+
+export type WorkflowRun = {
+  id: string;
+  status: string;
+  currentStepIndex: number;
+  error: string | null;
+  executionLog: Array<{ step: number; action: string; outcome: string; detail?: string; at: string }> | null;
+  createdAt: string;
+};
+
+/**
+ * The trigger/condition/action vocabulary, served by the backend.
+ *
+ * Never hardcoded here: only the server can reject an unknown action, so a
+ * client-side copy drifts into offering steps that fail validation on save.
+ */
+export type WorkflowSchema = {
+  triggers: string[];
+  conditions: string[];
+  actions: string[];
+  limits: { maxActions: number; maxConditions: number; maxDelayMinutes: number };
+};
+
+export async function fetchWorkflowSchema(): Promise<WorkflowSchema> {
+  const { data } = await api.get('/api/workflows/schema');
+  return data as WorkflowSchema;
+}
+
+export async function fetchWorkflows(): Promise<Workflow[]> {
+  const { data } = await api.get('/api/workflows');
+  return data as Workflow[];
+}
+
+export async function fetchWorkflowRuns(
+  id: string,
+): Promise<{ runs: WorkflowRun[]; tally: Record<string, number> }> {
+  const { data } = await api.get(`/api/workflows/${id}/executions`);
+  return data;
+}
+
+export async function createWorkflow(input: {
+  name: string;
+  description?: string | null;
+  triggerType: string;
+  configJson: WorkflowConfig;
+}): Promise<Workflow> {
+  const { data } = await api.post('/api/workflows', input);
+  return data as Workflow;
+}
+
+export async function updateWorkflow(
+  id: string,
+  input: Partial<{ name: string; description: string | null; isActive: boolean; triggerType: string; configJson: WorkflowConfig }>,
+): Promise<Workflow> {
+  const { data } = await api.patch(`/api/workflows/${id}`, input);
+  return data as Workflow;
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+  await api.delete(`/api/workflows/${id}`);
+}
