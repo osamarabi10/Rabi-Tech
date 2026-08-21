@@ -94,8 +94,15 @@ export const tenancyExtension = Prisma.defineExtension((client) => {
             }
           }
 
-          // Inject into filter for findMany/count/aggregate/groupBy
-          if (['findMany', 'count', 'aggregate', 'groupBy'].includes(operation)) {
+          // Inject into the filter for read and aggregate operations.
+          //
+          // findFirst and findFirstOrThrow were missing from here AND from the
+          // list above, so they ran completely unscoped: a findFirst by id in
+          // one tenant would happily return another tenant's row. They take an
+          // optional `where` exactly like findMany, so they belong in this
+          // branch — the one that creates `where` when absent rather than only
+          // augmenting an existing one.
+          if (['findMany', 'findFirst', 'findFirstOrThrow', 'count', 'aggregate', 'groupBy'].includes(operation)) {
             anyArgs.where = { ...(anyArgs.where || {}), organizationId };
           }
 

@@ -70,6 +70,7 @@ model Organization {
   invoices                Invoice[]
   emailVerificationTokens EmailVerificationToken[]
   signupThrottleEvents    SignupThrottleEvent[]
+  segments                Segment[]
 
   /// The console sweeps for live and expiring overrides on every load.
   @@index([overrideExpiresAt])
@@ -534,6 +535,8 @@ model User {
   assignedContacts      Contact[]            @relation("ContactAssignee")
 
   // Composite unique: one identity per org
+  segments Segment[]
+
   @@unique([id, organizationId])
   @@unique([organizationId, identityId])
   @@index([organizationId])
@@ -903,4 +906,35 @@ model Notification {
   conversation Conversation? @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Restrict)
 
   @@index([organizationId, userId, isRead, createdAt])
+}
+
+/// A named, saved contact filter. `filter` stores the same DSL the M3 builder
+/// produces and `contactWhereFromFilterDsl` compiles.
+model Segment {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  /// ContactFilterDsl. Unversioned, exactly like Campaign.audienceFilter — the
+  /// DSL is additive by contract, so stored filters keep compiling.
+  filter         Json
+  /// Who saved it. Audit only: there is no sharing model, so every segment in
+  /// an organization is visible to everyone in it.
+  createdById    String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  /// Soft delete. Deliberately NOT `isArchived` (the Contact/Conversation
+  /// convention): archiving there is a product feature the user sees, this is
+  /// deletion, and a timestamp answers "when" for free.
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation(fields: [createdById, organizationId], references: [id, organizationId], onDelete: Restrict)
+  // Name uniqueness is a PARTIAL, CASE-INSENSITIVE index created in SQL.
+  // Prisma can express neither, so do NOT add @@unique([organizationId, name]) —
+  // a full unique index would make a soft-deleted segment reserve its name
+  // forever, and re-creating it would be impossible without a manual DB edit.
+
+  @@unique([id, organizationId])
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, name])
 }

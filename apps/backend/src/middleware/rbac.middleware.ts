@@ -25,6 +25,15 @@ const ROLE_PERMISSIONS: Record<string, Set<Role>> = {
   'contact:delete': new Set(['ADMIN']),
   'contact:read': new Set(['ADMIN', 'SUPERVISOR', 'AGENT', 'VIEWER', 'FINANCE']),
 
+  // Segments — saved contact filters. Org-wide once saved, so renaming and
+  // deleting sit above the role that can create one: an agent must not be able
+  // to delete a view the whole team relies on. Unlike contact:delete this is not
+  // ADMIN-only, because deletion here is soft and reversible.
+  'segment:view': new Set(['ADMIN', 'SUPERVISOR', 'AGENT', 'VIEWER', 'FINANCE']),
+  'segment:create': new Set(['ADMIN', 'SUPERVISOR', 'AGENT']),
+  'segment:rename': new Set(['ADMIN', 'SUPERVISOR']),
+  'segment:delete': new Set(['ADMIN', 'SUPERVISOR']),
+
   // Campaign operations
   'campaign:create': new Set(['ADMIN', 'SUPERVISOR']),
   'campaign:send': new Set(['ADMIN', 'SUPERVISOR']),

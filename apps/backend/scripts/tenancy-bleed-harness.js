@@ -120,6 +120,19 @@ function staticAudits() {
     auditLeaks.join(', '),
   );
 
+  // findFirst/findFirstOrThrow were absent from both injection lists in the
+  // tenancy extension and therefore ran unscoped — found while building P10-a,
+  // with roughly twenty call sites across the backend including the inbound
+  // message path. This pins the fix.
+  const extensionSource = fs.readFileSync(
+    path.join(ROOT, 'src', 'prisma', 'extensions.ts'), 'utf8');
+  const findFirstScoped = /'findFirst'/.test(extensionSource) && /'findFirstOrThrow'/.test(extensionSource);
+  record(
+    'audit: tenancy extension scopes findFirst and findFirstOrThrow',
+    findFirstScoped,
+    findFirstScoped ? '' : 'findFirst is not in the injected operation list',
+  );
+
   const mutableCaches = [];
   for (const file of sourceFiles) {
     const rel = relative(file);
@@ -873,6 +886,76 @@ async function databaseAudits() {
           overrideReason: null, overrideExpiresAt: null, overrideSetAt: null,
         },
       });
+    });
+
+    await check('segments: saved segments are organization-scoped', async () => {
+      // Segments hold a stored filter, so a leak here is not one row but a
+      // whole audience definition plus the counts derived from it.
+      const filter = { $and: [{ category: 'contactField', field: 'email', operator: 'isEmpty' }] };
+
+      const created = await runAsOrganization(orgA.organizationId, () =>
+        scoped.segment.create({
+          data: {
+            organizationId: orgA.organizationId,
+            name: 'Bleed segment',
+            filter,
+            createdById: orgA.userId,
+          },
+          select: { id: true },
+        }));
+
+      const [listA, listB] = await Promise.all([
+        runAsOrganization(orgA.organizationId, () => scoped.segment.findMany({ where: { deletedAt: null } })),
+        runAsOrganization(orgB.organizationId, () => scoped.segment.findMany({ where: { deletedAt: null } })),
+      ]);
+      assert.equal(listA.length, 1, 'org A cannot see its own segment');
+      assert.equal(listB.length, 0, 'org B saw an org A segment');
+
+      // findFirst by id is exactly how the routes look a segment up before
+      // renaming or deleting it. It was NOT covered by the tenancy extension
+      // until P10-a, so this is the regression guard for that hole: org B
+      // must resolve org A's id to nothing.
+      const stolen = await runAsOrganization(orgB.organizationId, () =>
+        scoped.segment.findFirst({ where: { id: created.id, deletedAt: null } }));
+      assert.equal(stolen, null, 'findFirst returned another tenant\'s segment');
+
+      const stolenUnique = await runAsOrganization(orgB.organizationId, () =>
+        scoped.segment.findUnique({ where: { id: created.id } }));
+      assert.equal(stolenUnique, null, 'findUnique returned another tenant\'s segment');
+
+      // Writing across the boundary must fail rather than silently succeed.
+      await assert.rejects(
+        () => runAsOrganization(orgB.organizationId, () =>
+          scoped.segment.update({ where: { id: created.id }, data: { name: 'Stolen' } })),
+        'org B renamed an org A segment',
+      );
+
+      // Soft delete hides it from the list, keeps the row, and frees the name —
+      // the whole reason the unique index is partial. A plain @@unique would
+      // make the re-create below fail forever.
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.segment.update({ where: { id: created.id }, data: { deletedAt: new Date() } }));
+      const afterDelete = await runAsOrganization(orgA.organizationId, () =>
+        scoped.segment.findMany({ where: { deletedAt: null } }));
+      assert.equal(afterDelete.length, 0, 'a soft-deleted segment still appears in the list');
+      const row = await runAsOrganization(orgA.organizationId, () =>
+        scoped.segment.findUnique({ where: { id: created.id } }));
+      assert.ok(row && row.deletedAt, 'soft delete removed the row instead of stamping it');
+
+      const reused = await runAsOrganization(orgA.organizationId, () =>
+        scoped.segment.create({
+          data: {
+            organizationId: orgA.organizationId,
+            name: 'Bleed segment',
+            filter,
+            createdById: orgA.userId,
+          },
+          select: { id: true },
+        }));
+      assert.ok(reused.id, 'the name was not freed by soft delete');
+
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.segment.deleteMany({ where: {} }));
     });
 
     await check('consent: marketing consent is organization-scoped', async () => {

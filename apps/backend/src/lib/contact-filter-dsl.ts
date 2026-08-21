@@ -465,6 +465,85 @@ function compileGroup(organizationId: string, group: ContactFilterGroup, depth: 
   return where;
 }
 
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+export type FilterValidationResult = {
+  valid: boolean;
+  /** Human-readable, each prefixed with its path, e.g. "$and[0]: حقل غير مدعوم: foo". */
+  errors: string[];
+};
+
+/** Whether a node tree contains at least one actual rule. */
+function hasAnyRule(node: ContactFilterNode | null | undefined): boolean {
+  if (!node) return false;
+  if (!isGroup(node)) return true;
+  return [...(node.$and || []), ...(node.$or || [])].some(hasAnyRule);
+}
+
+function collectNodeErrors(
+  organizationId: string,
+  node: ContactFilterNode,
+  depth: number,
+  path: string,
+  errors: string[],
+): void {
+  if (depth > MAX_FILTER_DEPTH) {
+    errors.push(`${path}: تجاوز الحد الأقصى لتداخل المجموعات (${MAX_FILTER_DEPTH})`);
+    return;
+  }
+  if (isGroup(node)) {
+    const key = node.$or ? '$or' : '$and';
+    const children = (node.$or || node.$and || []) as ContactFilterNode[];
+    children.forEach((child, index) =>
+      collectNodeErrors(organizationId, child, depth + 1, `${path}.${key}[${index}]`, errors));
+    return;
+  }
+  try {
+    // The real compiler, not a re-implementation. That is what makes
+    // "validation matches the vocabulary exactly" true rather than aspirational:
+    // a filter that validates has already compiled.
+    compileRule(organizationId, node as ContactFilterRule);
+  } catch (error) {
+    errors.push(`${path}: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Check a filter without throwing, collecting **every** problem rather than
+ * stopping at the first.
+ *
+ * `contactWhereFromFilterDsl` throws on the first failure, which is right for a
+ * request and wrong for a save dialog — someone fixing four broken rules one
+ * round-trip at a time gives up.
+ */
+export function validateContactFilter(
+  filter: unknown,
+  organizationId: string,
+): FilterValidationResult {
+  const errors: string[] = [];
+
+  if (filter === null || filter === undefined || typeof filter !== 'object' || Array.isArray(filter)) {
+    return { valid: false, errors: ['الفلتر غير صالح'] };
+  }
+
+  const group = filter as ContactFilterGroup;
+  if (!Array.isArray(group.$and) && !Array.isArray(group.$or)) {
+    return { valid: false, errors: ['الفلتر غير صالح'] };
+  }
+
+  // An empty filter compiles perfectly and matches EVERYONE. Saved under a name
+  // like "VIP customers" and pointed at a broadcast, it is the most dangerous
+  // thing this DSL can store, so it is rejected rather than silently accepted.
+  if (!hasAnyRule(group)) {
+    return { valid: false, errors: ['الفلتر فارغ — الشريحة ستشمل كل جهات الاتصال'] };
+  }
+
+  collectNodeErrors(organizationId, group, 0, '$', errors);
+  return { valid: errors.length === 0, errors };
+}
+
 export function parseContactFilterDsl(value: unknown): ContactFilterDsl | null {
   if (!value) return null;
   if (typeof value === 'string') {

@@ -16,6 +16,7 @@ import { requestLoggingMiddleware } from './middleware/logging.middleware';
 import authRoutes         from './modules/auth/auth.routes';
 import conversationRoutes from './modules/conversations/conversations.routes';
 import contactRoutes      from './modules/contacts/contacts.routes';
+import segmentRoutes      from './modules/segments/segments.routes';
 import campaignRoutes     from './modules/campaigns/campaigns.routes';
 import systemRoutes       from './modules/system/system.routes';
 import templateRoutes     from './modules/templates/templates.routes';
@@ -356,6 +357,7 @@ app.use('/api', (req, res, next) => {
 app.use('/api/auth',          authRoutes);
 app.use('/api/conversations',  conversationRoutes);
 app.use('/api/contacts',       contactRoutes);
+app.use('/api/segments',       segmentRoutes);
 app.use('/api/campaigns',      campaignRoutes);
 app.use('/api/system',         systemRoutes);
 app.use('/api/templates',      templateRoutes);

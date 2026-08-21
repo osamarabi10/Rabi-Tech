@@ -14,8 +14,8 @@ import {
   parseContactFilterDsl,
   contactWhereFromFilterDsl,
   type ContactFilterDsl,
-  campaignIdsInFilter,
 } from '../../lib/contact-filter-dsl';
+import { assertCampaignsInOrg } from './campaign-refs';
 
 /**
  * Filter-compilation failures carry a message written for the user (in Arabic,
@@ -46,25 +46,6 @@ function audienceWhere(filter: ContactFilterDsl | null, organizationId: string) 
   };
 }
 
-/**
- * A campaign id inside a filter must belong to the caller's organization.
- *
- * Unvalidated it already fails safe — the nested filter carries organizationId,
- * so another tenant's campaign simply matches nobody. But "0 recipients" is an
- * answer, and returning it for a probed id confirms nothing exists there while
- * a real id would eventually return a number. 404 for both, matching the
- * existing convention in this file: existence is itself information.
- */
-async function assertCampaignsInOrg(filter: ContactFilterDsl | null): Promise<void> {
-  const ids = campaignIdsInFilter(filter);
-  if (!ids.length) return;
-  const found = await prisma.campaign.count({ where: { id: { in: ids } } });
-  if (found !== ids.length) {
-    const error = new Error('حملة غير موجودة');
-    (error as Error & { statusCode?: number }).statusCode = 404;
-    throw error;
-  }
-}
 
 /**
  * How many contacts the filter matched but consent removed.
