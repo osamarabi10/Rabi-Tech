@@ -256,37 +256,55 @@ All test data removed; residue check clean.
 
 ## P11 — Visual workflow builder · 6–8 weeks · **flagship**
 
+> **Status 2026-08-22.** The *engine* shipped: schema, BullMQ executor with a
+> depth cap, trigger wiring, run log, tenancy cases, and a form-based builder
+> at `/automations`. What is left is the visual half (item 6), plan gating
+> (item 8), two nodes, and the depth behind If/Else and HTTP Request.
+
 Engine before canvas. Reuse: socket events as triggers, assignment service,
 working-hours util. Skip (documented): Random Split, Zapier/Make nodes, GraphQL.
 
-- [ ] **1. Schema migration**: `Workflow` (name, status, trigger, graph Json),
+- [x] **1. Schema migration**: `Workflow` (name, status, trigger, graph Json),
   `WorkflowRun` (workflowId, conversationId/contactId, currentNodeId, state
   Json, status RUNNING|WAITING|DONE|FAILED, wakeAt), composite FKs
-- [ ] **2. Executor worker** (BullMQ): walk graph from trigger payload;
+- [x] **2. Executor worker** (BullMQ): walk graph from trigger payload;
   `Ask a Question`/`Wait` = persist run WAITING + return (no held process);
   scheduler-style scan resumes runs whose `wakeAt` passed or whose
   conversation got a reply
   — verify: run survives `docker compose restart backend` mid-wait
-- [ ] **3. Trigger wiring**: inbound-message + conversation-opened/closed +
+- [x] **3. Trigger wiring**: inbound-message + conversation-opened/closed +
   tag-added hooks enqueue matching workflows (org-scoped lookup, cached)
-- [ ] **4. Nodes, in value order** (each lands with an executor test):
-  - [ ] Send Message (template/variable interpolation; resolve-or-silent law)
-  - [ ] If/Else multi-branch (equals/contains/isSet/regex on contact+context)
-  - [ ] Assign (agent/team/round-robin via existing service)
-  - [ ] Date & Time branch (working-hours util)
-  - [ ] Update Contact (tags, fields, lifecycle)
+- [ ] **4. Nodes, in value order** — most shipped; three gaps remain.
+  There are no executor tests: this repo has no unit-test harness, so every
+  node was verified live instead.
+  - [x] Send Message (`SEND_MESSAGE` / `SEND_TEMPLATE`)
+  - [x] Assign (`ASSIGN_TEAM` / `ASSIGN_USER`)
+  - [x] Date & Time branch (`WITHIN_BUSINESS_HOURS`)
+  - [x] Update Contact (`ADD_TAG` / `REMOVE_TAG` / `UPDATE_CONTACT_FIELD`,
+    plus `CONTACT_LIFECYCLE_IS` as a condition)
+  - [~] If/Else multi-branch — conditions exist and gate the run
+    (`CONTACT_HAS_TAG`, `CONTACT_LACKS_TAG`, `CONVERSATION_TEAM_IS`,
+    `CONTACT_FIELD_EQUALS`), but they are **gates, not branches**: a false
+    condition stops the run rather than taking a second path. No regex operator.
+  - [~] HTTP Request — `HTTP_WEBHOOK` is **POST only**, with no method choice,
+    no auth header, no response→variable mapping and no backoff. It is
+    SSRF-guarded (shape check at save, resolved-address check at run, no
+    redirects) and every delivery is now logged.
   - [ ] Close Conversation
   - [ ] Ask a Question (wait + validate email/phone/number + write field)
-  - [ ] HTTP Request (GET/POST/PUT/DELETE, bearer/basic, JSON body builder,
-    response→variable mapping, exponential backoff, **SSRF-guarded**)
-- [ ] **5. Run log**: per-run timeline (node, input, output, ts) for debugging
+- [x] **5. Run log**: per-run timeline (node, input, output, ts) for debugging
   — verify: failed HTTP node shows attempt trail
 - [ ] **6. Canvas UI (React Flow)**: drag nodes, connect edges, config side
   panel, validation (no orphan nodes, one trigger), enable/disable workflow
+  — **not built.** `/automations` is a form-based builder (ordered condition
+  and action lists driven by `GET /api/workflows/schema`), not a canvas.
+  Enable/disable does work. React Flow is not installed.
   — verify DoD: admin builds "new conversation outside hours → template X,
   assign team Y, tag Z" on canvas; it executes; survives restart mid-wait
-- [ ] **7. Tenancy harness cases** for Workflow/WorkflowRun — gate green
+- [x] **7. Tenancy harness cases** for Workflow/WorkflowRun — gate green
 - [ ] **8. Entitlement**: workflows count gated per plan (`plans.ts`)
+  — **not built.** No workflow allowance exists in `plans.ts`; any plan can
+  create any number of workflows.
 
 ## P12 — WhatsApp Cloud API channel · ~4–5 weeks · after P11
 
