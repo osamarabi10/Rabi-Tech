@@ -18,6 +18,7 @@ import { getTenantId, runAsOrganization } from '../lib/tenant-context';
 import { recordMessageUsage } from '../modules/usage/usage.service';
 import { scheduleConversationEscalation } from './escalation.worker';
 import { autoAssignConversation } from '../modules/routing/assignment.service';
+import { dispatchWorkflowEvent } from './workflow.worker';
 
 // Redis connection config (same as campaign worker)
 const redisUrl = new URL(process.env.REDIS_URL || 'redis://localhost:6379');
@@ -277,6 +278,34 @@ async function processInboundMessage(data: {
       `#${conversation.displayId}`,
       new Date(),
     ).catch(() => {});
+  }
+
+  // Workflow triggers. Dispatched last so an automation that reassigns or tags
+  // acts on the state the rest of the pipeline has already settled, and wrapped
+  // so a workflow failure can never stop a customer's message being processed.
+  if (!fromMe) {
+    await dispatchWorkflowEvent({
+      triggerType: 'CONVERSATION_CREATED',
+      contactId: contact.id,
+      conversationId: conversation.id,
+      payload: { text: messageBody },
+    });
+    if (messageBody) {
+      await dispatchWorkflowEvent({
+        triggerType: 'KEYWORD_MATCHED',
+        contactId: contact.id,
+        conversationId: conversation.id,
+        payload: { text: messageBody },
+      });
+    }
+    if (!openNow) {
+      await dispatchWorkflowEvent({
+        triggerType: 'OUT_OF_HOURS',
+        contactId: contact.id,
+        conversationId: conversation.id,
+        payload: { text: messageBody },
+      });
+    }
   }
 
   // Notify listeners

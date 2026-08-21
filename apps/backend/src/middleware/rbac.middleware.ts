@@ -33,6 +33,11 @@ const ROLE_PERMISSIONS: Record<string, Set<Role>> = {
   'segment:create': new Set(['ADMIN', 'SUPERVISOR', 'AGENT']),
   'segment:rename': new Set(['ADMIN', 'SUPERVISOR']),
   'segment:delete': new Set(['ADMIN', 'SUPERVISOR']),
+  // Automations act on customers without a human in the loop, so authoring one
+  // sits with admins and supervisors while everyone who can read conversations
+  // can see what fired and why.
+  'workflow:view': new Set(['ADMIN', 'SUPERVISOR', 'AGENT', 'VIEWER', 'FINANCE']),
+  'workflow:manage': new Set(['ADMIN', 'SUPERVISOR']),
 
   // Campaign operations
   'campaign:create': new Set(['ADMIN', 'SUPERVISOR']),

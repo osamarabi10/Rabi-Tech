@@ -89,6 +89,11 @@ services:
       - GATEWAY_HEALTH_SELFSEND_CRON=${GATEWAY_HEALTH_SELFSEND_CRON:-0 */6 * * *}
       - GATEWAY_HEALTH_SWEEP_CRON=${GATEWAY_HEALTH_SWEEP_CRON:-30 3 * * *}
       - DISABLE_GATEWAY_HEALTH_WORKER=${DISABLE_GATEWAY_HEALTH_WORKER:-0}
+      # Workflow engine (P11). WORKFLOW_WEBHOOK_ALLOW_HTTP relaxes the HTTPS-only
+      # rule for local development ONLY; the private-address guard still applies.
+      - DISABLE_WORKFLOW_WORKER=${DISABLE_WORKFLOW_WORKER:-0}
+      - WORKFLOW_CONCURRENCY=${WORKFLOW_CONCURRENCY:-4}
+      - WORKFLOW_WEBHOOK_ALLOW_HTTP=${WORKFLOW_WEBHOOK_ALLOW_HTTP:-0}
     networks:
       default:
         aliases:

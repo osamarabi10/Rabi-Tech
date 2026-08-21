@@ -133,6 +133,21 @@ function staticAudits() {
     findFirstScoped ? '' : 'findFirst is not in the injected operation list',
   );
 
+  // HTTP_WEBHOOK is the first place this backend requests a URL a CUSTOMER
+  // chose, on a network carrying postgres, redis and the WhatsApp gateway.
+  // These are the addresses that must never be reachable through it.
+  const ssrf = require(path.join(ROOT, 'src', 'modules', 'workflows', 'outbound-url.ts'));
+  const privateTargets = [
+    '127.0.0.1', '10.0.0.5', '172.17.0.2', '192.168.1.10',
+    '169.254.169.254', '::1', '::ffff:127.0.0.1', 'not-an-ip',
+  ];
+  const leaked = privateTargets.filter((address) => !ssrf.isPrivateAddress(address));
+  record(
+    'audit: workflow webhook guard rejects internal addresses',
+    leaked.length === 0,
+    leaked.length ? `treated as public: ${leaked.join(', ')}` : '',
+  );
+
   const mutableCaches = [];
   for (const file of sourceFiles) {
     const rel = relative(file);
@@ -920,6 +935,75 @@ async function databaseAudits() {
       await runAsOrganization(orgB.organizationId, () => scoped.gatewayHealthCheck.deleteMany({}));
     });
 
+    await check('workflows: automations and executions are organization-scoped', async () => {
+      const config = {
+        trigger: { keyword: 'refund' },
+        conditions: [],
+        actions: [{ type: 'ADD_TAG', tag: 'needs-refund' }],
+      };
+
+      const workflowA = await runAsOrganization(orgA.organizationId, () =>
+        scoped.workflow.create({
+          data: {
+            organizationId: orgA.organizationId,
+            name: 'Bleed workflow',
+            isActive: true,
+            triggerType: 'KEYWORD_MATCHED',
+            configJson: config,
+          },
+          select: { id: true },
+        }));
+
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.workflowExecution.create({
+          data: {
+            organizationId: orgA.organizationId,
+            workflowId: workflowA.id,
+            contactId: orgA.records[0].contact.id,
+            status: 'COMPLETED',
+          },
+        }));
+
+      const [listA, listB] = await Promise.all([
+        runAsOrganization(orgA.organizationId, () => scoped.workflow.findMany({})),
+        runAsOrganization(orgB.organizationId, () => scoped.workflow.findMany({})),
+      ]);
+      assert.equal(listA.length, 1, 'org A cannot see its own workflow');
+      assert.equal(listB.length, 0, 'org B saw an org A workflow');
+
+      // The dispatcher looks workflows up by trigger on every inbound message.
+      // If that read crossed tenants, one org's message would run another
+      // org's automation against their contact.
+      const dispatchB = await runAsOrganization(orgB.organizationId, () =>
+        scoped.workflow.findMany({ where: { triggerType: 'KEYWORD_MATCHED', isActive: true } }));
+      assert.equal(dispatchB.length, 0, 'org B dispatch would run an org A workflow');
+
+      const runsB = await runAsOrganization(orgB.organizationId, () =>
+        scoped.workflowExecution.findMany({}));
+      assert.equal(runsB.length, 0, 'org B saw an org A execution');
+
+      const stolen = await runAsOrganization(orgB.organizationId, () =>
+        scoped.workflow.findFirst({ where: { id: workflowA.id } }));
+      assert.equal(stolen, null, 'org B resolved an org A workflow by id');
+
+      // A cross-tenant execution must be refused by the composite FK, not
+      // merely by the extension.
+      await assert.rejects(
+        () => runAsOrganization(orgB.organizationId, () =>
+          scoped.workflowExecution.create({
+            data: {
+              organizationId: orgB.organizationId,
+              workflowId: workflowA.id,
+              status: 'RUNNING',
+            },
+          })),
+        'org B created an execution against an org A workflow',
+      );
+
+      await runAsOrganization(orgA.organizationId, () => scoped.workflowExecution.deleteMany({}));
+      await runAsOrganization(orgA.organizationId, () => scoped.workflow.deleteMany({}));
+    });
+
     await check('segments: saved segments are organization-scoped', async () => {
       // Segments hold a stored filter, so a leak here is not one row but a
       // whole audience definition plus the counts derived from it.
@@ -1586,6 +1670,10 @@ async function workerAudits() {
   const incoming = require('../src/workers/incoming-message.worker');
   const campaign = require('../src/workers/campaign.worker');
   const escalation = require('../src/workers/escalation.worker');
+  // incoming-message.worker imports the workflow queue, whose module-scope
+  // Redis connection would otherwise keep this process alive after every check
+  // has passed — the harness would hang rather than fail, which is worse.
+  const workflow = require('../src/workers/workflow.worker');
   try {
     await check('worker: incoming handler rejects missing organization context', async () => {
       await assert.rejects(() => incoming.processIncomingMessageJob({}), /missing organizationId/);
@@ -1601,6 +1689,7 @@ async function workerAudits() {
       incoming.incomingMessageQueue.close(),
       campaign.campaignQueue.close(),
       escalation.escalationQueue.close(),
+      workflow.workflowQueue.close(),
     ]);
   }
 }

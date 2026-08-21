@@ -17,6 +17,7 @@ import authRoutes         from './modules/auth/auth.routes';
 import conversationRoutes from './modules/conversations/conversations.routes';
 import contactRoutes      from './modules/contacts/contacts.routes';
 import segmentRoutes      from './modules/segments/segments.routes';
+import workflowRoutes     from './modules/workflows/workflows.routes';
 import campaignRoutes     from './modules/campaigns/campaigns.routes';
 import systemRoutes       from './modules/system/system.routes';
 import templateRoutes     from './modules/templates/templates.routes';
@@ -37,6 +38,7 @@ import { assertKnownPaymentProvider } from './modules/billing/provider-registry'
 import { ensurePlans } from './modules/billing/billing.service';
 import { startBillingReconciliationWorker } from './workers/billing-reconciliation.worker';
 import { scheduleGatewayHealthChecks, startGatewayHealthWorker } from './workers/gateway-health.worker';
+import { startWorkflowWorker } from './workers/workflow.worker';
 import { LIMITS } from './middleware/rate-limit.middleware';
 import { verifySecrets } from './lib/verify-secrets';
 
@@ -359,6 +361,7 @@ app.use('/api/auth',          authRoutes);
 app.use('/api/conversations',  conversationRoutes);
 app.use('/api/contacts',       contactRoutes);
 app.use('/api/segments',       segmentRoutes);
+app.use('/api/workflows',      workflowRoutes);
 app.use('/api/campaigns',      campaignRoutes);
 app.use('/api/system',         systemRoutes);
 app.use('/api/templates',      templateRoutes);
@@ -482,6 +485,12 @@ httpServer.listen(Number(PORT), HOST, () => {
     logger.info('Billing reconciliation worker disabled (DISABLE_BILLING_RECONCILIATION_WORKER=1)');
   } else {
     startBillingReconciliationWorker();
+  }
+
+  if (process.env.DISABLE_WORKFLOW_WORKER === '1') {
+    logger.info('Workflow worker disabled (DISABLE_WORKFLOW_WORKER=1)');
+  } else {
+    startWorkflowWorker();
   }
 
   if (process.env.DISABLE_GATEWAY_HEALTH_WORKER === '1') {

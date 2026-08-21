@@ -72,6 +72,8 @@ model Organization {
   signupThrottleEvents    SignupThrottleEvent[]
   segments                Segment[]
   healthChecks            GatewayHealthCheck[]
+  workflows               Workflow[]
+  workflowExecutions      WorkflowExecution[]
 
   /// The console sweeps for live and expiring overrides on every load.
   @@index([overrideExpiresAt])
@@ -594,6 +596,7 @@ model Contact {
   organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversations      Conversation[]
   campaignRecipients CampaignRecipient[]
+  workflowExecutions WorkflowExecution[]
   csatResponses      CsatSurveyResponse[]
   assignee           User?                @relation("ContactAssignee", fields: [assigneeId, organizationId], references: [id, organizationId], onDelete: Restrict)
   contactTags        ContactTag[]
@@ -694,14 +697,15 @@ model Conversation {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
-  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  contact       Contact             @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  session       WhatsappSession     @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  team          Team?               @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  assignee      User?               @relation(fields: [assignedToId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  messages      Message[]
-  csatResponse  CsatSurveyResponse?
-  notifications Notification[]
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact            Contact             @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  session            WhatsappSession     @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  team               Team?               @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  assignee           User?               @relation(fields: [assignedToId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  messages           Message[]
+  workflowExecutions WorkflowExecution[]
+  csatResponse       CsatSurveyResponse?
+  notifications      Notification[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, displayId])
@@ -962,5 +966,60 @@ model GatewayHealthCheck {
 
   @@unique([id, organizationId])
   @@index([organizationId, probe, createdAt])
+  @@index([createdAt])
+}
+
+/// An automation: one trigger, optional conditions, an ordered list of actions.
+///
+/// `configJson` holds the graph. It is validated in code against the same
+/// vocabulary the builder renders, so a stored workflow can never reference an
+/// action the executor does not implement.
+model Workflow {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  isActive       Boolean  @default(false)
+  triggerType    String
+  configJson     Json
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  executions   WorkflowExecution[]
+  // Name uniqueness is a case-insensitive SQL index; Prisma cannot express
+  // LOWER(name), so do not add @@unique([organizationId, name]).
+
+  @@unique([id, organizationId])
+  @@index([organizationId, triggerType, isActive])
+}
+
+/// One run of one workflow. Also the audit trail: what fired, what it did,
+/// and why it stopped.
+model WorkflowExecution {
+  id               String   @id @default(cuid())
+  organizationId   String
+  workflowId       String
+  contactId        String?
+  conversationId   String?
+  status           String   @default("RUNNING")
+  currentStepIndex Int      @default(0)
+  /// Capped in code — see MAX_LOG_ENTRIES.
+  executionLog     Json?
+  error            String?
+  /// Loop guard: an action that re-fires its own trigger increments this.
+  depth            Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflow     Workflow      @relation(fields: [workflowId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  contact      Contact?      @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, workflowId, createdAt])
+  @@index([organizationId, workflowId, contactId, createdAt])
   @@index([createdAt])
 }
