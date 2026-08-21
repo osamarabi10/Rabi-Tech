@@ -318,9 +318,26 @@ working-hours util. Skip (documented): Random Split, Zapier/Make nodes, GraphQL.
 
 ## 🔧 Continuous hardening (slot between phases)
 
-- [ ] **H1. Gateway health monitor**: scheduled self-send every 15 min +
-  `PlatformAlert` on failure — kills the "customer discovers the outage" mode
-  (runbook: this WILL break again)
+- [ ] **H1. Gateway health monitor** —
+  **plan: [docs/H1-GATEWAY-HEALTH-PLAN.md](H1-GATEWAY-HEALTH-PLAN.md)**
+  Kills the "customer discovers the outage" mode (runbook: this WILL break
+  again). **Two tiers, not one**: a free session-status poll every 5 min, plus a
+  self-send every 6 hours to catch the fault a status poll is blind to — the
+  real outage was outbound 500s while the session reported healthy.
+  - the self-send must **bypass `meteredSend`**: at 15-minute intervals it is
+    ~2,880 messages/month, which is 28x a Free tenant's entire outbound
+    allowance (~25 hours to exhaust it), and `assertMetricAvailable` throws at
+    quota, so a metered monitor goes blind exactly when the system is stressed
+  - send to the channel's **own** number, not a configurable third party: 96
+    identical messages a day to a human on an unofficial gateway is how the
+    number running the platform gets banned
+  - `PlatformAlert` needs **no migration** — `resolvedAt: null` is already the
+    unresolved marker, with a resolve pattern at
+    `gateway-provisioning.service.ts:203`
+  - skip suspended / provisioning channels, or every suspended tenant emits
+    CRITICAL alerts forever
+  - gate **52/52 → 54/54** (org-scoped probe rows; and an internal send must
+    record no `UsageEvent`, since that flag is a bypass around billing)
 - [ ] **H2. Per-org campaign rate limits** (plan-aware): queue-per-org or Redis
   token bucket — BullMQ group limiting is Pro-only, so not a one-liner
 - [ ] **H3. Reports onto `PlatformDailyMetric` rollups** (scale, not
