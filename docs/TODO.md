@@ -379,7 +379,8 @@ place deliberately. See the gateway runbook.
 - [ ] **H3. Reports onto `PlatformDailyMetric` rollups** (scale, not
   correctness)
 - [ ] **H4. Custom-field editing** in the inbox contact panel
-- [ ] **H5. @mentions in internal notes** (+ notification fan-out)
+- [x] **H5. @mentions in internal notes** (+ notification fan-out)
+  — **done 2026-08-22.** Same work as M6.6 above; this entry predated it.
 - [ ] **H6. Backup job**: nightly `pg_dump` to `.tools/backups` + retention
 
 ---
@@ -682,12 +683,30 @@ Gate stays 57/57.
 > across 16 raw selects that had no focus ring at all, an `EmptyState`
 > component, and inbox scroll retention. Every box below is still open.
 
-- [ ] **1. Type scale tokens** (display/h1/h2/h3/body/body-strong/small/micro/mono)
+- [x] **1. Type scale tokens** (display/h1/h2/h3/body/small/caption/micro)
   replacing ad-hoc `text-[11px]` literals
-- [ ] **2. Motion tokens** — 120ms micro / 200ms panel / 300ms modal,
+  — **done 2026-08-22.** Eight steps as CSS variables, in rem so a reader who
+  raises their browser font size actually gets larger text. Swept **189**
+  literals across 34 files (96×11px, 71×10px, 9×9px, 9×13px, 4×12px). 12px and
+  13px collapse onto one step — keeping two a pixel apart is how a scale rots
+  back into literals.
+- [x] **2. Motion tokens** — 120ms micro / 200ms panel / 300ms modal,
   `cubic-bezier(0.2,0,0,1)`, honouring `prefers-reduced-motion`
-- [ ] **3. Two densities** — operator surfaces (inbox/contacts) dense; config
-  surfaces (settings/reports) spacious
+  — **done 2026-08-22.** Reduced motion collapses the durations to ~0 rather
+  than removing the animations, so `transitionend`/`animationend` listeners
+  still fire. Deleting them is how a menu that closes on `animationend` gets
+  stuck open for exactly the users who asked for less motion.
+- [x] **3. Densities** — Compact / Comfortable / Spacious on the conversation
+  list, persisted per browser
+  — **done 2026-08-22.** Verified live at 59 / 71 / 79px per row, surviving a
+  reload. Compact drops the preview line rather than shrinking everything,
+  because that line is where the row height goes. The row also moved off
+  `text-right` / `before:right-0`, which had put the active-row marker on the
+  far edge of the row in English.
+
+  Found here: `components/inbox/conversation-list.tsx` is **dead code** — the
+  list that renders is inline in `app/(dashboard)/inbox/page.tsx`. The density
+  work went into the dead file first and had to be redone. Delete it.
 - [ ] **4. Named empty states** per situation, "all caught up" deliberately quiet
 
 ## M6 — Inbox structure · ~1 week
@@ -698,12 +717,37 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   Mentions / Snoozed) with live counts
 - [ ] **2. Lifecycle stages** as a configurable pipeline, surfaced as inbox
   filters with counts
+  — **pipeline done 2026-08-22; the inbox filters are NOT built.**
+  `LifecycleStage` is a per-organization, ordered, colour-coded model with
+  `/settings/lifecycle` CRUD, seeded (Lead / Contacted / Qualified / Customer /
+  Unqualified) in the migration for existing tenants and at signup for new
+  ones. Selector in the contact panel, chip in the thread header.
+
+  `Contact.lifecycleStage` stays *text*, not a foreign key: values already exist
+  from hand entry and CSV import that match no stage, and the filter DSL treats
+  the column as text, so stored campaign audience filters reference it that way.
+  Consequence, handled rather than hidden — deleting a stage leaves contacts
+  carrying its name; the API reports how many, and the selector keeps an unknown
+  value as an explicit "deleted stage" option. A plain `<select>` shows the first
+  option instead and silently reassigns the contact the moment anyone touches it.
+  **Remaining: stage filters with counts in the inbox.**
 - [ ] **3. Custom inboxes** — saved views, the filter grammar's fourth consumer
 - [ ] **4. Contact panel tabs** — Details / Conversations / Files / Activity
   (horizontal at the bottom; short labels beat icons for infrequent actions)
 - [ ] **5. Session-health bar** on each conversation row — our analogue of their
   service-window bar
 - [ ] **6. @mentions** + a Mentions inbox
+  — **mentions done 2026-08-22; the Mentions inbox is NOT built.**
+  `@mention` popover in the composer mirroring the `:shortCode` pattern (same
+  keyboard navigation), firing `NotificationType.MENTION` — an enum value that
+  had sat unused since the notification service was written.
+
+  Mentions resolve from **ids the composer sends**, never by parsing note text
+  for names: two agents can share a display name, names contain spaces, and
+  "@ahmad" in prose addresses nobody. Only teammates still named in the final
+  text are notified, and only on internal notes — a customer-facing reply
+  carrying ids would let a WhatsApp message ping agents the customer never saw
+  named. **Remaining: the Mentions inbox itself.**
 
 ## M7 — Reports consolidation · ~1 week
 
