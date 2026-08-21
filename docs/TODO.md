@@ -206,3 +206,128 @@ working-hours util. Skip (documented): Random Split, Zapier/Make nodes, GraphQL.
 *When a box is ticked: note the date + verify evidence inline, and mirror the
 change into PROJECT-SPEC.md §6. This file is the working surface; the spec is
 the record.*
+
+---
+
+# Marasil-parity phases
+
+Derived from [MARASIL-SPEC-FIT.md](MARASIL-SPEC-FIT.md). Meta-only requirements
+(24-h window, template approval, quality ratings, cost estimation, Embedded
+Signup) are **deliberately excluded** — they do not exist on OpenWA. What remains
+is ordered by value, cheapest-liability-first.
+
+## M1 — Consent & opt-out · ~1 day · 🔴 **liability, do first**
+
+Marasil FR-16.6 / BR-16.2. On Meta the platform enforces some of this; on OpenWA
+**nothing does**, so today a tenant can broadcast to a contact who has said STOP.
+
+- [ ] **1. Migration**: `Contact.marketingConsent` enum
+  (`UNKNOWN|OPTED_IN|OPTED_OUT`, default `UNKNOWN`), `consentSource`,
+  `consentUpdatedAt`; index `[organizationId, marketingConsent]`
+- [ ] **2. Opt-out keywords**: org-configurable list, seeded
+  `STOP / UNSUBSCRIBE / توقف / إلغاء / הפסק`, matched case-insensitively on
+  inbound text in the existing worker (beside the CSAT intercept)
+  — verify: send "STOP" through the webhook → contact flips to `OPTED_OUT`
+- [ ] **3. Broadcast exclusion**: `audienceWhere()` excludes `OPTED_OUT`
+  **unconditionally** — no override flag, per BR-16.2
+  — verify: opted-out contact disappears from the live audience count
+- [ ] **4. Exclusion transparency** (Marasil UX bet #4, "explain every
+  exclusion"): the composer's Review step reports "N excluded (opted out)"
+  rather than silently shrinking the number
+- [ ] **5. Contact panel + import**: consent state visible and manually settable;
+  mandatory opt-in declaration checkbox on CSV import
+- [ ] **6. Tenancy**: harness case — consent state is org-scoped
+
+## M2 — RTL correctness · ~0.5 day · serves the core market daily
+
+Marasil §32.2. Their headline differentiator, and we measurably fail parts of it.
+
+- [ ] **1. Per-message direction detection** — first-strong-character detection
+  sets `dir` per message bubble, so a Hebrew customer's one English sentence
+  renders LTR inside an RTL interface
+  — verify: mixed-direction messages render correctly in one thread
+- [ ] **2. Bidi isolation** — phone numbers, IDs and timestamps wrapped so they
+  never reorder inside RTL text ("the single most common bidi bug")
+- [ ] **3. Physical→logical CSS** — fix the app-level offenders (`pr-9` on the
+  contacts and inbox search inputs, `ml-1` in inbox/reports)
+  — verify: search icon on the correct side in both directions
+- [ ] **4. Tabular figures** for phone numbers and IDs so columns align
+
+## M3 — Filter vocabulary · ~3 days · the campaign feature that sells
+
+Marasil §14.4. Ours: 3 categories × 6 operators. Theirs: ~20 dimensions.
+
+- [ ] **1. Type-aware operators**: date (`within_last N`, `more_than_N_ago`,
+  `between`), number (`>`, `<`, `between`), multi-select (`has_any_of`,
+  `has_all_of`, `has_none_of`), text (`ends_with`, `matches_regex`)
+- [ ] **2. New dimensions**: `lifecycleStage`, `assignedUser`, `assignedTeam`,
+  `createdAt`, `lastInboundAt`, `lastOutboundAt`, `hasEverReplied`,
+  `conversationCount`, `marketingConsent`
+- [ ] **3. Broadcast-history dimensions** — *"received the July promo but never
+  replied"*, which the spec calls the single most common marketing request and
+  which our current six filters cannot express. Data already exists on
+  `CampaignRecipient`.
+- [ ] **4. Nested groups to depth 3** with AND/OR toggles (ours is flat `$and`)
+- [ ] **5. Estimated counts** above a threshold, labelled `~4,200 (estimated)`
+
+## M4 — Dark theme · ~1 day · fixes a regression we introduced
+
+Marasil §30.1: both themes at v1, same token names, separate palette. *"Dark is
+not an afterthought"* — respond.io runs dark and 8-hour agents prefer it. We
+dropped dark when flipping to the light palette.
+
+- [ ] **1. Dark palette** under the same token names + `prefers-color-scheme`
+- [ ] **2. Theme toggle** (light / dark / system) persisted per user
+- [ ] **3. Contrast audit in dark** — same zero-failure bar as light
+- [ ] **4. Nav rail** re-tuned: on a dark canvas it needs a different treatment
+  from navy-on-white
+
+## M5 — Design system hardening · ~1 day
+
+- [ ] **1. Type scale tokens** (display/h1/h2/h3/body/body-strong/small/micro/mono)
+  replacing ad-hoc `text-[11px]` literals
+- [ ] **2. Motion tokens** — 120ms micro / 200ms panel / 300ms modal,
+  `cubic-bezier(0.2,0,0,1)`, honouring `prefers-reduced-motion`
+- [ ] **3. Two densities** — operator surfaces (inbox/contacts) dense; config
+  surfaces (settings/reports) spacious
+- [ ] **4. Named empty states** per situation, "all caught up" deliberately quiet
+
+## M6 — Inbox structure · ~1 week
+
+Marasil §29.1: 56 / 240 / 320 / flex / 340.
+
+- [ ] **1. Inbox-selector column**: system inboxes (All / Mine / Unassigned /
+  Mentions / Snoozed) with live counts
+- [ ] **2. Lifecycle stages** as a configurable pipeline, surfaced as inbox
+  filters with counts
+- [ ] **3. Custom inboxes** — saved views, the filter grammar's fourth consumer
+- [ ] **4. Contact panel tabs** — Details / Conversations / Files / Activity
+  (horizontal at the bottom; short labels beat icons for infrequent actions)
+- [ ] **5. Session-health bar** on each conversation row — our analogue of their
+  service-window bar
+- [ ] **6. @mentions** + a Mentions inbox
+
+## M7 — Reports consolidation · ~1 week
+
+Marasil §20: five surfaces, each answering one question. We have one page.
+
+- [ ] **1. Overview** — headline tiles with sparklines and period deltas
+- [ ] **2. Conversations** — response and resolution distributions
+- [ ] **3. Team** — workload and leaderboard
+- [ ] **4. Campaigns** — per-broadcast performance
+- [ ] **5. Gateway health** — our replacement for their "account health & cost":
+  session state, failed-send rate, webhook delivery
+- [ ] **6. Drill-down from every number** to the underlying conversations —
+  *"a manager who cannot click a number to see what it is made of will not
+  believe it"*
+- [ ] **7. Volume by hour-of-day heatmap** (their staffing-decision chart)
+
+## M8 — Roles, restrictions, admin · ~3 days
+
+- [ ] **1. Granular restrictions** over roles: restrict data export, contact
+  deletion, workspace settings, integration settings
+- [ ] **2. Role-aware navigation** — agents see three destinations, not five
+- [ ] **3. CSV import hardening** — fuzzy column mapping, validation preview,
+  duplicate strategy, `imported_{ts}` tag, opt-in declaration, live progress
+- [ ] **4. Quiet hours** enforced in the recipient's local time from phone prefix
+- [ ] **5. Broadcast clone**

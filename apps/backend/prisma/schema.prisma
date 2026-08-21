@@ -437,6 +437,15 @@ enum CampaignStatus {
 }
 
 
+/// Marketing consent. On the official WhatsApp API Meta enforces opt-out for
+/// you; on an unofficial gateway nothing does, so this is the only thing
+/// standing between a tenant and messaging someone who said STOP.
+enum MarketingConsent {
+  UNKNOWN
+  OPTED_IN
+  OPTED_OUT
+}
+
 enum AutoReplyKind {
   WELCOME
   OUT_OF_HOURS
@@ -448,6 +457,8 @@ enum AutoReplyKind {
   KEYWORD_HIGH
   KEYWORD_MEDIUM
   KEYWORD_LOW
+  OPT_OUT_CONFIRM
+  OPT_IN_CONFIRM
 }
 
 enum TemplateCategory {
@@ -534,6 +545,11 @@ model Contact {
   tags           String[] @default([])
   notes          String?
   isArchived     Boolean  @default(false)
+  /// Marketing consent. OPTED_OUT is excluded from every broadcast, always.
+  marketingConsent   MarketingConsent @default(UNKNOWN)
+  /// How consent last changed: keyword | agent | import | api.
+  consentSource      String?
+  consentUpdatedAt   DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -551,6 +567,7 @@ model Contact {
   @@unique([organizationId, email])
   @@index([organizationId, name])
   @@index([organizationId, assigneeId])
+  @@index([organizationId, marketingConsent])
   @@index([organizationId, lifecycleStage])
 }
 

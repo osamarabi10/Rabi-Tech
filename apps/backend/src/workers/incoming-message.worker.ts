@@ -8,6 +8,7 @@ import {
   maybeSendKeywordAutoReply,
 } from '../utils/conversation-session';
 import { handleClientFeedback } from '../utils/client-feedback';
+import { applyInboundConsentSignal } from '../utils/consent';
 import { notifyNewMessage } from '../utils/notification-service';
 import { getWorkingHoursConfig, maybeSendOutOfHoursReply } from '../utils/out-of-hours';
 import { isWithinWorkingHours } from '../utils/working-hours';
@@ -189,6 +190,42 @@ async function processInboundMessage(data: {
         },
       });
     }
+  }
+
+  // Opt-out / opt-in keywords. Checked before anything else that could reply:
+  // a customer who just typed STOP must not receive a keyword auto-reply in the
+  // same breath. Meta enforces this on the official API; on our gateway this is
+  // the only thing that does.
+  const consentResult = await applyInboundConsentSignal({
+    contactId: contact.id,
+    body: messageBody,
+  }).catch((error) => {
+    logger.error('Consent signal handling failed', { error: String(error) });
+    return { changed: false, consent: null as null };
+  });
+
+  if (consentResult.consent) {
+    // Confirm only on an actual change. Repeating the unsubscribe confirmation
+    // every time someone types STOP again is the noise opt-out exists to stop.
+    if (consentResult.changed && autoReplyEnabled) {
+      const kind = consentResult.consent === 'OPTED_OUT' ? 'OPT_OUT_CONFIRM' : 'OPT_IN_CONFIRM';
+      const confirmBody = await resolveAutoReply(kind as never).catch(() => null);
+      if (confirmBody) {
+        await OpenWAService.sendText(session, phone, confirmBody).catch(() => {});
+        await prisma.message.create({
+          data: {
+            organizationId,
+            conversationId: conversation.id,
+            direction: 'OUTBOUND',
+            body: confirmBody,
+            isAuto: true,
+            autoType: consentResult.consent === 'OPTED_OUT' ? 'opt_out' : 'opt_in',
+          },
+        });
+      }
+    }
+    // Either way a consent keyword is not a support question, so stop here.
+    return;
   }
 
   // Handle customer feedback (ratings, etc.)

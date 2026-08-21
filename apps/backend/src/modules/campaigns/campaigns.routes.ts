@@ -21,9 +21,34 @@ router.use(verifyToken);
 /**
  * Recipients for an audience filter. One definition used by preview, create and
  * report, so the count an admin approves is the count that actually gets sent.
+ *
+ * Opted-out contacts are excluded **unconditionally** — there is deliberately no
+ * override parameter. On the official WhatsApp API Meta enforces this; on our
+ * gateway nothing does, so it is enforced here or nowhere.
  */
 function audienceWhere(filter: ContactFilterDsl | null) {
-  return { ...contactWhereFromFilterDsl(filter), isArchived: false };
+  return {
+    ...contactWhereFromFilterDsl(filter),
+    isArchived: false,
+    marketingConsent: { not: 'OPTED_OUT' as const },
+  };
+}
+
+/**
+ * How many contacts the filter matched but consent removed.
+ *
+ * Surfaced so a shrinking audience is explained rather than mysterious — an
+ * admin who sees 3,605 become 3,028 with no reason given assumes the filter is
+ * broken and works around it.
+ */
+async function countExcludedByConsent(filter: ContactFilterDsl | null): Promise<number> {
+  return prisma.contact.count({
+    where: {
+      ...contactWhereFromFilterDsl(filter),
+      isArchived: false,
+      marketingConsent: 'OPTED_OUT',
+    },
+  });
 }
 
 /**
@@ -59,7 +84,7 @@ router.post('/audience/preview', requirePermission('campaign:create'), async (re
   try {
     const filter = parseContactFilterDsl(req.body?.audienceFilter);
     const where = audienceWhere(filter);
-    const [count, sample] = await Promise.all([
+    const [count, sample, excludedOptedOut] = await Promise.all([
       prisma.contact.count({ where }),
       prisma.contact.findMany({
         where,
@@ -67,8 +92,9 @@ router.post('/audience/preview', requirePermission('campaign:create'), async (re
         take: 5,
         orderBy: { createdAt: 'desc' },
       }),
+      countExcludedByConsent(filter),
     ]);
-    res.json({ count, sample });
+    res.json({ count, sample, excludedOptedOut });
   } catch {
     res.status(500).json({ error: 'Server error' });
   }

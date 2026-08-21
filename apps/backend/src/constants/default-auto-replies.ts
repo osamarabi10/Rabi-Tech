@@ -88,4 +88,19 @@ export const DEFAULT_AUTO_REPLIES: DefaultAutoReply[] = [
     body: 'أهلين 😊 وصلنا طلبك، رح نرد عليك بأقرب وقت.',
     isActive: false,
   },
+  {
+    kind: 'OPT_OUT_CONFIRM',
+    title: 'تأكيد إلغاء الاشتراك',
+    // Seeded ACTIVE, unlike the other opt-in replies. A customer who asks to
+    // stop should be told it worked; silence reads as being ignored, and is
+    // what makes people repeat STOP or report the number.
+    body: 'تمام، وقفنا الرسائل الترويجية 🙏\nإذا احتجت أي شي فينا نساعدك، راسلنا وقت ما بدك.',
+    isActive: true,
+  },
+  {
+    kind: 'OPT_IN_CONFIRM',
+    title: 'تأكيد إعادة الاشتراك',
+    body: 'أهلين فيك من جديد! 🎉\nرجعنا نبعتلك آخر عروضنا وأخبارنا.',
+    isActive: true,
+  },
 ];
