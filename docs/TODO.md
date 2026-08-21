@@ -221,22 +221,44 @@ is ordered by value, cheapest-liability-first.
 Marasil FR-16.6 / BR-16.2. On Meta the platform enforces some of this; on OpenWA
 **nothing does**, so today a tenant can broadcast to a contact who has said STOP.
 
-- [ ] **1. Migration**: `Contact.marketingConsent` enum
+- [x] **1. Migration**: `Contact.marketingConsent` enum
   (`UNKNOWN|OPTED_IN|OPTED_OUT`, default `UNKNOWN`), `consentSource`,
   `consentUpdatedAt`; index `[organizationId, marketingConsent]`
-- [ ] **2. Opt-out keywords**: org-configurable list, seeded
+- [x] **2. Opt-out keywords**: org-configurable list, seeded
   `STOP / UNSUBSCRIBE / توقف / إلغاء / הפסק`, matched case-insensitively on
   inbound text in the existing worker (beside the CSAT intercept)
   — verify: send "STOP" through the webhook → contact flips to `OPTED_OUT`
-- [ ] **3. Broadcast exclusion**: `audienceWhere()` excludes `OPTED_OUT`
+- [x] **3. Broadcast exclusion**: `audienceWhere()` excludes `OPTED_OUT`
   **unconditionally** — no override flag, per BR-16.2
   — verify: opted-out contact disappears from the live audience count
-- [ ] **4. Exclusion transparency** (Marasil UX bet #4, "explain every
+- [x] **4. Exclusion transparency** (Marasil UX bet #4, "explain every
   exclusion"): the composer's Review step reports "N excluded (opted out)"
   rather than silently shrinking the number
 - [ ] **5. Contact panel + import**: consent state visible and manually settable;
   mandatory opt-in declaration checkbox on CSV import
 - [ ] **6. Tenancy**: harness case — consent state is org-scoped
+
+**M1 evidence (2026-08-21).** Migrations `..._contact_marketing_consent` and
+`..._consent_confirm_autoreplies`. `utils/consent.ts` matches opt-out keywords on
+the **whole trimmed message**, never as a substring — "stop" inside "please
+don't stop sending offers" is not an opt-out, and treating it as one would mute a
+customer who wanted the opposite. Covers en/ar/he, plus opt-in so a customer can
+undo without contacting support.
+
+Wired into the inbound worker **ahead of** the CSAT and keyword paths, so someone
+who types STOP cannot receive a keyword auto-reply in the same breath.
+Confirmation fires only on an actual *change* — repeating the unsubscribe notice
+every time someone types STOP again is the noise opt-out exists to stop.
+
+Verified live through the real webhook: STOP → `OPTED_OUT` / `keyword`, and only
+in that organization (an identical phone number in the other tenant was
+untouched). Audience preview 8 → 7 with `excludedOptedOut: 1`; campaign create
+materialised 7 recipients, not 8. Tenancy gate **45/45**. All test data restored.
+
+`OPT_OUT_CONFIRM` / `OPT_IN_CONFIRM` seed **active**, unlike the other optional
+auto-replies: a customer who asks to stop should be told it worked, because
+silence reads as being ignored and is what makes people report the number.
+
 
 ## M2 — RTL correctness · ~0.5 day · serves the core market daily
 
