@@ -4,6 +4,7 @@ import { Search, MessageSquarePlus } from 'lucide-react';
 import type { Conv } from '@/lib/data';
 import { avatarColor, STATUS_CONFIG } from '@/lib/constants';
 import { useT } from '@/lib/i18n';
+import { messageDir } from '@/lib/text-direction';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -175,7 +176,7 @@ export function ConversationList({
                 </div>
 
                 <div className="flex items-center justify-between gap-2">
-                  <p className="truncate text-[11px] text-muted-foreground">{c.lastMsg}</p>
+                  <p className="truncate text-[11px] text-muted-foreground" dir={messageDir(c.lastMsg)}>{c.lastMsg}</p>
                   {c.unread > 0 && (
                     <span className="shrink-0 rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
                       {c.unread}

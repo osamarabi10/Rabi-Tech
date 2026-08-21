@@ -264,16 +264,44 @@ silence reads as being ignored and is what makes people report the number.
 
 Marasil §32.2. Their headline differentiator, and we measurably fail parts of it.
 
-- [ ] **1. Per-message direction detection** — first-strong-character detection
+- [x] **1. Per-message direction detection** — first-strong-character detection
   sets `dir` per message bubble, so a Hebrew customer's one English sentence
   renders LTR inside an RTL interface
   — verify: mixed-direction messages render correctly in one thread
-- [ ] **2. Bidi isolation** — phone numbers, IDs and timestamps wrapped so they
+- [x] **2. Bidi isolation** — phone numbers, IDs and timestamps wrapped so they
   never reorder inside RTL text ("the single most common bidi bug")
-- [ ] **3. Physical→logical CSS** — fix the app-level offenders (`pr-9` on the
+- [x] **3. Physical→logical CSS** — fix the app-level offenders (`pr-9` on the
   contacts and inbox search inputs, `ml-1` in inbox/reports)
   — verify: search icon on the correct side in both directions
-- [ ] **4. Tabular figures** for phone numbers and IDs so columns align
+- [x] **4. Tabular figures** for phone numbers and IDs so columns align
+
+**M2 evidence (2026-08-21).** `lib/text-direction.ts` implements the Unicode
+first-strong heuristic: scan for the first strongly-directional character,
+treating digits, punctuation and emoji as neutral and skipping them. Applied to
+message bubbles and to conversation-list previews.
+
+Logic verified across 9 cases, all passing — including neutrals-skipped
+("!!! Hello" is LTR, "??? مرحبا" is RTL) and first-strong-wins ("Ahmad قال hello"
+is LTR, "قال Ahmad hello" is RTL).
+
+**Proven live, which is the point:** with the interface switched to English
+(`documentElement.dir = ltr`), an Arabic message still renders `dir="rtl"`.
+Direction follows the message's own content rather than the interface language —
+the exact defect the Marasil spec criticises respond.io for.
+
+Bidi isolation: `dir` already implies `unicode-bidi: isolate` in modern browsers,
+so the 31 existing `dir="ltr"` sites were already isolating. A `.bidi-isolate`
+utility and an `isolate()` FSI/PDI helper are available for strings built by
+interpolation, where there is no element to carry `dir`.
+
+Logical properties: the search icon's `right-3` + `pr-9` became `start-3` +
+`ps-9`, which keeps it on the right in RTL and moves it to the conventional left
+in LTR; `ml-*` before icon labels became `me-*`. What remains physical is shadcn
+primitives shipping their own defaults.
+
+Tabular figures via a `.numeric` utility on phone numbers so digit columns align
+— confirmed live on the contact panel (`numeric font-mono`).
+
 
 ## M3 — Filter vocabulary · ~3 days · the campaign feature that sells
 

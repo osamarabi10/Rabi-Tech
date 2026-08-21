@@ -201,9 +201,9 @@ export default function ContactsPage() {
         <CardContent className="space-y-4 p-4">
           <div className="grid gap-3 lg:grid-cols-[1fr_180px]">
             <div className="relative">
-              <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                className="pr-9"
+                className="ps-9"
                 placeholder={t('بحث في جهات الاتصال')}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -277,7 +277,7 @@ export default function ContactsPage() {
                       </div>
                     </TableCell>
                   )}
-                  {visibleColumns.phone && <TableCell dir="ltr">{contact.phone}</TableCell>}
+                  {visibleColumns.phone && <TableCell className="numeric" dir="ltr">{contact.phone}</TableCell>}
                   {visibleColumns.email && <TableCell>{contact.email || '—'}</TableCell>}
                   {visibleColumns.stage && <TableCell>{contact.lifecycleStage || '—'}</TableCell>}
                   {visibleColumns.assignee && <TableCell>{contact.assigneeName || '—'}</TableCell>}

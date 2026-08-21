@@ -80,7 +80,7 @@ export default function CampaignsPage() {
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
           </Button>
           <Button size="sm" onClick={() => setShowNew(true)}>
-            <Plus className="ms-1 h-4 w-4" />
+            <Plus className="me-1 h-4 w-4" />
             {t('حملة جديدة')}
           </Button>
         </div>

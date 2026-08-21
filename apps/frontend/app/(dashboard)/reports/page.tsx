@@ -149,10 +149,10 @@ export default function OverviewPage() {
 
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" asChild>
-              <Link href="/inbox"><MessageSquare className="ml-1.5 h-3.5 w-3.5" />{t('الرسائل')}</Link>
+              <Link href="/inbox"><MessageSquare className="me-1.5 h-3.5 w-3.5" />{t('الرسائل')}</Link>
             </Button>
             <Button size="sm" variant="outline" asChild>
-              <Link href="/campaigns"><Megaphone className="ml-1.5 h-3.5 w-3.5" />{t('الحملات')}</Link>
+              <Link href="/campaigns"><Megaphone className="me-1.5 h-3.5 w-3.5" />{t('الحملات')}</Link>
             </Button>
           </div>
 

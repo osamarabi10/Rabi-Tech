@@ -123,6 +123,15 @@
 }
 
 @layer utilities {
+  /* Phone numbers, IDs and counts. Tabular figures keep digits the same width
+     so columns line up; the isolation utility stops a number reordering the
+     RTL text around it — the most common bidi bug in this kind of product. */
+  .numeric {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+  .bidi-isolate { unicode-bidi: isolate; }
+
   /* Dark navigation surface — the rail and any dark header. */
   .nav-surface {
     background: hsl(var(--nav));

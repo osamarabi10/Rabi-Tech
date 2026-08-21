@@ -67,6 +67,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
+import { messageDir } from '@/lib/text-direction';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ConvStatus = 'all' | 'open' | 'pending' | 'awaiting' | 'mine' | 'resolved';
@@ -547,8 +548,8 @@ export default function InboxPage() {
           {(
             <>
               <div className="relative">
-                <Search className="absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input className="h-8 pr-9 text-xs" placeholder={t('بحث...')} value={search} onChange={(e) => {
+                <Search className="absolute start-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input className="h-8 ps-9 text-xs" placeholder={t('بحث...')} value={search} onChange={(e) => {
                   const val = e.target.value;
                   setSearch(val);
                   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
@@ -648,7 +649,7 @@ export default function InboxPage() {
                     </div>
                   )}
                   <div className="flex items-center justify-between gap-1">
-                    <span className="truncate text-[11px] text-muted-foreground">
+                    <span className="truncate text-[11px] text-muted-foreground" dir={messageDir(c.lastMsg)}>
                       {isClientRating(c.lastMsg) ? `⭐ تقييم ${c.lastMsg}/5` : c.lastMsg}
                     </span>
                     {c.unread > 0 && (
@@ -737,7 +738,7 @@ export default function InboxPage() {
                   </div>}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-muted-foreground" dir="ltr">{sel.phone}</span>
+                  <span className="numeric text-[11px] text-muted-foreground" dir="ltr">{sel.phone}</span>
                 </div>
               </div>
 
@@ -809,7 +810,15 @@ export default function InboxPage() {
                       </div>
                     )}
                     <MessageMedia mediaUrl={m.mediaUrl} mediaType={m.mediaType} />
-                    {m.body && !(m.mediaUrl && /^\[.*\]$/.test(m.body)) && <p className="whitespace-pre-wrap">{m.body}</p>}
+                    {/*
+                      Direction comes from the message's own content, not the
+                      interface language: a Hebrew customer's one English
+                      sentence renders LTR inside an RTL interface. Inheriting
+                      instead is what misplaces punctuation in mixed text.
+                    */}
+                    {m.body && !(m.mediaUrl && /^\[.*\]$/.test(m.body)) && (
+                      <p className="whitespace-pre-wrap" dir={messageDir(m.body)}>{m.body}</p>
+                    )}
                     <div className="mt-1 flex items-center justify-between gap-2">
                       <p className="text-[10px] opacity-40">{m.time}</p>
                       {m.dir === 'out' && (
@@ -953,7 +962,7 @@ export default function InboxPage() {
           )}
           <DialogFooter className="flex-col gap-2 sm:flex-col">
             <Button className="w-full" onClick={handleResolve}>
-              <CheckCircle2 className="ml-1 h-3.5 w-3.5" />
+              <CheckCircle2 className="me-1 h-3.5 w-3.5" />
               {t('تأكيد الإغلاق')}
             </Button>
             <Button className="w-full" variant="outline" onClick={() => setShowCloseConfirm(false)}>{t('إلغاء')}</Button>

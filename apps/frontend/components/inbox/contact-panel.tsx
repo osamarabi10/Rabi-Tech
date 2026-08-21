@@ -69,7 +69,7 @@ export function ContactPanel({
           </Avatar>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold">{conversation.name}</p>
-            <p className="font-mono text-[11px] text-muted-foreground" dir="ltr">
+            <p className="numeric font-mono text-[11px] text-muted-foreground" dir="ltr">
               {conversation.phone}
             </p>
           </div>
