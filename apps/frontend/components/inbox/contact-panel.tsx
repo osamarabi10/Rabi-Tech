@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { toast } from 'sonner';
 import Link from 'next/link';
 import { ExternalLink, Tag, User, X } from 'lucide-react';
-import type { Agent, Conv } from '@/lib/data';
+import { updateContact, type Agent, type Conv, type MarketingConsent } from '@/lib/data';
 import { avatarColor } from '@/lib/constants';
 import { useT } from '@/lib/i18n';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -24,6 +25,8 @@ export interface ContactPanelProps {
   assigning?: boolean;
   onClose: () => void;
   currentUserId?: string;
+  /** Lets the parent keep its Conv copy in step after a consent change. */
+  onConsentChange?: (consent: MarketingConsent) => void;
 }
 
 export function ContactPanel({
@@ -33,9 +36,24 @@ export function ContactPanel({
   assigning,
   onClose,
   currentUserId,
+  onConsentChange,
 }: ContactPanelProps) {
   const { t } = useT();
   const [showAllAgents, setShowAllAgents] = useState(false);
+  const [savingConsent, setSavingConsent] = useState(false);
+
+  const saveConsent = async (consent: MarketingConsent) => {
+    setSavingConsent(true);
+    try {
+      await updateContact(conversation.contactId, { marketingConsent: consent });
+      toast.success(t('تم تحديث حالة التسويق'));
+      onConsentChange?.(consent);
+    } catch {
+      toast.error(t('فشل التحديث'));
+    } finally {
+      setSavingConsent(false);
+    }
+  };
 
   const color = avatarColor(conversation.phone);
   const visibleAgents = showAllAgents ? agents : agents.slice(0, 5);
@@ -88,7 +106,37 @@ export function ContactPanel({
             <dt className="w-20 shrink-0 text-muted-foreground">{t('أول تواصل')}</dt>
             <dd className="font-mono text-muted-foreground">{conversation.sessionDate}</dd>
           </div>
+          {/*
+            Consent is shown to every agent, not just admins: whoever is in the
+            conversation is the person who will be told "stop sending me these",
+            and they need to be able to honour it immediately.
+          */}
+          <div className="flex items-center gap-2">
+            <dt className="w-20 shrink-0 text-muted-foreground">{t('التسويق')}</dt>
+            <dd className="min-w-0 flex-1">
+              <select
+                value={conversation.marketingConsent}
+                disabled={savingConsent}
+                onChange={(e) => saveConsent(e.target.value as MarketingConsent)}
+                className={cn(
+                  'w-full rounded border border-border bg-card px-1.5 py-0.5 text-[11px]',
+                  'disabled:opacity-50',
+                  conversation.marketingConsent === 'OPTED_OUT' && 'border-warning/40 text-warning',
+                )}
+              >
+                <option value="UNKNOWN">{t('غير محدد')}</option>
+                <option value="OPTED_IN">{t('موافق')}</option>
+                <option value="OPTED_OUT">{t('ملغى الاشتراك')}</option>
+              </select>
+            </dd>
+          </div>
         </dl>
+
+        {conversation.marketingConsent === 'OPTED_OUT' && (
+          <p className="mt-2 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[10px] text-warning">
+            {t('مستبعد من كل الحملات')}
+          </p>
+        )}
 
         {conversation.contactTags.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1">

@@ -922,6 +922,11 @@ export default function InboxPage() {
           onAssign={handleAssign}
           onClose={() => setShowDetails(false)}
           currentUserId={currentUser?.id}
+          onConsentChange={(consent) =>
+            setConvs((prev) =>
+              prev.map((c) => (c.id === sel.id ? { ...c, marketingConsent: consent } : c)),
+            )
+          }
         />
       )}
 

@@ -2,6 +2,8 @@
 import api from './api';
 
 // ---------- UI types ----------
+export type MarketingConsent = 'UNKNOWN' | 'OPTED_IN' | 'OPTED_OUT';
+
 export type Conv = {
   id: string;
   displayId: number;
@@ -20,6 +22,8 @@ export type Conv = {
   contactId: string;
   contactTags: string[];
   contactNotes: string | null;
+  /** Marketing consent. OPTED_OUT contacts are excluded from every broadcast. */
+  marketingConsent: MarketingConsent;
   labels: string[];
 };
 
@@ -72,6 +76,7 @@ export type Contact = {
   assigneeId?: string | null;
   assigneeName?: string | null;
   notes?: string | null;
+  marketingConsent?: MarketingConsent;
   customFields?: Record<string, string | null>;
 };
 
@@ -257,6 +262,7 @@ export async function startConversation(input: {
     contactId: data.contact?.id ?? '',
     contactTags: data.contact?.tags ?? [],
     contactNotes: data.contact?.notes ?? null,
+    marketingConsent: data.contact?.marketingConsent ?? 'UNKNOWN',
     labels: data.labels ?? [],
   };
 }
@@ -287,6 +293,7 @@ export async function fetchConversations(
     contactId: c.contact?.id ?? '',
     contactTags: c.contact?.tags ?? [],
     contactNotes: c.contact?.notes ?? null,
+    marketingConsent: c.contact?.marketingConsent ?? 'UNKNOWN',
     labels: c.labels ?? [],
   }));
 }

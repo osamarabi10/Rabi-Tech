@@ -591,6 +591,12 @@ const D: Dict = {
   "متوفر في باقة": { he: "זמין בחבילת", en: "available on" },
   "باقتك الحالية": { he: "החבילה הנוכחית שלך", en: "Your current plan" },
   "أرسل رسالة لمجموعة من جهات الاتصال دفعة واحدة، مع تقرير تسليم لكل مستلم.": { he: "שלח הודעה לקבוצת אנשי קשר בבת אחת, עם דוח מסירה לכל נמען.", en: "Send one message to a group of contacts at once, with a delivery report per recipient." },
+  "التسويق": { he: "שיווק", en: "Marketing" },
+  "غير محدد": { he: "לא הוגדר", en: "Not set" },
+  "موافق": { he: "מאשר", en: "Opted in" },
+  "ملغى الاشتراك": { he: "ביטל הרשמה", en: "Opted out" },
+  "مستبعد من كل الحملات": { he: "מוחרג מכל הקמפיינים", en: "Excluded from all broadcasts" },
+  "تم تحديث حالة التسويق": { he: "סטטוס השיווק עודכן", en: "Marketing consent updated" },
 };
 
 type I18nCtx = {

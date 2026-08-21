@@ -8,6 +8,10 @@ import {
   parseContactFilterDsl,
 } from '../../lib/contact-filter-dsl';
 import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
+import { setContactConsent } from '../../utils/consent';
+
+/** Accepted marketing-consent values, validated before any write. */
+const CONSENT_VALUES = ['UNKNOWN', 'OPTED_IN', 'OPTED_OUT'] as const;
 
 const router = Router();
 router.use(verifyToken);
@@ -278,6 +282,17 @@ router.get('/:ref', async (req, res) => {
 
 router.patch('/:id', async (req, res) => {
   try {
+    // Consent is deliberately not part of contactPayload's allow-list. It is not
+    // a plain field: changing it must also record who/what changed it and when,
+    // so it goes through setContactConsent rather than a bare column write.
+    const consent = req.body?.marketingConsent;
+    if (consent !== undefined) {
+      if (!CONSENT_VALUES.includes(consent)) {
+        return res.status(400).json({ error: 'قيمة الموافقة غير صالحة' });
+      }
+      await setContactConsent(req.params.id, consent, 'agent');
+    }
+
     const contact = await prisma.contact.update({
       where: { id: req.params.id },
       data: contactPayload(req.body),

@@ -234,9 +234,11 @@ Marasil FR-16.6 / BR-16.2. On Meta the platform enforces some of this; on OpenWA
 - [x] **4. Exclusion transparency** (Marasil UX bet #4, "explain every
   exclusion"): the composer's Review step reports "N excluded (opted out)"
   rather than silently shrinking the number
-- [ ] **5. Contact panel + import**: consent state visible and manually settable;
-  mandatory opt-in declaration checkbox on CSV import
-- [ ] **6. Tenancy**: harness case — consent state is org-scoped
+- [x] **5. Contact panel**: consent state visible and manually settable
+  — the CSV-import half is carried forward: **RabiTech has no contact import**
+  (no route, no parser dependency, no UI), so the opt-in declaration has nothing
+  to attach to yet. Recorded as a blocking requirement on M8.3.
+- [x] **6. Tenancy**: harness case — consent state is org-scoped
 
 **M1 evidence (2026-08-21).** Migrations `..._contact_marketing_consent` and
 `..._consent_confirm_autoreplies`. `utils/consent.ts` matches opt-out keywords on
@@ -259,6 +261,23 @@ materialised 7 recipients, not 8. Tenancy gate **45/45**. All test data restored
 auto-replies: a customer who asks to stop should be told it worked, because
 silence reads as being ignored and is what makes people report the number.
 
+**M1.5 / M1.6 evidence (2026-08-21).** `PATCH /api/contacts/:id` gained a
+*separate* consent branch rather than an entry in `contactPayload()`'s allow-list:
+consent must record `consentSource` and `consentUpdatedAt`, which a blind field
+copy would not do. Verified live — `"BOGUS"` → 400, `OPTED_OUT` → 200 and the row
+reads `OPTED_OUT | agent | <timestamp>`, then restored to `UNKNOWN`. Zero residue.
+
+The panel shows consent to **every** agent, not just admins: whoever is in the
+conversation is the person told "stop sending me these", and they need to honour
+it in that moment. `OPTED_OUT` also draws a warning line so nobody plans a
+broadcast around a contact who will be silently dropped from it.
+
+Tenancy gate **45/45 → 46/46**. The new case proves three things, not one: org A's
+opt-out persists with source `agent`; org B's contact is untouched; and org A
+calling `setContactConsent` with an org B contact id **rejects** rather than
+silently succeeding. It then checks the audience count moves by exactly one in
+org A and not at all in org B — counts are taken relative to a baseline, because
+hardcoding fixture sizes is how a harness starts failing for the wrong reason.
 
 ## M2 — RTL correctness · ~0.5 day · serves the core market daily
 
@@ -377,7 +396,12 @@ Marasil §20: five surfaces, each answering one question. We have one page.
 - [ ] **1. Granular restrictions** over roles: restrict data export, contact
   deletion, workspace settings, integration settings
 - [ ] **2. Role-aware navigation** — agents see three destinations, not five
-- [ ] **3. CSV import hardening** — fuzzy column mapping, validation preview,
-  duplicate strategy, `imported_{ts}` tag, opt-in declaration, live progress
+- [ ] **3. CSV import — build it** (it does not exist: no route, no parser
+  dependency, no UI; the only way contacts enter RabiTech today is by messaging
+  in). Fuzzy column mapping, validation preview, duplicate strategy,
+  `imported_{ts}` tag, live progress — and a **mandatory opt-in declaration**
+  writing `consentSource: 'import'`, which is the M1.5 carry-forward and is not
+  optional: bulk-loading a purchased list into a broadcast tool is precisely the
+  liability M1 exists to prevent.
 - [ ] **4. Quiet hours** enforced in the recipient's local time from phone prefix
 - [ ] **5. Broadcast clone**

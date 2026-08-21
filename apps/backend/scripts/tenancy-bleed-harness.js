@@ -697,6 +697,42 @@ async function databaseAudits() {
       assert.equal(receivedA.length, 1, 'org A did not receive its conversation event');
       assert.equal(receivedB.length, 0, 'org B received org A conversation event');
     });
+    await check('consent: marketing consent is organization-scoped', async () => {
+      // Consent is the one contact field with legal weight: honouring a STOP in
+      // one tenant must never mute — or un-mute — the same phone number in another.
+      const { setContactConsent } = require('../src/utils/consent');
+      const contactA = orgA.records[0].contact.id;
+      const reachable = (organizationId) =>
+        runAsOrganization(organizationId, () =>
+          scoped.contact.count({ where: { marketingConsent: { not: 'OPTED_OUT' } } }));
+      const [baseA, baseB] = await Promise.all([reachable(orgA.organizationId), reachable(orgB.organizationId)]);
+      const contactB = orgB.records[0].contact.id;
+
+      await runAsOrganization(orgA.organizationId, () => setContactConsent(contactA, 'OPTED_OUT', 'agent'));
+
+      const [afterA, afterB] = await Promise.all([
+        runAsOrganization(orgA.organizationId, () => scoped.contact.findUnique({ where: { id: contactA } })),
+        runAsOrganization(orgB.organizationId, () => scoped.contact.findUnique({ where: { id: contactB } })),
+      ]);
+      assert.equal(afterA.marketingConsent, 'OPTED_OUT', 'org A consent did not persist');
+      assert.equal(afterA.consentSource, 'agent');
+      assert.equal(afterB.marketingConsent, 'UNKNOWN', 'org B consent bled from org A');
+
+      // Reaching across the boundary by id must fail rather than silently succeed.
+      await assert.rejects(
+        () => runAsOrganization(orgA.organizationId, () => setContactConsent(contactB, 'OPTED_OUT', 'agent')),
+        'org A wrote consent onto an org B contact',
+      );
+      const stillB = await runAsOrganization(orgB.organizationId, () => scoped.contact.findUnique({ where: { id: contactB } }));
+      assert.equal(stillB.marketingConsent, 'UNKNOWN', 'org B consent overwritten across tenants');
+
+      // Opted-out contacts must vanish from an audience, in org A only.
+      const [audienceA, audienceB] = await Promise.all([reachable(orgA.organizationId), reachable(orgB.organizationId)]);
+      assert.equal(audienceA, baseA - 1, 'opted-out contact still reachable by broadcast');
+      assert.equal(audienceB, baseB, 'org B audience changed because of an org A opt-out');
+
+      await runAsOrganization(orgA.organizationId, () => setContactConsent(contactA, 'UNKNOWN', 'agent'));
+    });
     await check('database: bare aggregates remain organization-scoped', async () => {
       assert.deepEqual(after.bareAggregates, { conversations: 1, contacts: 1 });
     });
