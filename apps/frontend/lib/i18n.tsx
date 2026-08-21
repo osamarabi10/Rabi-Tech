@@ -15,6 +15,16 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Navigation rail ----
+  'قراءة الكل': { he: 'סמן הכל כנקרא', en: 'Mark all read' },
+  'التنقل': { he: 'ניווט', en: 'Navigation' },
+  'مساحة العمل': { he: 'סביבת עבודה', en: 'Workspace' },
+  'مساعدة': { he: 'עזרה', en: 'Help' },
+  'اختصارات لوحة المفاتيح': { he: 'קיצורי מקלדת', en: 'Keyboard shortcuts' },
+  'إرسال': { he: 'שליחה', en: 'Send' },
+  'سطر جديد': { he: 'שורה חדשה', en: 'New line' },
+  'الردود الجاهزة': { he: 'תגובות מוכנות', en: 'Snippets' },
+  'ذكر زميل': { he: 'אזכור עמית', en: 'Mention a teammate' },
   // ---- Workflow branches and HTTP options ----
   'إذا / وإلا': { he: 'אם / אחרת', en: 'If / Else' },
   'الشرط': { he: 'תנאי', en: 'Condition' },

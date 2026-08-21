@@ -139,12 +139,17 @@ export default function InboxPage() {
   /**
    * `?conversation=<id>` opens that thread directly.
    *
-   * This is what makes a report number falsifiable: every drill-down row
-   * links here, so a manager can click a total and land in the conversation
-   * it was counted from. Without it the drill-down leads to whichever thread
-   * happened to be first.
+   * This is what makes a report number falsifiable: every drill-down row links
+   * here, so a manager can click a total and land in the conversation it was
+   * counted from. The notification bell uses it for the same reason.
+   *
+   * `?conv=` is accepted as well: the notification bell linked with that name
+   * for as long as it has existed, so every unread notification already in a
+   * user’s list points at it. The bell now writes the long form, but dropping
+   * the short one would quietly break links that are already out there.
    */
-  const requestedConvId = useSearchParams().get('conversation');
+  const params = useSearchParams();
+  const requestedConvId = params.get('conversation') ?? params.get('conv');
 
   /** The tenant’s pipeline, for the header chip and the contact panel. */
   const lifecycleStages = useLifecycleStages();
