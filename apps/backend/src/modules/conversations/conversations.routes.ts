@@ -13,6 +13,7 @@ import { sendStartWelcome } from '../../utils/welcome';
 import { getSessionForTeam } from '../../utils/whatsapp-sessions';
 import { validateBody, createConversationSchema, resolveConversationSchema } from '../../lib/validation';
 import logger from '../../lib/logger';
+import { stampFirstResponse } from '../analytics/response-time';
 import { auditConversation } from '../../lib/audit';
 import { requirePermission, requireSupervisor } from '../../middleware/rbac.middleware';
 import { sendCsatPrompt } from '../../utils/client-feedback';
@@ -275,6 +276,12 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
       },
     });
 
+    // An internal note is not a response to the customer, so it must not stop
+    // the response clock. Fire-and-forget: reporting metadata never delays a send.
+    if (!isInternal) {
+      stampFirstResponse(conv.id, msg.timestamp).catch(() => {});
+    }
+
     let sendError: unknown = null;
     if (!isInternal) {
       try {
@@ -353,6 +360,11 @@ router.patch('/:id', requirePermission('conversation:resolve'), async (req, res)
       data: {
         ...(status && { status }),
         ...(assignedToId !== undefined && { assignedToId: assignedToId || null }),
+        // Stamped at the transition, and cleared on reopen so the column always
+        // describes the resolution that currently stands. Reporting previously
+        // had to infer this from `updatedAt`, which relabelling a thread moved.
+        ...(status === 'RESOLVED' ? { resolvedAt: new Date() } : {}),
+        ...(status && status !== 'RESOLVED' ? { resolvedAt: null } : {}),
       },
     });
 

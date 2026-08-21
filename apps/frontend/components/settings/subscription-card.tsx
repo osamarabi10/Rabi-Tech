@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { formatDate } from '@/lib/format-time';
 
 /** Highest plan needs no upsell; everyone else gets an upgrade path. */
 const TOP_PLAN = 'ENTERPRISE';
@@ -52,7 +53,7 @@ export function SubscriptionCard() {
     && commercial.discountPercent !== null
     && commercial.effectivePriceCents !== commercial.listPriceCents;
   const periodEnd = subscription?.currentPeriodEnd
-    ? new Date(subscription.currentPeriodEnd).toLocaleDateString('ar')
+    ? formatDate(subscription.currentPeriodEnd)
     : null;
 
   return (
@@ -105,7 +106,7 @@ export function SubscriptionCard() {
               <p className="mt-0.5 text-[11px] text-success-vivid">
                 {`${t('الخصم')} ${commercial.discountPercent}%`}
                 {commercial.expiresAt
-                  && ` · ${t('حتى')} ${new Date(commercial.expiresAt).toLocaleDateString('ar')}`}
+                  && ` · ${t('حتى')} ${formatDate(commercial.expiresAt)}`}
               </p>
             )}
           </div>

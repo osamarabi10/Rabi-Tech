@@ -38,6 +38,7 @@ import { assertKnownPaymentProvider } from './modules/billing/provider-registry'
 import { ensurePlans } from './modules/billing/billing.service';
 import { startBillingReconciliationWorker } from './workers/billing-reconciliation.worker';
 import { scheduleGatewayHealthChecks, startGatewayHealthWorker } from './workers/gateway-health.worker';
+import { scheduleAnalyticsRollup, startAnalyticsRollupWorker } from './workers/analytics-rollup.worker';
 import { startWorkflowWorker } from './workers/workflow.worker';
 import { LIMITS } from './middleware/rate-limit.middleware';
 import { verifySecrets } from './lib/verify-secrets';
@@ -499,6 +500,15 @@ httpServer.listen(Number(PORT), HOST, () => {
     startGatewayHealthWorker();
     scheduleGatewayHealthChecks().catch((error) =>
       logger.error('Failed to schedule gateway health checks', { error: String(error) }),
+    );
+  }
+
+  if (process.env.DISABLE_ANALYTICS_ROLLUP_WORKER === '1') {
+    logger.info('Analytics rollup worker disabled (DISABLE_ANALYTICS_ROLLUP_WORKER=1)');
+  } else {
+    startAnalyticsRollupWorker();
+    scheduleAnalyticsRollup().catch((error) =>
+      logger.error('Failed to schedule analytics rollup', { error: String(error) }),
     );
   }
 });

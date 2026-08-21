@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   CheckCircle2,
@@ -69,13 +70,14 @@ import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import { messageDir } from '@/lib/text-direction';
 import { EmptyState } from '@/components/empty-state';
+import { formatTimeOfDay } from '@/lib/format-time';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ConvStatus = 'all' | 'open' | 'pending' | 'awaiting' | 'mine' | 'resolved';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function nowTime() {
-  return new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
+  return formatTimeOfDay(new Date());
 }
 
 const MEDIA_ICONS: Record<string, string> = {
@@ -125,6 +127,16 @@ export default function InboxPage() {
   const [convFilter, setConvFilter] = useState<ConvStatus>('all');
   const [convs, setConvs] = useState<Conv[]>([]);
   const [selId, setSelId] = useState<string | null>(null);
+
+  /**
+   * `?conversation=<id>` opens that thread directly.
+   *
+   * This is what makes a report number falsifiable: every drill-down row
+   * links here, so a manager can click a total and land in the conversation
+   * it was counted from. Without it the drill-down leads to whichever thread
+   * happened to be first.
+   */
+  const requestedConvId = useSearchParams().get('conversation');
   const [messages, setMessages] = useState<Msg[]>([]);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [oldestMsgId, setOldestMsgId] = useState<string | null>(null);
@@ -172,13 +184,25 @@ export default function InboxPage() {
   const loadConvs = useCallback(async (keepSel = false, filter: ConvStatus = convFilter, forceLoad = false) => {
     if (!forceLoad && isSearchMode) return; // don't overwrite search results
     try {
-      const includeResolved = filter === 'resolved' || filter === 'all';
+      // A thread reached by id is included even when resolved — a drill-down
+      // for "conversations resolved this month" links almost entirely to
+      // threads the default filter hides.
+      const includeResolved = filter === 'resolved' || filter === 'all' || !!requestedConvId;
       const list = await fetchConversations({ includeResolved });
       setConvs(list);
       if (!keepSel) {
         // On a phone the thread replaces the list, so auto-selecting would drop
         // the user straight into a conversation they never picked. Desktop shows
         // both panes at once, where preselecting is a convenience.
+        // A conversation asked for by id wins over both rules below: it was
+        // chosen deliberately, including on a phone.
+        const requested = requestedConvId
+          ? list.find((c) => c.id === requestedConvId)
+          : undefined;
+        if (requested) {
+          setSelId(requested.id);
+          return;
+        }
         const isNarrow = typeof window !== 'undefined' && window.innerWidth < 768;
         const first = isNarrow ? undefined : list.find(
           (c) => !c.phone.includes('status@broadcast') && !c.name.includes('status@broadcast')
@@ -188,7 +212,7 @@ export default function InboxPage() {
     } catch {
       toast.error(t('فشل تحميل المحادثات'));
     }
-  }, [convFilter, isSearchMode]);
+  }, [convFilter, isSearchMode, requestedConvId]);
 
   useEffect(() => { loadConvs(); }, [convFilter, loadConvs]);
 

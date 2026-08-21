@@ -674,6 +674,14 @@ Gate stays 57/57.
 
 ## M5 — Design system hardening · ~1 day
 
+> **Note (2026-08-21).** Commit `c2c438c` ("M5") and commit `e41a205` ("M6")
+> did *not* implement the boxes below. They delivered a different, smaller
+> slice: a single `lib/tint.ts` primitive behind `StatusBadge`/`ColorPill`/
+> `ContactAvatar` (fixing nine badges whose tint had silently vanished — an
+> alpha suffix on a token colour is invalid CSS), a `.select-field` class
+> across 16 raw selects that had no focus ring at all, an `EmptyState`
+> component, and inbox scroll retention. Every box below is still open.
+
 - [ ] **1. Type scale tokens** (display/h1/h2/h3/body/body-strong/small/micro/mono)
   replacing ad-hoc `text-[11px]` literals
 - [ ] **2. Motion tokens** — 120ms micro / 200ms panel / 300ms modal,
@@ -701,16 +709,56 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
 
 Marasil §20: five surfaces, each answering one question. We have one page.
 
-- [ ] **1. Overview** — headline tiles with sparklines and period deltas
-- [ ] **2. Conversations** — response and resolution distributions
-- [ ] **3. Team** — workload and leaderboard
-- [ ] **4. Campaigns** — per-broadcast performance
-- [ ] **5. Gateway health** — our replacement for their "account health & cost":
+**Schema this rested on.** Response and resolution time were only inferrable
+from `Conversation.updatedAt`, which every edit touches — relabelling a resolved
+thread moved its "resolution time". Migration `20260826090000_analytics_reporting`
+adds `firstResponseAt` (first *human* outbound; auto-replies excluded or every
+thread reports a response time of seconds) and `resolvedAt` (stamped at the
+transition, cleared on reopen), plus the `AnalyticsHourly` rollup. Historic
+`resolvedAt` is backfilled from `updatedAt` and is therefore approximate; every
+resolution from 2026-08-21 on is stamped at the transition itself.
+
+- [x] **1. Overview** — headline tiles with sparklines and period deltas
+  — **done 2026-08-21.** `GET /api/analytics/overview`. Verified live: seeded 10
+  inbound across two known days, headline read exactly 10 and the daily series
+  split 8 / 2 to the right dates.
+- [x] **2. Conversations** — response and resolution distributions
+  — **done 2026-08-21.** Median, mean and p90 reported together so one thread
+  left open over a weekend is visible as the gap between median and mean rather
+  than hidden inside it, over six fixed buckets.
+- [x] **3. Team** — workload and leaderboard
+  — **done 2026-08-21.** Search by name + team filter. Rewritten as five
+  `groupBy` aggregates: the previous endpoint loaded every sent message and
+  assigned conversation for every agent into memory and counted them in JS.
+- [x] **4. Campaigns** — per-broadcast performance
+  — **done 2026-08-21.** Delivered / read / failed / replied. "Replied" is one
+  pushed-down `contact.count` per campaign that walks the relation in Postgres
+  rather than pulling recipient ids into Node and sending them back as an `in`.
+- [~] **5. Gateway health** — our replacement for their "account health & cost":
   session state, failed-send rate, webhook delivery
-- [ ] **6. Drill-down from every number** to the underlying conversations —
+  — **partly done 2026-08-21.** Session state, failed-send rate and automated
+  share ship. **Webhook delivery does not**: nothing records webhook receipts,
+  so there is no honest number to report yet — it needs a delivery log first.
+  Live connectivity is deliberately read from the gateway rather than cached,
+  because a stored copy of "connected" is the more convincing of the two and
+  the wrong one.
+- [x] **6. Drill-down from every number** to the underlying conversations —
   *"a manager who cannot click a number to see what it is made of will not
   believe it"*
-- [ ] **7. Volume by hour-of-day heatmap** (their staffing-decision chart)
+  — **done 2026-08-21.** Allow-listed metrics only, never a filter assembled
+  from the query string. Verified: drill-down totals matched their tiles exactly
+  (7 and 1), and `?conversation=<id>` opens that exact thread in the inbox
+  (checked #1001), including resolved threads the default filter hides.
+- [x] **7. Volume by hour-of-day heatmap** (their staffing-decision chart)
+  — **done 2026-08-21.** Read from the hourly rollup, so it costs one row per
+  hour instead of one per message. Verified at two offsets: 06:00/07:00 UTC
+  landed on Mon 06/07 at offset 0 and Mon 09/10 at +180, totals conserved.
+  Rollup recomputation is idempotent — three backfills, still exactly 10.
+
+**Not covered by this phase.** Reports read `Message.timestamp` for percentiles
+and cap the sample at 20,000 conversations, flagging `truncated` rather than
+quietly describing a slice as the whole period. Above that the percentiles need
+a rollup of their own.
 
 ## M8 — Roles, restrictions, admin · ~3 days
 

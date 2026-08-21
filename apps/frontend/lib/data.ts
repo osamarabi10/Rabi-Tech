@@ -1,5 +1,6 @@
 // Data layer — always uses the live backend API.
 import api from './api';
+import { formatTimeOfDay } from './format-time';
 
 // ---------- UI types ----------
 export type MarketingConsent = 'UNKNOWN' | 'OPTED_IN' | 'OPTED_OUT';
@@ -219,7 +220,7 @@ export type CurrentUsage = {
 // ---------- helpers ----------
 function fmtTime(iso?: string | null): string {
   if (!iso) return '';
-  return new Date(iso).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
+  return formatTimeOfDay(iso);
 }
 
 function fmtDate(iso?: string | null): string {
@@ -1124,4 +1125,147 @@ export async function importContacts(input: {
 }): Promise<ImportSummary> {
   const { data } = await api.post('/api/contacts/import', input);
   return data as ImportSummary;
+}
+
+// ---------- reports (M7) ----------
+
+/**
+ * Every report takes the same period, and the backend rejects a bad one rather
+ * than clamping it — a report that quietly answers a different question than
+ * the one asked still looks authoritative on screen.
+ */
+export type ReportRange = { from: string; to: string };
+
+export type Headline = {
+  key: string;
+  value: number;
+  previous: number;
+  /** Null when the previous period was zero: that has no rate, only a direction. */
+  changePct: number | null;
+};
+
+export type DaySeriesPoint = { date: string; inbound: number; outbound: number; resolved: number };
+
+export type OverviewReport = {
+  headlines: Headline[];
+  series: DaySeriesPoint[];
+};
+
+export type DurationStats = {
+  count: number;
+  medianMinutes: number | null;
+  meanMinutes: number | null;
+  p90Minutes: number | null;
+  buckets: { label: string; max: number | null; count: number }[];
+  /** The sample was capped, so the summary describes a slice of the period. */
+  truncated: boolean;
+};
+
+export type HeatmapCell = { dayOfWeek: number; hour: number; inbound: number; outbound: number };
+
+export type ConversationsReport = {
+  firstResponse: DurationStats;
+  resolution: DurationStats;
+  heatmap: HeatmapCell[];
+};
+
+export type TeamReportRow = {
+  id: string;
+  name: string;
+  team: { id: string; name: string; color: string | null } | null;
+  messagesSent: number;
+  conversationsHandled: number;
+  resolved: number;
+  medianFirstResponseMinutes: number | null;
+  csatAvg: number | null;
+  csatCount: number;
+};
+
+export type CampaignReportRow = {
+  id: string;
+  title: string;
+  sentAt: string | null;
+  status: string;
+  recipients: number;
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  replied: number;
+};
+
+export type GatewayReport = {
+  sessions: { id: string; label: string; phoneNumber: string | null; isActive: boolean }[];
+  outbound: { total: number; failed: number; failureRatePct: number | null };
+  automation: { total: number; automated: number; automatedRatePct: number | null };
+};
+
+export type DrilldownMetric = 'started' | 'resolved' | 'answered' | 'unanswered' | 'open';
+
+export type DrilldownRow = {
+  id: string;
+  displayId: number;
+  status: string;
+  createdAt: string;
+  firstResponseAt: string | null;
+  resolvedAt: string | null;
+  contact: { name: string | null; phone: string } | null;
+  assignee: { id: string; name: string } | null;
+};
+
+export type DrilldownResult = {
+  metric: string;
+  total: number;
+  returned: number;
+  conversations: DrilldownRow[];
+};
+
+export async function fetchOverviewReport(range: ReportRange): Promise<OverviewReport> {
+  const { data } = await api.get('/api/analytics/overview', { params: range });
+  return data;
+}
+
+export async function fetchConversationsReport(range: ReportRange): Promise<ConversationsReport> {
+  const { data } = await api.get('/api/analytics/conversations', {
+    params: {
+      ...range,
+      // The staffing question is about the business's clock, not UTC.
+      // `getTimezoneOffset` counts minutes *west*, so it is inverted here.
+      utcOffsetMinutes: -new Date().getTimezoneOffset(),
+    },
+  });
+  return data;
+}
+
+export async function fetchTeamReport(
+  range: ReportRange,
+  filter?: { teamId?: string; q?: string },
+): Promise<{ agents: TeamReportRow[] }> {
+  const { data } = await api.get('/api/analytics/team', { params: { ...range, ...filter } });
+  return data;
+}
+
+/** Plural: performance across every broadcast in the period. The singular
+ *  `fetchCampaignReport` above is the per-recipient report for one campaign. */
+export async function fetchCampaignsReport(
+  range: ReportRange,
+): Promise<{ campaigns: CampaignReportRow[] }> {
+  const { data } = await api.get('/api/analytics/campaigns', { params: range });
+  return data;
+}
+
+export async function fetchGatewayReport(range: ReportRange): Promise<GatewayReport> {
+  const { data } = await api.get('/api/analytics/gateway', { params: range });
+  return data;
+}
+
+export async function fetchDrilldown(
+  range: ReportRange,
+  metric: DrilldownMetric,
+  filter?: { agentId?: string; teamId?: string },
+): Promise<DrilldownResult> {
+  const { data } = await api.get('/api/analytics/drilldown', {
+    params: { ...range, metric, ...filter },
+  });
+  return data;
 }

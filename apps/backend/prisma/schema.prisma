@@ -76,6 +76,8 @@ model Organization {
   workflowExecutions      WorkflowExecution[]
 
   /// The console sweeps for live and expiring overrides on every load.
+  analyticsHourly AnalyticsHourly[]
+
   @@index([overrideExpiresAt])
 }
 
@@ -691,6 +693,12 @@ model Conversation {
   teamId            String?
   assignedToId      String?
   lastMessageAt     DateTime?
+  /// First human outbound reply. Auto-replies are excluded on purpose: counting
+  /// them would report a first-response time of seconds for every thread.
+  firstResponseAt   DateTime?
+  /// Stamped at the RESOLVED transition and cleared on reopen, so it always
+  /// describes the current resolution rather than the last edit of any kind.
+  resolvedAt        DateTime?
   isArchived        Boolean            @default(false)
   labels            String[]           @default([])
   pendingMenuChoice String?
@@ -712,6 +720,9 @@ model Conversation {
   @@index([organizationId, isArchived, status, lastMessageAt])
   @@index([organizationId, contactId, sessionId])
   @@index([organizationId, teamId])
+  @@index([organizationId, resolvedAt])
+  @@index([organizationId, firstResponseAt])
+  @@index([organizationId, createdAt])
 }
 
 model Message {
@@ -1022,4 +1033,28 @@ model WorkflowExecution {
   @@index([organizationId, workflowId, createdAt])
   @@index([organizationId, workflowId, contactId, createdAt])
   @@index([createdAt])
+}
+
+/// Hourly message and conversation counts, per organization.
+///
+/// Prisma cannot express `date_trunc` in `groupBy` and raw SQL would bypass the
+/// tenancy extension, so the buckets are materialised and maintained by
+/// `workers/analytics-rollup.worker.ts`, which counts each hour over indexed
+/// ranges. A peak-hours heatmap then reads one row per hour rather than one row
+/// per message.
+model AnalyticsHourly {
+  organizationId        String
+  hourStart             DateTime
+  inbound               Int      @default(0)
+  outbound              Int      @default(0)
+  automated             Int      @default(0)
+  failed                Int      @default(0)
+  conversationsCreated  Int      @default(0)
+  conversationsResolved Int      @default(0)
+  computedAt            DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, hourStart])
+  @@index([organizationId, hourStart])
 }

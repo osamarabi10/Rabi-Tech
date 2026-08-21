@@ -69,7 +69,12 @@ export async function consolidateContactThreads(contactId: string, sessionId: st
     where: { id: primary.id },
     data: {
       ...(latest ? { lastMessageAt: latest.timestamp } : {}),
-      ...(hadOpenDup && primary.status === 'RESOLVED' ? { status: 'OPEN' } : {}),
+      // Reopening clears the resolution stamp along with the status. Leaving it
+      // set would report the thread as resolved at a moment it is demonstrably
+      // still open, and inflate the resolved count for that hour.
+      ...(hadOpenDup && primary.status === 'RESOLVED'
+        ? { status: 'OPEN' as const, resolvedAt: null }
+        : {}),
     },
   });
 }
@@ -111,7 +116,7 @@ export async function getOrCreateActiveConversation(
     if (existing.status === 'RESOLVED') {
       const reopened = await prisma.conversation.update({
         where: { id: existing.id },
-        data: { status: 'OPEN', lastMessageAt: new Date(), ...(teamId ? { teamId } : {}) },
+        data: { status: 'OPEN', resolvedAt: null, lastMessageAt: new Date(), ...(teamId ? { teamId } : {}) },
       });
       return {
         conversation: reopened,

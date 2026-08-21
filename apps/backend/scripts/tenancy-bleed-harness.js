@@ -1681,6 +1681,134 @@ async function databaseAudits() {
         }),
       );
     });
+    await check('analytics: hourly rollup buckets never cross organizations', async () => {
+      const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
+      const hour = floorToHour(new Date());
+
+      // Org A has a message in this hour; org B has none.
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.message.create({
+          data: {
+            id: 'bleed_rollup_msg_a',
+            organizationId: orgA.organizationId,
+            conversationId: orgA.records[0].conversation.id,
+            direction: 'INBOUND',
+            body: 'counted for org a only',
+            timestamp: new Date(hour.getTime() + 60000),
+          },
+        }),
+      );
+
+      await recomputeHours(orgA.organizationId, [hour]);
+      await recomputeHours(orgB.organizationId, [hour]);
+
+      const bucketOf = (organizationId) =>
+        runAsOrganization(organizationId, () =>
+          scoped.analyticsHourly.findFirst({ where: { hourStart: hour } }),
+        );
+
+      const beforeA = await bucketOf(orgA.organizationId);
+      const beforeB = await bucketOf(orgB.organizationId);
+      assert.ok(beforeA, 'org a should have a bucket for this hour');
+      assert.ok(beforeB, 'org b should have a bucket for this hour');
+
+      // Both fixtures seed their own traffic, so the absolute counts are not
+      // zero and asserting on them would prove nothing. What isolation means
+      // here is that one more message in A moves A by exactly one and leaves
+      // B untouched.
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.message.create({
+          data: {
+            id: 'bleed_rollup_msg_a2',
+            organizationId: orgA.organizationId,
+            conversationId: orgA.records[0].conversation.id,
+            direction: 'INBOUND',
+            body: 'second message for org a only',
+            timestamp: new Date(hour.getTime() + 120000),
+          },
+        }),
+      );
+
+      await recomputeHours(orgA.organizationId, [hour]);
+      await recomputeHours(orgB.organizationId, [hour]);
+
+      const afterA = await bucketOf(orgA.organizationId);
+      const afterB = await bucketOf(orgB.organizationId);
+
+      assert.equal(
+        afterA.inbound - beforeA.inbound,
+        1,
+        'org a bucket must count exactly its own new message',
+      );
+      assert.equal(
+        afterB.inbound - beforeB.inbound,
+        0,
+        'org b bucket must not move when org a receives a message',
+      );
+
+      // A caller asking explicitly for another tenant’s rows does not get an
+      // empty result — it gets its own. The extension overwrites the
+      // `organizationId` in `where` rather than intersecting with it, so the
+      // property worth asserting is that nothing returned belongs to org A.
+      const attempted = await runAsOrganization(orgB.organizationId, () =>
+        scoped.analyticsHourly.findMany({ where: { organizationId: orgA.organizationId } }),
+      );
+      assert.ok(
+        attempted.every((row) => row.organizationId === orgB.organizationId),
+        'a cross-tenant filter must not widen the scope past the caller',
+      );
+    });
+
+    await check('analytics: report aggregates are scoped to the caller organization', async () => {
+      const reporting = require('../src/modules/analytics/reporting.service');
+      const period = { from: new Date(Date.now() - 3600_000), to: new Date(Date.now() + 3600_000) };
+
+      const inboundOf = (report) => report.headlines.find((h) => h.key === 'inbound').value;
+      const overviewFor = (organizationId) =>
+        runAsOrganization(organizationId, () => reporting.overview(period));
+
+      const beforeA = inboundOf(await overviewFor(orgA.organizationId));
+      const beforeB = inboundOf(await overviewFor(orgB.organizationId));
+
+      // Both fixtures carry seeded traffic, so isolation is a statement about
+      // movement: A’s new message must be visible to A and invisible to B.
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.message.create({
+          data: {
+            id: 'bleed_overview_msg_a',
+            organizationId: orgA.organizationId,
+            conversationId: orgA.records[0].conversation.id,
+            direction: 'INBOUND',
+            body: 'overview isolation probe',
+            timestamp: new Date(),
+          },
+        }),
+      );
+
+      const afterA = inboundOf(await overviewFor(orgA.organizationId));
+      const afterB = inboundOf(await overviewFor(orgB.organizationId));
+
+      assert.equal(afterA - beforeA, 1, 'org a must count its own inbound message');
+      assert.equal(afterB - beforeB, 0, 'org b must not count org a inbound messages');
+    });
+
+    await check('analytics: campaign reply counting does not traverse into another organization', async () => {
+      const reporting = require('../src/modules/analytics/reporting.service');
+      const period = { from: new Date(Date.now() - 86_400_000), to: new Date(Date.now() + 3600_000) };
+
+      // This is the one report query that walks nested relation filters, and
+      // the tenancy extension does not descend into those — so it is the first
+      // place a cross-tenant read could appear.
+      const rowsB = await runAsOrganization(orgB.organizationId, () =>
+        reporting.campaignPerformance(period, orgB.organizationId),
+      );
+      assert.ok(Array.isArray(rowsB));
+      assert.ok(
+        rowsB.every((row) => row.replied === 0),
+        'org b must not attribute org a replies to its campaigns',
+      );
+    });
+
     await check('database: cross-org nested write is rejected by a composite FK', async () => {
       await assert.rejects(() =>
         runAsOrganization(orgA.organizationId, () =>
@@ -1717,6 +1845,13 @@ async function databaseAudits() {
     if (gatewayQueueModule) await require('../src/workers/gateway-provisioning.queue').gatewayProvisioningQueue.close().catch(() => {});
     const billingQueueModule = require.cache[require.resolve('../src/workers/billing-reconciliation.worker')];
     if (billingQueueModule) await require('../src/workers/billing-reconciliation.worker').billingReconciliationQueue.close().catch(() => {});
+    // Any queue whose module was loaded keeps a Redis connection open, and an
+    // unclosed one makes this harness hang after reporting success rather than
+    // exit — a green run that never returns is worse than a red one.
+    const rollupQueueModule = require.cache[require.resolve('../src/workers/analytics-rollup.worker')];
+    if (rollupQueueModule) await require('../src/workers/analytics-rollup.worker').analyticsRollupQueue.close().catch(() => {});
+    const healthQueueModule = require.cache[require.resolve('../src/workers/gateway-health.worker')];
+    if (healthQueueModule) await require('../src/workers/gateway-health.worker').gatewayHealthQueue.close().catch(() => {});
     const appPrismaModule = require.cache[require.resolve('../src/prisma')];
     if (appPrismaModule) await require('../src/prisma').prisma.$disconnect().catch(() => {});
     await raw.$disconnect().catch(() => {});

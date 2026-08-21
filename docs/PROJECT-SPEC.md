@@ -244,14 +244,26 @@ Omnichannel (TG/FB/IG) only after Cloud API.
 AI-assist drafting, then an AI node in P11's engine. Most-demoed,
 least-load-bearing; worthless before workflows exist.
 
-**Marasil-parity track (docs/TODO.md).** M1–M3 done. **M4** dark theme ·
-**M5** design-system hardening · **M6** inbox structure · **M7** reports
-consolidation · **M8** roles/restrictions **and building CSV import, which does
-not exist at all** — today the only way a contact enters RabiTech is by messaging
-in. Two things are deliberately deferred rather than forgotten: an **async rule
-compiler** (needed for "never replied *since campaign X was sent*", the Marasil
-headline filter we ship only half of) and **estimated audience counts** (not
-needed below ~50k contacts per tenant).
+**Marasil-parity track (docs/TODO.md).** M1–M4, M8 (CSV import) and **M7
+(reports consolidation)** done. M7 shipped five surfaces — overview with
+period-over-period deltas, response/resolution distributions, team leaderboard,
+per-broadcast performance, gateway health — plus drill-down from a number to the
+conversations behind it and an hour-of-day heatmap. It rests on two new columns
+(`Conversation.firstResponseAt` / `resolvedAt`) because those times were
+previously only inferrable from `updatedAt`, which any edit moves, and on an
+`AnalyticsHourly` rollup because Prisma cannot express `date_trunc` in `groupBy`
+and raw SQL would bypass the tenancy extension. **One gap, deliberately
+unshipped:** webhook-delivery health, which needs a delivery log that does not
+exist yet.
+
+**M5** design-system hardening and **M6** inbox structure remain open as written
+in TODO.md. The commits labelled M5/M6 delivered a smaller adjacent slice —
+a single tint primitive, a focus-ring class for 16 unstyled selects, an empty-state
+component, inbox scroll retention — not the checklists under those headings.
+Still open too: **M8 roles/restrictions**. Two things are deliberately deferred
+rather than forgotten: an **async rule compiler** (needed for "never replied
+*since campaign X was sent*", the Marasil headline filter we ship only half of)
+and **estimated audience counts** (not needed below ~50k contacts per tenant).
 
 **Continuous hardening backlog:** health monitor + scheduled self-send (gateway
 breakage is currently discovered by users); per-org plan-aware campaign rate
