@@ -36,6 +36,8 @@ export const ACTION_LABELS: Record<string, string> = {
   UPDATE_CONTACT_FIELD: 'تحديث حقل مخصص',
   HTTP_WEBHOOK: 'استدعاء رابط خارجي',
   WAIT_DELAY: 'انتظار',
+  IF_ELSE: 'إذا / وإلا',
+  CLOSE_CONVERSATION: 'إغلاق المحادثة',
 };
 
 export const RUN_STATUS_LABELS: Record<string, string> = {
@@ -47,7 +49,7 @@ export const RUN_STATUS_LABELS: Record<string, string> = {
 };
 
 /** Which extra input each action needs. Drives the builder's fields. */
-export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template' | 'tag' | 'customField' | 'url' | 'minutes' | 'none'> = {
+export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template' | 'tag' | 'customField' | 'url' | 'minutes' | 'branch' | 'none'> = {
   ASSIGN_TEAM: 'team',
   ASSIGN_USER: 'user',
   SEND_MESSAGE: 'text',
@@ -57,6 +59,10 @@ export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template'
   UPDATE_CONTACT_FIELD: 'customField',
   HTTP_WEBHOOK: 'url',
   WAIT_DELAY: 'minutes',
+  IF_ELSE: 'branch',
+  // Nothing to configure: what the customer receives is the
+  // CONVERSATION_CLOSED auto-reply the subscriber already edits in settings.
+  CLOSE_CONVERSATION: 'none',
 };
 
 export const triggerLabel = (value: string) => TRIGGER_LABELS[value] || value;

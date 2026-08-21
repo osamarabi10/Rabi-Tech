@@ -256,10 +256,16 @@ All test data removed; residue check clean.
 
 ## P11 — Visual workflow builder · 6–8 weeks · **flagship**
 
-> **Status 2026-08-22.** The *engine* shipped: schema, BullMQ executor with a
-> depth cap, trigger wiring, run log, tenancy cases, and a form-based builder
-> at `/automations`. What is left is the visual half (item 6), plan gating
-> (item 8), two nodes, and the depth behind If/Else and HTTP Request.
+> **Status 2026-08-22.** The *engine* is complete but for one node. Schema,
+> BullMQ executor with a depth cap, trigger wiring, run log, tenancy cases,
+> per-plan gating, real If/Else branching, a full HTTP Request node, and a
+> form-based builder at `/automations`.
+>
+> **What is left: the React Flow canvas (item 6) and the Ask a Question node.**
+> Ask a Question is the harder of the two — it has to pause a run, capture the
+> customer’s *next* message, validate it and write it to a field, which is a
+> new kind of wait: the existing `WAIT_DELAY` resumes on a timer, not on an
+> inbound message.
 
 Engine before canvas. Reuse: socket events as triggers, assignment service,
 working-hours util. Skip (documented): Random Split, Zapier/Make nodes, GraphQL.
@@ -282,15 +288,26 @@ working-hours util. Skip (documented): Random Split, Zapier/Make nodes, GraphQL.
   - [x] Date & Time branch (`WITHIN_BUSINESS_HOURS`)
   - [x] Update Contact (`ADD_TAG` / `REMOVE_TAG` / `UPDATE_CONTACT_FIELD`,
     plus `CONTACT_LIFECYCLE_IS` as a condition)
-  - [~] If/Else multi-branch — conditions exist and gate the run
-    (`CONTACT_HAS_TAG`, `CONTACT_LACKS_TAG`, `CONVERSATION_TEAM_IS`,
-    `CONTACT_FIELD_EQUALS`), but they are **gates, not branches**: a false
-    condition stops the run rather than taking a second path. No regex operator.
-  - [~] HTTP Request — `HTTP_WEBHOOK` is **POST only**, with no method choice,
-    no auth header, no response→variable mapping and no backoff. It is
-    SSRF-guarded (shape check at save, resolved-address check at run, no
-    redirects) and every delivery is now logged.
-  - [ ] Close Conversation
+  - [x] If/Else multi-branch — **done 2026-08-22.** `IF_ELSE` carries its own
+    conditions plus `then` and `else` branches, so a false test takes the second
+    path instead of ending the run. Nests three deep (the filter DSL ceiling),
+    with the action budget counted **across** branches so nesting cannot slip
+    past it. A `WAIT_DELAY` inside a branch is refused at save: a pause resumes
+    from a top-level step index, which cannot address a position inside a branch,
+    so resuming would skip the rest of it. Verified live on both paths —
+    `then: 1 action(s)` and `else: 2 action(s)` in the run log. Still no regex
+    operator.
+  - [x] HTTP Request — **done 2026-08-22.** Method (GET/POST/PUT/PATCH/DELETE),
+    bearer/basic auth, an interpolated body, `captureAs` mapping the response
+    into a variable later steps read as `{{name.field}}`, and two retries at
+    500ms/1500ms for transport errors and 5xx/429 only — a 4xx means the request
+    is wrong and repeating a non-idempotent POST would do the same thing twice.
+    Credentials go in the header and never into the delivery log.
+  - [x] Close Conversation — **done 2026-08-22.** Resolves, stamps `resolvedAt`,
+    emits to the inbox, and sends the subscriber’s own CONVERSATION_CLOSED
+    auto-reply (nothing if they switched it off). **No CSAT prompt**, unlike a
+    manual resolve: that survey asks how an agent handled you, and a thread
+    closed by a rule had no handling to rate.
   - [ ] Ask a Question (wait + validate email/phone/number + write field)
 - [x] **5. Run log**: per-run timeline (node, input, output, ts) for debugging
   — verify: failed HTTP node shows attempt trail
@@ -299,12 +316,23 @@ working-hours util. Skip (documented): Random Split, Zapier/Make nodes, GraphQL.
   — **not built.** `/automations` is a form-based builder (ordered condition
   and action lists driven by `GET /api/workflows/schema`), not a canvas.
   Enable/disable does work. React Flow is not installed.
+
+  Extended 2026-08-22 so the form covers what the engine gained: a branch
+  editor for `IF_ELSE` (conditions, then, otherwise) and method / auth /
+  capture fields for HTTP Request. **One level deep only** — the engine allows
+  three, but a nested editor inside a dialog stops being readable at the second,
+  so deeper graphs stay API-only until this canvas exists.
   — verify DoD: admin builds "new conversation outside hours → template X,
   assign team Y, tag Z" on canvas; it executes; survives restart mid-wait
 - [x] **7. Tenancy harness cases** for Workflow/WorkflowRun — gate green
-- [ ] **8. Entitlement**: workflows count gated per plan (`plans.ts`)
-  — **not built.** No workflow allowance exists in `plans.ts`; any plan can
-  create any number of workflows.
+- [x] **8. Entitlement**: workflows count gated per plan (`plans.ts`)
+  — **done 2026-08-22.** `workflowsLimit`: Free 1, Growth 10, Business 50,
+  Enterprise unlimited. Free gets one rather than none so automation is
+  demonstrable rather than merely advertised. Active *and* inactive both count:
+  counting only active ones would make the ceiling trivially avoidable, and
+  would mean hitting it by enabling something already built — a worse moment to
+  be told. Reads the **effective** plan, so an override grants it too. Refuses
+  with 429, matching the custom-field ceiling. Verified live.
 
 ## P12 — WhatsApp Cloud API channel · ~4–5 weeks · after P11
 

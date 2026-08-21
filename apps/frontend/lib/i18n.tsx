@@ -15,6 +15,17 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Workflow branches and HTTP options ----
+  'إذا / وإلا': { he: 'אם / אחרת', en: 'If / Else' },
+  'الشرط': { he: 'תנאי', en: 'Condition' },
+  'عندها': { he: 'אז', en: 'Then' },
+  'وإلا': { he: 'אחרת', en: 'Otherwise' },
+  'لا شيء': { he: 'כלום', en: 'Nothing' },
+  'الفرع يحتاج شرطاً واحداً على الأقل': { he: 'הענף דורש לפחות תנאי אחד', en: 'A branch needs at least one condition' },
+  'المصادقة': { he: 'אימות', en: 'Auth' },
+  'بدون مصادقة': { he: 'ללא אימות', en: 'No auth' },
+  'احفظ الرد باسم (اختياري)': { he: 'שמור את התגובה בשם (רשות)', en: 'Save response as (optional)' },
+  'استخدم {{الاسم.الحقل}} في الخطوات التالية': { he: 'השתמשו ב-{{שם.שדה}} בשלבים הבאים', en: 'Use {{name.field}} in later steps' },
   // ---- Lifecycle stages ----
   'مرحلة العميل': { he: 'שלב הלקוח', en: 'Lifecycle stage' },
   'مراحل العميل': { he: 'שלבי הלקוח', en: 'Lifecycle stages' },

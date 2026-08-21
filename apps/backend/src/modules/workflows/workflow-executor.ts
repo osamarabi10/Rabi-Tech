@@ -4,6 +4,9 @@ import logger from '../../lib/logger';
 import { getTenantId } from '../../lib/tenant-context';
 import { isWithinWorkingHours } from '../../utils/working-hours';
 import { getSessionForTeam } from '../../utils/whatsapp-sessions';
+import { closeConversationWithReply } from '../../utils/conversation-session';
+import { getIO, SocketEvents } from '../../socket';
+import { socketRoom } from '../../socket/rooms';
 import { OpenWAService } from '../whatsapp/openwa.service';
 import { assertSafeWebhookUrl, BlockedUrlError } from './outbound-url';
 import { recordDelivery, webhookIdentity } from '../webhooks/webhook-log.service';
@@ -154,10 +157,35 @@ export async function conditionsHold(
 // ---------------------------------------------------------------------------
 
 /** `{{contactName}}`-style interpolation, same shape as message templates. */
+/**
+ * `{{name}}` and `{{name.field.sub}}`.
+ *
+ * Dotted paths exist for the HTTP node: capturing a response into a variable
+ * is only useful if a later step can reach inside it. Without them a captured
+ * object interpolates as "[object Object]", which looks like it worked.
+ *
+ * An unresolved placeholder is left as written rather than replaced with an
+ * empty string — a message reading "your order  is ready" hides the mistake,
+ * while one reading "your order {{order.id}} is ready" reports it.
+ */
 function interpolate(text: string, vars: Record<string, unknown>): string {
-  return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (match, key: string) => {
-    const value = vars[key];
-    return value === undefined || value === null ? match : String(value);
+  return text.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, path: string) => {
+    const value = path.split('.').reduce<unknown>((acc, key) => {
+      if (acc === null || acc === undefined || typeof acc !== 'object') return undefined;
+      return (acc as Record<string, unknown>)[key];
+    }, vars);
+
+    if (value === undefined || value === null) return match;
+    if (typeof value === 'object') {
+      // A whole object in a message body is almost never intended, but in a
+      // JSON request body it is exactly right.
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return match;
+      }
+    }
+    return String(value);
   });
 }
 
@@ -198,6 +226,40 @@ async function sendToContact(context: ExecutionContext, body: string): Promise<s
   // refused at the ceiling, exactly like an agent's own message.
   await OpenWAService.sendText(session.sessionName, contact.phone, text);
   return 'sent';
+}
+
+/**
+ * One retry policy for outbound HTTP, and only for the failures worth retrying.
+ *
+ * A 4xx is the endpoint saying the request itself is wrong — repeating it
+ * changes nothing and, on a non-idempotent POST, risks doing the same thing
+ * twice. Only transport errors and 5xx/429 are retried.
+ *
+ * Two retries at 500ms and 1500ms. The whole run holds a queue worker, so the
+ * ceiling is deliberately low: an endpoint that needs longer than a couple of
+ * seconds to recover is down, and the run should say so.
+ */
+const RETRY_DELAYS_MS = [500, 1500];
+
+async function fetchWithBackoff(url: string, init: RequestInit): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      const retryable = response.status === 429 || response.status >= 500;
+      if (!retryable || attempt === RETRY_DELAYS_MS.length) return response;
+    } catch (error) {
+      lastError = error;
+      // An abort is the caller giving up, not a flaky endpoint.
+      if ((error as Error)?.name === 'AbortError') throw error;
+      if (attempt === RETRY_DELAYS_MS.length) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+  }
+
+  // Unreachable: the loop returns or throws on its final pass.
+  throw lastError ?? new Error('request failed');
 }
 
 async function runAction(
@@ -302,6 +364,59 @@ async function runAction(
       return entry(stepIndex, action.type, 'ok', `${slug}=${value ?? ''}`);
     }
 
+    case 'CLOSE_CONVERSATION': {
+      if (!context.conversationId) return entry(stepIndex, action.type, 'skipped', 'no conversation');
+
+      // The same closing reply an agent’s resolve sends — the subscriber’s own
+      // CONVERSATION_CLOSED template, not text invented here.
+      await closeConversationWithReply(context.conversationId);
+      await prisma.conversation.update({
+        where: { id: context.conversationId },
+        data: { status: 'RESOLVED', resolvedAt: new Date() },
+      });
+
+      // The inbox is watching. Without this the thread sits open on every
+      // agent’s screen until they reload.
+      try {
+        getIO()
+          .to(socketRoom.organization(context.organizationId))
+          .emit(SocketEvents.CONVERSATION_RESOLVED, { conversationId: context.conversationId });
+      } catch {
+        // No socket server in a worker-only process; closing still stands.
+      }
+
+      // Deliberately no CSAT prompt, unlike a manual resolve. That survey asks
+      // how an agent handled you; a thread closed by a rule had no handling to
+      // rate, and surveying those fills the score with answers about nothing.
+      return entry(stepIndex, action.type, 'ok', 'resolved');
+    }
+
+    case 'IF_ELSE': {
+      const held = await conditionsHold(action.conditions, context);
+      const branch = held ? action.then : action.else;
+      const label = held ? 'then' : 'else';
+
+      if (!Array.isArray(branch) || branch.length === 0) {
+        // An empty side is a legitimate "do nothing in that case", not a fault.
+        return entry(stepIndex, action.type, 'ok', `${label}: no actions`);
+      }
+
+      // Branch actions run inside the parent step. A WAIT_DELAY in here would
+      // have to resume into a nested position the top-level `fromStep` cursor
+      // cannot address, so it is refused at save rather than half-supported.
+      const results: LogEntry[] = [];
+      for (let i = 0; i < branch.length; i += 1) {
+        results.push(await runAction(branch[i], context, stepIndex));
+      }
+      const failed = results.filter((r) => r.outcome === 'failed').length;
+      return entry(
+        stepIndex,
+        action.type,
+        failed ? 'failed' : 'ok',
+        `${label}: ${results.length} action(s)${failed ? `, ${failed} failed` : ''}`,
+      );
+    }
+
     case 'HTTP_WEBHOOK': {
       // Every guard lives in assertSafeWebhookUrl. See that file for why this is
       // the most dangerous action in the list.
@@ -331,32 +446,61 @@ async function runAction(
         throw error;
       }
 
+      const method = String(action.method || 'POST').toUpperCase();
+
       // Lifted out of the fetch call so the log records exactly what was sent,
       // rather than a second, separately-built approximation of it.
-      const body = {
-        workflowId: context.workflowId,
-        executionId: context.executionId,
-        contactId: context.contactId,
-        conversationId: context.conversationId,
-        payload: context.payload,
+      //
+      // A custom body is interpolated the same way message text is, so
+      // `{{payload.text}}` and anything captured by an earlier step can be sent
+      // on. Without one, the default envelope is used.
+      const body = action.body
+        ? interpolate(String(action.body), context.payload)
+        : JSON.stringify({
+            workflowId: context.workflowId,
+            executionId: context.executionId,
+            contactId: context.contactId,
+            conversationId: context.conversationId,
+            payload: context.payload,
+          });
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Host: target.hostHeader,
+        'User-Agent': 'RabiTech-Workflow/1',
       };
+
+      // Credentials go in the header and never into the log — `recordDelivery`
+      // stores the host, the request body and the response, none of which
+      // carry this.
+      const auth = action.auth as { type?: string; token?: string; username?: string; password?: string } | undefined;
+      if (auth?.type === 'bearer' && auth.token) {
+        headers.Authorization = `Bearer ${auth.token}`;
+      } else if (auth?.type === 'basic' && auth.username) {
+        const encoded = Buffer.from(`${auth.username}:${auth.password ?? ''}`).toString('base64');
+        headers.Authorization = `Basic ${encoded}`;
+      }
+
+      // GET and DELETE carry no body: some servers reject the request outright
+      // when one arrives, which would look like an endpoint fault rather than a
+      // request we built wrong.
+      const sendsBody = method !== 'GET' && method !== 'DELETE';
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10_000);
       try {
-        const response = await fetch(target.url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Host: target.hostHeader,
-            'User-Agent': 'RabiTech-Workflow/1',
+        const response = await fetchWithBackoff(
+          target.url,
+          {
+            method,
+            headers,
+            ...(sendsBody ? { body } : {}),
+            signal: controller.signal,
+            // Never follow a redirect: a public URL that 302s to 127.0.0.1 would
+            // walk straight past the check above.
+            redirect: 'manual' as const,
           },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-          // Never follow a redirect: a public URL that 302s to 127.0.0.1 would
-          // walk straight past the check above.
-          redirect: 'manual',
-        });
+        );
 
         // Read the body before deciding the outcome. It is capped by the log
         // service, and it is usually the only clue why an endpoint rejected a
@@ -376,6 +520,18 @@ async function runAction(
           responseBody,
           durationMs: Date.now() - startedAt,
         });
+
+        // Response → variable. Later steps address it as `{{name.field}}`,
+        // which is what turns a webhook from a notification into a lookup.
+        if (response.ok && typeof action.captureAs === 'string' && action.captureAs) {
+          try {
+            context.payload[action.captureAs] = JSON.parse(responseBody);
+          } catch {
+            // Not JSON: keep the text rather than dropping the capture, so a
+            // plain-text endpoint is still usable.
+            context.payload[action.captureAs] = responseBody;
+          }
+        }
 
         return entry(stepIndex, action.type, response.ok ? 'ok' : 'failed', `HTTP ${response.status}`);
       } catch (error) {

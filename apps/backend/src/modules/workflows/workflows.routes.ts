@@ -4,6 +4,8 @@ import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { verifyToken } from '../auth/auth.middleware';
 import { requirePermission } from '../../middleware/rbac.middleware';
+import { PLAN_ENTITLEMENTS } from '../billing/plans';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { validateWorkflowConfig, workflowVocabulary } from './workflow-schema';
 
 /**
@@ -100,6 +102,23 @@ router.post('/', requirePermission('workflow:manage'), async (req, res) => {
     const validation = validateWorkflowConfig(req.body?.triggerType, req.body?.configJson);
     if (!validation.valid) {
       return res.status(400).json({ error: 'إعداد الأتمتة غير صالح', details: validation.errors });
+    }
+
+    // The effective plan, not the plan of record: honouring an override for
+    // quotas but not for features is half an upgrade, which is worse than none.
+    const effective = await resolveEntitlements(req.user!.organizationId);
+    const limit = PLAN_ENTITLEMENTS[effective.plan].workflowsLimit;
+    if (limit !== null) {
+      const existing = await prisma.workflow.count();
+      if (existing >= limit) {
+        // 429, matching how the custom-field ceiling answers: this is a quota
+        // refusal, not a malformed request and not a permission problem.
+        return res.status(429).json({
+          error: `الباقة الحالية تسمح بـ ${limit} أتمتة`,
+          limit,
+          current: existing,
+        });
+      }
     }
 
     const workflow = await prisma.workflow.create({

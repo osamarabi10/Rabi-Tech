@@ -340,6 +340,8 @@ export function WorkflowBuilder({
                     tags={tags}
                     fields={fields}
                     templates={templates}
+                    conditionTypes={schema.conditions}
+                    actionTypes={schema.actions}
                     maxDelayMinutes={schema.limits.maxDelayMinutes}
                     t={t}
                   />
@@ -408,7 +410,7 @@ function StepCard({
 
 /** The second input an action needs, chosen from its declared operand kind. */
 function ActionOperand({
-  action, onChange, teams, users, tags, fields, templates, maxDelayMinutes, t,
+  action, onChange, teams, users, tags, fields, templates, conditionTypes, actionTypes, maxDelayMinutes, t,
 }: {
   action: WorkflowAction;
   onChange: (next: WorkflowAction) => void;
@@ -417,11 +419,32 @@ function ActionOperand({
   tags: CrmTag[];
   fields: CustomFieldDefinition[];
   templates: Template[];
+  /** From the server schema, never a local copy — same rule as everywhere else. */
+  conditionTypes: readonly string[];
+  actionTypes: readonly string[];
   maxDelayMinutes: number;
   t: (key: string) => string;
 }) {
   const kind = ACTION_FIELDS[action.type] || 'none';
   const select = 'select-field w-full';
+
+  if (kind === 'branch') {
+    return (
+      <BranchEditor
+        action={action}
+        onChange={onChange}
+        teams={teams}
+        users={users}
+        tags={tags}
+        fields={fields}
+        templates={templates}
+        conditionTypes={conditionTypes}
+        actionTypes={actionTypes}
+        maxDelayMinutes={maxDelayMinutes}
+        t={t}
+      />
+    );
+  }
 
   if (kind === 'team') {
     return (
@@ -467,14 +490,88 @@ function ActionOperand({
     );
   }
   if (kind === 'url') {
+    const auth = (action.auth ?? null) as { type?: string; token?: string; username?: string; password?: string } | null;
     return (
-      <div className="space-y-1">
+      <div className="space-y-1.5">
+        <div className="flex gap-1.5">
+          <select
+            className="select-field w-24 shrink-0"
+            value={String(action.method ?? 'POST')}
+            onChange={(e) => onChange({ ...action, method: e.target.value })}
+            aria-label={t('الطريقة')}
+          >
+            {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((method) => (
+              <option key={method} value={method}>{method}</option>
+            ))}
+          </select>
+          <Input
+            value={String(action.url ?? '')}
+            onChange={(e) => onChange({ ...action, url: e.target.value })}
+            placeholder="https://example.com/hook"
+            dir="ltr"
+          />
+        </div>
+
+        <div className="flex gap-1.5">
+          <select
+            className="select-field w-28 shrink-0"
+            value={auth?.type ?? ''}
+            onChange={(e) => {
+              const next = e.target.value;
+              // Clearing auth removes the whole object rather than leaving an
+              // empty one behind — the validator rejects an auth block with no
+              // recognised type.
+              if (!next) {
+                const { auth: _dropped, ...rest } = action;
+                onChange(rest as typeof action);
+              } else {
+                onChange({ ...action, auth: { type: next } });
+              }
+            }}
+            aria-label={t('المصادقة')}
+          >
+            <option value="">{t('بدون مصادقة')}</option>
+            <option value="bearer">Bearer</option>
+            <option value="basic">Basic</option>
+          </select>
+
+          {auth?.type === 'bearer' && (
+            <Input
+              value={auth.token ?? ''}
+              onChange={(e) => onChange({ ...action, auth: { ...auth, token: e.target.value } })}
+              placeholder="token"
+              dir="ltr"
+              type="password"
+            />
+          )}
+          {auth?.type === 'basic' && (
+            <>
+              <Input
+                value={auth.username ?? ''}
+                onChange={(e) => onChange({ ...action, auth: { ...auth, username: e.target.value } })}
+                placeholder="username"
+                dir="ltr"
+              />
+              <Input
+                value={auth.password ?? ''}
+                onChange={(e) => onChange({ ...action, auth: { ...auth, password: e.target.value } })}
+                placeholder="password"
+                dir="ltr"
+                type="password"
+              />
+            </>
+          )}
+        </div>
+
         <Input
-          value={String(action.url ?? '')}
-          onChange={(e) => onChange({ ...action, url: e.target.value })}
-          placeholder="https://example.com/hook"
+          value={String(action.captureAs ?? '')}
+          onChange={(e) => onChange({ ...action, captureAs: e.target.value })}
+          placeholder={t('احفظ الرد باسم (اختياري)')}
           dir="ltr"
         />
+        <p className="text-micro text-muted-foreground">
+          {t('استخدم {{الاسم.الحقل}} في الخطوات التالية')}
+        </p>
         <p className="text-micro text-muted-foreground">{t('روابط https العامة فقط')}</p>
       </div>
     );
@@ -500,4 +597,185 @@ function ActionOperand({
     );
   }
   return <div className={cn('self-center text-caption text-muted-foreground')}>{t('بدون إعدادات')}</div>;
+}
+
+/**
+ * `IF_ELSE`: its own conditions, and the actions each side runs.
+ *
+ * One level deep. The executor and validator allow branches to nest three deep,
+ * but a nested editor inside a dialog stops being readable at the second level —
+ * so deeper graphs stay API-only until the canvas exists, rather than being
+ * offered here in a form nobody can follow.
+ *
+ * `WAIT_DELAY` is filtered out of the inner picker because a pause cannot resume
+ * into a branch; the server rejects it, and offering it would be an invitation
+ * to an error message.
+ */
+function BranchEditor({
+  action, onChange, teams, users, tags, fields, templates, conditionTypes, actionTypes, maxDelayMinutes, t,
+}: {
+  action: WorkflowAction;
+  onChange: (next: WorkflowAction) => void;
+  teams: Team[];
+  users: SystemUser[];
+  tags: CrmTag[];
+  fields: CustomFieldDefinition[];
+  templates: Template[];
+  conditionTypes: readonly string[];
+  actionTypes: readonly string[];
+  maxDelayMinutes: number;
+  t: (key: string) => string;
+}) {
+  const conditions = (action.conditions as WorkflowCondition[] | undefined) ?? [];
+  const branchActions = (side: 'then' | 'else') =>
+    (action[side] as WorkflowAction[] | undefined) ?? [];
+
+  const nestable = actionTypes.filter((type) => type !== 'WAIT_DELAY' && type !== 'IF_ELSE');
+
+  const setSide = (side: 'then' | 'else', next: WorkflowAction[]) =>
+    onChange({ ...action, [side]: next });
+
+  const renderSide = (side: 'then' | 'else', title: string) => (
+    <div className="rounded-md border border-border p-2">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-caption font-semibold">{title}</span>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-6 px-1.5"
+          onClick={() => setSide(side, [...branchActions(side), { type: nestable[0] }])}
+        >
+          <Plus className="h-3 w-3" />
+        </Button>
+      </div>
+
+      {branchActions(side).length === 0 ? (
+        <p className="text-micro text-muted-foreground">{t('لا شيء')}</p>
+      ) : (
+        <div className="space-y-1.5">
+          {branchActions(side).map((inner, index) => (
+            <div key={index} className="flex items-start gap-1.5">
+              <select
+                className="select-field-sm w-36 shrink-0"
+                value={inner.type}
+                onChange={(e) => {
+                  const next = [...branchActions(side)];
+                  next[index] = { type: e.target.value };
+                  setSide(side, next);
+                }}
+              >
+                {nestable.map((type) => (
+                  <option key={type} value={type}>{t(actionLabel(type))}</option>
+                ))}
+              </select>
+
+              <div className="min-w-0 flex-1">
+                <ActionOperand
+                  action={inner}
+                  onChange={(nextAction) => {
+                    const next = [...branchActions(side)];
+                    next[index] = nextAction;
+                    setSide(side, next);
+                  }}
+                  teams={teams}
+                  users={users}
+                  tags={tags}
+                  fields={fields}
+                  templates={templates}
+                  conditionTypes={conditionTypes}
+                  actionTypes={actionTypes}
+                  maxDelayMinutes={maxDelayMinutes}
+                  t={t}
+                />
+              </div>
+
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 shrink-0"
+                onClick={() => setSide(side, branchActions(side).filter((_, i) => i !== index))}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="w-full space-y-2">
+      <div className="rounded-md border border-border p-2">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-caption font-semibold">{t('الشرط')}</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 px-1.5"
+            onClick={() =>
+              onChange({ ...action, conditions: [...conditions, { type: conditionTypes[0] } as WorkflowCondition] })
+            }
+          >
+            <Plus className="h-3 w-3" />
+          </Button>
+        </div>
+
+        {conditions.length === 0 ? (
+          <p className="text-micro text-warning">{t('الفرع يحتاج شرطاً واحداً على الأقل')}</p>
+        ) : (
+          <div className="space-y-1.5">
+            {conditions.map((condition, index) => (
+              <div key={index} className="flex items-center gap-1.5">
+                <select
+                  className="select-field-sm w-40 shrink-0"
+                  value={condition.type}
+                  onChange={(e) => {
+                    const next = [...conditions];
+                    next[index] = { ...next[index], type: e.target.value } as WorkflowCondition;
+                    onChange({ ...action, conditions: next });
+                  }}
+                >
+                  {conditionTypes.map((type) => (
+                    <option key={type} value={type}>{t(conditionLabel(type))}</option>
+                  ))}
+                </select>
+
+                {condition.type !== 'WITHIN_BUSINESS_HOURS' && (
+                  <Input
+                    className="h-8 text-caption"
+                    value={String(condition.value ?? '')}
+                    onChange={(e) => {
+                      const next = [...conditions];
+                      next[index] = { ...next[index], value: e.target.value };
+                      onChange({ ...action, conditions: next });
+                    }}
+                    placeholder={t('القيمة')}
+                  />
+                )}
+
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 shrink-0"
+                  onClick={() =>
+                    onChange({ ...action, conditions: conditions.filter((_, i) => i !== index) })
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {renderSide('then', t('عندها'))}
+      {renderSide('else', t('وإلا'))}
+    </div>
+  );
 }

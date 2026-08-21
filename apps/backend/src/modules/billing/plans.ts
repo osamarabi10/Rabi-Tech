@@ -9,6 +9,14 @@ export type PlanEntitlements = {
   monthlyCampaignSendsLimit: number | null;
   customFieldsLimit: number | null;
   usersLimit: number | null;
+  /**
+   * Active *and* inactive workflows both count.
+   *
+   * Counting only active ones would make the limit trivially avoidable — build
+   * twenty, keep one on — and would mean a subscriber hits the ceiling by
+   * enabling something they already built, which is a worse moment to be told.
+   */
+  workflowsLimit: number | null;
   autoProvisionGateway: boolean;
   customDomain: boolean;
   whiteLabel: boolean;
@@ -24,6 +32,10 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: 0,
     customFieldsLimit: 5,
     usersLimit: 1,
+    // Free gets one, so automation is demonstrable rather than merely
+    // advertised: a tier that cannot build a single workflow teaches nobody
+    // what the feature is worth.
+    workflowsLimit: 1,
     autoProvisionGateway: false,
     customDomain: false,
     whiteLabel: false,
@@ -37,6 +49,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: 5000,
     customFieldsLimit: 20,
     usersLimit: 5,
+    workflowsLimit: 10,
     autoProvisionGateway: true,
     customDomain: false,
     whiteLabel: false,
@@ -50,6 +63,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: 25000,
     customFieldsLimit: 50,
     usersLimit: 25,
+    workflowsLimit: 50,
     autoProvisionGateway: true,
     customDomain: true,
     whiteLabel: true,
@@ -63,6 +77,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: null,
     customFieldsLimit: null,
     usersLimit: null,
+    workflowsLimit: null,
     autoProvisionGateway: true,
     customDomain: true,
     whiteLabel: true,
