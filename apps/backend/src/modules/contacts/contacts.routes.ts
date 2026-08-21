@@ -13,6 +13,9 @@ import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
 import { setContactConsent } from '../../utils/consent';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
+import { ImportError, importContacts } from './import.service';
+import logger from '../../lib/logger';
+import { requirePermission } from '../../middleware/rbac.middleware';
 
 /** Accepted marketing-consent values, validated before any write. */
 const CONSENT_VALUES = ['UNKNOWN', 'OPTED_IN', 'OPTED_OUT'] as const;
@@ -223,6 +226,34 @@ router.post('/custom-fields', async (req, res) => {
     res.status(201).json(definition);
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+/**
+ * POST /api/contacts/import
+ *
+ * Bulk import. Requires an explicit consent affirmation in the payload — the
+ * checkbox in the UI is a courtesy, this is the gate. Every imported contact is
+ * stamped consentSource: 'import', and a contact who has already opted out is
+ * never flipped back: re-importing a list must not undo the STOPs a tenant has
+ * received.
+ */
+router.post('/import', requirePermission('contact:create'), async (req, res) => {
+  try {
+    const summary = await importContacts(
+      req.user!.organizationId,
+      Array.isArray(req.body?.rows) ? req.body.rows : [],
+      {
+        consentAffirmed: req.body?.consentAffirmed === true,
+        defaultCountryCode: req.body?.defaultCountryCode,
+        tag: req.body?.tag ?? null,
+      },
+    );
+    res.json(summary);
+  } catch (err) {
+    if (err instanceof ImportError) return res.status(err.status).json({ error: err.message });
+    logger.error('Contact import failed', { error: String(err) });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

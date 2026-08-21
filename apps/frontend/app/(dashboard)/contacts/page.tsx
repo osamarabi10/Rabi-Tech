@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save, BookmarkPlus } from 'lucide-react';
+import Link from 'next/link';
+import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save, BookmarkPlus, Upload } from 'lucide-react';
 import { activeFilter } from '@/lib/contact-filter';
 import { avatarColor } from '@/lib/constants';
 import {
@@ -244,6 +245,12 @@ export default function ContactsPage() {
               onSelect={applySegment}
               onChanged={loadSegments}
             />
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/contacts/import">
+                <Upload className="h-3.5 w-3.5" />
+                {t('استيراد')}
+              </Link>
+            </Button>
             <Button
               size="sm"
               variant="outline"

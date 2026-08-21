@@ -1092,3 +1092,36 @@ export async function updateWorkflow(
 export async function deleteWorkflow(id: string): Promise<void> {
   await api.delete(`/api/workflows/${id}`);
 }
+
+// ---------------------------------------------------------------------------
+// Contact import (M8)
+// ---------------------------------------------------------------------------
+
+export type ImportRow = {
+  phone?: string;
+  name?: string;
+  email?: string;
+  lifecycleStage?: string;
+  customFields?: Record<string, string>;
+};
+
+export type ImportSummary = {
+  total: number;
+  created: number;
+  updated: number;
+  failed: number;
+  /** Contacts left OPTED_OUT because an import must not undo a STOP. */
+  skippedOptedOut: number;
+  errors: Array<{ row: number; reason: string }>;
+};
+
+export async function importContacts(input: {
+  rows: ImportRow[];
+  /** Required. The server refuses the import without it. */
+  consentAffirmed: boolean;
+  defaultCountryCode?: string;
+  tag?: string | null;
+}): Promise<ImportSummary> {
+  const { data } = await api.post('/api/contacts/import', input);
+  return data as ImportSummary;
+}

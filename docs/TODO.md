@@ -671,12 +671,52 @@ Marasil §20: five surfaces, each answering one question. We have one page.
 - [ ] **1. Granular restrictions** over roles: restrict data export, contact
   deletion, workspace settings, integration settings
 - [ ] **2. Role-aware navigation** — agents see three destinations, not five
-- [ ] **3. CSV import — build it** (it does not exist: no route, no parser
-  dependency, no UI; the only way contacts enter RabiTech today is by messaging
-  in). Fuzzy column mapping, validation preview, duplicate strategy,
-  `imported_{ts}` tag, live progress — and a **mandatory opt-in declaration**
-  writing `consentSource: 'import'`, which is the M1.5 carry-forward and is not
-  optional: bulk-loading a purchased list into a broadcast tool is precisely the
-  liability M1 exists to prevent.
+- [x] **3. CSV import** — built (M8). Header auto-mapping, validation preview,
+  duplicate-in-file detection, optional tag, and the **mandatory opt-in
+  declaration** writing `consentSource: 'import'`.
+
+**M8 evidence (2026-08-21).** No migration needed — `consentSource` already
+existed from M1.
+
+**Two rules the server enforces, not the checkbox.** The affirmation is a hard
+gate in `importContacts()`: no `consentAffirmed: true`, no import, verified
+three ways (absent, false, and empty rows). And **an import can never resurrect
+an opted-out contact** — someone who sent STOP stays `OPTED_OUT` however the
+spreadsheet describes them. Without that, re-importing a list is how a tenant
+silently undoes every opt-out they have received, and they would never know.
+Verified: re-importing an opted-out row returns `skippedOptedOut: 1` and the
+row is still `OPTED_OUT`.
+
+**Phones are stored digits-only, deliberately — not `+E.164`.** Inbound
+WhatsApp addresses arrive as `972542030590@c.us` and the inbound path strips
+the suffix and any `+` before matching. A stored `+` would mean an imported
+contact never matches their own incoming message: the system would not
+recognise them, and a *second* contact would be created for the same person.
+That is the worst outcome for a contacts import, because it looks like it
+worked. Numbers are therefore *validated* as E.164 and *stored* in the existing
+form, with `displayE164()` used for the preview only.
+
+Verified live: `+972 50-000-0501`, `00972500000502` and `0500000503` (with a
+default country code) all normalize to the stored digits-only form; junk, empty,
+too-short and duplicate-in-file rows are each reported with their row number.
+
+Chunked at 250 rows per transaction with a 20,000-row ceiling: one transaction
+per row is slow, one for the whole file times out and rolls back work that was
+fine, and both fail worst on exactly the large file this feature exists for. A
+failing chunk reports against its own rows and the import continues.
+
+Browser: header auto-mapping guessed all four columns of a realistic file;
+entering a default country code moved a row from invalid to valid live; submit
+stayed disabled until the affirmation was ticked; the result read 3 total,
+2 new, 1 failed with the row and reason.
+
+**One bug caught by looking:** the preview rendered its validation reasons in
+Arabic inside an English interface — `previewPhone` returned display text, so
+the component had nothing to translate. It now returns stable reason codes that
+the page passes through `t()`.
+
+Gate **56/56 → 57/57**. All test data removed.
+
+
 - [ ] **4. Quiet hours** enforced in the recipient's local time from phone prefix
 - [ ] **5. Broadcast clone**

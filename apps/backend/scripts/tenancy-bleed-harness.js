@@ -935,6 +935,67 @@ async function databaseAudits() {
       await runAsOrganization(orgB.organizationId, () => scoped.gatewayHealthCheck.deleteMany({}));
     });
 
+    await check('import: bulk contact import cannot cross tenants or undo an opt-out', async () => {
+      const { importContacts } = require('../src/modules/contacts/import.service');
+
+      // Consent is a hard gate, not a UI courtesy.
+      await assert.rejects(
+        () => runAsOrganization(orgA.organizationId, () =>
+          importContacts(orgA.organizationId, [{ phone: '972500000099' }], { consentAffirmed: false })),
+        /موافقة|consent/i,
+        'an import ran without a consent affirmation',
+      );
+
+      const before = await Promise.all([
+        runAsOrganization(orgA.organizationId, () => scoped.contact.count()),
+        runAsOrganization(orgB.organizationId, () => scoped.contact.count()),
+      ]);
+
+      const summary = await runAsOrganization(orgA.organizationId, () =>
+        importContacts(orgA.organizationId, [
+          { phone: '+972 50-000-0098', name: 'Imported A' },
+          { phone: 'not-a-number' },
+        ], { consentAffirmed: true }));
+      assert.equal(summary.created, 1, 'the valid row was not created');
+      assert.equal(summary.failed, 1, 'the invalid row was not reported');
+
+      const after = await Promise.all([
+        runAsOrganization(orgA.organizationId, () => scoped.contact.count()),
+        runAsOrganization(orgB.organizationId, () => scoped.contact.count()),
+      ]);
+      assert.equal(after[0], before[0] + 1, 'org A did not gain the imported contact');
+      assert.equal(after[1], before[1], 'an org A import changed org B contact count');
+
+      // Stored digits-only, so it matches the form inbound WhatsApp addresses
+      // normalize to. A stored "+" would create a second contact for the same
+      // person the first time they message in.
+      const imported = await runAsOrganization(orgA.organizationId, () =>
+        scoped.contact.findFirst({ where: { name: 'Imported A' } }));
+      assert.equal(imported.phone, '972500000098', 'phone was not normalized to storage form');
+      assert.equal(imported.consentSource, 'import');
+      assert.equal(imported.marketingConsent, 'OPTED_IN');
+
+      // org B must not see it, by list or by phone.
+      const seenByB = await runAsOrganization(orgB.organizationId, () =>
+        scoped.contact.findFirst({ where: { phone: '972500000098' } }));
+      assert.equal(seenByB, null, 'org B saw a contact org A imported');
+
+      // An import must never resurrect an opted-out contact.
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.contact.update({ where: { id: imported.id }, data: { marketingConsent: 'OPTED_OUT' } }));
+      const second = await runAsOrganization(orgA.organizationId, () =>
+        importContacts(orgA.organizationId, [{ phone: '972500000098', name: 'Imported A' }],
+          { consentAffirmed: true }));
+      assert.equal(second.skippedOptedOut, 1, 'the opted-out contact was not reported as skipped');
+      const afterReimport = await runAsOrganization(orgA.organizationId, () =>
+        scoped.contact.findUnique({ where: { id: imported.id } }));
+      assert.equal(afterReimport.marketingConsent, 'OPTED_OUT',
+        'a re-import flipped an opted-out contact back to opted in');
+
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.contact.delete({ where: { id: imported.id } }));
+    });
+
     await check('workflows: automations and executions are organization-scoped', async () => {
       const config = {
         trigger: { keyword: 'refund' },
