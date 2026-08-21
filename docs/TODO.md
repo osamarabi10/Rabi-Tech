@@ -172,18 +172,33 @@ are display and billing-input only until P10-b wires a real provider.
 
 ## P10-a — Saved segments · ~4 days
 
+**Full implementation plan: [docs/P10A-SAVED-SEGMENTS-PLAN.md](P10A-SAVED-SEGMENTS-PLAN.md)**
+— verified paths, migration SQL, validator design, and the six places the brief
+diverges from the code. Two of those would fail at runtime: `contact:manage`
+does not exist (`requirePermission` 500s on an unknown operation), and a plain
+unique name index makes a soft-deleted segment reserve its name forever.
+
 - [ ] **1. Migration**: `Segment` model (id, organizationId, name, filter Json,
-  createdById, timestamps; composite FK; unique `[organizationId, name]`)
-- [ ] **2. CRUD routes** `/api/segments` (list/create/rename/delete;
-  `requirePermission('contact:read'/'contact:manage')`)
-  — verify: curl round-trip; cross-org id returns 404
-- [ ] **3. Contacts page**: "حفظ كشريحة" on the filter builder; segment chips
+  createdById, timestamps, `deletedAt`; composite FK `[id, organizationId]`)
+  — name uniqueness is a **partial, case-insensitive** SQL index
+  (`WHERE "deletedAt" IS NULL` on `lower(name)`); Prisma can express neither,
+  so do **not** add `@@unique([organizationId, name])`
+- [ ] **2. Filter validator** in `lib/contact-filter-dsl.ts` — walks the tree
+  calling the private `compileRule` per leaf so validation and compilation
+  cannot drift; collects **all** errors with paths, and rejects an empty filter
+  (a segment matching everyone is the dangerous case)
+- [ ] **3. CRUD routes** `/api/segments` (list/create/rename/delete/count)
+  with new `segment:*` permissions — verify: curl round-trip; cross-org id
+  returns 404 on **all three** verbs; name reusable after soft delete
+- [ ] **4. Contacts page**: "حفظ كشريحة" on the filter builder; segment chips
   to load a saved filter — verify in browser
-- [ ] **4. Campaign Target step**: segment picker alongside the builder;
-  audience preview uses the segment's filter
-  — verify: saved segment shows same live count in composer
-- [ ] **5. Tenancy**: add harness case — segment from org A invisible to org B
-  — verify: gate 46/46
+- [ ] **5. Campaign Target step**: segment picker **above** the builder (a
+  segment is a starting point, not an alternative), audience preview keeps using
+  the consent-excluding campaign endpoint
+  — note: the chip count and the composer count legitimately differ by the
+  opted-out count; `excludedOptedOut` is the line that explains it
+- [ ] **6. Tenancy**: add harness case — segment from org A invisible to org B
+  — verify: gate **50/50 → 51/51**
 
 ## P10-b — Payments live · ~1 week · **blocked on O5**
 
