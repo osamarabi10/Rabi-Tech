@@ -4,13 +4,12 @@ import { prisma } from '../../prisma';
 import { getOrganizationConfig } from '../../utils/whatsapp-sessions';
 import { getTenantId } from '../../lib/tenant-context';
 import {
-  configuredLimit,
   getMetricUsage,
   monthRange,
   recordMessageUsage,
   recordUsageEvents,
 } from './usage.service';
-import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
+import { resolveEntitlements, resolveMetricLimit } from '../billing/entitlements.resolver';
 
 export const ENTITLEMENTS: Record<UsageMetric, { blocksOutbound: boolean }> = {
   messages_inbound: { blocksOutbound: false },
@@ -58,8 +57,9 @@ export async function assertMetricAvailable(
 ): Promise<void> {
   if (!ENTITLEMENTS[metric].blocksOutbound) return;
   const organizationId = getTenantId();
-  const config = await getOrganizationConfig(organizationId);
-  const limit = configuredLimit(config, metric);
+  // Resolver, not OrganizationConfig: a platform-owner override has to be
+  // honoured here or an enterprise deal is agreed and then not enforced.
+  const limit = await resolveMetricLimit(organizationId, metric, reference);
   if (limit === null) return;
   const current = await getMetricUsage(metric, reference);
   if (current + BigInt(quantity) > limit) {
@@ -108,16 +108,15 @@ export function seatLimitResponse(error: SeatLimitError) {
  */
 export async function assertSeatAvailable(): Promise<void> {
   const organizationId = getTenantId();
-  const organization = await prisma.organization.findUnique({
-    where: { id: organizationId },
-    select: { tier: true },
-  });
-  const plan = PLAN_ENTITLEMENTS[normalizePlanCode(organization?.tier || 'FREE')];
-  if (plan.usersLimit === null) return;
+  // Seats follow the effective plan too. Reading Organization.tier directly
+  // would grant an overridden org the quotas of its new plan but the seats of
+  // its old one — half an upgrade, which is worse than none.
+  const entitlements = await resolveEntitlements(organizationId);
+  if (entitlements.seatLimit === null) return;
 
   const current = await prisma.user.count({ where: { isActive: true } });
-  if (current >= plan.usersLimit) {
-    throw new SeatLimitError(current, plan.usersLimit, plan.name);
+  if (current >= entitlements.seatLimit) {
+    throw new SeatLimitError(current, entitlements.seatLimit, entitlements.planName);
   }
 }
 

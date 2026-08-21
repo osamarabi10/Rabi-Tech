@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { Prisma } from '@prisma/client';
+import { OrganizationConfig, Prisma } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { queueGatewayAction } from '../../workers/gateway-provisioning.queue';
@@ -8,6 +8,7 @@ import logger from '../../lib/logger';
 import { getCurrentUsage, getMetricUsage } from '../usage/usage.service';
 import { getPaymentProvider } from './provider-registry';
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode } from './plans';
+import { resolveEntitlements } from './entitlements.resolver';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
 
 const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
@@ -551,6 +552,13 @@ export async function reconcileBilling(): Promise<{ checked: number; repaired: n
 /** Config stores 'unlimited' as this sentinel; the plan stores it as null. */
 const UNLIMITED_SENTINEL = 1_000_000_000;
 
+/** Treats the "unlimited" sentinel applyPlanLimits writes as what it means. */
+function normalize(raw: number | bigint | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  const value = Number(raw);
+  return value >= UNLIMITED_SENTINEL ? null : value;
+}
+
 /**
  * Compares the plan's published allowance against the quota actually enforced.
  *
@@ -561,21 +569,61 @@ const UNLIMITED_SENTINEL = 1_000_000_000;
  * longer paying for. Surfacing it makes that visible instead of invisible.
  */
 function detectQuotaDrift(
-  plan: (typeof PLAN_ENTITLEMENTS)[PlanCode],
-  usage: { items: Array<{ metric: string; limit: string | null }> },
+  planOfRecord: (typeof PLAN_ENTITLEMENTS)[PlanCode],
+  config: OrganizationConfig | null,
+  effective: Record<string, number | null>,
+  isOverridden: boolean,
 ) {
+  // Compared against the plan of RECORD, not the effective plan. When an
+  // override is live the two differ by design, and comparing config against the
+  // override would report every overridden organization as drifted — which is
+  // how a real signal becomes noise nobody reads.
   const expected: Record<string, number | null> = {
-    active_contacts: plan.monthlyActiveContactsLimit,
-    messages_outbound: plan.monthlyOutboundMessagesLimit,
-    campaign_sends: plan.monthlyCampaignSendsLimit,
+    active_contacts: planOfRecord.monthlyActiveContactsLimit,
+    messages_outbound: planOfRecord.monthlyOutboundMessagesLimit,
+    campaign_sends: planOfRecord.monthlyCampaignSendsLimit,
   };
-  const drift: Array<{ metric: string; planAllows: number | null; enforced: number | null }> = [];
-  for (const item of usage.items) {
-    if (!(item.metric in expected)) continue;
-    const planAllows = expected[item.metric];
-    const raw = item.limit === null ? null : Number(item.limit);
-    const enforced = raw === null || raw >= UNLIMITED_SENTINEL ? null : raw;
-    if (planAllows !== enforced) drift.push({ metric: item.metric, planAllows, enforced });
+  const configured: Record<string, number | null> = {
+    active_contacts: normalize(config?.monthlyActiveContactsLimit),
+    messages_outbound: normalize(config?.monthlyOutboundMessagesLimit),
+    campaign_sends: normalize(config?.monthlyCampaignSendsLimit),
+  };
+
+  const drift: Array<{
+    metric: string;
+    planAllows: number | null;
+    enforced: number | null;
+    configured: number | null;
+    kind: 'drift' | 'override-written-through';
+  }> = [];
+
+  for (const metric of Object.keys(expected)) {
+    const planAllows = expected[metric];
+    const stored = configured[metric];
+    const enforced = effective[metric] ?? null;
+
+    // Config still matches the plan it was derived from: nothing has diverged.
+    // An override sitting on top of it is intentional, not drift.
+    if (stored === planAllows) continue;
+
+    // Config diverges from the plan of record. Two different faults look alike
+    // here, and only one is the classic P8-b drift:
+    //
+    //  - No override live, or an override that config does not equal: something
+    //    changed a tier out of band and the tenant silently kept — or lost —
+    //    quota. That is drift.
+    //  - An override IS live and config now equals the enforced number: an
+    //    override was written through into config. That is the one thing
+    //    entitlements.resolver.ts exists to prevent, so it is named separately
+    //    rather than buried among ordinary drift.
+    const writtenThrough = isOverridden && stored === enforced;
+    drift.push({
+      metric,
+      planAllows,
+      enforced,
+      configured: stored,
+      kind: writtenThrough ? 'override-written-through' : 'drift',
+    });
   }
   return drift;
 }
@@ -589,27 +637,55 @@ export async function getBillingSummary(organizationId: string) {
   ]);
 
   const detail = await getCurrentBilling(organizationId);
-  const plan = PLAN_ENTITLEMENTS[normalizePlanCode(detail.organization.tier || 'FREE')];
+  // The effective entitlement, after any platform-owner override. The tenant is
+  // shown what is actually enforced, not what their nominal tier would grant.
+  const effective = await resolveEntitlements(organizationId);
+  const plan = PLAN_ENTITLEMENTS[effective.plan];
+  const config = await runAsPlatform('billing-summary:config', () =>
+    prisma.organizationConfig.findUnique({ where: { organizationId } }));
+
+  const seatLimit = effective.seatLimit;
 
   return {
     plan: {
       code: plan.code,
       name: plan.name,
-      monthlyPriceCents: plan.monthlyPriceCents,
+      monthlyPriceCents: effective.listPriceCents,
     },
     entitlements: plan,
     subscription: detail.subscription,
     organization: detail.organization,
     seats: {
       used: seatsUsed,
-      limit: plan.usersLimit,
-      remaining: plan.usersLimit === null ? null : Math.max(0, plan.usersLimit - seatsUsed),
-      atLimit: plan.usersLimit !== null && seatsUsed >= plan.usersLimit,
+      limit: seatLimit,
+      remaining: seatLimit === null ? null : Math.max(0, seatLimit - seatsUsed),
+      atLimit: seatLimit !== null && seatsUsed >= seatLimit,
     },
     usage,
     invoices: detail.invoices,
     plans: detail.plans,
+    /**
+     * Commercial terms, for the "عرض خاص" badge and the credit line.
+     *
+     * overrideReason is deliberately NOT included: it is the owner's internal
+     * note ("matched competitor quote", "compensation for the October outage")
+     * and will eventually say something that must never reach the customer.
+     */
+    commercial: {
+      isOverridden: effective.isOverridden,
+      source: effective.source,
+      expiresAt: effective.override.expiresAt?.toISOString() ?? null,
+      discountPercent: effective.isOverridden ? effective.override.discountPercent : null,
+      listPriceCents: effective.listPriceCents,
+      effectivePriceCents: effective.effectivePriceCents,
+      creditCents: effective.override.creditCents,
+    },
     /** Non-empty means enforced quotas no longer match the named plan. */
-    quotaDrift: detectQuotaDrift(plan, usage),
+    quotaDrift: detectQuotaDrift(
+      PLAN_ENTITLEMENTS[effective.planOfRecord],
+      config,
+      effective.limits,
+      effective.isOverridden,
+    ),
   };
 }

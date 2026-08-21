@@ -13,6 +13,8 @@ import {
   markPaymentFailed,
 } from '../billing/billing.service';
 import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
 
 const router = Router();
 
@@ -37,6 +39,10 @@ router.get('/subscribers', async (_req, res) => {
         emailVerifiedAt: true,
         downgradeGraceEndsAt: true,
         downgradeGraceReason: true,
+        // Surfaced on the row so an overridden subscriber is visible in the
+        // list, not only after opening a dialog.
+        planOverride: true,
+        overrideExpiresAt: true,
         createdAt: true,
         updatedAt: true,
         _count: { select: { users: true, whatsappSessions: true } },
@@ -280,6 +286,127 @@ router.patch('/subscribers/:id/status', requirePlatformOwner, async (req, res) =
     res.status(202).json({ organizationId: req.params.id, action });
   } catch (err) {
     res.status(404).json({ error: 'Subscriber not found' });
+  }
+});
+
+/** The commercial columns, selected identically for before/after snapshots. */
+const COMMERCIAL_SELECT = {
+  id: true,
+  name: true,
+  tier: true,
+  planOverride: true,
+  macQuotaOverride: true,
+  discountPercent: true,
+  creditCents: true,
+  overrideReason: true,
+  overrideExpiresAt: true,
+  overrideSetBy: true,
+  overrideSetAt: true,
+} as const;
+
+/**
+ * PATCH /api/platform/subscribers/:id/commercials
+ *
+ * The owner's lever for enterprise deals: plan override, MAC quota, discount and
+ * credit, with a mandatory reason and an optional expiry.
+ *
+ * Deliberately does NOT call applyPlanLimits(). A plan override must not rewrite
+ * OrganizationConfig — see the header of modules/billing/entitlements.resolver.ts
+ * for why write-through was rejected.
+ */
+router.patch('/subscribers/:id/commercials', requirePlatformOwner, async (req, res) => {
+  try {
+    // Read first: this snapshot is both the validation baseline and beforeState.
+    // Taken after the write it would be worthless.
+    const before = await prisma.organization.findUnique({
+      where: { id: req.params.id },
+      select: COMMERCIAL_SELECT,
+    });
+    // 404 rather than 403 for an id in another scope: existence is information.
+    if (!before) return res.status(404).json({ error: 'Subscriber not found' });
+
+    const patch = parseCommercialPatch(req.body || {}, before);
+
+    const after = await prisma.$transaction(async (tx) => {
+      const updated = await tx.organization.update({
+        where: { id: req.params.id },
+        data: {
+          ...patch,
+          // Never from the request body.
+          overrideSetBy: req.platformUser!.id,
+          overrideSetAt: new Date(),
+        },
+        select: COMMERCIAL_SELECT,
+      });
+      // Inside the transaction so an override can never exist without the record
+      // of who granted it and why. That guarantee is the point of the feature.
+      await tx.platformAuditLog.create({
+        data: {
+          reason: updated.overrideReason || 'commercial terms cleared',
+          action: 'platform.commercials.updated',
+          actorIdentityId: req.platformUser!.id,
+          actorEmail: req.platformUser!.email,
+          targetOrgId: updated.id,
+          targetOrgName: updated.name,
+          beforeState: before as never,
+          afterState: updated as never,
+          ipAddress: req.ip,
+        },
+      });
+      return updated;
+    });
+
+    const effective = await resolveEntitlements(after.id);
+    res.json({ organization: after, effective });
+  } catch (err) {
+    if (isCommercialTermsError(err)) return res.status(400).json({ error: err.message });
+    logger.error('Commercial terms update failed', {
+      organizationId: req.params.id,
+      error: String(err),
+    });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/** Commercial terms plus the resolved entitlement, for the console dialog. */
+router.get('/subscribers/:id/commercials', requirePlatformOwner, async (req, res) => {
+  try {
+    const organization = await prisma.organization.findUnique({
+      where: { id: req.params.id },
+      select: COMMERCIAL_SELECT,
+    });
+    if (!organization) return res.status(404).json({ error: 'Subscriber not found' });
+    // Resolved to an email rather than returning a raw Identity cuid: a bare id
+    // in a UI reads as unfinished. overrideSetBy has no FK on purpose (an audit
+    // trail must outlive the actor), so this may legitimately come back null.
+    const setBy = organization.overrideSetBy
+      ? await prisma.identity.findUnique({
+          where: { id: organization.overrideSetBy },
+          select: { email: true },
+        })
+      : null;
+    res.json({
+      organization: { ...organization, overrideSetByEmail: setBy?.email ?? null },
+      effective: await resolveEntitlements(organization.id),
+    });
+  } catch (err) {
+    logger.error('Commercial terms read failed', { error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/** Recent commercial changes for one subscriber — platform scope only. */
+router.get('/subscribers/:id/commercials/history', requirePlatformOwner, async (req, res) => {
+  try {
+    const entries = await prisma.platformAuditLog.findMany({
+      where: { targetOrgId: req.params.id, action: 'platform.commercials.updated' },
+      orderBy: { timestamp: 'desc' },
+      take: 20,
+    });
+    res.json(entries);
+  } catch (err) {
+    logger.error('Commercial history read failed', { error: String(err) });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

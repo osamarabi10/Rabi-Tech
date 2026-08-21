@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, LogOut, MessageCircle, MoreHorizontal, Pause, Play,
-  Plus, RefreshCw, RotateCw, Trash2, Users, CreditCard, Eye,
+  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api, { setViewAsOrg } from '@/lib/api';
@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { CommercialTermsDialog } from '@/components/platform/commercial-terms-dialog';
 
 type ProvisioningState =
   | 'PENDING' | 'PROVISIONING' | 'AWAITING_QR' | 'ACTIVE' | 'SUSPENDED' | 'FAILED';
@@ -31,6 +32,8 @@ type Subscriber = {
   tier: string;
   emailVerifiedAt: string | null;
   downgradeGraceEndsAt: string | null;
+  planOverride: string | null;
+  overrideExpiresAt: string | null;
   subscriptions: Array<{ planCode: string; status: string; provider: string; currentPeriodEnd: string | null }>;
   createdAt: string;
   _count: { users: number; whatsappSessions: number };
@@ -64,6 +67,7 @@ export default function SubscribersPage() {
   const [saving, setSaving] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
   const [destroyTarget, setDestroyTarget] = useState<Subscriber | null>(null);
+  const [termsTarget, setTermsTarget] = useState<Subscriber | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
 
   const load = useCallback(async () => {
@@ -270,6 +274,22 @@ export default function SubscribersPage() {
                 >
                   <Eye className="h-3.5 w-3.5" /> View
                 </Button>
+                {/*
+                  A button of its own rather than an item in the menu above:
+                  that menu is disabled whenever the gateway is unmanaged, and
+                  commercial terms have nothing to do with gateway state.
+                */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  title="Plan override, MAC quota, discount and credit"
+                  onClick={() => setTermsTarget(subscriber)}
+                >
+                  <Tag className="h-3.5 w-3.5" /> Terms
+                  {subscriber.planOverride && (
+                    <Badge variant="secondary" className="ms-1 px-1 text-[9px]">عرض خاص</Badge>
+                  )}
+                </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button size="icon" variant="ghost" disabled={actionId === subscriber.id || !channel?.managedByProvisioner} title="Gateway actions">
@@ -330,6 +350,13 @@ export default function SubscribersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CommercialTermsDialog
+        subscriberId={termsTarget?.id ?? null}
+        subscriberName={termsTarget?.name ?? ''}
+        onClose={() => setTermsTarget(null)}
+        onSaved={load}
+      />
 
       <Dialog open={Boolean(destroyTarget)} onOpenChange={(value) => !value && setDestroyTarget(null)}>
         <DialogContent className="max-w-md">

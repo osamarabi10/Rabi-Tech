@@ -59,6 +59,9 @@ function relative(file) {
   return path.relative(ROOT, file).replace(/\\/g, '/');
 }
 
+/** Any direct use of the PlatformAuditLog delegate. */
+const PLATFORM_AUDIT_REF = /(?:prisma|tx)\.platformAuditLog/;
+
 function staticAudits() {
   const sourceFiles = walk(path.join(ROOT, 'src')).filter((file) => file.endsWith('.ts'));
   const projectFiles = walk(ROOT).filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file));
@@ -91,6 +94,30 @@ function staticAudits() {
     'audit: no unreviewed PrismaClient constructors',
     bareClients.length === 0,
     bareClients.join(', '),
+  );
+
+  // PlatformAuditLog sits in the tenancy extension PLATFORM_MODELS list, so
+  // under ORGANIZATION scope the extension injects nothing at all. A
+  // tenant-scoped read would return every subscriber commercial history —
+  // negotiated discounts included. Nothing outside platform code reads it
+  // today; this check makes sure nothing starts.
+  const auditLeaks = [];
+  const auditAllowed = new Set(['src/lib/audit.ts']);
+  for (const file of sourceFiles) {
+    const rel = relative(file);
+    if (auditAllowed.has(rel) || rel.startsWith('src/modules/platform/')) continue;
+    const auditLines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+    auditLines.forEach((line, index) => {
+      const trimmed = line.trim();
+      if (PLATFORM_AUDIT_REF.test(line) && !trimmed.startsWith("//") && !trimmed.startsWith("*")) {
+        auditLeaks.push(`${rel}:${index + 1}`);
+      }
+    });
+  }
+  record(
+    'audit: PlatformAuditLog is reachable only from platform scope',
+    auditLeaks.length === 0,
+    auditLeaks.join(', '),
   );
 
   const mutableCaches = [];
@@ -461,7 +488,7 @@ async function databaseAudits() {
 
   try {
     const { tenancyExtension } = require('../src/prisma/extensions');
-    const { runAsOrganization } = require('../src/lib/tenant-context');
+    const { runAsOrganization, runAsPlatform } = require('../src/lib/tenant-context');
     const scoped = raw.$extends(tenancyExtension);
 
     const orgA = await seedOrganization(raw, 'a', 1);
@@ -773,6 +800,81 @@ async function databaseAudits() {
       await raw.campaignRecipient.delete({ where: { id: 'bleed_recipient_b' } });
       await raw.campaign.delete({ where: { id: campaignId } });
     });
+    await check('commercials: overrides are org-scoped, expire, and never touch config', async () => {
+      const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
+      const { parseCommercialPatch } = require('../src/modules/billing/commercial-terms');
+      const asPlatform = (fn) => runAsPlatform('harness:commercials', fn);
+
+      const configBefore = await asPlatform(() =>
+        raw.organizationConfig.findUnique({ where: { organizationId: orgA.organizationId } }));
+      const baseA = await asPlatform(() => resolveEntitlements(orgA.organizationId));
+      const baseB = await asPlatform(() => resolveEntitlements(orgB.organizationId));
+
+      // A commercial exception with no recorded reason is the thing this
+      // feature exists to prevent.
+      assert.throws(
+        () => parseCommercialPatch({ planOverride: 'ENTERPRISE' }, {
+          planOverride: null, macQuotaOverride: null, discountPercent: null,
+          creditCents: 0, overrideReason: null, overrideExpiresAt: null,
+        }),
+        /reason is required/i,
+        'an override was accepted with no reason',
+      );
+
+      await raw.organization.update({
+        where: { id: orgA.organizationId },
+        data: {
+          planOverride: 'ENTERPRISE',
+          macQuotaOverride: 44444,
+          discountPercent: 50,
+          overrideReason: 'harness',
+          overrideSetAt: new Date(),
+        },
+      });
+
+      const overriddenA = await asPlatform(() => resolveEntitlements(orgA.organizationId));
+      const untouchedB = await asPlatform(() => resolveEntitlements(orgB.organizationId));
+      assert.equal(overriddenA.plan, 'ENTERPRISE', 'org A override did not apply');
+      assert.equal(overriddenA.source, 'override');
+      assert.equal(overriddenA.limits.active_contacts, 44444, 'MAC override did not apply');
+      // Half an upgrade — quotas raised but seats left behind — is worse than none.
+      assert.equal(overriddenA.seatLimit, null, 'seats did not follow the effective plan');
+      assert.deepEqual(
+        { plan: untouchedB.plan, limits: untouchedB.limits, seats: untouchedB.seatLimit },
+        { plan: baseB.plan, limits: baseB.limits, seats: baseB.seatLimit },
+        'org B entitlements changed because of an org A override',
+      );
+
+      // The load-bearing rule: overrides resolve at read time and must never
+      // be mirrored into OrganizationConfig. If this ever fails, expiry
+      // silently stops working and drift detection becomes permanent noise.
+      const configAfter = await asPlatform(() =>
+        raw.organizationConfig.findUnique({ where: { organizationId: orgA.organizationId } }));
+      assert.deepEqual(configAfter, configBefore,
+        'an override was written through into OrganizationConfig');
+
+      // An expired override is ignored but not erased: the deal stays on record.
+      await raw.organization.update({
+        where: { id: orgA.organizationId },
+        data: { overrideExpiresAt: new Date(Date.now() - 86400000) },
+      });
+      const expiredA = await asPlatform(() => resolveEntitlements(orgA.organizationId));
+      assert.equal(expiredA.isOverridden, false, 'an expired override was still applied');
+      assert.equal(expiredA.override.expired, true);
+      assert.equal(expiredA.plan, baseA.plan, 'expiry did not fall back to the plan of record');
+      assert.equal(expiredA.limits.active_contacts, baseA.limits.active_contacts);
+      assert.equal(expiredA.override.plan, 'ENTERPRISE',
+        'the expired deal was erased rather than kept on record');
+
+      await raw.organization.update({
+        where: { id: orgA.organizationId },
+        data: {
+          planOverride: null, macQuotaOverride: null, discountPercent: null,
+          overrideReason: null, overrideExpiresAt: null, overrideSetAt: null,
+        },
+      });
+    });
+
     await check('consent: marketing consent is organization-scoped', async () => {
       // Consent is the one contact field with legal weight: honouring a STOP in
       // one tenant must never mute — or un-mute — the same phone number in another.

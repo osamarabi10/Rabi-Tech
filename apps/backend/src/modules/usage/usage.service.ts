@@ -1,25 +1,10 @@
 import { OrganizationConfig, UsageMetric } from '@prisma/client';
 import { getTenantId } from '../../lib/tenant-context';
 import { prisma } from '../../prisma';
-import { getOrganizationConfig } from '../../utils/whatsapp-sessions';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { METRIC_LIMIT_FIELDS, USAGE_METRICS } from './metrics';
 
-export const USAGE_METRICS: UsageMetric[] = [
-  'messages_inbound',
-  'messages_outbound',
-  'active_contacts',
-  'ai_tokens_in',
-  'ai_tokens_out',
-  'campaign_sends',
-];
-
-export const METRIC_LIMIT_FIELDS = {
-  messages_inbound: 'monthlyInboundMessagesLimit',
-  messages_outbound: 'monthlyOutboundMessagesLimit',
-  active_contacts: 'monthlyActiveContactsLimit',
-  ai_tokens_in: 'monthlyAiTokensInLimit',
-  ai_tokens_out: 'monthlyAiTokensOutLimit',
-  campaign_sends: 'monthlyCampaignSendsLimit',
-} as const satisfies Record<UsageMetric, keyof OrganizationConfig>;
+export { METRIC_LIMIT_FIELDS, USAGE_METRICS } from './metrics';
 
 export type UsageEventInput = {
   metric: UsageMetric;
@@ -139,7 +124,10 @@ export async function getCurrentUsage(reference = new Date()): Promise<{
   items: UsageItem[];
 }> {
   const organizationId = getTenantId();
-  const config = await getOrganizationConfig(organizationId);
+  // Resolved, not raw config. If enforcement honours an override but this bar
+  // does not, a tenant on a raised quota reads "2,500 / 2,500 — exceeded" while
+  // everything keeps working: confusing in a way that generates support tickets.
+  const entitlements = await resolveEntitlements(organizationId, reference);
   const values = await Promise.all(USAGE_METRICS.map((metric) => getMetricUsage(metric, reference)));
   const { start, end } = monthRange(reference);
 
@@ -147,7 +135,8 @@ export async function getCurrentUsage(reference = new Date()): Promise<{
     period: { start: start.toISOString(), end: end.toISOString() },
     items: USAGE_METRICS.map((metric, index) => {
       const current = values[index];
-      const limit = configuredLimit(config, metric);
+      const raw = entitlements.limits[metric];
+      const limit = raw === null ? null : BigInt(raw);
       const percent = limit === null
         ? null
         : limit === 0n

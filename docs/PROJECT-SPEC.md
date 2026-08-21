@@ -177,6 +177,7 @@ numbers (display-only; the shared number now lives on `ostudio-primary`).
 | **Gateway stabilization** | inbound self-healing + SSRF allowlist (50/0 deliveries); outbound fixed via image update (pins WA Web version); runbook written |
 | **M1 Consent & opt-out** | STOP/إلغاء/הפסק matched on the whole trimmed message, never a substring; broadcasts exclude `OPTED_OUT` unconditionally with the exclusion counted back to the admin; settable per contact by any agent; org-scoped in the gate |
 | **M2 RTL correctness** | per-message first-strong direction — an Arabic message renders `dir="rtl"` even with the interface in English; logical CSS; tabular figures |
+| **P9 Platform pricing control** | plan/MAC/discount/credit overrides resolved at **read time** — never written into `OrganizationConfig`, so expiry needs no sweeper and drift detection stays meaningful; drift now distinguishes intentional override from genuine divergence; audit row written in the same transaction as the override; gate 50/50 |
 | **M3 Filter vocabulary** | typed date/number/multi-value operators; activity + broadcast-history dimensions; nested groups to depth 3; vocabulary **served** by `/api/contacts/filter-schema` rather than hardcoded; 28 filters verified live incl. a cross-tenant campaign-id probe blocked when buried in a nested group |
 
 ### Remaining — in build order, with definitions of done
@@ -194,7 +195,9 @@ Also added `quotaDrift`: `Organization.tier` and `OrganizationConfig` are two
 stores that can silently diverge with enforcement following the config, letting
 a tenant keep quotas they no longer pay for.
 
-**P9 · Platform pricing control** — ~1 week
+**P9 · Platform pricing control** — ✅ done, see docs/TODO.md
+
+**P9 (original brief)** — ~1 week
 `Organization`: `planOverride, macQuotaOverride, discountPercent, creditCents,
 overrideReason, overrideExpiresAt`. Console UI to set them; entitlement
 resolution honors overrides; every override audited.

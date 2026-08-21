@@ -903,8 +903,27 @@ export type BillingSummary = {
     paidAt: string | null;
   }>;
   plans: Array<{ code: string; name: string; monthlyPriceCents: number }>;
-  /** Non-empty means enforced quotas no longer match the named plan. */
-  quotaDrift: Array<{ metric: string; planAllows: number | null; enforced: number | null }>;
+  /**
+   * Commercial terms in force. `overrideReason` is deliberately absent — it is
+   * the platform owner's internal note and must never reach the customer.
+   */
+  commercial: {
+    isOverridden: boolean;
+    source: 'override' | 'subscription' | 'tier';
+    expiresAt: string | null;
+    discountPercent: number | null;
+    listPriceCents: number;
+    effectivePriceCents: number;
+    creditCents: number;
+  };
+  /** Non-empty means enforced quotas no longer match the plan of record. */
+  quotaDrift: Array<{
+    metric: string;
+    planAllows: number | null;
+    enforced: number | null;
+    configured: number | null;
+    kind: 'drift' | 'override-written-through';
+  }>;
 };
 
 export async function fetchBillingSummary(): Promise<BillingSummary> {

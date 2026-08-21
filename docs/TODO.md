@@ -85,21 +85,90 @@ original brief diverged from the code. Read it before starting: three items
 below are subtly wrong on their own (the audit table already exists, `tier` is
 a String not an enum, and `BUSINESS` is missing from the override list).
 
-- [ ] **1. Migration**: `Organization` + `planOverride`, `macQuotaOverride`,
-  `discountPercent`, `creditCents`, `overrideReason`, `overrideExpiresAt`
-  (hand-written SQL, `prisma generate`, `migrate deploy`)
-- [ ] **2. Entitlement resolution honors overrides** in one place
-  (`plans.ts` resolver: override → subscription plan → tier), incl. expiry
-  — verify: tenancy gate 48/48 → 50/50 (two new checks, see plan §6)
-- [ ] **3. `PATCH /api/platform/subscribers/:id/commercials`**
-  (requirePlatformOwner) writes overrides + `PlatformAuditLog` row
-  — verify: curl sets a MAC override; audit row exists
-- [ ] **4. Console UI**: "Commercial terms" dialog per subscriber — plan
-  override select, MAC quota, discount %, credit, reason (required), expiry
-  — verify: set override in browser → tenant's `/api/usage/seats` + meters
-  reflect it
-- [ ] **5. Billing summary (tenant side) shows effective values**, marked
-  "عرض خاص" when overridden — verify in browser
+- [x] **1. Migration**: `Organization` + `planOverride`, `macQuotaOverride`,
+  `discountPercent`, `creditCents`, `overrideReason`, `overrideExpiresAt`,
+  `overrideSetBy`, `overrideSetAt`, six CHECK constraints; `PlatformAuditLog`
+  extended with nullable actor/target/before/after columns
+- [x] **2. Entitlement resolution honors overrides** in one place
+  (`modules/billing/entitlements.resolver.ts`: override → subscription → tier),
+  incl. expiry — gate 48/48 → **50/50**
+- [x] **3. `PATCH /api/platform/subscribers/:id/commercials`**
+  (requirePlatformOwner) writes overrides + `PlatformAuditLog` row in the same
+  transaction; plus `GET .../commercials` and `.../commercials/history`
+- [x] **4. Console UI**: "Commercial terms" dialog per subscriber, showing
+  plan-of-record → effective for every value. English-only, as the console is.
+  — verified: browser save → `/api/usage/seats` and the meters both reflect it
+- [x] **5. Billing summary (tenant side) shows effective values**, marked
+  "عرض خاص" when overridden, with struck-through list price and credit line
+  — verified in browser; `overrideReason` is never sent to the tenant
+
+
+**P9 evidence (2026-08-21).** Migration `20260822090000_platform_pricing_control`.
+
+The load-bearing decision: **overrides resolve at read time and are never
+written into `OrganizationConfig`.** Write-through was rejected because expiry
+would then need a sweeper job that can silently fail, `detectQuotaDrift` would
+fire on every overridden org forever, and the enforced state would drift from
+the approved state. The cost is that seven call sites now go through
+`modules/billing/entitlements.resolver.ts` instead of reading tier or config.
+
+Layering matters more than it looks: effective limits are
+`macQuotaOverride → live planOverride → OrganizationConfig`, **not** plan
+allowances for everything. Returning plan numbers wholesale would have dropped
+manually-configured AI and inbound limits and silently re-tightened quotas for
+any org whose config legitimately differed. Verified: with no override the
+resolver returns byte-identical numbers to the pre-P9 baseline.
+
+`detectQuotaDrift` compares config against the plan **of record**, not the
+effective plan — otherwise every overridden org reads as drifted and a real
+signal becomes noise. Three-way classification proven live: config bumped
+out of band → `drift`; config forced to equal the enforced override →
+`override-written-through` (the regression this design exists to prevent);
+override live with config untouched → clean.
+
+A first pass got this wrong and reported all three metrics as written-through
+on a perfectly normal override. Caught by verifying rather than by reading.
+
+**Entitlements follow the effective plan everywhere, not just quotas.** Seats,
+`/api/usage/seats`, custom-field allowance and branding/white-label all moved
+to the resolver. Honouring an override for quotas but not features is half an
+upgrade — the customer pays for a tier they cannot fully use — and the branding
+tab was live-caught still announcing "Plan: FREE" for an org overridden to
+Growth.
+
+`PlatformAuditLog` was **extended, not created** — it already existed as
+`{id, reason, timestamp}` and `auditPlatformScope()` writes to it on every
+platform-scope entry, so every new column is nullable. `targetOrgId` and
+`actorIdentityId` carry no FK on purpose: an audit trail must outlive the
+subscriber and the actor it describes. The audit row is written **inside the
+same transaction** as the override, so a commercial exception cannot exist
+without the record of who granted it and why.
+
+Six SQL CHECK constraints back the route validation, each verified to bite:
+unknown plan, discount > 100, negative credit, negative MAC, override with no
+reason, and a whitespace-only reason.
+
+Verified live: seven validation rejections each with a specific message; plan
+override → ENTERPRISE gives unlimited quotas *and* unlimited seats; MAC
+override applies on top; 30% discount on Growth renders ₪49 struck through →
+₪34; credit shows as ₪125 and survives a partial PATCH that omits it; the usage
+bar reads 25,000 matching what enforcement uses. Expiry forced into the past →
+falls back to the plan of record with **no sweeper**, `expired: true`, and the
+deal left on record rather than erased. Console dialog saves end-to-end from
+the browser and disables Save with an empty reason.
+
+Gate **48/48 → 50/50**: one runtime check (org-scoped, expires, and
+`OrganizationConfig` byte-identical before and after) and one static check
+(`PlatformAuditLog` is a platform model, so under org scope the extension
+injects nothing and a tenant-scoped read would return every subscriber’s
+negotiated terms — nothing reads it outside platform code, and now nothing can
+start without failing the gate).
+
+All test data removed; residue check clean and the tenant summary is identical
+to its pre-P9 baseline.
+
+**Not done:** money still does not move. `discountPercent` and `creditCents`
+are display and billing-input only until P10-b wires a real provider.
 
 ## P10-a — Saved segments · ~4 days
 

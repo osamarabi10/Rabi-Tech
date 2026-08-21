@@ -644,6 +644,10 @@ const D: Dict = {
   "اختر الحملة": { he: "בחר קמפיין", en: "Choose a campaign" },
   "قيم مفصولة بفاصلة": { he: "ערכים מופרדים בפסיק", en: "Comma-separated values" },
   "لا توجد وسوم": { he: "אין תגיות", en: "No tags" },
+  "عرض خاص": { he: "מבצע מיוחד", en: "Special offer" },
+  "الخصم": { he: "הנחה", en: "Discount" },
+  "حتى": { he: "עד", en: "until" },
+  "رصيد متاح": { he: "יתרה זמינה", en: "Available credit" },
 };
 
 type I18nCtx = {

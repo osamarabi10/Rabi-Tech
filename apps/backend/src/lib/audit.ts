@@ -13,9 +13,51 @@ export interface AuditOptions {
   userAgent?: string;
 }
 
-/** Durable, fail-closed record written before any platform-scope operation. */
-export async function auditPlatformScope(reason: string): Promise<void> {
-  await prisma.platformAuditLog.create({ data: { reason } });
+/**
+ * Details for a platform-owner action, beyond the bare scope-entry record.
+ *
+ * Every field is optional: this function is called on *every* platform-scope
+ * entry with nothing but a reason, and those callers must keep working.
+ */
+export interface PlatformAuditDetail {
+  /** Dotted action name, e.g. "platform.commercials.updated". */
+  action?: string;
+  /** Identity.id — a platform owner has no User row in the target org. */
+  actorIdentityId?: string;
+  actorEmail?: string;
+  /** The organization acted on, plus a name snapshot that outlives it. */
+  targetOrgId?: string;
+  targetOrgName?: string;
+  beforeState?: unknown;
+  afterState?: unknown;
+  ipAddress?: string;
+}
+
+/**
+ * Durable, fail-closed record written before any platform-scope operation.
+ *
+ * Deliberately **not** wrapped in try/catch, unlike auditLog() below: a
+ * commercial exception that exists with no record of who granted it or why is
+ * exactly what this table is for. If the audit write fails, the action must
+ * fail with it.
+ */
+export async function auditPlatformScope(
+  reason: string,
+  detail: PlatformAuditDetail = {},
+): Promise<void> {
+  await prisma.platformAuditLog.create({
+    data: {
+      reason,
+      action: detail.action,
+      actorIdentityId: detail.actorIdentityId,
+      actorEmail: detail.actorEmail,
+      targetOrgId: detail.targetOrgId,
+      targetOrgName: detail.targetOrgName,
+      beforeState: (detail.beforeState ?? undefined) as never,
+      afterState: (detail.afterState ?? undefined) as never,
+      ipAddress: detail.ipAddress,
+    },
+  });
 }
 
 /**

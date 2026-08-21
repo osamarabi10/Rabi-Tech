@@ -46,8 +46,11 @@ export function SubscriptionCard() {
   }
   if (!data) return null;
 
-  const { plan, seats, subscription, invoices, quotaDrift, organization } = data;
+  const { plan, seats, subscription, invoices, quotaDrift, organization, commercial } = data;
   const canUpgrade = plan.code !== TOP_PLAN;
+  const discounted = commercial.isOverridden
+    && commercial.discountPercent !== null
+    && commercial.effectivePriceCents !== commercial.listPriceCents;
   const periodEnd = subscription?.currentPeriodEnd
     ? new Date(subscription.currentPeriodEnd).toLocaleDateString('ar')
     : null;
@@ -69,16 +72,42 @@ export function SubscriptionCard() {
               <span className="rounded-md bg-primary px-2 py-0.5 text-[11px] font-bold text-primary-foreground">
                 {plan.name}
               </span>
+              {/*
+                Shown whenever terms differ from the published plan, so a tenant
+                on negotiated terms is never confused by a price list that does
+                not match what they pay.
+              */}
+              {commercial.isOverridden && (
+                <span className="rounded-md border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
+                  {t('عرض خاص')}
+                </span>
+              )}
               {subscription?.status && (
                 <span className="text-[11px] text-muted-foreground">{subscription.status}</span>
               )}
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              {plan.monthlyPriceCents === 0
+              {commercial.effectivePriceCents === 0
                 ? t('مجاني')
-                : `${money(plan.monthlyPriceCents)} / ${t('شهرياً')}`}
+                : (
+                  <>
+                    {discounted && (
+                      <span className="me-1 line-through opacity-60">
+                        {money(commercial.listPriceCents)}
+                      </span>
+                    )}
+                    {`${money(commercial.effectivePriceCents)} / ${t('شهرياً')}`}
+                  </>
+                )}
               {periodEnd && ` · ${t('يتجدد')} ${periodEnd}`}
             </p>
+            {discounted && (
+              <p className="mt-0.5 text-[11px] text-success-vivid">
+                {`${t('الخصم')} ${commercial.discountPercent}%`}
+                {commercial.expiresAt
+                  && ` · ${t('حتى')} ${new Date(commercial.expiresAt).toLocaleDateString('ar')}`}
+              </p>
+            )}
           </div>
           {canUpgrade && (
             <Button size="sm" asChild>
@@ -89,6 +118,15 @@ export function SubscriptionCard() {
             </Button>
           )}
         </div>
+
+        {commercial.creditCents > 0 && (
+          <div className="flex items-center justify-between rounded-md border border-success-vivid/30 bg-success-vivid/10 px-3 py-2 text-xs">
+            <span className="font-medium">{t('رصيد متاح')}</span>
+            <span className="numeric font-mono font-semibold" dir="ltr">
+              {money(commercial.creditCents)}
+            </span>
+          </div>
+        )}
 
         {/* Seats — the one entitlement not shown by the usage meters */}
         <div className={cn(

@@ -11,6 +11,7 @@ import {
 } from '../../lib/contact-filter-dsl';
 import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
 import { setContactConsent } from '../../utils/consent';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
 
 /** Accepted marketing-consent values, validated before any write. */
 const CONSENT_VALUES = ['UNKNOWN', 'OPTED_IN', 'OPTED_OUT'] as const;
@@ -186,11 +187,11 @@ router.post('/custom-fields', async (req, res) => {
     const allowedValues = Array.isArray(req.body?.allowedValues)
       ? req.body.allowedValues.map((value: unknown) => String(value).trim()).filter(Boolean)
       : [];
-    const organization = await prisma.organization.findUnique({
-      where: { id: req.user!.organizationId },
-      select: { tier: true },
-    });
-    const limit = PLAN_ENTITLEMENTS[normalizePlanCode(organization?.tier || 'FREE')].customFieldsLimit;
+    // Feature allowances follow the effective plan too. Honouring an override
+    // for quotas but not for features is half an upgrade, which is worse than
+    // none: the customer paid for a tier they cannot fully use.
+    const effective = await resolveEntitlements(req.user!.organizationId);
+    const limit = PLAN_ENTITLEMENTS[effective.plan].customFieldsLimit;
     if (limit !== null) {
       const existing = await prisma.customFieldDefinition.count();
       const sameSlug = await prisma.customFieldDefinition.findUnique({

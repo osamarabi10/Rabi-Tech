@@ -17,6 +17,7 @@ import {
   validateBrandingAsset,
   verifyBrandingAssetSignature,
 } from './branding.service';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
 
 const router = Router();
 
@@ -65,11 +66,10 @@ router.get('/current', async (req, res) => {
 router.patch('/current', requireAdmin, async (req, res) => {
   try {
     const normalized = normalizeBrandingInput(req.body || {});
-    const organization = await prisma.organization.findUnique({
-      where: { id: req.user!.organizationId },
-      select: { tier: true },
-    });
-    assertFooterEntitlement(organization?.tier || 'FREE', normalized);
+    // The effective plan, so an organization overridden to BUSINESS can
+    // actually remove the footer it is now paying to remove.
+    const effective = await resolveEntitlements(req.user!.organizationId);
+    assertFooterEntitlement(effective.plan, normalized);
     if (!Object.keys(normalized).length) {
       return res.status(400).json({ error: 'No branding fields supplied' });
     }

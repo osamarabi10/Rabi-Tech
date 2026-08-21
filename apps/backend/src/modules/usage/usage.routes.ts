@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { getCurrentUsage } from './usage.service';
 import { prisma } from '../../prisma';
 import { getTenantId } from '../../lib/tenant-context';
-import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
 
 const router = Router();
 
@@ -23,19 +23,20 @@ router.get('/current', async (_req, res) => {
 router.get('/seats', async (_req, res) => {
   try {
     const organizationId = getTenantId();
-    const organization = await prisma.organization.findUnique({
-      where: { id: organizationId },
-      select: { tier: true },
-    });
-    const plan = PLAN_ENTITLEMENTS[normalizePlanCode(organization?.tier || 'FREE')];
+    // Resolver, not raw tier: this endpoint must agree with assertSeatAvailable,
+    // which is what actually refuses the next invite. Two sources for one answer
+    // is how a UI ends up saying "3 of 5" while the server returns 402.
+    const entitlements = await resolveEntitlements(organizationId);
+    const limit = entitlements.seatLimit;
     const used = await prisma.user.count({ where: { isActive: true } });
     res.json({
-      plan: plan.code,
-      planName: plan.name,
+      plan: entitlements.plan,
+      planName: entitlements.planName,
       used,
-      limit: plan.usersLimit,
-      remaining: plan.usersLimit === null ? null : Math.max(0, plan.usersLimit - used),
-      atLimit: plan.usersLimit !== null && used >= plan.usersLimit,
+      limit,
+      remaining: limit === null ? null : Math.max(0, limit - used),
+      atLimit: limit !== null && used >= limit,
+      isOverridden: entitlements.isOverridden,
     });
   } catch {
     res.status(500).json({ error: 'Failed to load seats' });

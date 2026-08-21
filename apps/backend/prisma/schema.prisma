@@ -19,8 +19,27 @@ model Organization {
   emailVerifiedAt      DateTime?
   downgradeGraceEndsAt DateTime?
   downgradeGraceReason String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+
+  /// Platform-owner commercial overrides (P9). Resolved at read time by
+  /// modules/billing/entitlements.resolver.ts and NEVER mirrored into OrganizationConfig —
+  /// see the migration comment for why. planOverride mirrors PlanCode in
+  /// modules/billing/plans.ts and is constrained in SQL; keep the two in step.
+  planOverride      String?
+  /// Monthly Active Contacts only. MAC is the commercial billing unit; the
+  /// other five meters follow the effective plan, because one integer cannot
+  /// mean both active_contacts (~2.5k) and ai_tokens_in (~millions).
+  macQuotaOverride  Int?
+  discountPercent   Int?
+  creditCents       Int       @default(0)
+  overrideReason    String?
+  overrideExpiresAt DateTime?
+  /// Identity.id of the platform owner who set it. No FK: an audit trail must
+  /// outlive the actor.
+  overrideSetBy     String?
+  overrideSetAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   users                   User[]
   teams                   Team[]
@@ -51,6 +70,9 @@ model Organization {
   invoices                Invoice[]
   emailVerificationTokens EmailVerificationToken[]
   signupThrottleEvents    SignupThrottleEvent[]
+
+  /// The console sweeps for live and expiring overrides on every load.
+  @@index([overrideExpiresAt])
 }
 
 model Plan {
@@ -193,24 +215,24 @@ model OrganizationConfig {
 }
 
 model Team {
-  id             String   @id @default(cuid())
+  id             String  @id @default(cuid())
   organizationId String
   name           String
   slug           String
   description    String?
-  isDefault      Boolean  @default(false)
-  color          String   @default("#6366F1")
+  isDefault      Boolean @default(false)
+  color          String  @default("#6366F1")
   emoji          String?
 
   /// NONE | ROUND_ROBIN | LEAST_OPEN. Automatic assignment for new conversations.
-  assignmentStrategy String @default("NONE")
+  assignmentStrategy    String @default("NONE")
   /// Max concurrent open conversations per agent. Null means unlimited.
   /// Without a cap, round-robin buries the fastest agent: they close quickly,
   /// so they always look free and keep receiving more.
   maxConcurrentPerAgent Int?
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   members       UserTeam[]
@@ -313,7 +335,25 @@ model PlatformAuditLog {
   reason    String
   timestamp DateTime @default(now())
 
+  /// Everything below is nullable: auditPlatformScope() writes reason-only rows
+  /// and predates these columns.
+  action          String?
+  /// Identity.id — the platform actor. A platform owner has no User row in the
+  /// target org, which is why the org-scoped AuditLog cannot carry these.
+  actorIdentityId String?
+  actorEmail      String?
+  /// The organization acted on. Plain strings, no relation: an audit trail must
+  /// outlive the subscriber it describes, and targetOrgName keeps it readable
+  /// after the org is deleted.
+  targetOrgId     String?
+  targetOrgName   String?
+  beforeState     Json?
+  afterState      Json?
+  ipAddress       String?
+
   @@index([timestamp])
+  @@index([targetOrgId, timestamp])
+  @@index([action, timestamp])
 }
 
 enum GatewayProvisioningState {
@@ -389,7 +429,6 @@ model OrganizationChannel {
   @@index([managedByProvisioner, provisioningState])
 }
 
-
 enum Role {
   ADMIN // Full access, manages users/config
   SUPERVISOR // Can assign/close tickets, view team performance
@@ -397,8 +436,6 @@ enum Role {
   VIEWER // Read-only access to conversations
   FINANCE // View-only analytics/reports
 }
-
-
 
 enum ConversationStatus {
   OPEN
@@ -420,7 +457,6 @@ enum MessageStatus {
   FAILED
 }
 
-
 enum NotificationType {
   NEW_MESSAGE
   CONVERSATION_ASSIGNED
@@ -435,7 +471,6 @@ enum CampaignStatus {
   SENT
   FAILED
 }
-
 
 /// Marketing consent. On the official WhatsApp API Meta enforces opt-out for
 /// you; on an unofficial gateway nothing does, so this is the only thing
@@ -476,16 +511,16 @@ model User {
   identityId     String
 
   name          String
-  role          Role       @default(AGENT) // org-specific role
+  role          Role      @default(AGENT) // org-specific role
   /// Deprecated legacy ISP routing column. Team/UserTeam is the source of truth.
   primaryTeamId String?
-  isActive      Boolean    @default(true)
-  isAway        Boolean    @default(false)
+  isActive      Boolean   @default(true)
+  isAway        Boolean   @default(false)
   awayAt        DateTime?
   phone         String?
-  tokenVersion  Int        @default(0) // Increment to invalidate all tokens on logout-all
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  tokenVersion  Int       @default(0) // Increment to invalidate all tokens on logout-all
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   identity              Identity             @relation(fields: [identityId], references: [id], onDelete: Cascade)
@@ -506,14 +541,14 @@ model User {
 }
 
 model WhatsappSession {
-  id             String     @id @default(cuid())
+  id             String   @id @default(cuid())
   organizationId String
   sessionName    String
   phoneNumber    String?
   teamId         String?
   label          String
-  isActive       Boolean    @default(true)
-  createdAt      DateTime   @default(now())
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
 
   organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   team          Team?          @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
@@ -528,30 +563,29 @@ model WhatsappSession {
   @@index([organizationId, teamId])
 }
 
-
 model Contact {
-  id             String   @id @default(cuid())
-  organizationId String
-  phone          String
-  name           String?
-  firstName      String?
-  lastName       String?
-  email          String?
-  language       String?
-  profilePic     String?
-  countryCode    String?
-  lifecycleStage String?
-  assigneeId     String?
-  tags           String[] @default([])
-  notes          String?
-  isArchived     Boolean  @default(false)
+  id               String           @id @default(cuid())
+  organizationId   String
+  phone            String
+  name             String?
+  firstName        String?
+  lastName         String?
+  email            String?
+  language         String?
+  profilePic       String?
+  countryCode      String?
+  lifecycleStage   String?
+  assigneeId       String?
+  tags             String[]         @default([])
+  notes            String?
+  isArchived       Boolean          @default(false)
   /// Marketing consent. OPTED_OUT is excluded from every broadcast, always.
-  marketingConsent   MarketingConsent @default(UNKNOWN)
+  marketingConsent MarketingConsent @default(UNKNOWN)
   /// How consent last changed: keyword | agent | import | api.
-  consentSource      String?
-  consentUpdatedAt   DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  consentSource    String?
+  consentUpdatedAt DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversations      Conversation[]
@@ -697,9 +731,6 @@ model Message {
   @@index([organizationId, conversationId, timestamp])
   @@index([organizationId, conversationId, direction, isRead])
 }
-
-
-
 
 model Campaign {
   id             String         @id @default(cuid())
@@ -855,7 +886,6 @@ model CsatSurveyResponse {
   @@unique([conversationId, organizationId])
   @@index([organizationId])
 }
-
 
 model Notification {
   id             String           @id @default(cuid())
