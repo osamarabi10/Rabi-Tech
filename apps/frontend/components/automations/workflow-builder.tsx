@@ -206,7 +206,7 @@ export function WorkflowBuilder({
               <select
                 value={draft.triggerType}
                 onChange={(e) => setDraft((d) => ({ ...d, triggerType: e.target.value }))}
-                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                className="select-field w-full"
               >
                 {schema.triggers.map((trigger) => (
                   <option key={trigger} value={trigger}>{t(triggerLabel(trigger))}</option>
@@ -224,7 +224,7 @@ export function WorkflowBuilder({
                 <select
                   value={draft.tag}
                   onChange={(e) => setDraft((d) => ({ ...d, tag: e.target.value }))}
-                  className="mt-2 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  className="select-field mt-2 w-full"
                 >
                   <option value="">{t('اختر الوسم')}</option>
                   {tags.map((tag) => <option key={tag.id} value={tag.name}>{tag.name}</option>)}
@@ -248,7 +248,7 @@ export function WorkflowBuilder({
                   <select
                     value={condition.type}
                     onChange={(e) => setCondition(index, { type: e.target.value })}
-                    className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                    className="select-field"
                   >
                     {schema.conditions.map((type) => (
                       <option key={type} value={type}>{t(conditionLabel(type))}</option>
@@ -261,7 +261,7 @@ export function WorkflowBuilder({
                     <select
                       value={String(condition.value ?? '')}
                       onChange={(e) => setCondition(index, { ...condition, value: e.target.value })}
-                      className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                      className="select-field"
                     >
                       <option value="">{t('اختر الفريق')}</option>
                       {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
@@ -270,7 +270,7 @@ export function WorkflowBuilder({
                     <select
                       value={String(condition.value ?? '')}
                       onChange={(e) => setCondition(index, { ...condition, value: e.target.value })}
-                      className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                      className="select-field"
                     >
                       <option value="">{t('اختر الوسم')}</option>
                       {tags.map((tag) => <option key={tag.id} value={tag.name}>{tag.name}</option>)}
@@ -280,7 +280,7 @@ export function WorkflowBuilder({
                       <select
                         value={String(condition.field ?? '')}
                         onChange={(e) => setCondition(index, { ...condition, field: e.target.value })}
-                        className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                        className="select-field"
                       >
                         <option value="">{t('الحقل')}</option>
                         {fields.map((f) => <option key={f.slug} value={f.slug}>{f.name}</option>)}
@@ -325,7 +325,7 @@ export function WorkflowBuilder({
                   <select
                     value={action.type}
                     onChange={(e) => setAction(index, { type: e.target.value })}
-                    className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                    className="select-field"
                   >
                     {schema.actions.map((type) => (
                       <option key={type} value={type}>{t(actionLabel(type))}</option>
@@ -421,7 +421,7 @@ function ActionOperand({
   t: (key: string) => string;
 }) {
   const kind = ACTION_FIELDS[action.type] || 'none';
-  const select = 'h-9 w-full rounded-md border border-input bg-background px-2 text-sm';
+  const select = 'select-field w-full';
 
   if (kind === 'team') {
     return (

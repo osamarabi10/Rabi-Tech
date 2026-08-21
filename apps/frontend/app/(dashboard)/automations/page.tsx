@@ -18,6 +18,7 @@ import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { WorkflowBuilder } from '@/components/automations/workflow-builder';
 import { runStatusLabel, triggerLabel } from '@/lib/workflow-labels';
+import { EmptyState } from '@/components/empty-state';
 
 /**
  * Automations list.
@@ -129,11 +130,12 @@ export default function AutomationsPage() {
 
       {!loading && workflows.length === 0 && (
         <Card>
-          <CardContent className="space-y-2 py-10 text-center">
-            <p className="text-sm font-medium">{t('لا توجد أتمتة بعد')}</p>
-            <p className="text-xs text-muted-foreground">
-              {t('الأتمتة تنفّذ إجراءات تلقائية عند وصول رسالة أو تغيّر وسم.')}
-            </p>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={WorkflowIcon}
+              title={t('لا توجد أتمتة بعد')}
+              hint={t('الأتمتة تنفّذ إجراءات تلقائية عند وصول رسالة أو تغيّر وسم.')}
+            />
           </CardContent>
         </Card>
       )}

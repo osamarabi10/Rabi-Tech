@@ -245,7 +245,7 @@ export function CampaignComposer({
                     setFilter(next ? next.filter : { $and: [] });
                     setSegmentBaseline(next ? JSON.stringify(next.filter) : '');
                   }}
-                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                  className="select-field select-field-sm"
                 >
                   <option value="">{t('بدون')}</option>
                   {segments.map((segment) => (

@@ -68,6 +68,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import { messageDir } from '@/lib/text-direction';
+import { EmptyState } from '@/components/empty-state';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ConvStatus = 'all' | 'open' | 'pending' | 'awaiting' | 'mine' | 'resolved';
@@ -596,10 +597,11 @@ export default function InboxPage() {
         {/* List */}
         <ScrollArea className="flex-1">
           {filtered.length === 0 && (
-            <div className="flex flex-col items-center gap-2 py-10 text-center">
-              <MessageSquarePlus className="h-8 w-8 text-muted-foreground/30" />
-              <p className="text-xs text-muted-foreground">{t('لا توجد محادثات')}</p>
-            </div>
+            <EmptyState
+              compact
+              icon={MessageSquarePlus}
+              title={t('لا توجد محادثات')}
+            />
           )}
 
           {filtered.map((c) => {

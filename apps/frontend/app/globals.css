@@ -229,6 +229,31 @@
   background: hsl(var(--nav-muted) / 0.3);
 }
 
+@layer components {
+  /*
+   * Native <select> styled to match the Input primitive.
+   *
+   * The raw selects scattered through the app carried their own class
+   * strings — five different signatures — and none of them had a focus
+   * ring. That is not a cosmetic gap: a keyboard user tabbing through a
+   * form had no way to see where they were.
+   *
+   * Kept as a component class rather than a React wrapper because these are
+   * plain <select> elements with per-site layout classes; a class composes
+   * with those, a wrapper would have to re-forward all of them.
+   */
+  .select-field {
+    @apply h-9 rounded-md border border-border bg-secondary px-2 text-sm shadow-sm transition-all;
+    @apply focus-visible:outline-none focus-visible:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary/20;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Compact variant for dense rows such as the filter builder. */
+  .select-field-sm {
+    @apply h-8 px-1.5 text-[11px];
+  }
+}
+
 @layer utilities {
   /* Phone numbers, IDs and counts. Tabular figures keep digits the same width
      so columns line up; the isolation utility stops a number reordering the

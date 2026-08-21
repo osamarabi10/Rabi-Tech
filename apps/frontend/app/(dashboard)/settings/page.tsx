@@ -475,12 +475,37 @@ export default function SettingsPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <span className="rounded-md bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground">
-                    Primary action
+                {/*
+                  A colour preview, not a colour-coded label. The accent chip
+                  used to render its own name in the accent colour, which is
+                  unreadable whenever a subscriber picks anything light — it
+                  measured 3.1:1 with the default. Showing the colour as a
+                  filled swatch and the name in normal text is legible for
+                  every possible brand colour, which colour-as-text can never
+                  be, because the palette does not own that colour.
+                */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className="h-4 w-4 shrink-0 rounded border border-border"
+                      style={{ background: 'hsl(var(--primary))' }}
+                      aria-hidden
+                    />
+                    <span className="text-xs text-muted-foreground">{t('اللون الأساسي')}</span>
                   </span>
-                  <span className="rounded-md border border-[hsl(var(--brand-accent))] px-3 py-1 text-xs text-[hsl(var(--brand-accent))]">
-                    Accent
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className="h-4 w-4 shrink-0 rounded border border-border"
+                      style={{ background: 'hsl(var(--brand-accent))' }}
+                      aria-hidden
+                    />
+                    <span className="text-xs text-muted-foreground">{t('لون التمييز')}</span>
+                  </span>
+                  {/* The primary still gets a real button preview, because a
+                      filled button is how the colour is actually used and its
+                      own foreground token guarantees the contrast. */}
+                  <span className="rounded-md bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground">
+                    {t('زر إجراء')}
                   </span>
                 </div>
                 {branding.footerText && (
@@ -1038,7 +1063,7 @@ export default function SettingsPage() {
                   <div className="flex items-center gap-2">
                     <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: team.color }} />
                     <p className="truncate text-sm font-semibold">{team.name}</p>
-                    {team.isDefault && <StatusBadge label={t('افتراضي')} color="#22C55E" className="text-[10px]" />}
+                    {team.isDefault && <StatusBadge label={t('افتراضي')} color="hsl(var(--success))" className="text-[10px]" />}
                   </div>
                   <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" dir="ltr">
                     {team.slug}

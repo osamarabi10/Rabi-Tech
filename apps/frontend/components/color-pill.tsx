@@ -1,6 +1,7 @@
 'use client';
 
 import { useTheme } from '@/lib/theme';
+import { tintedStyle } from '@/lib/tint';
 import { cn } from '@/lib/utils';
 
 /**
@@ -33,11 +34,7 @@ export function ColorPill({
   return (
     <span
       className={cn('shrink-0 rounded-full border px-2 py-0.5 text-[10px]', className)}
-      style={
-        dark
-          ? { backgroundColor: color, color: '#fff', borderColor: color }
-          : { backgroundColor: `${color}1A`, color, borderColor: `${color}40` }
-      }
+      style={tintedStyle(color, dark)}
     >
       {children}
     </span>

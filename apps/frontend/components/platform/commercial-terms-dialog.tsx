@@ -217,7 +217,7 @@ export function CommercialTermsDialog({
                 <select
                   value={planOverride}
                   onChange={(event) => setPlanOverride(event.target.value)}
-                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  className="select-field w-full"
                 >
                   <option value="">None — use plan of record</option>
                   {PLANS.map((plan) => <option key={plan} value={plan}>{plan}</option>)}

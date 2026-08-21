@@ -3,6 +3,7 @@
 import { avatarColor } from '@/lib/constants';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useTheme } from '@/lib/theme';
+import { tintedStyle } from '@/lib/tint';
 import { cn } from '@/lib/utils';
 
 /**
@@ -41,11 +42,7 @@ export function ContactAvatar({
     <Avatar className={cn('h-8 w-8', className)}>
       <AvatarFallback
         className={cn('text-xs font-semibold', textClassName)}
-        style={
-          dark
-            ? { backgroundColor: color, color: '#fff' }
-            : { backgroundColor: `${color}22`, color }
-        }
+        style={tintedStyle(color, dark)}
       >
         {(label || '?').charAt(0)}
       </AvatarFallback>

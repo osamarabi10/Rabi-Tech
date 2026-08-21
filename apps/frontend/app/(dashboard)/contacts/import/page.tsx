@@ -196,7 +196,7 @@ export default function ContactImportPage() {
                         <select
                           value={mapping[header] || ''}
                           onChange={(e) => setMapping((m) => ({ ...m, [header]: e.target.value }))}
-                          className="h-8 flex-1 rounded-md border border-input bg-background px-1.5 text-[11px]"
+                          className="select-field select-field-sm flex-1"
                         >
                           <option value="">{t('تجاهل')}</option>
                           <option value="phone">{t('الهاتف')}</option>

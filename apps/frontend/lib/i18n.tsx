@@ -759,6 +759,8 @@ const D: Dict = {
   "فاتح": { he: "בהיר", en: "Light" },
   "داكن": { he: "כהה", en: "Dark" },
   "حسب النظام": { he: "לפי המערכת", en: "System" },
+  "لون التمييز": { he: "צבע הדגשה", en: "Accent colour" },
+  "زر إجراء": { he: "כפתור פעולה", en: "Action button" },
 };
 
 type I18nCtx = {

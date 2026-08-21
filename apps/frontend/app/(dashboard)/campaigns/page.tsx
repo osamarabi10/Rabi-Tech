@@ -21,6 +21,7 @@ import {
 import { useT } from '@/lib/i18n';
 import { UpgradeGate } from '@/components/upgrade-gate';
 import { cn } from '@/lib/utils';
+import { EmptyState } from '@/components/empty-state';
 
 export default function CampaignsPage() {
   const { t } = useT();
@@ -91,15 +92,11 @@ export default function CampaignsPage() {
           <p className="py-10 text-center text-sm text-muted-foreground">{t('جاري التحميل...')}</p>
         )}
         {!loading && campaigns.length === 0 && (
-          <div className="flex flex-col items-center gap-2 py-12 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-              <Megaphone className="h-6 w-6 text-primary" />
-            </div>
-            <p className="text-sm font-medium">{t('لا توجد حملات بعد')}</p>
-            <p className="max-w-xs text-xs text-muted-foreground">
-              {t('أنشئ حملة لإرسال رسالة لمجموعة من جهات الاتصال دفعة واحدة')}
-            </p>
-          </div>
+          <EmptyState
+            icon={Megaphone}
+            title={t('لا توجد حملات بعد')}
+            hint={t('أنشئ حملة لإرسال رسالة لمجموعة من جهات الاتصال دفعة واحدة')}
+          />
         )}
         {campaigns.map((c) => {
           const sc = STATUS_CONFIG[c.status] || STATUS_CONFIG.DRAFT;
