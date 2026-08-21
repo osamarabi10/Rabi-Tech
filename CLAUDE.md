@@ -22,6 +22,8 @@ The authoritative RabiTech target architecture, implementation checkpoint, relea
 
 [docs/BILLING-PROVIDER-GUIDE.md](docs/BILLING-PROVIDER-GUIDE.md) — everything needed to switch on online payments later. Activation is already automatic; only checkout is stubbed.
 
+[docs/MARASIL-SPEC-FIT.md](docs/MARASIL-SPEC-FIT.md) analyses the 123-page Marasil product spec (same product, but designed for Meta Cloud API) against RabiTech on OpenWA — what does not port, what inverts, the full UI/design-token comparison, and the consent gap it exposes.
+
 [docs/RESPONDIO-BLUEPRINT-FIT.md](docs/RESPONDIO-BLUEPRINT-FIT.md) maps the Respond.io architecture blueprint onto RabiTech's verified state — what already exists, what to build, and which parts of that blueprint to deliberately skip (multi-datastore persistence, light-canvas re-theme, omnichannel fan-out). Read it before starting workflow-engine or channel work.
 
 ## Commands
