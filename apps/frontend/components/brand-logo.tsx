@@ -36,10 +36,10 @@ export function BrandLogo({
       </div>
       {showText && (
         <div className="min-w-0 leading-tight">
-          <p className="truncate text-[13px] font-bold tracking-wide text-foreground">
+          <p className="truncate text-small font-bold tracking-wide text-foreground">
             {branding.productName}
           </p>
-          {subtitle && <p className="truncate text-[10px] text-muted-foreground">{subtitle}</p>}
+          {subtitle && <p className="truncate text-micro text-muted-foreground">{subtitle}</p>}
         </div>
       )}
     </div>

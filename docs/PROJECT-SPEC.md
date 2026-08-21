@@ -177,6 +177,9 @@ numbers (display-only; the shared number now lives on `ostudio-primary`).
 | **Gateway stabilization** | inbound self-healing + SSRF allowlist (50/0 deliveries); outbound fixed via image update (pins WA Web version); runbook written |
 | **M1 Consent & opt-out** | STOP/إلغاء/הפסק matched on the whole trimmed message, never a substring; broadcasts exclude `OPTED_OUT` unconditionally with the exclusion counted back to the admin; settable per contact by any agent; org-scoped in the gate |
 | **M2 RTL correctness** | per-message first-strong direction — an Arabic message renders `dir="rtl"` even with the interface in English; logical CSS; tabular figures |
+| **M3 Filter vocabulary** | typed date/number/multi-value operators; activity + broadcast-history dimensions; nested groups to depth 3; vocabulary **served** by `/api/contacts/filter-schema` rather than hardcoded; 28 filters verified live incl. a cross-tenant campaign-id probe blocked when buried in a nested group |
+| **M1 Consent & opt-out** | STOP/إلغاء/הפסק matched on the whole trimmed message, never a substring; broadcasts exclude `OPTED_OUT` unconditionally with the exclusion counted back to the admin; settable per contact by any agent; org-scoped in the gate |
+| **M2 RTL correctness** | per-message first-strong direction — an Arabic message renders `dir="rtl"` even with the interface in English; logical CSS; tabular figures |
 | **P9 Platform pricing control** | plan/MAC/discount/credit overrides resolved at **read time** — never written into `OrganizationConfig`, so expiry needs no sweeper and drift detection stays meaningful; drift now distinguishes intentional override from genuine divergence; audit row written in the same transaction as the override; gate 50/50 |
 | **P11 Workflow engine** | triggers → conditions → 9 actions on BullMQ, WAIT_DELAY as a delayed re-enqueue; a workflow cannot outrun consent, the plan, or itself (depth cap + re-entry window); HTTP_WEBHOOK guarded against SSRF at both shape and resolved address, blocked at save **and** at run |
 | **M4 Dark theme** | one `.dark` token block re-themes everything, because components read tokens not literals; the regression had left `className="dark"` hardcoded with no palette behind it; audit surfaced hardcoded hexes, a raw palette class failing AA in light, and a `--warning` token whose value disagreed with its own comment; 0 dark failures across four views |
@@ -252,18 +255,48 @@ conversations behind it and an hour-of-day heatmap. It rests on two new columns
 (`Conversation.firstResponseAt` / `resolvedAt`) because those times were
 previously only inferrable from `updatedAt`, which any edit moves, and on an
 `AnalyticsHourly` rollup because Prisma cannot express `date_trunc` in `groupBy`
-and raw SQL would bypass the tenancy extension. **One gap, deliberately
-unshipped:** webhook-delivery health, which needs a delivery log that does not
-exist yet.
+and raw SQL would bypass the tenancy extension. The **webhook-delivery** gap
+closed on 2026-08-22 with `WebhookDeliveryLog`, logged in both directions —
+outbound workflow calls and inbound gateway receipts are separate faults, and
+only the second goes silent when the platform stops receiving WhatsApp traffic.
+Inbound payloads are stored as a redacted summary, never the message text:
+copying every customer message into a second table with its own retention and
+its own readers answers no question the health view asks. Retention is 14 days,
+pruned by the analytics rollup worker — inbound is one row per received message
+and would otherwise outgrow `Message` itself.
 
-**M5** design-system hardening and **M6** inbox structure remain open as written
-in TODO.md. The commits labelled M5/M6 delivered a smaller adjacent slice —
-a single tint primitive, a focus-ring class for 16 unstyled selects, an empty-state
-component, inbox scroll retention — not the checklists under those headings.
+**Reports were rebuilt to the Respond.io shape on 2026-08-22**: a unified filter
+bar (date range · team · channel) over prominent summary cards (first response,
+resolution velocity, message volume), then time-series charts, then tables.
+Team and channel apply to every surface rather than only the one that owns the
+control. `contactsAdded` disappears under either filter instead of showing an
+unfiltered figure beside filtered ones — contacts belong to no team and no
+channel. The unfiltered series still reads the hourly rollup; a filtered one
+cannot, because the rollup carries no team or channel dimension, so it falls
+back to a capped direct read.
+
+**M5 is done**: an eight-step type scale (189 `text-[Npx]` literals swept off
+across 34 files), motion tokens honouring `prefers-reduced-motion`, and a
+Compact / Comfortable / Spacious density switcher on the conversation list.
+**M6 is partly done** — configurable `LifecycleStage` with `/settings/lifecycle`
+CRUD and selectors in the contact panel and thread header, plus `@mention`
+notifications on internal notes. Still open in M6: the inbox-selector column,
+lifecycle *filters with counts*, custom inboxes, contact-panel tabs, the
+session-health bar, and the Mentions inbox.
+
 Still open too: **M8 roles/restrictions**. Two things are deliberately deferred
 rather than forgotten: an **async rule compiler** (needed for "never replied
 *since campaign X was sent*", the Marasil headline filter we ship only half of)
 and **estimated audience counts** (not needed below ~50k contacts per tenant).
+
+**Marasil-parity track (docs/TODO.md).** M1–M3 done. **M4** dark theme ·
+**M5** design-system hardening · **M6** inbox structure · **M7** reports
+consolidation · **M8** roles/restrictions **and building CSV import, which does
+not exist at all** — today the only way a contact enters RabiTech is by messaging
+in. Two things are deliberately deferred rather than forgotten: an **async rule
+compiler** (needed for "never replied *since campaign X was sent*", the Marasil
+headline filter we ship only half of) and **estimated audience counts** (not
+needed below ~50k contacts per tenant).
 
 **Continuous hardening backlog:** health monitor + scheduled self-send (gateway
 breakage is currently discovered by users); per-org plan-aware campaign rate

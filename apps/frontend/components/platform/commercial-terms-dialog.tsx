@@ -161,7 +161,7 @@ export function CommercialTermsDialog({
           <DialogTitle className="flex items-center gap-2">
             Commercial terms — {subscriberName}
             {effective?.isOverridden && (
-              <Badge variant="secondary" className="text-[10px]">عرض خاص</Badge>
+              <Badge variant="secondary" className="text-micro">عرض خاص</Badge>
             )}
           </DialogTitle>
         </DialogHeader>
@@ -203,7 +203,7 @@ export function CommercialTermsDialog({
                 )}
               </div>
               {effective.override.expired && (
-                <p className="mt-2 text-[11px] text-amber-600">
+                <p className="mt-2 text-caption text-amber-600">
                   An override is recorded but expired on{' '}
                   {effective.override.expiresAt?.slice(0, 10)} — it is no longer applied.
                   The values are kept so the deal stays on record.
@@ -266,7 +266,7 @@ export function CommercialTermsDialog({
                 value={expiresAt}
                 onChange={(event) => setExpiresAt(event.target.value)}
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-caption text-muted-foreground">
                 One expiry governs plan, MAC and discount together. Credit never expires.
               </p>
             </div>
@@ -281,13 +281,13 @@ export function CommercialTermsDialog({
                 onChange={(event) => setReason(event.target.value)}
                 placeholder="Why these terms differ from the published plan"
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-caption text-muted-foreground">
                 Recorded in the platform audit log. Never shown to the subscriber.
               </p>
             </div>
 
             {org?.overrideSetAt && (
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-caption text-muted-foreground">
                 Last changed {new Date(org.overrideSetAt).toLocaleString('en-GB')}
                 {org.overrideSetByEmail ? ` by ${org.overrideSetByEmail}` : ''}
               </p>

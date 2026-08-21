@@ -109,6 +109,10 @@ const SETTINGS_SECTIONS = [
   { id: 'channels',      label: 'قنوات واتساب', adminOnly: false },
   { id: 'keywords',      label: 'الكلمات المفتاحية', adminOnly: false },
   { id: 'teams',         label: 'الفرق', adminOnly: false },
+  // A page of its own rather than a section here: the stage list is a small
+  // CRUD surface with its own ordering controls, and it is long enough that
+  // inlining it would push everything below it off the screen.
+  { id: 'lifecycle',     label: 'مراحل العميل', adminOnly: true, href: '/settings/lifecycle' },
 ];
 
 /**
@@ -428,7 +432,7 @@ export default function SettingsPage() {
           {SETTINGS_SECTIONS.filter((s) => !s.adminOnly || isAdmin).map((s) => (
             <a
               key={s.id}
-              href={`#${s.id}`}
+              href={'href' in s && s.href ? s.href : `#${s.id}`}
               className="shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               {t(s.label)}
@@ -689,8 +693,8 @@ export default function SettingsPage() {
                     <div className="h-2 overflow-hidden rounded-sm bg-muted" role="meter" aria-valuenow={item.percent ?? 0} aria-valuemin={0} aria-valuemax={100}>
                       <div className={cn('h-full transition-[width]', color)} style={{ width: `${item.percent ?? 0}%` }} />
                     </div>
-                    {item.state === 'warning' && <p className="text-[11px] text-warning">{t('قريب من الحد الشهري')}</p>}
-                    {item.state === 'exceeded' && <p className="text-[11px] font-medium text-danger">{t('وصلت للحد الشهري')}</p>}
+                    {item.state === 'warning' && <p className="text-caption text-warning">{t('قريب من الحد الشهري')}</p>}
+                    {item.state === 'exceeded' && <p className="text-caption font-medium text-danger">{t('وصلت للحد الشهري')}</p>}
                   </div>
                 );
               })}
@@ -760,7 +764,7 @@ export default function SettingsPage() {
                     value={wh.welcomeTemplate.body}
                   />
                 )}
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-caption text-muted-foreground">
                   أنشئ قالباً من فئة <strong>AUTO_REPLY</strong> في{' '}
                   <a href="/templates" className="text-primary underline">
                     {t('القوالب')}
@@ -839,7 +843,7 @@ export default function SettingsPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-caption text-muted-foreground">
                   عدّل النص من صفحة{' '}
                   <a href="/templates" className="text-primary underline">
                     {t('القوالب')}
@@ -1063,12 +1067,12 @@ export default function SettingsPage() {
                   <div className="flex items-center gap-2">
                     <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: team.color }} />
                     <p className="truncate text-sm font-semibold">{team.name}</p>
-                    {team.isDefault && <StatusBadge label={t('افتراضي')} color="hsl(var(--success))" className="text-[10px]" />}
+                    {team.isDefault && <StatusBadge label={t('افتراضي')} color="hsl(var(--success))" className="text-micro" />}
                   </div>
-                  <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" dir="ltr">
+                  <p className="mt-1 truncate font-mono text-micro text-muted-foreground" dir="ltr">
                     {team.slug}
                   </p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">
+                  <p className="mt-1 text-caption text-muted-foreground">
                     {(team._count?.members || 0)} {t('أعضاء')} · {(team._count?.conversations || 0)} {t('محادثات')}
                   </p>
                 </div>
@@ -1139,7 +1143,7 @@ export default function SettingsPage() {
                 <Loader2 className="h-8 w-8 animate-spin" />
                 <p className="text-xs">{t('جارٍ تجهيز رمز الربط…')}</p>
                 {qr?.state && (
-                  <p className="font-mono text-[10px] opacity-50">{qr.state}</p>
+                  <p className="font-mono text-micro opacity-50">{qr.state}</p>
                 )}
               </div>
             )}

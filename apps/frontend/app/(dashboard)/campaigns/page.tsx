@@ -148,7 +148,7 @@ export default function CampaignsPage() {
                 {metrics.map((m) => (
                   <div key={m.label} className="rounded-md border border-border px-2 py-2 text-center">
                     <p className="text-lg font-bold" style={{ color: m.color }}>{m.value}</p>
-                    <p className="text-[10px] text-muted-foreground">{m.label}</p>
+                    <p className="text-micro text-muted-foreground">{m.label}</p>
                   </div>
                 ))}
               </div>
@@ -162,11 +162,11 @@ export default function CampaignsPage() {
                   <div className="max-h-40 space-y-1 overflow-y-auto">
                     {report.failures.map((f) => (
                       <div key={f.id} className="rounded border border-destructive/20 bg-destructive/5 px-2 py-1.5">
-                        <p className="text-[11px] font-medium" dir="ltr">
+                        <p className="text-caption font-medium" dir="ltr">
                           {f.contact.name || f.contact.phone}
                         </p>
                         {f.error && (
-                          <p className="truncate text-[10px] text-muted-foreground" title={f.error}>
+                          <p className="truncate text-micro text-muted-foreground" title={f.error}>
                             {f.error}
                           </p>
                         )}

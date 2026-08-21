@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
-import { MessageSquare, Megaphone, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { Wifi, WifiOff } from 'lucide-react';
 import {
   fetchCampaignsReport,
   fetchConversationsReport,
@@ -11,6 +10,7 @@ import {
   fetchSessions,
   fetchTeamReport,
   fetchTeams,
+  fetchWebhookReport,
   type CampaignReportRow,
   type ConversationsReport,
   type DrilldownMetric,
@@ -20,8 +20,8 @@ import {
   type Session,
   type Team,
   type TeamReportRow,
+  type WebhookReport,
 } from '@/lib/data';
-import { Button } from '@/components/ui/button';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
@@ -29,36 +29,32 @@ import {
   EmptyNote,
   MetricTile,
   ReportCard,
-  Sparkline,
   formatDuration,
   formatPct,
 } from '@/components/reports/primitives';
+import { LineChart, type Series } from '@/components/reports/line-chart';
 import { VolumeHeatmap } from '@/components/reports/heatmap';
 import { DrilldownPanel } from '@/components/reports/drilldown-panel';
+import { ReportFilterBar, type ReportFilters } from '@/components/reports/filter-bar';
 
 /**
- * Reports (M7).
+ * Reports.
  *
- * Five surfaces, one question each, rather than one page that answers none of
- * them well:
+ * The page reads top to bottom the way the question is actually asked: pick the
+ * slice, see where it stands, see how it moved, then look at the rows behind it.
  *
- * - **Overview** — is the operation growing, and against what?
- * - **Conversations** — how fast do we answer, and when are we busy?
- * - **Team** — who is carrying the load?
- * - **Campaigns** — did the broadcast do anything?
- * - **Gateway** — is the channel actually working?
+ *   filter bar  →  summary cards  →  time series  →  tables
  *
- * Each tab fetches only when it is opened. The tabs are independent queries and
- * loading all five on mount would make the slowest one the cost of the page.
+ * That order matters more than it sounds. An earlier version led with tables and
+ * hid the period control in the page header, so the first thing on screen was
+ * detail nobody had asked a question of yet, and changing the period meant
+ * hunting for the control that owned it.
+ *
+ * Each tab fetches only when opened — five independent queries on mount would
+ * make the slowest one the cost of the page.
  */
 
-type TabKey = 'overview' | 'conversations' | 'team' | 'campaigns' | 'gateway';
-
-const RANGES = [
-  { days: 7, label: 'آخر ٧ أيام' },
-  { days: 30, label: 'آخر ٣٠ يوم' },
-  { days: 90, label: 'آخر ٩٠ يوم' },
-] as const;
+type TabKey = 'overview' | 'conversations' | 'team' | 'campaigns' | 'gateway' | 'webhooks';
 
 const BUCKET_LABEL: Record<string, string> = {
   under_5m: 'أقل من ٥ دقائق',
@@ -70,6 +66,7 @@ const BUCKET_LABEL: Record<string, string> = {
 };
 
 const HEADLINE_LABEL: Record<string, string> = {
+  messageVolume: 'حجم الرسائل',
   conversationsStarted: 'محادثات بدأت',
   conversationsResolved: 'محادثات حُلّت',
   inbound: 'رسائل واردة',
@@ -77,16 +74,24 @@ const HEADLINE_LABEL: Record<string, string> = {
   contactsAdded: 'جهات اتصال جديدة',
 };
 
-/** Which headline tiles can be opened, and as what. */
 const HEADLINE_DRILLDOWN: Record<string, DrilldownMetric | undefined> = {
   conversationsStarted: 'started',
   conversationsResolved: 'resolved',
 };
 
+/** Change between two durations, where *down* is the improvement. */
+function durationChangePct(current: number | null, previous: number | null): number | null {
+  if (current === null || previous === null || previous === 0) return null;
+  // Negated so the arrow points the way the operator feels it: a response time
+  // that fell is an improvement, and an up-arrow on a rising wait would be a lie
+  // told by a component that only knows the number went up.
+  return -Math.round(((current - previous) / previous) * 1000) / 10;
+}
+
 export default function ReportsPage() {
   const { t } = useT();
   const [tab, setTab] = useState<TabKey>('overview');
-  const [days, setDays] = useState<number>(30);
+  const [filters, setFilters] = useState<ReportFilters>({ days: 30, teamId: '', sessionId: '' });
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [drilldown, setDrilldown] = useState<{ metric: DrilldownMetric; agentId?: string } | null>(
@@ -95,53 +100,68 @@ export default function ReportsPage() {
 
   const range = useMemo<ReportRange>(() => {
     const to = new Date();
-    const from = new Date(to.getTime() - days * 24 * 3600_000);
+    const from = new Date(to.getTime() - filters.days * 24 * 3600_000);
     return { from: from.toISOString(), to: to.toISOString() };
-  }, [days]);
+  }, [filters.days]);
+
+  const query = useMemo(
+    () => ({
+      ...range,
+      teamId: filters.teamId || undefined,
+      sessionId: filters.sessionId || undefined,
+    }),
+    [range, filters.teamId, filters.sessionId],
+  );
 
   const [overview, setOverview] = useState<OverviewReport | null>(null);
   const [conversations, setConversations] = useState<ConversationsReport | null>(null);
   const [team, setTeam] = useState<TeamReportRow[] | null>(null);
   const [campaigns, setCampaigns] = useState<CampaignReportRow[] | null>(null);
   const [gateway, setGateway] = useState<GatewayReport | null>(null);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [webhooks, setWebhooks] = useState<WebhookReport | null>(null);
+  const [liveSessions, setLiveSessions] = useState<Session[]>([]);
 
   const [teams, setTeams] = useState<Team[]>([]);
-  const [teamFilter, setTeamFilter] = useState('');
+  const [channels, setChannels] = useState<GatewayReport['sessions']>([]);
   const [teamSearch, setTeamSearch] = useState('');
 
   useEffect(() => {
+    // The filter bar's own vocabulary. Fetched once, and from the report rather
+    // than the gateway: these are the sessions conversations are stored against,
+    // which is what the filter actually matches on.
     fetchTeams().then(setTeams).catch(() => {});
+    fetchGatewayReport(range)
+      .then((report) => setChannels(report.sessions))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setFailed(false);
     try {
-      if (tab === 'overview') setOverview(await fetchOverviewReport(range));
-      if (tab === 'conversations') setConversations(await fetchConversationsReport(range));
+      if (tab === 'overview') setOverview(await fetchOverviewReport(query));
+      if (tab === 'conversations') setConversations(await fetchConversationsReport(query));
       if (tab === 'team') {
-        const res = await fetchTeamReport(range, {
-          teamId: teamFilter || undefined,
-          q: teamSearch.trim() || undefined,
-        });
+        const res = await fetchTeamReport(query, { q: teamSearch.trim() || undefined });
         setTeam(res.agents);
       }
-      if (tab === 'campaigns') setCampaigns((await fetchCampaignsReport(range)).campaigns);
+      if (tab === 'campaigns') setCampaigns((await fetchCampaignsReport(query)).campaigns);
       if (tab === 'gateway') {
         // Stored session state and live connectivity come from different places
         // on purpose — a cached copy of "connected" is the more convincing of
         // the two and the wrong one.
-        const [report, live] = await Promise.all([fetchGatewayReport(range), fetchSessions()]);
+        const [report, live] = await Promise.all([fetchGatewayReport(query), fetchSessions()]);
         setGateway(report);
-        setSessions(live);
+        setLiveSessions(live);
       }
+      if (tab === 'webhooks') setWebhooks(await fetchWebhookReport(query));
     } catch {
       setFailed(true);
     } finally {
       setLoading(false);
     }
-  }, [tab, range, teamFilter, teamSearch]);
+  }, [tab, query, teamSearch]);
 
   useEffect(() => {
     load();
@@ -153,35 +173,21 @@ export default function ReportsPage() {
     { key: 'team', label: 'الفريق' },
     { key: 'campaigns', label: 'الحملات' },
     { key: 'gateway', label: 'حالة القناة' },
+    { key: 'webhooks', label: 'الويب هوك' },
   ];
 
   return (
     <div className="flex-1 overflow-y-auto p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-base font-extrabold">{t('التقارير')}</h1>
-        <div className="flex items-center gap-2">
-          <div className="flex rounded-md border border-border p-0.5">
-            {RANGES.map((r) => (
-              <button
-                key={r.days}
-                type="button"
-                onClick={() => setDays(r.days)}
-                className={cn(
-                  'rounded px-2.5 py-1 text-[11px] font-medium transition-colors',
-                  days === r.days
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent',
-                )}
-              >
-                {t(r.label)}
-              </button>
-            ))}
-          </div>
-          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={load} disabled={loading}>
-            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-          </Button>
-        </div>
-      </div>
+      <h1 className="mb-3 text-h1 font-extrabold">{t('التقارير')}</h1>
+
+      <ReportFilterBar
+        filters={filters}
+        onChange={setFilters}
+        teams={teams}
+        sessions={channels}
+        loading={loading}
+        onRefresh={load}
+      />
 
       <nav className="mb-4 flex flex-wrap gap-1 border-b border-border">
         {TABS.map((item) => (
@@ -190,7 +196,7 @@ export default function ReportsPage() {
             type="button"
             onClick={() => setTab(item.key)}
             className={cn(
-              'border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+              'border-b-2 px-3 py-2 text-h3 font-medium transition-colors motion-micro',
               tab === item.key
                 ? 'border-primary text-primary'
                 : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -202,7 +208,7 @@ export default function ReportsPage() {
       </nav>
 
       {failed ? (
-        <p className="py-10 text-center text-sm text-destructive">{t('تعذّر جلب التقرير')}</p>
+        <p className="py-10 text-center text-body text-destructive">{t('تعذّر جلب التقرير')}</p>
       ) : (
         <div className="space-y-4">
           {tab === 'overview' && (
@@ -212,27 +218,21 @@ export default function ReportsPage() {
               onDrilldown={(metric) => setDrilldown({ metric })}
             />
           )}
-
           {tab === 'conversations' && <ConversationsTab report={conversations} loading={loading} />}
-
           {tab === 'team' && (
             <TeamTab
               rows={team}
               loading={loading}
-              teams={teams}
-              teamFilter={teamFilter}
-              onTeamFilter={setTeamFilter}
               search={teamSearch}
               onSearch={setTeamSearch}
               onDrilldown={(agentId) => setDrilldown({ metric: 'resolved', agentId })}
             />
           )}
-
           {tab === 'campaigns' && <CampaignsTab rows={campaigns} loading={loading} />}
-
           {tab === 'gateway' && (
-            <GatewayTab report={gateway} sessions={sessions} loading={loading} />
+            <GatewayTab report={gateway} sessions={liveSessions} loading={loading} />
           )}
+          {tab === 'webhooks' && <WebhooksTab report={webhooks} loading={loading} />}
         </div>
       )}
 
@@ -250,7 +250,7 @@ export default function ReportsPage() {
 
 function Loading() {
   const { t } = useT();
-  return <p className="py-10 text-center text-sm text-muted-foreground">{t('جاري التحميل...')}</p>;
+  return <p className="py-10 text-center text-body text-muted-foreground">{t('جاري التحميل...')}</p>;
 }
 
 function OverviewTab({
@@ -265,10 +265,68 @@ function OverviewTab({
   const { t } = useT();
   if (!report) return loading ? <Loading /> : <EmptyNote />;
 
+  const volume = report.headlines.find((h) => h.key === 'messageVolume');
+  const rest = report.headlines.filter((h) => h.key !== 'messageVolume');
+
+  const series: Series[] = [
+    {
+      key: 'inbound',
+      label: t('رسائل واردة'),
+      color: 'hsl(var(--primary))',
+      points: report.series.map((p) => ({ date: p.date, value: p.inbound })),
+    },
+    {
+      key: 'outbound',
+      label: t('رسائل صادرة'),
+      color: 'hsl(var(--success))',
+      points: report.series.map((p) => ({ date: p.date, value: p.outbound })),
+    },
+    {
+      key: 'resolved',
+      label: t('محادثات حُلّت'),
+      color: 'hsl(var(--warning))',
+      points: report.series.map((p) => ({ date: p.date, value: p.resolved })),
+    },
+  ];
+
   return (
     <>
+      {/* The three the page leads with: how fast we answer, how fast we finish,
+          and how much came through. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <MetricTile
+          label={t('زمن أول رد')}
+          value={formatDuration(report.firstResponseMedianMinutes, t)}
+          changePct={durationChangePct(
+            report.firstResponseMedianMinutes,
+            report.firstResponsePreviousMinutes,
+          )}
+          hint={t('الوسيط')}
+          onClick={() => onDrilldown('answered')}
+        />
+        <MetricTile
+          label={t('سرعة الحل')}
+          value={formatDuration(report.resolutionMedianMinutes, t)}
+          changePct={durationChangePct(
+            report.resolutionMedianMinutes,
+            report.resolutionPreviousMinutes,
+          )}
+          hint={t('الوسيط')}
+          onClick={() => onDrilldown('resolved')}
+        />
+        <MetricTile
+          label={t('حجم الرسائل')}
+          value={(volume?.value ?? 0).toLocaleString('en-US')}
+          changePct={volume?.changePct}
+        />
+      </div>
+
+      <ReportCard title={t('الحجم عبر الزمن')}>
+        <LineChart series={series} />
+      </ReportCard>
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        {report.headlines.map((headline) => {
+        {rest.map((headline) => {
           const metric = HEADLINE_DRILLDOWN[headline.key];
           return (
             <MetricTile
@@ -281,33 +339,6 @@ function OverviewTab({
           );
         })}
       </div>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <ReportCard title={t('الرسائل الواردة')}>
-          <Sparkline points={report.series} valueOf={(p) => p.inbound} />
-        </ReportCard>
-        <ReportCard title={t('الرسائل الصادرة')}>
-          <Sparkline points={report.series} valueOf={(p) => p.outbound} />
-        </ReportCard>
-        <ReportCard title={t('محادثات حُلّت')}>
-          <Sparkline points={report.series} valueOf={(p) => p.resolved} />
-        </ReportCard>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" asChild>
-          <Link href="/inbox">
-            <MessageSquare className="me-1.5 h-3.5 w-3.5" />
-            {t('الرسائل')}
-          </Link>
-        </Button>
-        <Button size="sm" variant="outline" asChild>
-          <Link href="/campaigns">
-            <Megaphone className="me-1.5 h-3.5 w-3.5" />
-            {t('الحملات')}
-          </Link>
-        </Button>
-      </div>
     </>
   );
 }
@@ -318,21 +349,21 @@ function DurationSummary({ stats }: { stats: ConversationsReport['firstResponse'
     <>
       <div className="mb-4 grid grid-cols-3 gap-3">
         <div>
-          <p className="text-[11px] text-muted-foreground">{t('الوسيط')}</p>
-          <p className="numeric text-lg font-bold">{formatDuration(stats.medianMinutes, t)}</p>
+          <p className="text-caption text-muted-foreground">{t('الوسيط')}</p>
+          <p className="numeric text-h1 font-bold">{formatDuration(stats.medianMinutes, t)}</p>
         </div>
         <div>
-          <p className="text-[11px] text-muted-foreground">{t('المتوسط')}</p>
-          <p className="numeric text-lg font-bold">{formatDuration(stats.meanMinutes, t)}</p>
+          <p className="text-caption text-muted-foreground">{t('المتوسط')}</p>
+          <p className="numeric text-h1 font-bold">{formatDuration(stats.meanMinutes, t)}</p>
         </div>
         <div>
-          <p className="text-[11px] text-muted-foreground">{t('الشريحة ٩٠')}</p>
-          <p className="numeric text-lg font-bold">{formatDuration(stats.p90Minutes, t)}</p>
+          <p className="text-caption text-muted-foreground">{t('الشريحة ٩٠')}</p>
+          <p className="numeric text-h1 font-bold">{formatDuration(stats.p90Minutes, t)}</p>
         </div>
       </div>
       <DistributionBars buckets={stats.buckets} labelFor={(l) => t(BUCKET_LABEL[l] ?? l)} />
       {stats.truncated && (
-        <p className="mt-3 text-[11px] text-warning">{t('عيّنة جزئية — الفترة أوسع من الحد')}</p>
+        <p className="mt-3 text-caption text-warning">{t('عيّنة جزئية — الفترة أوسع من الحد')}</p>
       )}
     </>
   );
@@ -368,18 +399,12 @@ function ConversationsTab({
 function TeamTab({
   rows,
   loading,
-  teams,
-  teamFilter,
-  onTeamFilter,
   search,
   onSearch,
   onDrilldown,
 }: {
   rows: TeamReportRow[] | null;
   loading: boolean;
-  teams: Team[];
-  teamFilter: string;
-  onTeamFilter: (v: string) => void;
   search: string;
   onSearch: (v: string) => void;
   onDrilldown: (agentId: string) => void;
@@ -390,26 +415,12 @@ function TeamTab({
     <ReportCard
       title={t('أداء الوكلاء')}
       action={
-        <div className="flex items-center gap-2">
-          <input
-            value={search}
-            onChange={(e) => onSearch(e.target.value)}
-            placeholder={t('بحث بالاسم')}
-            className="h-7 w-32 rounded-md border border-border bg-background px-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-          <select
-            value={teamFilter}
-            onChange={(e) => onTeamFilter(e.target.value)}
-            className="select-field-sm"
-          >
-            <option value="">{t('كل الفرق')}</option>
-            {teams.map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        <input
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder={t('بحث بالاسم')}
+          className="h-7 w-32 rounded-md border border-border bg-background px-2 text-caption outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
       }
     >
       {!rows ? (
@@ -422,7 +433,7 @@ function TeamTab({
         <EmptyNote />
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+          <table className="w-full text-h3">
             <thead>
               <tr className="border-b border-border text-muted-foreground">
                 <th className="px-3 py-2 text-start font-medium">{t('الوكيل')}</th>
@@ -439,7 +450,7 @@ function TeamTab({
                   <td className="px-3 py-2">
                     <span className="font-medium">{row.name}</span>
                     {row.team && (
-                      <span className="ms-2 text-[11px] text-muted-foreground">{row.team.name}</span>
+                      <span className="ms-2 text-caption text-muted-foreground">{row.team.name}</span>
                     )}
                   </td>
                   <td className="numeric px-3 py-2 text-center">{row.messagesSent}</td>
@@ -459,9 +470,7 @@ function TeamTab({
                   <td className="numeric px-3 py-2 text-center">
                     {row.csatAvg ?? '—'}
                     {row.csatCount > 0 && (
-                      <span className="ms-1 text-[10px] text-muted-foreground">
-                        ({row.csatCount})
-                      </span>
+                      <span className="ms-1 text-micro text-muted-foreground">({row.csatCount})</span>
                     )}
                   </td>
                 </tr>
@@ -479,12 +488,13 @@ function CampaignsTab({ rows, loading }: { rows: CampaignReportRow[] | null; loa
   if (!rows) return loading ? <Loading /> : <EmptyNote />;
   if (rows.length === 0) return <EmptyNote />;
 
-  const pct = (part: number, whole: number) => (whole === 0 ? null : Math.round((part / whole) * 1000) / 10);
+  const pct = (part: number, whole: number) =>
+    whole === 0 ? null : Math.round((part / whole) * 1000) / 10;
 
   return (
     <ReportCard title={t('أداء الحملات')}>
       <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+        <table className="w-full text-h3">
           <thead>
             <tr className="border-b border-border text-muted-foreground">
               <th className="px-3 py-2 text-start font-medium">{t('الحملة')}</th>
@@ -501,7 +511,7 @@ function CampaignsTab({ rows, loading }: { rows: CampaignReportRow[] | null; loa
                 <td className="px-3 py-2">
                   <span className="font-medium">{row.title}</span>
                   {row.sentAt && (
-                    <span className="numeric ms-2 text-[11px] text-muted-foreground" dir="ltr">
+                    <span className="numeric ms-2 text-caption text-muted-foreground" dir="ltr">
                       {row.sentAt.slice(0, 10)}
                     </span>
                   )}
@@ -509,20 +519,20 @@ function CampaignsTab({ rows, loading }: { rows: CampaignReportRow[] | null; loa
                 <td className="numeric px-3 py-2 text-center">{row.recipients}</td>
                 <td className="numeric px-3 py-2 text-center">
                   {row.delivered}
-                  <span className="ms-1 text-[10px] text-muted-foreground">
+                  <span className="ms-1 text-micro text-muted-foreground">
                     {formatPct(pct(row.delivered, row.recipients))}
                   </span>
                 </td>
                 <td className="numeric px-3 py-2 text-center">
                   {row.read}
-                  <span className="ms-1 text-[10px] text-muted-foreground">
+                  <span className="ms-1 text-micro text-muted-foreground">
                     {formatPct(pct(row.read, row.recipients))}
                   </span>
                 </td>
                 <td className="numeric px-3 py-2 text-center text-destructive">{row.failed}</td>
                 <td className="numeric px-3 py-2 text-center">
                   {row.replied}
-                  <span className="ms-1 text-[10px] text-muted-foreground">
+                  <span className="ms-1 text-micro text-muted-foreground">
                     {formatPct(pct(row.replied, row.recipients))}
                   </span>
                 </td>
@@ -531,7 +541,7 @@ function CampaignsTab({ rows, loading }: { rows: CampaignReportRow[] | null; loa
           </tbody>
         </table>
       </div>
-      <p className="mt-3 text-[11px] text-muted-foreground">
+      <p className="mt-3 text-caption text-muted-foreground">
         {t('«ردّوا» = جهات اتصال أرسلت رسالة بعد إرسال الحملة')}
       </p>
     </ReportCard>
@@ -579,18 +589,18 @@ function GatewayTab({
               return (
                 <div
                   key={session.id}
-                  className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-xs"
+                  className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-h3"
                 >
                   <span>
                     {session.label}
                     {session.phoneNumber && (
-                      <span className="numeric ms-2 text-[11px] text-muted-foreground" dir="ltr">
+                      <span className="numeric ms-2 text-caption text-muted-foreground" dir="ltr">
                         {session.phoneNumber}
                       </span>
                     )}
                   </span>
                   {connected === undefined ? (
-                    <span className="text-[11px] text-muted-foreground">{t('غير معروف')}</span>
+                    <span className="text-caption text-muted-foreground">{t('غير معروف')}</span>
                   ) : connected ? (
                     <Wifi className="h-4 w-4 text-success" />
                   ) : (
@@ -601,6 +611,134 @@ function GatewayTab({
             })}
           </div>
         )}
+      </ReportCard>
+    </>
+  );
+}
+
+const DIRECTION_LABEL: Record<string, string> = {
+  INBOUND: 'وارد (من البوابة)',
+  OUTBOUND: 'صادر (إلى نقاط النهاية)',
+};
+
+function WebhooksTab({ report, loading }: { report: WebhookReport | null; loading: boolean }) {
+  const { t } = useT();
+  if (!report) return loading ? <Loading /> : <EmptyNote />;
+
+  return (
+    <>
+      {/* Split by direction throughout: averaging them would hide the one that
+          matters. Outbound failing means a subscriber endpoint is down; inbound
+          failing means we have stopped receiving WhatsApp traffic at all. */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {report.directions.map((d) => (
+          <div key={d.direction} className="rounded-lg border border-border bg-card p-4">
+            <p className="text-caption font-medium uppercase tracking-wide text-muted-foreground">
+              {t(DIRECTION_LABEL[d.direction] ?? d.direction)}
+            </p>
+            <div className="mt-3 grid grid-cols-3 gap-3">
+              <div>
+                <p className="text-caption text-muted-foreground">{t('نسبة النجاح')}</p>
+                <p
+                  className={cn(
+                    'numeric text-h1 font-bold',
+                    d.successRatePct !== null && d.successRatePct < 95 && 'text-destructive',
+                  )}
+                >
+                  {formatPct(d.successRatePct)}
+                </p>
+              </div>
+              <div>
+                <p className="text-caption text-muted-foreground">{t('الوسيط')}</p>
+                <p className="numeric text-h1 font-bold">{d.medianLatencyMs ?? '—'}ms</p>
+              </div>
+              <div>
+                <p className="text-caption text-muted-foreground">{t('الشريحة ٩٠')}</p>
+                <p className="numeric text-h1 font-bold">{d.p90LatencyMs ?? '—'}ms</p>
+              </div>
+            </div>
+            <p className="mt-2 text-caption text-muted-foreground">
+              <span className="numeric">{d.total.toLocaleString('en-US')}</span> {t('عملية تسليم')} ·{' '}
+              <span className="numeric">{d.failed.toLocaleString('en-US')}</span> {t('فاشلة')}
+            </p>
+            {d.total === 0 && (
+              // A gateway that has gone silent shows no failures at all, which
+              // would otherwise read as a flawless record.
+              <p className="mt-1 text-caption text-warning">{t('لا توجد عمليات تسليم مسجّلة')}</p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <ReportCard title={t('نقاط النهاية')}>
+        {report.endpoints.length === 0 ? (
+          <EmptyNote />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-h3">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground">
+                  <th className="px-3 py-2 text-start font-medium">{t('الوجهة')}</th>
+                  <th className="px-3 py-2 text-center font-medium">{t('عمليات التسليم')}</th>
+                  <th className="px-3 py-2 text-center font-medium">{t('فشلت')}</th>
+                  <th className="px-3 py-2 text-center font-medium">{t('نسبة النجاح')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.endpoints.map((endpoint) => (
+                  <tr key={endpoint.webhookId} className="border-b border-border/40">
+                    <td className="px-3 py-2">
+                      <span className="font-medium" dir="ltr">
+                        {endpoint.targetHost || t('البوابة')}
+                      </span>
+                    </td>
+                    <td className="numeric px-3 py-2 text-center">{endpoint.total}</td>
+                    <td className="numeric px-3 py-2 text-center text-destructive">
+                      {endpoint.failed}
+                    </td>
+                    <td className="numeric px-3 py-2 text-center">
+                      {formatPct(endpoint.successRatePct)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </ReportCard>
+
+      <ReportCard title={t('آخر حالات الفشل')}>
+        {report.failures.length === 0 ? (
+          <EmptyNote />
+        ) : (
+          <ul className="divide-y divide-border">
+            {report.failures.map((failure) => (
+              <li key={failure.id} className="py-2 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-micro font-medium text-destructive">
+                    {failure.statusCode ?? t('بلا استجابة')}
+                  </span>
+                  <span className="text-caption font-medium" dir="ltr">
+                    {failure.targetHost || t('البوابة')}
+                  </span>
+                  <span className="text-caption text-muted-foreground">{failure.eventType}</span>
+                  <span className="numeric ms-auto text-micro text-muted-foreground" dir="ltr">
+                    {failure.createdAt.slice(0, 19).replace('T', ' ')}
+                  </span>
+                </div>
+                {failure.errorMessage && (
+                  <p className="mt-1 truncate text-caption text-muted-foreground" dir="ltr">
+                    {failure.errorMessage}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-3 text-caption text-muted-foreground">
+          {t('يُحتفظ بالسجلات لمدة')} <span className="numeric">{report.retentionDays}</span>{' '}
+          {t('يوم')}
+        </p>
       </ReportCard>
     </>
   );

@@ -15,6 +15,48 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Lifecycle stages ----
+  'مرحلة العميل': { he: 'שלב הלקוח', en: 'Lifecycle stage' },
+  'مراحل العميل': { he: 'שלבי הלקוח', en: 'Lifecycle stages' },
+  'عرّف مراحل رحلة العميل كما تناسب عملك': { he: 'הגדירו את שלבי מסע הלקוח שמתאימים לעסק שלכם', en: 'Define the customer journey stages that fit your business' },
+  'مرحلة محذوفة': { he: 'שלב שנמחק', en: 'deleted stage' },
+  'تم تحديث المرحلة': { he: 'השלב עודכן', en: 'Stage updated' },
+  'اسم المرحلة': { he: 'שם השלב', en: 'Stage name' },
+  'لا توجد مراحل': { he: 'אין שלבים', en: 'No stages' },
+  'فشل جلب المراحل': { he: 'טעינת השלבים נכשלה', en: 'Could not load the stages' },
+  'فشل الإنشاء': { he: 'היצירה נכשלה', en: 'Could not create' },
+  'جهة اتصال ما زالت تحمل هذه المرحلة': { he: 'אנשי קשר עדיין נושאים שלב זה', en: 'contacts still carry this stage' },
+  'اللون': { he: 'צבע', en: 'Colour' },
+  'أعلى': { he: 'למעלה', en: 'Move up' },
+  'أسفل': { he: 'למטה', en: 'Move down' },
+  // ---- Reports: filters, webhooks, density ----
+  // A column header and a mid-sentence count are different strings even when
+  // the Arabic is close: reusing one key rendered "3 deliveries · 0 Failed",
+  // with a capitalised table header dropped into the middle of a sentence.
+  'عمليات التسليم': { he: 'מסירות', en: 'Deliveries' },
+  'فاشلة': { he: 'נכשלו', en: 'failed' },
+  'القناة': { he: 'ערוץ', en: 'Channel' },
+  'كل القنوات': { he: 'כל הערוצים', en: 'All channels' },
+  'الويب هوك': { he: 'Webhooks', en: 'Webhooks' },
+  'حجم الرسائل': { he: 'נפח הודעות', en: 'Message volume' },
+  'سرعة الحل': { he: 'מהירות סגירה', en: 'Resolution velocity' },
+  'الحجم عبر الزمن': { he: 'נפח לאורך זמן', en: 'Volume over time' },
+  'نسبة النجاح': { he: 'שיעור הצלחה', en: 'Success rate' },
+  'عملية تسليم': { he: 'מסירות', en: 'deliveries' },
+  'لا توجد عمليات تسليم مسجّلة': { he: 'לא נרשמו מסירות', en: 'No deliveries recorded' },
+  'نقاط النهاية': { he: 'נקודות קצה', en: 'Endpoints' },
+  'الوجهة': { he: 'יעד', en: 'Destination' },
+  'آخر حالات الفشل': { he: 'כשלים אחרונים', en: 'Recent failures' },
+  'بلا استجابة': { he: 'ללא תגובה', en: 'No response' },
+  'البوابة': { he: 'השער', en: 'Gateway' },
+  'يُحتفظ بالسجلات لمدة': { he: 'הרשומות נשמרות למשך', en: 'Logs are kept for' },
+  'يوم': { he: 'ימים', en: 'days' },
+  'وارد (من البوابة)': { he: 'נכנס (מהשער)', en: 'Inbound (from gateway)' },
+  'صادر (إلى نقاط النهاية)': { he: 'יוצא (לנקודות קצה)', en: 'Outbound (to endpoints)' },
+  'كثافة العرض': { he: 'צפיפות תצוגה', en: 'View density' },
+  'مضغوط': { he: 'צפוף', en: 'Compact' },
+  'مريح': { he: 'רגיל', en: 'Comfortable' },
+  'واسع': { he: 'מרווח', en: 'Spacious' },
   // ---- Reports (M7) ----
   'حالة القناة': { he: 'מצב הערוץ', en: 'Channel health' },
   'آخر ٧ أيام': { he: '7 ימים אחרונים', en: 'Last 7 days' },

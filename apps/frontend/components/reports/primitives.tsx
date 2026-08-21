@@ -58,12 +58,12 @@ export function MetricTile({
         onClick && 'transition-colors hover:border-primary/50 hover:bg-accent/40',
       )}
     >
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <span className="text-caption font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
       <span className="numeric mt-1.5 text-2xl font-extrabold leading-none">{value}</span>
       {changePct !== undefined && (
-        <span className="mt-2 flex items-center gap-1 text-[11px]">
+        <span className="mt-2 flex items-center gap-1 text-caption">
           {changePct === null ? (
             <span className="flex items-center gap-1 text-muted-foreground">
               <Minus className="h-3 w-3" />
@@ -84,7 +84,7 @@ export function MetricTile({
           <span className="text-muted-foreground">{t('مقابل الفترة السابقة')}</span>
         </span>
       )}
-      {hint && <span className="mt-1 text-[11px] text-muted-foreground">{hint}</span>}
+      {hint && <span className="mt-1 text-caption text-muted-foreground">{hint}</span>}
     </Wrapper>
   );
 }
@@ -136,7 +136,7 @@ export function DistributionBars({
         const pct = Math.round((bucket.count / total) * 100);
         return (
           <div key={bucket.label} className="flex items-center gap-3">
-            <span className="w-24 shrink-0 text-[11px] text-muted-foreground">
+            <span className="w-24 shrink-0 text-caption text-muted-foreground">
               {labelFor(bucket.label)}
             </span>
             <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
@@ -145,7 +145,7 @@ export function DistributionBars({
                 style={{ width: `${pct}%` }}
               />
             </div>
-            <span className="numeric w-16 shrink-0 text-end text-[11px] tabular-nums">
+            <span className="numeric w-16 shrink-0 text-end text-caption tabular-nums">
               {bucket.count} <span className="text-muted-foreground">({pct}%)</span>
             </span>
           </div>

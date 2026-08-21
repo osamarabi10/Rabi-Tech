@@ -10,6 +10,7 @@ import { getPaymentProvider } from './provider-registry';
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode } from './plans';
 import { resolveEntitlements } from './entitlements.resolver';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
+import { seedLifecycleStages } from '../lifecycle/lifecycle.service';
 
 const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
 const SIGNUP_IP_LIMIT = Number(process.env.SIGNUP_IP_HOURLY_LIMIT || 10);
@@ -156,6 +157,9 @@ export async function createSignup(input: {
       });
       // Starter auto-replies as editable rows the subscriber owns.
       await seedDefaultAutoReplies(tx, organization.id);
+      // Same principle for the contact pipeline: a default list they can
+      // rename, reorder or delete, not a vocabulary the product imposes.
+      await seedLifecycleStages(tx, organization.id);
       const admin = await tx.user.create({
         data: {
           organizationId: organization.id,

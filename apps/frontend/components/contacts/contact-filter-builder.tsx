@@ -146,7 +146,7 @@ function GroupEditor({
           </p>
           {children.length > 1 && (
             <Select value={op} onValueChange={(next) => onChange(withChildren(next as '$and' | '$or', children))}>
-              <SelectTrigger className="h-7 w-[104px] text-[11px]"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-7 w-[104px] text-caption"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="$and">{t('كل الشروط')}</SelectItem>
                 <SelectItem value="$or">{t('أي شرط')}</SelectItem>
@@ -379,7 +379,7 @@ function ValueInput({
 
   if (spec?.type === 'campaign') {
     if (!schema.campaigns.length) {
-      return <p className="self-center text-[11px] text-muted-foreground">{t('لا توجد حملات مُرسلة بعد')}</p>;
+      return <p className="self-center text-caption text-muted-foreground">{t('لا توجد حملات مُرسلة بعد')}</p>;
     }
     return (
       <Select value={current} onValueChange={set}>
@@ -457,7 +457,7 @@ function TagPicker({
   t: (key: string) => string;
 }) {
   if (!schema.tags.length) {
-    return <p className="self-center text-[11px] text-muted-foreground">{t('لا توجد وسوم')}</p>;
+    return <p className="self-center text-caption text-muted-foreground">{t('لا توجد وسوم')}</p>;
   }
   return (
     <Select value={String(rule.value ?? '')} onValueChange={(name) => onChange({ ...rule, field: 'name', value: name })}>

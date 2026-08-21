@@ -357,7 +357,7 @@ export function WorkflowBuilder({
             {errors.length > 0 && (
               <ul className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-2">
                 {errors.map((error, index) => (
-                  <li key={index} className="text-[11px] text-destructive">{error}</li>
+                  <li key={index} className="text-caption text-destructive">{error}</li>
                 ))}
               </ul>
             )}
@@ -389,7 +389,7 @@ function StepCard({
     <div className="rounded-md border border-border p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-micro font-bold text-primary-foreground">
             {step}
           </span>
           <span className="text-xs font-semibold">{title}</span>
@@ -400,7 +400,7 @@ function StepCard({
           </Button>
         )}
       </div>
-      {hint && <p className="mb-2 text-[11px] text-muted-foreground">{hint}</p>}
+      {hint && <p className="mb-2 text-caption text-muted-foreground">{hint}</p>}
       <div className="space-y-2">{children}</div>
     </div>
   );
@@ -475,7 +475,7 @@ function ActionOperand({
           placeholder="https://example.com/hook"
           dir="ltr"
         />
-        <p className="text-[10px] text-muted-foreground">{t('روابط https العامة فقط')}</p>
+        <p className="text-micro text-muted-foreground">{t('روابط https العامة فقط')}</p>
       </div>
     );
   }
@@ -499,5 +499,5 @@ function ActionOperand({
       />
     );
   }
-  return <div className={cn('self-center text-[11px] text-muted-foreground')}>{t('بدون إعدادات')}</div>;
+  return <div className={cn('self-center text-caption text-muted-foreground')}>{t('بدون إعدادات')}</div>;
 }

@@ -33,7 +33,7 @@ export function ColorPill({
 
   return (
     <span
-      className={cn('shrink-0 rounded-full border px-2 py-0.5 text-[10px]', className)}
+      className={cn('shrink-0 rounded-full border px-2 py-0.5 text-micro', className)}
       style={tintedStyle(color, dark)}
     >
       {children}

@@ -65,7 +65,7 @@ export function TeamRouting({ team, onSaved }: { team: Team; onSaved: () => void
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label className="text-[11px]">{t('الطريقة')}</Label>
+          <Label className="text-caption">{t('الطريقة')}</Label>
           <Select value={strategy} onValueChange={(v) => setStrategy(v as AssignmentStrategy)}>
             <SelectTrigger className="h-8 text-xs">
               <SelectValue />
@@ -81,7 +81,7 @@ export function TeamRouting({ team, onSaved }: { team: Team; onSaved: () => void
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-[11px]">{t('حد المحادثات لكل موظف')}</Label>
+          <Label className="text-caption">{t('حد المحادثات لكل موظف')}</Label>
           <Input
             className="h-8 text-xs"
             type="number"
@@ -95,10 +95,10 @@ export function TeamRouting({ team, onSaved }: { team: Team; onSaved: () => void
       </div>
 
       {active && (
-        <p className="mt-2 text-[11px] text-muted-foreground">{t(active.hint)}</p>
+        <p className="mt-2 text-caption text-muted-foreground">{t(active.hint)}</p>
       )}
       {strategy !== 'NONE' && (
-        <p className="mt-1 text-[11px] text-muted-foreground">
+        <p className="mt-1 text-caption text-muted-foreground">
           {t('الموظفون في وضع الغياب أو اللي وصلوا للحد ما بيستلموا محادثات جديدة. إذا ما في حدا متاح، المحادثة بتضل بالطابور.')}
         </p>
       )}

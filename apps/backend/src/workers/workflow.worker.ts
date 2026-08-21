@@ -95,7 +95,7 @@ export function startWorkflowWorker(): Worker | null {
 
         const workflow = await prisma.workflow.findUnique({
           where: { id: data.workflowId },
-          select: { isActive: true, configJson: true },
+          select: { isActive: true, configJson: true, triggerType: true },
         });
         // Re-checked on resume, not only at dispatch: a workflow can be
         // deactivated or edited while an execution sits in a WAIT_DELAY, and
@@ -117,6 +117,7 @@ export function startWorkflowWorker(): Worker | null {
             organizationId: data.organizationId,
             workflowId: data.workflowId,
             executionId: data.executionId,
+            triggerType: workflow.triggerType,
             contactId: execution.contactId,
             conversationId: execution.conversationId,
             depth: execution.depth,

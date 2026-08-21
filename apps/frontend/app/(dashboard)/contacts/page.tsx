@@ -334,7 +334,7 @@ export default function ContactsPage() {
                   {visibleColumns.tags && (
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
-                        {contact.tags.map((tagName) => <Badge key={tagName} variant="secondary" className="text-[10px]">{tagName}</Badge>)}
+                        {contact.tags.map((tagName) => <Badge key={tagName} variant="secondary" className="text-micro">{tagName}</Badge>)}
                       </div>
                     </TableCell>
                   )}

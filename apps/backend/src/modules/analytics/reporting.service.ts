@@ -19,6 +19,47 @@ import { prisma } from '../../prisma';
 
 export type Period = { from: Date; to: Date };
 
+/**
+ * The slice every report is read through.
+ *
+ * Applied at the source rather than by trimming results, so a filtered
+ * median is the median *of that slice* rather than the whole-period median
+ * with some rows hidden.
+ */
+export type ReportFilters = {
+  teamId?: string;
+  /** A WhatsApp session id — how a tenant separates support from marketing. */
+  sessionId?: string;
+};
+
+export function hasFilters(filters: ReportFilters): boolean {
+  return Boolean(filters.teamId || filters.sessionId);
+}
+
+/** Conversation-level filter. Both columns live on Conversation. */
+function conversationFilter(filters: ReportFilters) {
+  return {
+    ...(filters.teamId ? { teamId: filters.teamId } : {}),
+    ...(filters.sessionId ? { sessionId: filters.sessionId } : {}),
+  };
+}
+
+/**
+ * Message-level filter, reached through the conversation.
+ *
+ * `organizationId` is written out on the nested side: the tenancy extension
+ * injects only at the top level of `where` and does not descend into relation
+ * filters. It is redundant while the join key is a tenant-local composite FK,
+ * and it stays correct if one ever is not.
+ *
+ * Returns nothing at all when unfiltered, so the common path does not pay for
+ * a join it does not need.
+ */
+function messageFilter(filters: ReportFilters, organizationId: string) {
+  if (!hasFilters(filters)) return {};
+  return { conversation: { organizationId, ...conversationFilter(filters) } };
+}
+
 /** The period of the same length immediately before this one, for deltas. */
 export function previousPeriod(period: Period): Period {
   const span = period.to.getTime() - period.from.getTime();
@@ -44,19 +85,39 @@ export type Headline = {
   changePct: number | null;
 };
 
-async function headlineValues(period: Period) {
-  const [conversationsStarted, conversationsResolved, inbound, outbound, contactsAdded] =
-    await Promise.all([
-      prisma.conversation.count({ where: { createdAt: within(period) } }),
-      prisma.conversation.count({ where: { resolvedAt: within(period) } }),
-      prisma.message.count({ where: { timestamp: within(period), direction: 'INBOUND' } }),
-      prisma.message.count({
-        where: { timestamp: within(period), direction: 'OUTBOUND', isInternal: false },
-      }),
-      prisma.contact.count({ where: { createdAt: within(period) } }),
-    ]);
+async function headlineValues(
+  period: Period,
+  filters: ReportFilters,
+  organizationId: string,
+) {
+  const conv = conversationFilter(filters);
+  const msg = messageFilter(filters, organizationId);
 
-  return { conversationsStarted, conversationsResolved, inbound, outbound, contactsAdded };
+  const [conversationsStarted, conversationsResolved, inbound, outbound] = await Promise.all([
+    prisma.conversation.count({ where: { createdAt: within(period), ...conv } }),
+    prisma.conversation.count({ where: { resolvedAt: within(period), ...conv } }),
+    prisma.message.count({ where: { timestamp: within(period), direction: 'INBOUND', ...msg } }),
+    prisma.message.count({
+      where: { timestamp: within(period), direction: 'OUTBOUND', isInternal: false, ...msg },
+    }),
+  ]);
+
+  // Contacts belong to no team and no channel, so a "new contacts" number
+  // cannot honour these filters. Rather than show an unfiltered figure beside
+  // filtered ones — which reads as though it were also scoped — it is omitted
+  // entirely whenever a filter is active.
+  const contactsAdded = hasFilters(filters)
+    ? null
+    : await prisma.contact.count({ where: { createdAt: within(period) } });
+
+  return {
+    conversationsStarted,
+    conversationsResolved,
+    inbound,
+    outbound,
+    messageVolume: inbound + outbound,
+    contactsAdded,
+  };
 }
 
 function percentile(sorted: number[], p: number): number | null {
@@ -98,6 +159,9 @@ const DURATION_BUCKETS: { label: string; max: number | null }[] = [
  */
 const MAX_DURATION_SAMPLE = 20000;
 
+/** Same reasoning, for the filtered series and heatmap paths. */
+const MAX_SERIES_SAMPLE = 50000;
+
 function summarise(durationsMinutes: number[], truncated: boolean): DurationStats {
   const sorted = [...durationsMinutes].sort((a, b) => a - b);
   const buckets = DURATION_BUCKETS.map((b) => ({ ...b, count: 0 }));
@@ -120,9 +184,12 @@ function summarise(durationsMinutes: number[], truncated: boolean): DurationStat
 }
 
 /** Conversations answered in the period, and how long the customer waited. */
-export async function firstResponseStats(period: Period): Promise<DurationStats> {
+export async function firstResponseStats(
+  period: Period,
+  filters: ReportFilters = {},
+): Promise<DurationStats> {
   const rows = await prisma.conversation.findMany({
-    where: { firstResponseAt: within(period) },
+    where: { firstResponseAt: within(period), ...conversationFilter(filters) },
     select: { createdAt: true, firstResponseAt: true },
     take: MAX_DURATION_SAMPLE + 1,
   });
@@ -137,9 +204,12 @@ export async function firstResponseStats(period: Period): Promise<DurationStats>
 }
 
 /** Conversations resolved in the period, and how long they stayed open. */
-export async function resolutionStats(period: Period): Promise<DurationStats> {
+export async function resolutionStats(
+  period: Period,
+  filters: ReportFilters = {},
+): Promise<DurationStats> {
   const rows = await prisma.conversation.findMany({
-    where: { resolvedAt: within(period) },
+    where: { resolvedAt: within(period), ...conversationFilter(filters) },
     select: { createdAt: true, resolvedAt: true },
     take: MAX_DURATION_SAMPLE + 1,
   });
@@ -152,17 +222,33 @@ export async function resolutionStats(period: Period): Promise<DurationStats> {
 
 export type OverviewReport = {
   headlines: Headline[];
+  firstResponseMedianMinutes: number | null;
+  firstResponsePreviousMinutes: number | null;
+  resolutionMedianMinutes: number | null;
+  resolutionPreviousMinutes: number | null;
   series: { date: string; inbound: number; outbound: number; resolved: number }[];
 };
 
-export async function overview(period: Period): Promise<OverviewReport> {
-  const [current, previous, series] = await Promise.all([
-    headlineValues(period),
-    headlineValues(previousPeriod(period)),
-    dailySeries(period),
+export async function overview(
+  period: Period,
+  filters: ReportFilters,
+  organizationId: string,
+): Promise<OverviewReport> {
+  const [current, previous, series, frt, resolution] = await Promise.all([
+    headlineValues(period, filters, organizationId),
+    headlineValues(previousPeriod(period), filters, organizationId),
+    dailySeries(period, filters, organizationId),
+    firstResponseStats(period, filters),
+    resolutionStats(period, filters),
+    ]);
+
+  const [frtPrev, resolutionPrev] = await Promise.all([
+    firstResponseStats(previousPeriod(period), filters),
+    resolutionStats(previousPeriod(period), filters),
   ]);
 
-  const keys: (keyof typeof current)[] = [
+  const counts: (keyof typeof current)[] = [
+    'messageVolume',
     'conversationsStarted',
     'conversationsResolved',
     'inbound',
@@ -170,13 +256,26 @@ export async function overview(period: Period): Promise<OverviewReport> {
     'contactsAdded',
   ];
 
-  return {
-    headlines: keys.map((key) => ({
+  const headlines: Headline[] = counts
+    // `contactsAdded` is null under a team or channel filter, because contacts
+    // carry neither. Dropping the tile is honest; showing an unfiltered number
+    // beside filtered ones is not.
+    .filter((key) => current[key] !== null)
+    .map((key) => ({
       key,
-      value: current[key],
-      previous: previous[key],
-      changePct: percentChange(current[key], previous[key]),
-    })),
+      value: current[key] as number,
+      previous: (previous[key] ?? 0) as number,
+      changePct: percentChange(current[key] as number, (previous[key] ?? 0) as number),
+    }));
+
+  return {
+    headlines,
+    // The two headline durations travel beside the counts so the page can lead
+    // with them without a second round trip.
+    firstResponseMedianMinutes: frt.medianMinutes,
+    firstResponsePreviousMinutes: frtPrev.medianMinutes,
+    resolutionMedianMinutes: resolution.medianMinutes,
+    resolutionPreviousMinutes: resolutionPrev.medianMinutes,
     series,
   };
 }
@@ -190,24 +289,68 @@ export async function overview(period: Period): Promise<OverviewReport> {
  */
 export async function dailySeries(
   period: Period,
+  filters: ReportFilters = {},
+  organizationId = '',
 ): Promise<{ date: string; inbound: number; outbound: number; resolved: number }[]> {
-  const rows = await prisma.analyticsHourly.findMany({
-    where: { hourStart: within(period) },
-    select: { hourStart: true, inbound: true, outbound: true, conversationsResolved: true },
-    orderBy: { hourStart: 'asc' },
-  });
-
   const byDay = new Map<string, { inbound: number; outbound: number; resolved: number }>();
-  for (const row of rows) {
-    const date = row.hourStart.toISOString().slice(0, 10);
+  const bump = (date: string, key: keyof { inbound: 0; outbound: 0; resolved: 0 }) => {
     const day = byDay.get(date) ?? { inbound: 0, outbound: 0, resolved: 0 };
-    day.inbound += row.inbound;
-    day.outbound += row.outbound;
-    day.resolved += row.conversationsResolved;
+    day[key] += 1;
     byDay.set(date, day);
+  };
+
+  if (!hasFilters(filters)) {
+    // Fast path: the rollup has no team or channel dimension, but it does not
+    // need one here. A 90-day range is ~2,160 small rows instead of a scan.
+    const rows = await prisma.analyticsHourly.findMany({
+      where: { hourStart: within(period) },
+      select: { hourStart: true, inbound: true, outbound: true, conversationsResolved: true },
+      orderBy: { hourStart: 'asc' },
+    });
+    for (const row of rows) {
+      const date = row.hourStart.toISOString().slice(0, 10);
+      const day = byDay.get(date) ?? { inbound: 0, outbound: 0, resolved: 0 };
+      day.inbound += row.inbound;
+      day.outbound += row.outbound;
+      day.resolved += row.conversationsResolved;
+      byDay.set(date, day);
+    }
+    return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, v]) => ({ date, ...v }));
   }
 
-  return [...byDay.entries()].map(([date, v]) => ({ date, ...v }));
+  // Filtered: the rollup cannot answer this, so the days are built from the
+  // rows themselves. Bounded by the cap rather than the period, and only ever
+  // reached when a team or channel is actually selected.
+  const [messages, resolved] = await Promise.all([
+    prisma.message.findMany({
+      where: {
+        timestamp: within(period),
+        isInternal: false,
+        ...messageFilter(filters, organizationId),
+      },
+      select: { timestamp: true, direction: true },
+      take: MAX_SERIES_SAMPLE,
+      orderBy: { timestamp: 'asc' },
+    }),
+    prisma.conversation.findMany({
+      where: { resolvedAt: within(period), ...conversationFilter(filters) },
+      select: { resolvedAt: true },
+      take: MAX_SERIES_SAMPLE,
+      orderBy: { resolvedAt: 'asc' },
+    }),
+  ]);
+
+  for (const message of messages) {
+    bump(
+      message.timestamp.toISOString().slice(0, 10),
+      message.direction === 'INBOUND' ? 'inbound' : 'outbound',
+    );
+  }
+  for (const conversation of resolved) {
+    bump(conversation.resolvedAt!.toISOString().slice(0, 10), 'resolved');
+  }
+
+  return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, v]) => ({ date, ...v }));
 }
 
 export type HeatmapCell = { dayOfWeek: number; hour: number; inbound: number; outbound: number };
@@ -224,22 +367,46 @@ export type HeatmapCell = { dayOfWeek: number; hour: number; inbound: number; ou
 export async function hourOfDayHeatmap(
   period: Period,
   utcOffsetMinutes = 0,
+  filters: ReportFilters = {},
+  organizationId = '',
 ): Promise<HeatmapCell[]> {
-  const rows = await prisma.analyticsHourly.findMany({
-    where: { hourStart: within(period) },
-    select: { hourStart: true, inbound: true, outbound: true },
-  });
-
   const grid = new Map<string, HeatmapCell>();
-  for (const row of rows) {
-    const local = new Date(row.hourStart.getTime() + utcOffsetMinutes * 60000);
+  const cellFor = (at: Date): HeatmapCell => {
+    const local = new Date(at.getTime() + utcOffsetMinutes * 60000);
     const dayOfWeek = local.getUTCDay();
     const hour = local.getUTCHours();
     const key = `${dayOfWeek}-${hour}`;
     const cell = grid.get(key) ?? { dayOfWeek, hour, inbound: 0, outbound: 0 };
-    cell.inbound += row.inbound;
-    cell.outbound += row.outbound;
     grid.set(key, cell);
+    return cell;
+  };
+
+  if (!hasFilters(filters)) {
+    const rows = await prisma.analyticsHourly.findMany({
+      where: { hourStart: within(period) },
+      select: { hourStart: true, inbound: true, outbound: true },
+    });
+    for (const row of rows) {
+      const cell = cellFor(row.hourStart);
+      cell.inbound += row.inbound;
+      cell.outbound += row.outbound;
+    }
+  } else {
+    const messages = await prisma.message.findMany({
+      where: {
+        timestamp: within(period),
+        isInternal: false,
+        ...messageFilter(filters, organizationId),
+      },
+      select: { timestamp: true, direction: true },
+      take: MAX_SERIES_SAMPLE,
+      orderBy: { timestamp: 'desc' },
+    });
+    for (const message of messages) {
+      const cell = cellFor(message.timestamp);
+      if (message.direction === 'INBOUND') cell.inbound += 1;
+      else cell.outbound += 1;
+    }
   }
 
   return [...grid.values()].sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.hour - b.hour);
@@ -268,8 +435,12 @@ export type AgentRow = {
  */
 export async function teamPerformance(
   period: Period,
-  filter: { teamId?: string; search?: string } = {},
+  filter: ReportFilters & { search?: string } = {},
+  organizationId = '',
 ): Promise<AgentRow[]> {
+  const conv = conversationFilter(filter);
+  const msg = messageFilter(filter, organizationId);
+
   const agents = await prisma.user.findMany({
     where: {
       isActive: true,
@@ -296,17 +467,18 @@ export async function teamPerformance(
         direction: 'OUTBOUND',
         isInternal: false,
         timestamp: within(period),
+        ...msg,
       },
       _count: { _all: true },
     }),
     prisma.conversation.groupBy({
       by: ['assignedToId'],
-      where: { assignedToId: { in: agentIds }, createdAt: within(period) },
+      where: { assignedToId: { in: agentIds }, createdAt: within(period), ...conv },
       _count: { _all: true },
     }),
     prisma.conversation.groupBy({
       by: ['assignedToId'],
-      where: { assignedToId: { in: agentIds }, resolvedAt: within(period) },
+      where: { assignedToId: { in: agentIds }, resolvedAt: within(period), ...conv },
       _count: { _all: true },
     }),
     prisma.csatSurveyResponse.groupBy({
@@ -322,7 +494,7 @@ export async function teamPerformance(
     // Durations again, so again rows rather than an aggregate — bounded by
     // conversations answered in the period.
     prisma.conversation.findMany({
-      where: { assignedToId: { in: agentIds }, firstResponseAt: within(period) },
+      where: { assignedToId: { in: agentIds }, firstResponseAt: within(period), ...conv },
       select: { assignedToId: true, createdAt: true, firstResponseAt: true },
       take: MAX_DURATION_SAMPLE,
     }),
@@ -391,10 +563,16 @@ export type CampaignRow = {
 export async function campaignPerformance(
   period: Period,
   organizationId: string,
+  filters: ReportFilters = {},
 ): Promise<CampaignRow[]> {
   const campaigns = await prisma.campaign.findMany({
     where: {
       OR: [{ sentAt: within(period) }, { sentAt: null, createdAt: within(period) }],
+      // A broadcast goes out on one session, so the channel filter applies
+      // directly. A team filter does not: campaigns belong to no team, and
+      // silently returning nothing under one would read as "this team sent no
+      // broadcasts" rather than "that question does not apply here".
+      ...(filters.sessionId ? { sessionId: filters.sessionId } : {}),
     },
     select: { id: true, title: true, sentAt: true, status: true },
     orderBy: { createdAt: 'desc' },

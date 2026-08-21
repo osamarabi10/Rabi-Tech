@@ -25,6 +25,11 @@ export type Conv = {
   contactNotes: string | null;
   /** Marketing consent. OPTED_OUT contacts are excluded from every broadcast. */
   marketingConsent: MarketingConsent;
+  /**
+   * Free text, matched against the tenant's configured stages by name. A
+   * contact can hold a value no longer in that list — see LifecycleSelect.
+   */
+  lifecycleStage: string | null;
   labels: string[];
 };
 
@@ -273,6 +278,7 @@ export async function startConversation(input: {
     contactTags: data.contact?.tags ?? [],
     contactNotes: data.contact?.notes ?? null,
     marketingConsent: data.contact?.marketingConsent ?? 'UNKNOWN',
+    lifecycleStage: data.contact?.lifecycleStage ?? null,
     labels: data.labels ?? [],
   };
 }
@@ -304,6 +310,7 @@ export async function fetchConversations(
     contactTags: c.contact?.tags ?? [],
     contactNotes: c.contact?.notes ?? null,
     marketingConsent: c.contact?.marketingConsent ?? 'UNKNOWN',
+    lifecycleStage: c.contact?.lifecycleStage ?? null,
     labels: c.labels ?? [],
   }));
 }
@@ -364,8 +371,18 @@ export function isClientRating(body: string): boolean {
   return /^[1-5]$/.test(raw);
 }
 
-export async function sendReply(convId: string, body: string, isInternal = false): Promise<Msg> {
-  const { data } = await api.post(`/api/conversations/${convId}/reply`, { body, isInternal });
+export async function sendReply(
+  convId: string,
+  body: string,
+  isInternal = false,
+  /** Resolved teammate ids, never names parsed out of the text. */
+  mentionedUserIds: string[] = [],
+): Promise<Msg> {
+  const { data } = await api.post(`/api/conversations/${convId}/reply`, {
+    body,
+    isInternal,
+    mentionedUserIds,
+  });
   return {
     id: data.id,
     dir: 'out',
@@ -1134,7 +1151,13 @@ export async function importContacts(input: {
  * than clamping it — a report that quietly answers a different question than
  * the one asked still looks authoritative on screen.
  */
-export type ReportRange = { from: string; to: string };
+export type ReportRange = {
+  from: string;
+  to: string;
+  /** Both optional: absent means the whole organization. */
+  teamId?: string;
+  sessionId?: string;
+};
 
 export type Headline = {
   key: string;
@@ -1148,6 +1171,11 @@ export type DaySeriesPoint = { date: string; inbound: number; outbound: number; 
 
 export type OverviewReport = {
   headlines: Headline[];
+  /** Null when nothing in the period was answered or resolved. */
+  firstResponseMedianMinutes: number | null;
+  firstResponsePreviousMinutes: number | null;
+  resolutionMedianMinutes: number | null;
+  resolutionPreviousMinutes: number | null;
   series: DaySeriesPoint[];
 };
 
@@ -1237,9 +1265,14 @@ export async function fetchConversationsReport(range: ReportRange): Promise<Conv
   return data;
 }
 
+/**
+ * Team and channel now come from the shared range, so the only thing left
+ * here is the name search — which is a property of this table, not of the
+ * page-wide slice.
+ */
 export async function fetchTeamReport(
   range: ReportRange,
-  filter?: { teamId?: string; q?: string },
+  filter?: { q?: string },
 ): Promise<{ agents: TeamReportRow[] }> {
   const { data } = await api.get('/api/analytics/team', { params: { ...range, ...filter } });
   return data;
@@ -1267,5 +1300,93 @@ export async function fetchDrilldown(
   const { data } = await api.get('/api/analytics/drilldown', {
     params: { ...range, metric, ...filter },
   });
+  return data;
+}
+
+export type WebhookDirectionHealth = {
+  direction: 'INBOUND' | 'OUTBOUND';
+  total: number;
+  failed: number;
+  /** Null when nothing was delivered — silence is not a perfect record. */
+  successRatePct: number | null;
+  medianLatencyMs: number | null;
+  p90LatencyMs: number | null;
+  latencySampled: number;
+  latencyTruncated: boolean;
+};
+
+export type WebhookEndpointRow = {
+  webhookId: string;
+  targetHost: string | null;
+  total: number;
+  failed: number;
+  successRatePct: number | null;
+};
+
+export type WebhookFailureRow = {
+  id: string;
+  direction: string;
+  webhookId: string;
+  eventType: string;
+  targetHost: string | null;
+  statusCode: number | null;
+  errorMessage: string | null;
+  durationMs: number;
+  createdAt: string;
+};
+
+export type WebhookReport = {
+  directions: WebhookDirectionHealth[];
+  endpoints: WebhookEndpointRow[];
+  failures: WebhookFailureRow[];
+  retentionDays: number;
+};
+
+export async function fetchWebhookReport(range: ReportRange): Promise<WebhookReport> {
+  const { data } = await api.get('/api/analytics/webhooks', { params: range });
+  return data;
+}
+
+// ---------- lifecycle stages ----------
+
+/**
+ * A stage in the subscriber's own contact pipeline.
+ *
+ * The list is data, not a constant in this file: a hardcoded vocabulary would
+ * be one a subscriber could never rename into their own language.
+ */
+export type LifecycleStage = {
+  id: string;
+  name: string;
+  color: string | null;
+  orderIndex: number;
+};
+
+export async function fetchLifecycleStages(): Promise<LifecycleStage[]> {
+  const { data } = await api.get('/api/lifecycle-stages');
+  return data;
+}
+
+export async function createLifecycleStage(input: {
+  name: string;
+  color?: string | null;
+}): Promise<LifecycleStage> {
+  const { data } = await api.post('/api/lifecycle-stages', input);
+  return data;
+}
+
+export async function updateLifecycleStage(
+  id: string,
+  patch: { name?: string; color?: string | null; orderIndex?: number },
+): Promise<LifecycleStage> {
+  const { data } = await api.patch(`/api/lifecycle-stages/${id}`, patch);
+  return data;
+}
+
+/** Returns how many contacts still carry the deleted stage's name. */
+export async function deleteLifecycleStage(
+  id: string,
+): Promise<{ deleted: boolean; affectedContacts: number }> {
+  const { data } = await api.delete(`/api/lifecycle-stages/${id}`);
   return data;
 }

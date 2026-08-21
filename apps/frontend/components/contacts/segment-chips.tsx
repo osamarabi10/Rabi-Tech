@@ -90,7 +90,7 @@ export function SegmentChips({
           <span
             key={segment.id}
             className={cn(
-              'flex items-center gap-1 rounded-full border ps-2.5 pe-1 py-0.5 text-[11px] transition-colors',
+              'flex items-center gap-1 rounded-full border ps-2.5 pe-1 py-0.5 text-caption transition-colors',
               active
                 ? 'border-primary bg-primary/10 text-primary'
                 : 'border-border text-muted-foreground hover:border-primary/50 hover:text-foreground',
@@ -112,7 +112,7 @@ export function SegmentChips({
                 // Its own background, not just a margin: a segment named "Phone has 9"
                 // followed by a count of 0 reads as "Phone has 90" when the only
                 // separation is whitespace.
-                <span className="numeric ms-1.5 rounded-full bg-foreground/10 px-1.5 font-mono text-[10px]">
+                <span className="numeric ms-1.5 rounded-full bg-foreground/10 px-1.5 font-mono text-micro">
                   {count}
                 </span>
               ) : null}

@@ -75,7 +75,7 @@ export function SaveSegmentDialog({
             placeholder={t('عملاء مميزون')}
             aria-invalid={Boolean(error)}
           />
-          {error && <p className="text-[11px] text-destructive">{error}</p>}
+          {error && <p className="text-caption text-destructive">{error}</p>}
         </div>
 
         <DialogFooter>

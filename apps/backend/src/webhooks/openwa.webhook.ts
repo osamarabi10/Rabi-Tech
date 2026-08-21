@@ -9,6 +9,37 @@ import logger from '../lib/logger';
 import { getTenantId, runAsOrganization, runAsPlatform } from '../lib/tenant-context';
 import { recordMessageUsage } from '../modules/usage/usage.service';
 import { queueGatewayAction } from '../workers/gateway-provisioning.queue';
+import { recordDelivery } from '../modules/webhooks/webhook-log.service';
+
+/**
+ * What an inbound receipt records about its payload.
+ *
+ * Deliberately NOT the payload. Every inbound webhook carries a customer
+ * message, and copying that text into a delivery log would duplicate the
+ * entire conversation history into a second table with its own retention and
+ * its own set of readers — a real privacy expansion that answers no question
+ * the health view asks. Shape and size are enough to tell a healthy delivery
+ * from a malformed one.
+ */
+function inboundSummary(body: any): Record<string, unknown> {
+  const data = body?.data || {};
+  const message = data?.message || data || {};
+  return {
+    event: body?.event ?? null,
+    session: body?.session ?? body?.sessionName ?? data?.session ?? null,
+    messageType: message?.type ?? data?.type ?? null,
+    hasBody: Boolean(message?.body ?? message?.text ?? data?.body ?? data?.text),
+    hasMedia: Boolean(message?.hasMedia ?? data?.hasMedia),
+    fromMe: Boolean(message?.fromMe ?? data?.fromMe),
+    payloadBytes: (() => {
+      try {
+        return JSON.stringify(body ?? {}).length;
+      } catch {
+        return null;
+      }
+    })(),
+  };
+}
 
 const router = Router();
 
@@ -28,6 +59,7 @@ router.post('/webhooks/openwa/:webhookToken', async (req, res, next) => {
   });
 }, async (req: Request, res: Response) => {
 
+  const receivedAt = Date.now();
   const { event, data } = req.body;
   let session = req.body.session || req.body.sessionName || data?.sessionName || data?.session;
   const sessionId = req.body.sessionId || data?.sessionId;
@@ -183,9 +215,34 @@ router.post('/webhooks/openwa/:webhookToken', async (req, res, next) => {
         await queueGatewayAction(organizationId, 'monitor');
       }
     }
+    await recordDelivery({
+      direction: 'INBOUND',
+      // The gateway is one endpoint per organization, so its identity is fixed.
+      webhookId: 'gateway--openwa',
+      eventType: String(event || 'unknown'),
+      statusCode: 200,
+      ok: true,
+      requestPayload: inboundSummary(req.body),
+      durationMs: Date.now() - receivedAt,
+    });
     res.sendStatus(200);
   } catch (err) {
     logger.error('Webhook error', { error: String(err) });
+    // Still a 200 — the gateway must not retry, and a retry storm during an
+    // incident is its own outage. But the delivery is recorded as FAILED,
+    // because the status we return says nothing about whether we processed it.
+    // Inbound health that read only the response code would show a flawless
+    // 100% while every message was being dropped.
+    await recordDelivery({
+      direction: 'INBOUND',
+      webhookId: 'gateway--openwa',
+      eventType: String(event || 'unknown'),
+      statusCode: 200,
+      ok: false,
+      errorMessage: String(err),
+      requestPayload: inboundSummary(req.body),
+      durationMs: Date.now() - receivedAt,
+    });
     res.sendStatus(200);
   }
 });

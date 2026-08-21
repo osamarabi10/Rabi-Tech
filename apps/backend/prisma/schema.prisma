@@ -78,6 +78,10 @@ model Organization {
   /// The console sweeps for live and expiring overrides on every load.
   analyticsHourly AnalyticsHourly[]
 
+  webhookDeliveryLogs WebhookDeliveryLog[]
+
+  lifecycleStages LifecycleStage[]
+
   @@index([overrideExpiresAt])
 }
 
@@ -1002,6 +1006,8 @@ model Workflow {
   // Name uniqueness is a case-insensitive SQL index; Prisma cannot express
   // LOWER(name), so do not add @@unique([organizationId, name]).
 
+  deliveryLogs WebhookDeliveryLog[]
+
   @@unique([id, organizationId])
   @@index([organizationId, triggerType, isActive])
 }
@@ -1028,6 +1034,8 @@ model WorkflowExecution {
   workflow     Workflow      @relation(fields: [workflowId, organizationId], references: [id, organizationId], onDelete: Cascade)
   contact      Contact?      @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
   conversation Conversation? @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  deliveryLogs WebhookDeliveryLog[]
 
   @@unique([id, organizationId])
   @@index([organizationId, workflowId, createdAt])
@@ -1057,4 +1065,81 @@ model AnalyticsHourly {
 
   @@id([organizationId, hourStart])
   @@index([organizationId, hourStart])
+}
+
+/// Every webhook delivery, in both directions.
+///
+/// OUTBOUND is a workflow `HTTP_WEBHOOK` step calling a subscriber endpoint;
+/// INBOUND is the gateway delivering a message to `/webhooks/openwa/:token`.
+/// They are separate faults with separate causes — a workflow webhook failing
+/// says nothing about whether WhatsApp messages are still arriving — so both
+/// live here and the reports split them.
+///
+/// Highest-volume table in the schema: inbound is one row per received
+/// message. Pruned by the analytics rollup worker.
+model WebhookDeliveryLog {
+  id             String @id @default(cuid())
+  organizationId String
+
+  /// 'OUTBOUND' | 'INBOUND'.
+  direction String
+  /// Stable identity of the configured endpoint, so repeated deliveries group.
+  /// There is no webhook table — see webhookIdentity().
+  webhookId String
+  eventType String
+
+  workflowId  String?
+  executionId String?
+
+  /// Host only. A full URL can carry a token in its query string, and this is
+  /// exactly where that would sit in plaintext forever.
+  targetHost String?
+
+  statusCode   Int?
+  /// Denormalised: the success rate becomes an indexed count instead of a scan.
+  /// A transport error has no status code at all, and is still a failure.
+  ok           Boolean @default(false)
+  errorMessage String?
+
+  /// Truncated before they reach here — these two carry customer content.
+  requestPayload String?
+  responseBody   String?
+
+  durationMs Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflow     Workflow?          @relation(fields: [workflowId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  execution    WorkflowExecution? @relation(fields: [executionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, direction, ok, createdAt])
+  @@index([organizationId, webhookId, createdAt])
+  @@index([createdAt])
+}
+
+/// A stage in the subscriber-defined contact lifecycle.
+///
+/// `Contact.lifecycleStage` stays a plain string rather than a foreign key:
+/// values already exist from hand entry and CSV import that match no stage, and
+/// the contact filter DSL treats the column as text — stored campaign audience
+/// filters reference it that way, so changing the type would invalidate them.
+/// This list drives the selector; a contact holding a value outside it still
+/// displays that value rather than appearing blank.
+model LifecycleStage {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  color          String?
+  /// A lifecycle is a sequence — alphabetical would put Customer before Lead.
+  orderIndex     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, name])
+  @@index([organizationId, orderIndex])
 }

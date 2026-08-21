@@ -6,6 +6,7 @@ import { isWithinWorkingHours } from '../../utils/working-hours';
 import { getSessionForTeam } from '../../utils/whatsapp-sessions';
 import { OpenWAService } from '../whatsapp/openwa.service';
 import { assertSafeWebhookUrl, BlockedUrlError } from './outbound-url';
+import { recordDelivery, webhookIdentity } from '../webhooks/webhook-log.service';
 import type { WorkflowAction, WorkflowCondition, WorkflowConfig } from './workflow-schema';
 
 /**
@@ -40,6 +41,12 @@ export type ExecutionContext = {
   organizationId: string;
   workflowId: string;
   executionId: string;
+  /**
+   * What set this run going. Carried so a webhook delivery can be logged
+   * against the event that caused it — "which trigger is hammering this
+   * endpoint" is the first question asked of a failing webhook.
+   */
+  triggerType: string;
   contactId: string | null;
   conversationId: string | null;
   depth: number;
@@ -298,15 +305,41 @@ async function runAction(
     case 'HTTP_WEBHOOK': {
       // Every guard lives in assertSafeWebhookUrl. See that file for why this is
       // the most dangerous action in the list.
+      const identity = webhookIdentity(context.workflowId, stepIndex);
+      const startedAt = Date.now();
       let target;
       try {
         target = await assertSafeWebhookUrl(String(action.url));
       } catch (error) {
         if (error instanceof BlockedUrlError) {
+          // A blocked URL is a delivery attempt that failed, and the most
+          // important kind to have in the log: it means someone configured a
+          // webhook pointing somewhere it must never reach.
+          await recordDelivery({
+            direction: 'OUTBOUND',
+            webhookId: identity,
+            eventType: context.triggerType,
+            workflowId: context.workflowId,
+            executionId: context.executionId,
+            targetUrl: String(action.url),
+            ok: false,
+            errorMessage: error.message,
+            durationMs: Date.now() - startedAt,
+          });
           return entry(stepIndex, action.type, 'failed', error.message);
         }
         throw error;
       }
+
+      // Lifted out of the fetch call so the log records exactly what was sent,
+      // rather than a second, separately-built approximation of it.
+      const body = {
+        workflowId: context.workflowId,
+        executionId: context.executionId,
+        contactId: context.contactId,
+        conversationId: context.conversationId,
+        payload: context.payload,
+      };
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -318,20 +351,47 @@ async function runAction(
             Host: target.hostHeader,
             'User-Agent': 'RabiTech-Workflow/1',
           },
-          body: JSON.stringify({
-            workflowId: context.workflowId,
-            executionId: context.executionId,
-            contactId: context.contactId,
-            conversationId: context.conversationId,
-            payload: context.payload,
-          }),
+          body: JSON.stringify(body),
           signal: controller.signal,
           // Never follow a redirect: a public URL that 302s to 127.0.0.1 would
           // walk straight past the check above.
           redirect: 'manual',
         });
+
+        // Read the body before deciding the outcome. It is capped by the log
+        // service, and it is usually the only clue why an endpoint rejected a
+        // delivery — a bare status code explains nothing.
+        const responseBody = await response.text().catch(() => '');
+
+        await recordDelivery({
+          direction: 'OUTBOUND',
+          webhookId: identity,
+          eventType: context.triggerType,
+          workflowId: context.workflowId,
+          executionId: context.executionId,
+          targetUrl: String(action.url),
+          statusCode: response.status,
+          ok: response.ok,
+          requestPayload: body,
+          responseBody,
+          durationMs: Date.now() - startedAt,
+        });
+
         return entry(stepIndex, action.type, response.ok ? 'ok' : 'failed', `HTTP ${response.status}`);
       } catch (error) {
+        // A transport error carries no status code at all, and is still a failure.
+        await recordDelivery({
+          direction: 'OUTBOUND',
+          webhookId: identity,
+          eventType: context.triggerType,
+          workflowId: context.workflowId,
+          executionId: context.executionId,
+          targetUrl: String(action.url),
+          ok: false,
+          errorMessage: String((error as Error).message),
+          requestPayload: body,
+          durationMs: Date.now() - startedAt,
+        });
         return entry(stepIndex, action.type, 'failed', String((error as Error).message).slice(0, 200));
       } finally {
         clearTimeout(timeout);

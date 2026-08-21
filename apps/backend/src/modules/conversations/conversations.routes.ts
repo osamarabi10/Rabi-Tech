@@ -17,7 +17,7 @@ import { stampFirstResponse } from '../analytics/response-time';
 import { auditConversation } from '../../lib/audit';
 import { requirePermission, requireSupervisor } from '../../middleware/rbac.middleware';
 import { sendCsatPrompt } from '../../utils/client-feedback';
-import { notifyAssigned, notifyResolved } from '../../utils/notification-service';
+import { notifyAssigned, notifyMentioned, notifyResolved } from '../../utils/notification-service';
 import { isQuotaExceededError, quotaErrorResponse } from '../usage/entitlements';
 import { requireTeamId } from '../../utils/teams';
 
@@ -245,6 +245,11 @@ router.get('/:id/messages', async (req, res) => {
 router.post('/:id/reply', requirePermission('conversation:create'), async (req, res) => {
   try {
     const { body, mediaUrl, isInternal } = req.body;
+    // Ids, not parsed names: two agents can share a display name, and "@ahmad"
+    // written in prose addresses nobody. The composer sends who it resolved.
+    const mentionedUserIds: string[] = Array.isArray(req.body?.mentionedUserIds)
+      ? req.body.mentionedUserIds.filter((id: unknown) => typeof id === 'string').slice(0, 20)
+      : [];
 
     if (!body?.trim() && !mediaUrl) {
       return res.status(400).json({ error: 'الرسالة لا يمكن أن تكون فارغة' });
@@ -280,6 +285,13 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
     // the response clock. Fire-and-forget: reporting metadata never delays a send.
     if (!isInternal) {
       stampFirstResponse(conv.id, msg.timestamp).catch(() => {});
+    }
+
+    // Mentions only exist on internal notes. A customer-facing reply carrying
+    // ids would be someone poking the API, and notifying on it would let a
+    // WhatsApp message ping agents who were never named to the customer.
+    if (isInternal && mentionedUserIds.length > 0) {
+      notifyMentioned(conv.id, mentionedUserIds, req.user!.id, req.user!.name).catch(() => {});
     }
 
     let sendError: unknown = null;

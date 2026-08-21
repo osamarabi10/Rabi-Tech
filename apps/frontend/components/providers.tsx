@@ -5,6 +5,7 @@ import { BrandingProvider } from '@/lib/branding-context';
 import type { Branding } from '@/lib/branding';
 import { I18nProvider, useT } from '@/lib/i18n';
 import { ThemeProvider, useTheme } from '@/lib/theme';
+import { DensityProvider } from '@/lib/density';
 
 function ThemedToaster() {
   const { locale } = useT();
@@ -32,8 +33,13 @@ export function Providers({
     <BrandingProvider branding={branding}>
       <ThemeProvider>
         <I18nProvider>
-          {children}
-          <ThemedToaster />
+          {/* Innermost: density is a view preference with no bearing on theme,
+              locale or branding, so nothing above it needs to re-render when it
+              changes. */}
+          <DensityProvider>
+            {children}
+            <ThemedToaster />
+          </DensityProvider>
         </I18nProvider>
       </ThemeProvider>
     </BrandingProvider>

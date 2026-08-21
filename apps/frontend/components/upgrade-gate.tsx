@@ -56,7 +56,7 @@ export function UpgradeGate({
         )}
 
         {plan && (
-          <p className="mt-3 text-[11px] text-muted-foreground">
+          <p className="mt-3 text-caption text-muted-foreground">
             {t('باقتك الحالية')}: <span className="font-semibold">{plan.name}</span>
           </p>
         )}

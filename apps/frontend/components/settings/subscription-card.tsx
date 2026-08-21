@@ -70,7 +70,7 @@ export function SubscriptionCard() {
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2.5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="rounded-md bg-primary px-2 py-0.5 text-[11px] font-bold text-primary-foreground">
+              <span className="rounded-md bg-primary px-2 py-0.5 text-caption font-bold text-primary-foreground">
                 {plan.name}
               </span>
               {/*
@@ -79,12 +79,12 @@ export function SubscriptionCard() {
                 not match what they pay.
               */}
               {commercial.isOverridden && (
-                <span className="rounded-md border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
+                <span className="rounded-md border border-primary/40 bg-primary/10 px-2 py-0.5 text-caption font-bold text-primary">
                   {t('عرض خاص')}
                 </span>
               )}
               {subscription?.status && (
-                <span className="text-[11px] text-muted-foreground">{subscription.status}</span>
+                <span className="text-caption text-muted-foreground">{subscription.status}</span>
               )}
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -103,7 +103,7 @@ export function SubscriptionCard() {
               {periodEnd && ` · ${t('يتجدد')} ${periodEnd}`}
             </p>
             {discounted && (
-              <p className="mt-0.5 text-[11px] text-success-vivid">
+              <p className="mt-0.5 text-caption text-success-vivid">
                 {`${t('الخصم')} ${commercial.discountPercent}%`}
                 {commercial.expiresAt
                   && ` · ${t('حتى')} ${formatDate(commercial.expiresAt)}`}
@@ -144,7 +144,7 @@ export function SubscriptionCard() {
             </span>
           </div>
           {seats.atLimit && (
-            <p className="mt-1 text-[11px] text-warning">
+            <p className="mt-1 text-caption text-warning">
               {t('وصلت للحد الأقصى — رقّي الباقة لإضافة أعضاء')}
             </p>
           )}
@@ -157,13 +157,13 @@ export function SubscriptionCard() {
         */}
         {quotaDrift.length > 0 && (
           <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2">
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-danger">
+            <p className="flex items-center gap-1.5 text-caption font-semibold text-danger">
               <AlertTriangle className="h-3.5 w-3.5" />
               {t('الحصص المطبّقة لا تطابق الباقة — تواصل مع الدعم')}
             </p>
             <ul className="mt-1 space-y-0.5">
               {quotaDrift.map((d) => (
-                <li key={d.metric} className="font-mono text-[10px] text-muted-foreground" dir="ltr">
+                <li key={d.metric} className="font-mono text-micro text-muted-foreground" dir="ltr">
                   {d.metric}: plan {d.planAllows ?? '∞'} · enforced {d.enforced ?? '∞'}
                 </li>
               ))}
@@ -172,18 +172,18 @@ export function SubscriptionCard() {
         )}
 
         {organization.downgradeGraceEndsAt && (
-          <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[11px] text-warning">
+          <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-caption text-warning">
             {organization.downgradeGraceReason || t('باقتك قيد المراجعة')}
           </p>
         )}
 
         {/* Invoices */}
         <div>
-          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <p className="mb-1.5 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
             {t('الفواتير')}
           </p>
           {invoices.length === 0 ? (
-            <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-[11px] text-muted-foreground">
+            <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-caption text-muted-foreground">
               {t('لا توجد فواتير بعد')}
             </p>
           ) : (
@@ -191,7 +191,7 @@ export function SubscriptionCard() {
               {invoices.slice(0, 6).map((inv) => (
                 <div
                   key={inv.id}
-                  className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-1.5 text-[11px]"
+                  className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-1.5 text-caption"
                 >
                   <span className="font-mono text-muted-foreground" dir="ltr">
                     {new Date(inv.createdAt).toISOString().slice(0, 10)}
@@ -200,7 +200,7 @@ export function SubscriptionCard() {
                     {money(inv.amountDueCents, inv.currency)}
                   </span>
                   <span className={cn(
-                    'rounded-full px-2 py-0.5 text-[10px]',
+                    'rounded-full px-2 py-0.5 text-micro',
                     inv.status === 'PAID'
                       ? 'bg-success/15 text-success'
                       : 'bg-warning/15 text-warning',

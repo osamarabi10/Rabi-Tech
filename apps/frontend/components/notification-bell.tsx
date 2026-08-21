@@ -75,7 +75,7 @@ export function NotificationBell() {
       >
         <Bell className="h-4 w-4" />
         {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
+          <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-micro font-bold text-primary-foreground">
             {unread > 9 ? '9+' : unread}
           </span>
         )}
@@ -86,7 +86,7 @@ export function NotificationBell() {
           <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
             <span className="text-sm font-semibold">{t('الإشعارات')}</span>
             {unread > 0 && (
-              <button onClick={handleReadAll} className="text-[11px] text-primary hover:underline">
+              <button onClick={handleReadAll} className="text-caption text-primary hover:underline">
                 قراءة الكل
               </button>
             )}
@@ -105,9 +105,9 @@ export function NotificationBell() {
                 <span className="text-base shrink-0 mt-0.5">{typeIcon[n.type] || '🔔'}</span>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-semibold leading-snug">{n.title}</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">{n.body}</p>
+                  <p className="mt-0.5 text-caption text-muted-foreground">{n.body}</p>
                   {n.conversation && (
-                    <p className="mt-0.5 text-[10px] text-muted-foreground opacity-60">#{n.conversation.displayId}</p>
+                    <p className="mt-0.5 text-micro text-muted-foreground opacity-60">#{n.conversation.displayId}</p>
                   )}
                 </div>
                 {!n.isRead && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" />}

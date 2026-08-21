@@ -173,7 +173,7 @@ export function CampaignComposer({
           {STEPS.map((s, i) => (
             <div key={s.key} className="flex flex-1 items-center gap-2">
               <div className={cn(
-                'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold',
+                'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-caption font-bold',
                 i <= stepIndex ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
               )}>{i + 1}</div>
               <span className={cn('text-xs', i === stepIndex ? 'font-semibold text-foreground' : 'text-muted-foreground')}>
@@ -193,7 +193,7 @@ export function CampaignComposer({
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <Label className="text-xs">{t('الرسالة')}</Label>
-                <span className="text-[10px] text-muted-foreground">{message.length}/3000</span>
+                <span className="text-micro text-muted-foreground">{message.length}/3000</span>
               </div>
               <Textarea
                 value={message}
@@ -202,7 +202,7 @@ export function CampaignComposer({
                 rows={5}
                 placeholder={t('اكتب رسالتك… استخدم {{contactName}} لاسم العميل')}
               />
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-micro text-muted-foreground">
                 {t('المتغيرات المتاحة')}: <code>{'{{contactName}}'}</code> <code>{'{{firstName}}'}</code>
               </p>
             </div>
@@ -215,7 +215,7 @@ export function CampaignComposer({
                       key={tpl.id}
                       type="button"
                       onClick={() => setMessage(tpl.body)}
-                      className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+                      className="rounded-full border border-border px-2.5 py-1 text-caption text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
                     >
                       {tpl.title}
                     </button>
@@ -253,7 +253,7 @@ export function CampaignComposer({
                   ))}
                 </select>
                 {segmentId && edited && (
-                  <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+                  <span className="rounded-full border border-border px-2 py-0.5 text-micro text-muted-foreground">
                     {t('شريحة مخصصة')}
                   </span>
                 )}
@@ -290,7 +290,7 @@ export function CampaignComposer({
             {/* WhatsApp-style bubble so the admin sees what the customer sees. */}
             <div className="rounded-lg bg-[#0b141a] p-3">
               <div className="ms-auto max-w-[85%] rounded-lg rounded-te-sm bg-[#005c4b] px-3 py-2">
-                <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-white">
+                <p className="whitespace-pre-wrap break-words text-small leading-relaxed text-white">
                   {previewText || t('(رسالة فارغة)')}
                 </p>
               </div>
@@ -298,11 +298,11 @@ export function CampaignComposer({
 
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="rounded-md border border-border px-3 py-2">
-                <p className="text-[10px] text-muted-foreground">{t('المستقبلون')}</p>
+                <p className="text-micro text-muted-foreground">{t('المستقبلون')}</p>
                 <p className="text-base font-bold">{counting ? '…' : audience?.count ?? 0}</p>
               </div>
               <div className="rounded-md border border-border px-3 py-2">
-                <p className="text-[10px] text-muted-foreground">{t('الجمهور')}</p>
+                <p className="text-micro text-muted-foreground">{t('الجمهور')}</p>
                 <p className="truncate font-medium">
                   {activeCount ? `${activeCount} ${t('فلتر')}` : t('كل جهات الاتصال')}
                 </p>

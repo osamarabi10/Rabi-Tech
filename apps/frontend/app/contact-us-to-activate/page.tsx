@@ -54,7 +54,7 @@ export default function ContactUsToActivatePage({
             <dd className="max-w-[260px] truncate font-mono" dir="ltr">{searchParams.externalRef || '—'}</dd>
           </div>
         </dl>
-        <p className="mt-2 text-[11px] text-muted-foreground">
+        <p className="mt-2 text-caption text-muted-foreground">
           احتفظ برقم المرجع — بيساعدنا نلاقي طلبك بسرعة.
         </p>
 

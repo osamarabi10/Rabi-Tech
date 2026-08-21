@@ -246,7 +246,7 @@ export default function SubscribersPage() {
                   <Badge variant={subscriber.subscriptions[0]?.status === 'ACTIVE' ? 'default' : 'secondary'}>
                     {subscriber.tier}
                   </Badge>
-                  <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                  <p className="mt-1 truncate text-caption text-muted-foreground">
                     {subscriber.subscriptions[0]?.status || 'none'}{subscriber.emailVerifiedAt ? '' : ' · email pending'}
                   </p>
                 </div>
@@ -295,7 +295,7 @@ export default function SubscribersPage() {
                 >
                   <Tag className="h-3.5 w-3.5" /> Terms
                   {subscriber.planOverride && (
-                    <Badge variant="secondary" className="ms-1 px-1 text-[9px]">عرض خاص</Badge>
+                    <Badge variant="secondary" className="ms-1 px-1 text-micro">عرض خاص</Badge>
                   )}
                 </Button>
                 <DropdownMenu>

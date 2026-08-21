@@ -1,7 +1,7 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import { Loader2, Paperclip, Send, Zap } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AtSign, Loader2, Paperclip, Send, Zap } from 'lucide-react';
 import type { Template } from '@/lib/data';
 import { useT } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,9 @@ import { cn } from '@/lib/utils';
  * Comment mode visibly recolours the whole composer and swaps the send button, so
  * the current mode is unmissable at a glance.
  */
+/** A teammate who can be mentioned. Id-based, never matched by name. */
+export type MentionCandidate = { id: string; name: string };
+
 export interface ComposerProps {
   value: string;
   onChange: (value: string) => void;
@@ -32,6 +35,16 @@ export interface ComposerProps {
   shortCodeMatches?: Template[];
   onShortCodeQuery?: (query: string | null) => void;
   onShortCodePick?: (template: Template) => void;
+  /**
+   * Teammate suggestions for the `@mention` popover.
+   *
+   * Only ever populated while `isInternal` is true. A mention on a
+   * customer-facing reply would either leak a colleague’s name into the
+   * WhatsApp message or notify someone the customer never saw named.
+   */
+  mentionMatches?: MentionCandidate[];
+  onMentionQuery?: (query: string | null) => void;
+  onMentionPick?: (user: MentionCandidate) => void;
   /** Quick-reply chips shown above the input. */
   quickTemplates?: Template[];
   onQuickTemplate?: (template: Template) => void;
@@ -51,6 +64,9 @@ export function Composer({
   shortCodeMatches = [],
   onShortCodeQuery,
   onShortCodePick,
+  mentionMatches = [],
+  onMentionQuery,
+  onMentionPick,
   quickTemplates = [],
   onQuickTemplate,
   onAttach,
@@ -60,10 +76,45 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement>(null);
   const [highlight, setHighlight] = useState(0);
 
+  // Leaving note mode closes the mention list — the suggestions are only valid
+  // on an internal note, and a stale popover over a customer-facing reply
+  // invites inserting a colleague’s name into a WhatsApp message.
+  useEffect(() => {
+    if (!isInternal) onMentionQuery?.(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isInternal]);
+
   const tooLong = value.length > maxLength;
   const canSend = !disabled && !sending && value.trim().length > 0 && !tooLong;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Mention popover first: it only opens on internal notes, where the
+    // snippet popover is the less likely of the two to be what the agent is
+    // driving. Both cannot be open at once — one is triggered by `@`, the
+    // other by `:`.
+    if (mentionMatches.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHighlight((i) => (i + 1) % mentionMatches.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlight((i) => (i - 1 + mentionMatches.length) % mentionMatches.length);
+        return;
+      }
+      if (e.key === 'Tab' || e.key === 'Enter') {
+        e.preventDefault();
+        onMentionPick?.(mentionMatches[highlight]);
+        setHighlight(0);
+        return;
+      }
+      if (e.key === 'Escape') {
+        onMentionQuery?.(null);
+        return;
+      }
+    }
+
     // Snippet popover navigation takes precedence while it is open.
     if (shortCodeMatches.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -135,7 +186,7 @@ export function Composer({
         </div>
 
         {isInternal && (
-          <span className="text-[11px] text-warning/90">
+          <span className="text-caption text-warning/90">
             {t('العميل ما بيشوف هالملاحظة')}
           </span>
         )}
@@ -150,7 +201,7 @@ export function Composer({
               type="button"
               disabled={disabled}
               onClick={() => onQuickTemplate?.(tpl)}
-              className="max-w-[170px] truncate rounded-full border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-[11px] text-primary/80 transition-colors hover:bg-primary/15 hover:text-primary"
+              className="max-w-[170px] truncate rounded-full border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-caption text-primary/80 transition-colors hover:bg-primary/15 hover:text-primary"
             >
               {tpl.shortCode && <span className="ms-1 text-primary/40">:{tpl.shortCode}</span>}
               {tpl.title}
@@ -183,6 +234,37 @@ export function Composer({
         </Button>
 
         <div className="relative flex-1">
+          {mentionMatches.length > 0 && (
+            <div
+              className={cn(
+                'absolute bottom-full mb-1.5 w-full max-w-md overflow-hidden rounded-lg border border-border bg-popover shadow-xl',
+                'animate-in fade-in-0 slide-in-from-bottom-1 motion-panel',
+              )}
+              role="listbox"
+            >
+              {mentionMatches.slice(0, 5).map((user, i) => (
+                <button
+                  key={user.id}
+                  type="button"
+                  onClick={() => onMentionPick?.(user)}
+                  className={cn(
+                    'flex w-full items-center gap-2 px-3 py-2 text-start text-h3 transition-colors',
+                    i === highlight ? 'bg-primary/10 text-primary' : 'hover:bg-accent',
+                  )}
+                >
+                  <AtSign className="h-3 w-3 shrink-0 opacity-50" />
+                  <span className="truncate">{user.name}</span>
+                </button>
+              ))}
+              <div className="flex items-center gap-3 border-t border-border bg-secondary/50 px-3 py-1 text-micro text-muted-foreground">
+                <span dir="ltr">↑↓</span>
+                <span>{t('تنقّل')}</span>
+                <span dir="ltr">Tab</span>
+                <span>{t('إدراج')}</span>
+              </div>
+            </div>
+          )}
+
           {shortCodeMatches.length > 0 && (
             <div
               className={cn(
@@ -209,7 +291,7 @@ export function Composer({
                 </button>
               ))}
               {/* The list was already keyboard-navigable; nothing said so. */}
-              <div className="flex items-center gap-3 border-t border-border bg-secondary/50 px-3 py-1 text-[10px] text-muted-foreground">
+              <div className="flex items-center gap-3 border-t border-border bg-secondary/50 px-3 py-1 text-micro text-muted-foreground">
                 <span dir="ltr">↑↓</span>
                 <span>{t('تنقّل')}</span>
                 <span dir="ltr">Tab</span>
@@ -240,12 +322,23 @@ export function Composer({
               } else {
                 onShortCodeQuery?.(null);
               }
+
+              // `@fragment` at the caret opens the mention popover. Anchored to
+              // the end rather than searched for anywhere in the note, so an
+              // address or an already-inserted mention earlier in the text does
+              // not reopen the list while the agent types past it.
+              if (isInternal) {
+                const atCaret = next.match(/@([^\s@]*)$/);
+                onMentionQuery?.(atCaret ? atCaret[1] : null);
+              } else {
+                onMentionQuery?.(null);
+              }
             }}
             onKeyDown={handleKeyDown}
           />
           <span
             className={cn(
-              'absolute bottom-1.5 end-2 text-[10px]',
+              'absolute bottom-1.5 end-2 text-micro',
               tooLong ? 'text-destructive' : 'text-muted-foreground',
             )}
           >
@@ -264,7 +357,7 @@ export function Composer({
         </Button>
       </div>
 
-      {error && <p className="px-3 pb-2 text-[11px] text-destructive">{error}</p>}
+      {error && <p className="px-3 pb-2 text-caption text-destructive">{error}</p>}
     </div>
   );
 }

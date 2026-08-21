@@ -96,3 +96,47 @@ export async function notifyResolved(conversationId: string, resolvedByName: str
     body: `بواسطة ${resolvedByName}`,
   });
 }
+
+/**
+ * Everyone named in an internal note.
+ *
+ * Mentions are resolved from **ids the composer sends**, not by parsing the
+ * note text for names. Two agents can share a display name, names contain
+ * spaces, and someone typing "@ahmad" in prose is not addressing anyone —
+ * matching on text would notify the wrong person some of the time and
+ * silently nobody the rest.
+ *
+ * The author is dropped: being notified of your own note is noise.
+ */
+export async function notifyMentioned(
+  conversationId: string,
+  mentionedUserIds: string[],
+  authorId: string,
+  authorName: string,
+): Promise<void> {
+  const targets = [...new Set(mentionedUserIds)].filter((id) => id && id !== authorId);
+  if (targets.length === 0) return;
+
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { displayId: true },
+  });
+  if (!conv) return;
+
+  // Scoped read: an id from another organization simply is not found here, so
+  // a forged mention cannot address someone outside the tenant.
+  const users = await prisma.user.findMany({
+    where: { id: { in: targets }, isActive: true },
+    select: { id: true },
+  });
+
+  for (const user of users) {
+    await createNotification({
+      userId: user.id,
+      type: 'MENTION',
+      conversationId,
+      title: `ذكرك ${authorName} في محادثة #${conv.displayId}`,
+      body: 'ملاحظة داخلية',
+    });
+  }
+}

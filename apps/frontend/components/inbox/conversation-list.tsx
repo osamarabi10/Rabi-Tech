@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { StatusBadge } from '@/components/status-badge';
+import { DENSITY_CLASSES, useDensity, type Density } from '@/lib/density';
 import { cn } from '@/lib/utils';
 
 /**
@@ -47,6 +48,12 @@ export interface ConversationListProps {
   unreadTotal?: number;
 }
 
+const DENSITY_OPTIONS: { key: Density; label: string }[] = [
+  { key: 'compact', label: 'مضغوط' },
+  { key: 'comfortable', label: 'مريح' },
+  { key: 'spacious', label: 'واسع' },
+];
+
 export function ConversationList({
   conversations,
   selectedId,
@@ -59,6 +66,8 @@ export function ConversationList({
   unreadTotal = 0,
 }: ConversationListProps) {
   const { t } = useT();
+  const { density, setDensity } = useDensity();
+  const d = DENSITY_CLASSES[density];
 
   return (
     <div className="flex w-[300px] shrink-0 flex-col border-e border-border bg-[hsl(var(--surface-1))]">
@@ -68,7 +77,7 @@ export function ConversationList({
           <h2 className="text-sm font-bold">
             {t('المحادثات')}
             {unreadTotal > 0 && (
-              <span className="ms-2 rounded-full bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground">
+              <span className="ms-2 rounded-full bg-primary px-1.5 py-0.5 text-micro text-primary-foreground">
                 {unreadTotal}
               </span>
             )}
@@ -87,7 +96,7 @@ export function ConversationList({
               key={tb.key}
               onClick={() => onTabChange(tb.key)}
               className={cn(
-                'flex-1 rounded px-2 py-1 text-[11px] font-medium transition-colors',
+                'flex-1 rounded px-2 py-1 text-caption font-medium transition-colors',
                 tab === tb.key
                   ? 'bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:text-foreground',
@@ -98,22 +107,50 @@ export function ConversationList({
           ))}
         </div>
 
-        {/* Status filters, secondary */}
-        <div className="flex gap-1 overflow-x-auto pb-0.5 [&::-webkit-scrollbar]:hidden">
-          {STATUS_TABS.map((tb) => (
-            <button
-              key={tb.key}
-              onClick={() => onTabChange(tab === tb.key ? 'all' : tb.key)}
-              className={cn(
-                'shrink-0 rounded-full border px-2 py-0.5 text-[10px] transition-colors',
-                tab === tb.key
-                  ? 'border-primary/40 bg-primary/10 text-primary'
-                  : 'border-border text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(tb.label)}
-            </button>
-          ))}
+        {/* Status filters, secondary — density shares the row, because it is a
+            view preference rather than a filter and should not read as one
+            more thing narrowing the list. */}
+        <div className="flex items-center gap-1">
+          <div className="flex flex-1 gap-1 overflow-x-auto pb-0.5 [&::-webkit-scrollbar]:hidden">
+            {STATUS_TABS.map((tb) => (
+              <button
+                key={tb.key}
+                onClick={() => onTabChange(tab === tb.key ? 'all' : tb.key)}
+                className={cn(
+                  'shrink-0 rounded-full border px-2 py-0.5 text-micro transition-colors motion-micro',
+                  tab === tb.key
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t(tb.label)}
+              </button>
+            ))}
+          </div>
+
+          <div
+            className="flex shrink-0 rounded-md border border-border p-0.5"
+            role="group"
+            aria-label={t('كثافة العرض')}
+          >
+            {DENSITY_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setDensity(option.key)}
+                title={t(option.label)}
+                aria-pressed={density === option.key}
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-micro transition-colors motion-micro',
+                  density === option.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t(option.label)}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="relative">
@@ -145,36 +182,47 @@ export function ConversationList({
               type="button"
               onClick={() => onSelect(c.id)}
               className={cn(
-                'flex w-full items-start gap-2.5 border-b border-border/40 px-3 py-3 text-start transition-colors',
+                'flex w-full items-start border-b border-border/40 text-start transition-colors motion-micro',
+                d.row,
+                d.gap,
                 active ? 'bg-primary/10' : 'hover:bg-accent/40',
               )}
             >
               <ContactAvatar
                 phone={c.phone}
                 label={c.avatar}
-                className="h-9 w-9 shrink-0"
+                className={cn(d.avatar, 'shrink-0')}
                 textClassName="font-bold"
               />
 
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-[13px] font-semibold">{c.name}</span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">{c.lastTime}</span>
+                  <span className="truncate text-small font-semibold">{c.name}</span>
+                  <span className="shrink-0 text-micro text-muted-foreground">{c.lastTime}</span>
                 </div>
 
                 <div className="mb-0.5 flex items-center gap-1.5">
-                  <StatusBadge label={status.label} color={status.color} className="px-1.5 py-0 text-[9px]" />
+                  <StatusBadge label={status.label} color={status.color} className="px-1.5 py-0 text-micro" />
                   {c.assigneeName ? (
-                    <span className="truncate text-[10px] text-muted-foreground">{c.assigneeName}</span>
+                    <span className="truncate text-micro text-muted-foreground">{c.assigneeName}</span>
                   ) : (
-                    <span className="text-[10px] text-warning/80">{t('غير مسندة')}</span>
+                    <span className="text-micro text-warning/80">{t('غير مسندة')}</span>
                   )}
                 </div>
 
                 <div className="flex items-center justify-between gap-2">
-                  <p className="truncate text-[11px] text-muted-foreground" dir={messageDir(c.lastMsg)}>{c.lastMsg}</p>
+                  {d.showPreview ? (
+                    <p
+                      className={cn('truncate text-caption text-muted-foreground', d.preview)}
+                      dir={messageDir(c.lastMsg)}
+                    >
+                      {c.lastMsg}
+                    </p>
+                  ) : (
+                    <span />
+                  )}
                   {c.unread > 0 && (
-                    <span className="shrink-0 rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
+                    <span className="shrink-0 rounded-full bg-primary px-1.5 text-micro text-primary-foreground">
                       {c.unread}
                     </span>
                   )}

@@ -1681,6 +1681,113 @@ async function databaseAudits() {
         }),
       );
     });
+    await check('webhooks: delivery logs never cross organizations', async () => {
+      const write = (organizationId, direction, ok) =>
+        runAsOrganization(organizationId, () =>
+          scoped.webhookDeliveryLog.create({
+            data: {
+              organizationId,
+              direction,
+              webhookId: 'bleed--' + organizationId,
+              eventType: 'probe',
+              ok,
+              durationMs: 5,
+            },
+          }),
+        );
+
+      await write(orgA.organizationId, 'OUTBOUND', false);
+      await write(orgB.organizationId, 'INBOUND', true);
+
+      const seenByA = await runAsOrganization(orgA.organizationId, () =>
+        scoped.webhookDeliveryLog.findMany({ select: { organizationId: true, webhookId: true } }),
+      );
+      const seenByB = await runAsOrganization(orgB.organizationId, () =>
+        scoped.webhookDeliveryLog.findMany({ select: { organizationId: true, webhookId: true } }),
+      );
+
+      assert.ok(
+        seenByA.length > 0 && seenByA.every((row) => row.organizationId === orgA.organizationId),
+        'org a must see only its own delivery logs',
+      );
+      assert.ok(
+        seenByB.length > 0 && seenByB.every((row) => row.organizationId === orgB.organizationId),
+        'org b must see only its own delivery logs',
+      );
+
+      // The failure rate is the number the health view leads with, so it is the
+      // one that must not absorb another tenant's failures.
+      const failuresForB = await runAsOrganization(orgB.organizationId, () =>
+        scoped.webhookDeliveryLog.count({ where: { ok: false } }),
+      );
+      assert.equal(failuresForB, 0, 'org b must not count org a webhook failures');
+    });
+
+    await check('webhooks: a delivery log cannot be attached to another org workflow', async () => {
+      const workflowA = await runAsOrganization(orgA.organizationId, () =>
+        scoped.workflow.create({
+          data: {
+            id: 'bleed_wf_a',
+            organizationId: orgA.organizationId,
+            name: 'bleed workflow a',
+            triggerType: 'CONVERSATION_CREATED',
+            configJson: { actions: [] },
+          },
+        }),
+      );
+
+      // The composite FK is the boundary here, not the extension: org B naming
+      // org A's workflow must fail at the database.
+      await assert.rejects(() =>
+        runAsOrganization(orgB.organizationId, () =>
+          scoped.webhookDeliveryLog.create({
+            data: {
+              organizationId: orgB.organizationId,
+              direction: 'OUTBOUND',
+              webhookId: 'bleed--cross',
+              eventType: 'probe',
+              workflowId: workflowA.id,
+              ok: false,
+              durationMs: 1,
+            },
+          }),
+        ),
+      );
+    });
+
+    await check('lifecycle: stages never cross organizations', async () => {
+      const create = (organizationId, name) =>
+        runAsOrganization(organizationId, () =>
+          scoped.lifecycleStage.create({
+            data: { organizationId, name, orderIndex: 0 },
+          }),
+        );
+
+      await create(orgA.organizationId, 'Bleed Stage A');
+      await create(orgB.organizationId, 'Bleed Stage B');
+
+      const stagesForB = await runAsOrganization(orgB.organizationId, () =>
+        scoped.lifecycleStage.findMany({ select: { name: true, organizationId: true } }),
+      );
+
+      assert.ok(
+        stagesForB.every((row) => row.organizationId === orgB.organizationId),
+        'org b must see only its own stages',
+      );
+      assert.ok(
+        !stagesForB.some((row) => row.name === 'Bleed Stage A'),
+        'org a stage must not appear in org b pipeline',
+      );
+
+      // Same name in two tenants is legitimate — the unique constraint is
+      // per-organization, and a shared vocabulary is the normal case.
+      await create(orgA.organizationId, 'Shared Name');
+      await create(orgB.organizationId, 'Shared Name');
+
+      // ...but twice in one tenant is not.
+      await assert.rejects(() => create(orgA.organizationId, 'Shared Name'));
+    });
+
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
       const hour = floorToHour(new Date());
@@ -1765,7 +1872,7 @@ async function databaseAudits() {
 
       const inboundOf = (report) => report.headlines.find((h) => h.key === 'inbound').value;
       const overviewFor = (organizationId) =>
-        runAsOrganization(organizationId, () => reporting.overview(period));
+        runAsOrganization(organizationId, () => reporting.overview(period, {}, organizationId));
 
       const beforeA = inboundOf(await overviewFor(orgA.organizationId));
       const beforeB = inboundOf(await overviewFor(orgB.organizationId));

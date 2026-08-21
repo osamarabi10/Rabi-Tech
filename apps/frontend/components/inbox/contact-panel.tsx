@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { ExternalLink, Tag, User, X } from 'lucide-react';
 import { updateContact, type Agent, type Conv, type MarketingConsent } from '@/lib/data';
 import { avatarColor } from '@/lib/constants';
 import { useT } from '@/lib/i18n';
+import { LifecycleSelect, useLifecycleStages } from './lifecycle-select';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -41,6 +42,32 @@ export function ContactPanel({
   const { t } = useT();
   const [showAllAgents, setShowAllAgents] = useState(false);
   const [savingConsent, setSavingConsent] = useState(false);
+  const stages = useLifecycleStages();
+  const [stage, setStage] = useState<string | null>(conversation.lifecycleStage);
+  const [savingStage, setSavingStage] = useState(false);
+
+  // The panel is reused as the selection changes rather than remounted, so
+  // without this the previous contact’s stage stays on screen.
+  useEffect(() => {
+    setStage(conversation.lifecycleStage);
+  }, [conversation.contactId, conversation.lifecycleStage]);
+
+  const saveStage = async (next: string | null) => {
+    const previous = stage;
+    setStage(next);
+    setSavingStage(true);
+    try {
+      await updateContact(conversation.contactId, { lifecycleStage: next });
+      toast.success(t('تم تحديث المرحلة'));
+    } catch {
+      // Put the old value back rather than leaving the control showing a
+      // change that never reached the server.
+      setStage(previous);
+      toast.error(t('فشل التحديث'));
+    } finally {
+      setSavingStage(false);
+    }
+  };
 
   const saveConsent = async (consent: MarketingConsent) => {
     setSavingConsent(true);
@@ -87,13 +114,13 @@ export function ContactPanel({
           </Avatar>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold">{conversation.name}</p>
-            <p className="numeric font-mono text-[11px] text-muted-foreground" dir="ltr">
+            <p className="numeric font-mono text-caption text-muted-foreground" dir="ltr">
               {conversation.phone}
             </p>
           </div>
         </div>
 
-        <dl className="space-y-1.5 text-[12px]">
+        <dl className="space-y-1.5 text-small">
           <div className="flex items-center gap-2">
             <dt className="w-20 shrink-0 text-muted-foreground">{t('الفريق')}</dt>
             <dd className="truncate font-medium">{conversation.teamName || t('عام')}</dd>
@@ -112,6 +139,18 @@ export function ContactPanel({
             and they need to be able to honour it immediately.
           */}
           <div className="flex items-center gap-2">
+            <dt className="w-20 shrink-0 text-muted-foreground">{t('مرحلة العميل')}</dt>
+            <dd className="min-w-0 flex-1">
+              <LifecycleSelect
+                value={stage}
+                stages={stages}
+                onChange={saveStage}
+                disabled={savingStage}
+              />
+            </dd>
+          </div>
+
+          <div className="flex items-center gap-2">
             <dt className="w-20 shrink-0 text-muted-foreground">{t('التسويق')}</dt>
             <dd className="min-w-0 flex-1">
               <select
@@ -119,7 +158,7 @@ export function ContactPanel({
                 disabled={savingConsent}
                 onChange={(e) => saveConsent(e.target.value as MarketingConsent)}
                 className={cn(
-                  'w-full rounded border border-border bg-card px-1.5 py-0.5 text-[11px]',
+                  'w-full rounded border border-border bg-card px-1.5 py-0.5 text-caption',
                   'disabled:opacity-50',
                   conversation.marketingConsent === 'OPTED_OUT' && 'border-warning/40 text-warning',
                 )}
@@ -133,7 +172,7 @@ export function ContactPanel({
         </dl>
 
         {conversation.marketingConsent === 'OPTED_OUT' && (
-          <p className="mt-2 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[10px] text-warning">
+          <p className="mt-2 rounded border border-warning/40 bg-warning/10 px-2 py-1 text-micro text-warning">
             {t('مستبعد من كل الحملات')}
           </p>
         )}
@@ -143,7 +182,7 @@ export function ContactPanel({
             {conversation.contactTags.map((tag) => (
               <span
                 key={tag}
-                className="flex items-center gap-1 rounded-full border border-border bg-secondary/50 px-2 py-0.5 text-[10px] text-muted-foreground"
+                className="flex items-center gap-1 rounded-full border border-border bg-secondary/50 px-2 py-0.5 text-micro text-muted-foreground"
               >
                 <Tag className="h-2.5 w-2.5" />
                 {tag}
@@ -155,7 +194,7 @@ export function ContactPanel({
 
       {/* Assignment */}
       <div className="border-b border-border p-4">
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="mb-2 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
           {t('المسؤول')}
         </p>
 
@@ -196,7 +235,7 @@ export function ContactPanel({
                 />
                 <span className="truncate">{agent.name}</span>
                 {agent.id === currentUserId && (
-                  <span className="ms-auto shrink-0 text-[10px] opacity-60">{t('أنا')}</span>
+                  <span className="ms-auto shrink-0 text-micro opacity-60">{t('أنا')}</span>
                 )}
               </button>
             );
@@ -206,7 +245,7 @@ export function ContactPanel({
             <button
               type="button"
               onClick={() => setShowAllAgents((v) => !v)}
-              className="w-full rounded-md px-2 py-1 text-start text-[11px] text-muted-foreground hover:text-foreground"
+              className="w-full rounded-md px-2 py-1 text-start text-caption text-muted-foreground hover:text-foreground"
             >
               {showAllAgents ? t('عرض أقل') : `${t('عرض الكل')} (${agents.length})`}
             </button>
@@ -217,10 +256,10 @@ export function ContactPanel({
       {/* Notes */}
       {conversation.contactNotes && (
         <div className="border-b border-border p-4">
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="mb-1.5 text-micro font-semibold uppercase tracking-wider text-muted-foreground">
             {t('ملاحظات')}
           </p>
-          <p className="whitespace-pre-wrap text-[12px] text-muted-foreground">
+          <p className="whitespace-pre-wrap text-small text-muted-foreground">
             {conversation.contactNotes}
           </p>
         </div>

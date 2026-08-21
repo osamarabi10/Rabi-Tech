@@ -12,7 +12,10 @@ import {
   resolutionStats,
   teamPerformance,
   type Period,
+  type ReportFilters,
 } from './reporting.service';
+import { webhookReport } from './webhook-report.service';
+import { WEBHOOK_LOG_RETENTION_DAYS } from '../webhooks/webhook-log.service';
 
 const router = Router();
 router.use(verifyToken);
@@ -52,6 +55,20 @@ function isPeriodError(p: Period | { error: string }): p is { error: string } {
   return (p as { error: string }).error !== undefined;
 }
 
+/**
+ * The team and channel slice, read from the same query string on every report.
+ *
+ * Ids are passed through as opaque strings and never interpolated — they reach
+ * Prisma as bound values, and a filter naming another tenant simply matches
+ * nothing because the extension scopes the query it lands in.
+ */
+function parseFilters(query: Record<string, unknown>): ReportFilters {
+  const teamId = typeof query.teamId === 'string' && query.teamId ? query.teamId : undefined;
+  const sessionId =
+    typeof query.sessionId === 'string' && query.sessionId ? query.sessionId : undefined;
+  return { teamId, sessionId };
+}
+
 /** Minutes east of UTC, as `Date.getTimezoneOffset()` inverted. Bounded to real zones. */
 function parseUtcOffset(query: Record<string, unknown>): number {
   const raw = Number(query.utcOffsetMinutes);
@@ -75,7 +92,9 @@ router.get('/overview', requirePermission('analytics:read'), async (req, res) =>
   if (isPeriodError(period)) return res.status(400).json({ error: period.error });
 
   try {
-    res.json({ period, ...(await overview(period)) });
+    const filters = parseFilters(req.query as Record<string, unknown>);
+    const report = await overview(period, filters, req.user!.organizationId);
+    res.json({ period, ...report });
   } catch (err) {
     logger.error('analytics overview failed', { error: String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'فشل جلب التقرير', requestId: (req as any).id });
@@ -88,10 +107,16 @@ router.get('/conversations', requirePermission('analytics:read'), async (req, re
   if (isPeriodError(period)) return res.status(400).json({ error: period.error });
 
   try {
+    const filters = parseFilters(req.query as Record<string, unknown>);
     const [firstResponse, resolution, heatmap] = await Promise.all([
-      firstResponseStats(period),
-      resolutionStats(period),
-      hourOfDayHeatmap(period, parseUtcOffset(req.query as Record<string, unknown>)),
+      firstResponseStats(period, filters),
+      resolutionStats(period, filters),
+      hourOfDayHeatmap(
+        period,
+        parseUtcOffset(req.query as Record<string, unknown>),
+        filters,
+        req.user!.organizationId,
+      ),
     ]);
     res.json({ period, firstResponse, resolution, heatmap });
   } catch (err) {
@@ -108,11 +133,16 @@ router.get('/team', requirePermission('analytics:read'), async (req, res) => {
   const period = parsePeriod(req.query as Record<string, unknown>);
   if (isPeriodError(period)) return res.status(400).json({ error: period.error });
 
-  const teamId = typeof req.query.teamId === 'string' && req.query.teamId ? req.query.teamId : undefined;
   const search = typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q.trim() : undefined;
 
   try {
-    res.json({ period, agents: await teamPerformance(period, { teamId, search }) });
+    const filters = parseFilters(req.query as Record<string, unknown>);
+    const agents = await teamPerformance(
+      period,
+      { ...filters, search },
+      req.user!.organizationId,
+    );
+    res.json({ period, agents });
   } catch (err) {
     logger.error('analytics team failed', { error: String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'فشل جلب التقرير', requestId: (req as any).id });
@@ -125,7 +155,11 @@ router.get('/campaigns', requirePermission('analytics:read'), async (req, res) =
   if (isPeriodError(period)) return res.status(400).json({ error: period.error });
 
   try {
-    const campaigns = await campaignPerformance(period, req.user!.organizationId);
+    const campaigns = await campaignPerformance(
+      period,
+      req.user!.organizationId,
+      parseFilters(req.query as Record<string, unknown>),
+    );
     res.json({ period, campaigns });
   } catch (err) {
     logger.error('analytics campaigns failed', { error: String(err), requestId: (req as any).id });
@@ -142,6 +176,20 @@ router.get('/gateway', requirePermission('analytics:read'), async (req, res) => 
     res.json({ period, ...(await gatewayReport(period)) });
   } catch (err) {
     logger.error('analytics gateway failed', { error: String(err), requestId: (req as any).id });
+    res.status(500).json({ error: 'فشل جلب التقرير', requestId: (req as any).id });
+  }
+});
+
+/** Inbound gateway health and outbound webhook telemetry, split by direction. */
+router.get('/webhooks', requirePermission('analytics:read'), async (req, res) => {
+  const period = parsePeriod(req.query as Record<string, unknown>);
+  if (isPeriodError(period)) return res.status(400).json({ error: period.error });
+
+  try {
+    const report = await webhookReport(period, WEBHOOK_LOG_RETENTION_DAYS);
+    res.json({ period, ...report });
+  } catch (err) {
+    logger.error('analytics webhooks failed', { error: String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'فشل جلب التقرير', requestId: (req as any).id });
   }
 });

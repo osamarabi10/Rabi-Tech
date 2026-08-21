@@ -161,7 +161,7 @@ export function SnippetsCard({ isAdmin, teams }: { isAdmin: boolean; teams: Team
       </CardHeader>
 
       <CardContent className="space-y-3">
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           {t('اكتب')} <code className="rounded bg-muted px-1">:{t('الرمز')}</code>{' '}
           {t('داخل صندوق الرد ليتوسّع القالب تلقائياً.')}
         </p>
@@ -176,7 +176,7 @@ export function SnippetsCard({ isAdmin, teams }: { isAdmin: boolean; teams: Team
                 key={key}
                 onClick={() => setFilter(key as typeof filter)}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors',
+                  'rounded-md px-2.5 py-1 text-caption font-medium transition-colors',
                   filter === key
                     ? 'bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -211,18 +211,18 @@ export function SnippetsCard({ isAdmin, teams }: { isAdmin: boolean; teams: Team
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="truncate text-xs font-semibold">{tpl.title}</span>
                   {tpl.shortCode && (
-                    <span className="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" dir="ltr">
+                    <span className="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 font-mono text-micro text-muted-foreground" dir="ltr">
                       <Hash className="h-2.5 w-2.5" />{tpl.shortCode}
                     </span>
                   )}
-                  <span className="rounded-full border border-border px-1.5 py-0 text-[10px] text-muted-foreground">
+                  <span className="rounded-full border border-border px-1.5 py-0 text-micro text-muted-foreground">
                     {t(CATEGORIES.find((c) => c.value === tpl.category)?.label || tpl.category)}
                   </span>
                   {!tpl.isActive && (
-                    <span className="text-[10px] font-medium text-warning">{t('معطّل')}</span>
+                    <span className="text-micro font-medium text-warning">{t('معطّل')}</span>
                   )}
                 </div>
-                <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-[11px] text-muted-foreground">
+                <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-caption text-muted-foreground">
                   {tpl.body}
                 </p>
               </div>
@@ -294,7 +294,7 @@ export function SnippetsCard({ isAdmin, teams }: { isAdmin: boolean; teams: Team
               </div>
             </div>
             {activeCategory && (
-              <p className="text-[10px] text-muted-foreground">{t(activeCategory.hint)}</p>
+              <p className="text-micro text-muted-foreground">{t(activeCategory.hint)}</p>
             )}
 
             <div className="space-y-1.5">
@@ -305,7 +305,7 @@ export function SnippetsCard({ isAdmin, teams }: { isAdmin: boolean; teams: Team
                 onChange={(e) => setForm((p) => ({ ...p, body: e.target.value }))}
                 placeholder={t('استخدم {{contactName}} لاسم العميل')}
               />
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-micro text-muted-foreground">
                 {t('المتغيرات')}: <code>{'{{contactName}}'}</code> <code>{'{{firstName}}'}</code>
               </p>
             </div>

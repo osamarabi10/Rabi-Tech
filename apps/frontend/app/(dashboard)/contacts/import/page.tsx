@@ -166,7 +166,7 @@ export default function ContactImportPage() {
                   {fileName || t('اسحب الملف هنا أو انقر للاختيار')}
                 </p>
                 {rows.length > 0 && (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-caption text-muted-foreground">
                     {rows.length} {t('صف')} · {headers.length} {t('عمود')}
                   </p>
                 )}
@@ -190,7 +190,7 @@ export default function ContactImportPage() {
                   <div className="grid gap-2 sm:grid-cols-2">
                     {headers.map((header) => (
                       <div key={header} className="flex items-center gap-2">
-                        <span className="w-1/2 truncate text-[11px] text-muted-foreground" title={header}>
+                        <span className="w-1/2 truncate text-caption text-muted-foreground" title={header}>
                           {header}
                         </span>
                         <select
@@ -220,7 +220,7 @@ export default function ContactImportPage() {
                         placeholder="972"
                         dir="ltr"
                       />
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="text-micro text-muted-foreground">
                         {t('يُستخدم للأرقام المحلية التي تبدأ بصفر')}
                       </p>
                     </div>
@@ -231,7 +231,7 @@ export default function ContactImportPage() {
                   </div>
 
                   {!phoneHeader && (
-                    <p className="rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
+                    <p className="rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-caption text-destructive">
                       {t('يجب ربط عمود واحد بالهاتف')}
                     </p>
                   )}
@@ -243,7 +243,7 @@ export default function ContactImportPage() {
                 <CardContent className="p-4">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs font-semibold">{t('معاينة')}</p>
-                    <p className="text-[11px]">
+                    <p className="text-caption">
                       <span className="text-success-vivid">{validCount} {t('صالح')}</span>
                       {invalidCount > 0 && (
                         <span className="ms-2 text-destructive">{invalidCount} {t('غير صالح')}</span>
@@ -251,7 +251,7 @@ export default function ContactImportPage() {
                     </p>
                   </div>
                   <div className="overflow-x-auto">
-                    <table className="w-full text-[11px]">
+                    <table className="w-full text-caption">
                       <thead className="text-muted-foreground">
                         <tr>
                           <th className="p-1 text-start">#</th>
@@ -283,7 +283,7 @@ export default function ContactImportPage() {
                     </table>
                   </div>
                   {rows.length > PREVIEW_ROWS && (
-                    <p className="mt-2 text-[10px] text-muted-foreground">
+                    <p className="mt-2 text-micro text-muted-foreground">
                       {t('تُعرض أول صفوف فقط — يتم التحقق من كل الصفوف عند الاستيراد.')}
                     </p>
                   )}
@@ -301,11 +301,11 @@ export default function ContactImportPage() {
                       onChange={(e) => setConsent(e.target.checked)}
                       className="mt-0.5"
                     />
-                    <span className="text-[11px] leading-relaxed">
+                    <span className="text-caption leading-relaxed">
                       {t('أؤكد أن جميع جهات الاتصال في هذا الملف وافقت صراحةً على استقبال رسائل من مؤسستنا.')}
                     </span>
                   </label>
-                  <p className="text-[10px] text-muted-foreground">
+                  <p className="text-micro text-muted-foreground">
                     {t('جهات الاتصال التي سبق أن ألغت الاشتراك تبقى ملغاة ولا يعيدها الاستيراد.')}
                   </p>
 
@@ -346,14 +346,14 @@ function ImportResult({
         </div>
 
         {summary.skippedOptedOut > 0 && (
-          <p className="rounded border border-warning/40 bg-warning/10 px-2 py-1.5 text-[11px] text-warning">
+          <p className="rounded border border-warning/40 bg-warning/10 px-2 py-1.5 text-caption text-warning">
             {summary.skippedOptedOut} {t('جهة اتصال بقيت ملغاة الاشتراك ولم يغيّرها الاستيراد.')}
           </p>
         )}
 
         {summary.errors.length > 0 && (
           <div className="max-h-56 overflow-y-auto rounded-md border border-border">
-            <table className="w-full text-[11px]">
+            <table className="w-full text-caption">
               <tbody>
                 {summary.errors.map((error, index) => (
                   <tr key={index} className="border-b border-border last:border-0">
@@ -385,7 +385,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: 'ok
       )}>
         {value}
       </p>
-      <p className="text-[10px] text-muted-foreground">{label}</p>
+      <p className="text-micro text-muted-foreground">{label}</p>
     </div>
   );
 }

@@ -135,16 +135,16 @@ export function AutoRepliesCard({ isAdmin }: { isAdmin: boolean }) {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{t(info.label)}</span>
                     {slot.configured ? (
-                      <Badge variant={active ? 'default' : 'secondary'} className="text-[10px]">
+                      <Badge variant={active ? 'default' : 'secondary'} className="text-micro">
                         {active ? t('مفعّل') : t('متوقف')}
                       </Badge>
                     ) : (
-                      <Badge variant="secondary" className="text-[10px]">
+                      <Badge variant="secondary" className="text-micro">
                         {t('غير مضبوط — لا يُرسل شيء')}
                       </Badge>
                     )}
                   </div>
-                  <p className="text-[11px] text-muted-foreground">{t(info.when)}</p>
+                  <p className="text-caption text-muted-foreground">{t(info.when)}</p>
                 </div>
 
                 {isAdmin && (

@@ -1,13 +1,13 @@
 # RabiTech — TODO
 
-Execution checklist derived from [PROJECT-SPEC.md](PROJECT-SPEC.md) §6.
+Execution checklist derived fro5 [PROJECT SPEC.6d](PROJECT SPEC.6d) §6.
 Work top to bottom. A box is ticked only when its **verify** line has been run
 and passed — never on "code written".
 
 Standing gate for every phase:
-`npx tsc --noEmit -p apps/backend` · `npm run test:tenancy` (45/45) ·
+`npx tsc   noEmit  p apps/backend` · `npm run test:tenancy` (45/45) ·
 frontend build · deploy · live check. New tables get `organizationId` +
-composite FK `[id, organizationId]`. New env vars go into `docker-compose.yml`
+composite FK `[id, organizationId]`. New env vars go into `docker compose.yml`
 explicitly or they don't exist in the container.
 
 ---
@@ -734,11 +734,17 @@ resolution from 2026-08-21 on is stamped at the transition itself.
   — **done 2026-08-21.** Delivered / read / failed / replied. "Replied" is one
   pushed-down `contact.count` per campaign that walks the relation in Postgres
   rather than pulling recipient ids into Node and sending them back as an `in`.
-- [~] **5. Gateway health** — our replacement for their "account health & cost":
+- [x] **5. Gateway health** — our replacement for their "account health & cost":
   session state, failed-send rate, webhook delivery
-  — **partly done 2026-08-21.** Session state, failed-send rate and automated
-  share ship. **Webhook delivery does not**: nothing records webhook receipts,
-  so there is no honest number to report yet — it needs a delivery log first.
+  — **done 2026-08-22.** Session state, failed-send rate and automated share
+  shipped 2026-08-21; **webhook delivery** followed with `WebhookDeliveryLog`
+  and a sixth Webhooks tab. Logged in **both** directions, because they are
+  separate faults: OUTBOUND is a workflow calling a subscriber endpoint,
+  INBOUND is the gateway delivering to us, and only the second goes silent
+  when the platform stops receiving WhatsApp traffic. Verified live: an
+  inbound receipt recorded 200/ok/3ms, an outbound failure recorded its host,
+  null status and error, and a success rate of `—` rather than a green 100%
+  when nothing was delivered at all.
   Live connectivity is deliberately read from the gateway rather than cached,
   because a stored copy of "connected" is the more convincing of the two and
   the wrong one.

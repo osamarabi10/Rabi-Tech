@@ -51,6 +51,8 @@ import { renderTemplate } from '@/lib/utils';
 import { getBackendBaseUrl } from '@/lib/runtime-url';
 import { getSocket } from '@/lib/socket';
 import { StatusBadge } from '@/components/status-badge';
+import { LifecycleChip, useLifecycleStages } from '@/components/inbox/lifecycle-select';
+import { DENSITY_CLASSES, useDensity, type Density } from '@/lib/density';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -122,6 +124,12 @@ function labelColor(text: string): string {
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
+const DENSITY_OPTIONS: { key: Density; label: string }[] = [
+  { key: 'compact', label: 'مضغوط' },
+  { key: 'comfortable', label: 'مريح' },
+  { key: 'spacious', label: 'واسع' },
+];
+
 export default function InboxPage() {
   const { t } = useT();
   const [convFilter, setConvFilter] = useState<ConvStatus>('all');
@@ -137,6 +145,13 @@ export default function InboxPage() {
    * happened to be first.
    */
   const requestedConvId = useSearchParams().get('conversation');
+
+  /** The tenant’s pipeline, for the header chip and the contact panel. */
+  const lifecycleStages = useLifecycleStages();
+
+  /** How much of the screen each conversation row is allowed to take. */
+  const { density, setDensity } = useDensity();
+  const rowDensity = DENSITY_CLASSES[density];
   const [messages, setMessages] = useState<Msg[]>([]);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [oldestMsgId, setOldestMsgId] = useState<string | null>(null);
@@ -160,6 +175,17 @@ export default function InboxPage() {
   const [assigning, setAssigning] = useState(false);
   const [isInternalNote, setIsInternalNote] = useState(false);
   const [shortCodeMatches, setShortCodeMatches] = useState<Template[]>([]);
+
+  /**
+   * Teammates matching the `@` fragment being typed, and the ones already
+   * inserted.
+   *
+   * `mentioned` holds ids rather than names because that is what gets sent.
+   * Re-deriving them from the note text at send time would break on two
+   * agents sharing a display name, and on any name containing a space.
+   */
+  const [mentionMatches, setMentionMatches] = useState<{ id: string; name: string }[]>([]);
+  const [mentioned, setMentioned] = useState<{ id: string; name: string }[]>([]);
   const [shortCodeIdx, setShortCodeIdx] = useState(0);
   const [labelMenuOpen, setLabelMenuOpen] = useState(false);
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
@@ -463,8 +489,14 @@ export default function InboxPage() {
     const body = reply;
     const internal = isInternalNote;
     setReply(''); setSendError(null); setIsInternalNote(false); setShortCodeMatches([]);
+    setMentionMatches([]); setMentioned([]);
     try {
-      const sent = await apiSendReply(sel.id, body, internal);
+      // Only the teammates still named in the note. Someone mentioned and
+      // then deleted from the text should not be notified.
+      const stillMentioned = internal
+        ? mentioned.filter((user) => body.includes(`@${user.name}`)).map((user) => user.id)
+        : [];
+      const sent = await apiSendReply(sel.id, body, internal, stillMentioned);
       setMessages((p) => [...p, sent]);
       setConvs((p) => p.map((c) => (c.id === sel.id ? { ...c, lastMsg: body, lastTime: sent.time } : c)));
     } catch (err: unknown) {
@@ -627,13 +659,17 @@ export default function InboxPage() {
           {/* Status filter tabs (chats only) */}
           {(
             <>
-              <div className="flex gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
+              {/* Density shares the filter row: it is a view preference, not
+                  another thing narrowing the list, so it sits apart at the end
+                  rather than among the filters. */}
+              <div className="flex items-center gap-1">
+              <div className="flex flex-1 gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
                 {STATUS_TABS.map((tab) => (
                   <button
                     key={tab.key}
                     onClick={() => setConvFilter(tab.key)}
                     className={cn(
-                      'flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors',
+                      'flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1 text-caption font-semibold transition-colors',
                       convFilter === tab.key
                         // Solid, not a tint: the count pill nests inside this and
                         // a tint-on-tint stack left it at ~2.9:1.
@@ -644,7 +680,7 @@ export default function InboxPage() {
                     {tab.label}
                     {tab.count !== undefined && tab.count > 0 && (
                       <span className={cn(
-                        'rounded-full px-1 text-[10px]',
+                        'rounded-full px-1 text-micro',
                         // Opaque, not a white overlay: at 10px a translucent pill
                         // over the blue tab only reached 3.4:1.
                         convFilter === tab.key ? 'bg-card font-semibold text-primary' : 'bg-muted',
@@ -655,13 +691,39 @@ export default function InboxPage() {
                   </button>
                 ))}
               </div>
+
+              <div
+                className="flex shrink-0 rounded-md border border-border p-0.5"
+                role="group"
+                aria-label={t('كثافة العرض')}
+              >
+                {DENSITY_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setDensity(option.key)}
+                    title={t(option.label)}
+                    aria-pressed={density === option.key}
+                    className={cn(
+                      'rounded px-1.5 py-0.5 text-micro transition-colors motion-micro',
+                      density === option.key
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {t(option.label)}
+                  </button>
+                ))}
+              </div>
+              </div>
+
               {PREDEFINED_LABELS.length > 0 && (
                 <div className="flex gap-1 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden">
                   {PREDEFINED_LABELS.map((lbl) => (
                     <button
                       key={lbl.text}
                       onClick={() => setLabelFilter((f) => f === lbl.text ? null : lbl.text)}
-                      className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium transition-opacity"
+                      className="shrink-0 rounded-full px-2 py-0.5 text-micro font-medium transition-opacity"
                       style={{
                         backgroundColor: `${lbl.color}${labelFilter === lbl.text ? '35' : '18'}`,
                         color: lbl.color,
@@ -747,11 +809,17 @@ export default function InboxPage() {
                 type="button"
                 onClick={() => setSelId(c.id)}
                 className={cn(
-                  'relative flex w-full gap-2.5 border-b border-border/40 px-3 py-3 text-right transition-colors hover:bg-accent/40',
-                  isActive && 'bg-primary/8 before:absolute before:right-0 before:top-0 before:h-full before:w-0.5 before:bg-primary'
+                  // `text-start` and `before:start-0`, not their physical
+                  // equivalents: the active-row marker sat on the right in both
+                  // directions, which in English put it on the far edge of the
+                  // row instead of against the list.
+                  'relative flex w-full border-b border-border/40 text-start transition-colors motion-micro hover:bg-accent/40',
+                  rowDensity.row,
+                  rowDensity.gap,
+                  isActive && 'bg-primary/8 before:absolute before:start-0 before:top-0 before:h-full before:w-0.5 before:bg-primary'
                 )}
               >
-                <Avatar className="h-9 w-9 shrink-0">
+                <Avatar className={cn(rowDensity.avatar, 'shrink-0')}>
                   {/* Solid fill, white initial — a 12% tint of the same hue put
                       the initial at ~2.9:1 against its own background. */}
                   <AvatarFallback className="text-xs font-bold" style={{ backgroundColor: cz.color, color: '#fff' }}>
@@ -760,15 +828,15 @@ export default function InboxPage() {
                 </Avatar>
                 <div className="min-w-0 flex-1">
                   <div className="mb-0.5 flex items-start justify-between gap-1">
-                    <span className={cn('truncate text-[13px] font-semibold', isActive ? 'text-foreground' : 'text-foreground/90')}>
+                    <span className={cn('truncate text-small font-semibold', isActive ? 'text-foreground' : 'text-foreground/90')}>
                       {c.name}
                     </span>
-                    <span className="shrink-0 text-[10px] text-muted-foreground">{c.lastTime}</span>
+                    <span className="shrink-0 text-micro text-muted-foreground">{c.lastTime}</span>
                   </div>
                   <div className="mb-1 flex items-center gap-1.5">
-                    <StatusBadge label={csc.label} color={csc.color} className="px-1.5 py-0 text-[9px]" />
+                    <StatusBadge label={csc.label} color={csc.color} className="px-1.5 py-0 text-micro" />
                     {c.assigneeName && (
-                      <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
+                      <span className="flex items-center gap-0.5 text-micro text-muted-foreground">
                         <User className="h-2.5 w-2.5" />{c.assigneeName}
                       </span>
                     )}
@@ -776,7 +844,7 @@ export default function InboxPage() {
                   {c.labels.length > 0 && (
                     <div className="mb-0.5 flex flex-wrap gap-0.5">
                       {c.labels.slice(0, 3).map((lbl) => (
-                        <span key={lbl} className="rounded-full px-1.5 py-0 text-[9px] font-medium"
+                        <span key={lbl} className="rounded-full px-1.5 py-0 text-micro font-medium"
                           style={{ backgroundColor: `${labelColor(lbl)}25`, color: labelColor(lbl) }}>
                           {lbl}
                         </span>
@@ -784,11 +852,18 @@ export default function InboxPage() {
                     </div>
                   )}
                   <div className="flex items-center justify-between gap-1">
-                    <span className="truncate text-[11px] text-muted-foreground" dir={messageDir(c.lastMsg)}>
-                      {isClientRating(c.lastMsg) ? `⭐ تقييم ${c.lastMsg}/5` : c.lastMsg}
-                    </span>
+                    {rowDensity.showPreview ? (
+                      <span
+                        className={cn('truncate text-caption text-muted-foreground', rowDensity.preview)}
+                        dir={messageDir(c.lastMsg)}
+                      >
+                        {isClientRating(c.lastMsg) ? `⭐ تقييم ${c.lastMsg}/5` : c.lastMsg}
+                      </span>
+                    ) : (
+                      <span />
+                    )}
                     {c.unread > 0 && (
-                      <Badge className="h-4 min-w-4 shrink-0 rounded-full px-1 text-[9px]">{c.unread}</Badge>
+                      <Badge className="h-4 min-w-4 shrink-0 rounded-full px-1 text-micro">{c.unread}</Badge>
                     )}
                   </div>
                 </div>
@@ -838,10 +913,15 @@ export default function InboxPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="truncate text-sm font-bold">{sel.name}</span>
-                  <span className="shrink-0 text-[10px] font-mono text-muted-foreground opacity-60">#{sel.displayId}</span>
-                  <StatusBadge label={sc!.label} color={sc!.color} className="shrink-0 px-1.5 py-0 text-[10px]" />
+                  <span className="shrink-0 text-micro font-mono text-muted-foreground opacity-60">#{sel.displayId}</span>
+                  <StatusBadge label={sc!.label} color={sc!.color} className="shrink-0 px-1.5 py-0 text-micro" />
+                  {/* Where this contact stands, beside the conversation status.
+                      Read-only here: the header is a summary, and the editable
+                      control lives in the contact panel next to the rest of the
+                      contact’s fields. */}
+                  <LifecycleChip value={sel.lifecycleStage} stages={lifecycleStages} />
                   {sel.labels.map((lbl) => (
-                    <span key={lbl} className="rounded-full px-2 py-0 text-[9px] font-medium cursor-pointer"
+                    <span key={lbl} className="rounded-full px-2 py-0 text-micro font-medium cursor-pointer"
                       style={{ backgroundColor: `${labelColor(lbl)}25`, color: labelColor(lbl) }}
                       onClick={() => handleUpdateLabels(sel.labels.filter((l) => l !== lbl))}>
                       {lbl} ×
@@ -851,7 +931,7 @@ export default function InboxPage() {
                   {PREDEFINED_LABELS.length > 0 && <div ref={labelMenuRef} className="relative">
                     <button
                       onClick={() => setLabelMenuOpen((v) => !v)}
-                      className="flex items-center gap-0.5 rounded-full border border-border/50 px-1.5 py-0 text-[9px] text-muted-foreground hover:text-foreground transition-colors"
+                      className="flex items-center gap-0.5 rounded-full border border-border/50 px-1.5 py-0 text-micro text-muted-foreground hover:text-foreground transition-colors"
                     >
                       <Tag className="h-2.5 w-2.5" /> +
                     </button>
@@ -866,14 +946,14 @@ export default function InboxPage() {
                           </button>
                         ))}
                         {PREDEFINED_LABELS.every((l) => sel.labels.includes(l.text)) && (
-                          <p className="px-2 py-1 text-[10px] text-muted-foreground">{t('كل التصنيفات مضافة')}</p>
+                          <p className="px-2 py-1 text-micro text-muted-foreground">{t('كل التصنيفات مضافة')}</p>
                         )}
                       </div>
                     )}
                   </div>}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="numeric text-[11px] text-muted-foreground" dir="ltr">{sel.phone}</span>
+                  <span className="numeric text-caption text-muted-foreground" dir="ltr">{sel.phone}</span>
                 </div>
               </div>
 
@@ -909,7 +989,7 @@ export default function InboxPage() {
                         } finally { setLoadingOlder(false); }
                       }}
                       disabled={loadingOlder}
-                      className="rounded-full border border-border bg-card px-4 py-1.5 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-50 transition-colors"
+                      className="rounded-full border border-border bg-card px-4 py-1.5 text-caption text-muted-foreground hover:bg-accent disabled:opacity-50 transition-colors"
                     >
                       {loadingOlder ? t('جارٍ التحميل...') : t('تحميل رسائل أقدم')}
                     </button>
@@ -930,22 +1010,22 @@ export default function InboxPage() {
                           : 'self-start rounded-br-sm bg-primary text-primary-foreground'
                   )}>
                     {m.isInternal && (
-                      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold text-warning">
+                      <div className="mb-1 flex items-center gap-1 text-micro font-semibold text-warning">
                         <Lock className="h-2.5 w-2.5" />
                         {t('ملاحظة داخلية')}
                       </div>
                     )}
                     {m.auto && !m.isInternal && (
-                      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold text-primary">
+                      <div className="mb-1 flex items-center gap-1 text-micro font-semibold text-primary">
                         <Zap className="h-3 w-3" />
                         {m.autoType === 'feedback' ? t('شكر وتقييم') : t('رد تلقائي')}
                       </div>
                     )}
                     {m.dir === 'out' && !m.auto && !m.isInternal && m.sentByName && (
-                      <p className="mb-0.5 text-[10px] font-semibold text-primary-foreground/80">{m.sentByName}</p>
+                      <p className="mb-0.5 text-micro font-semibold text-primary-foreground/80">{m.sentByName}</p>
                     )}
                     {m.dir === 'in' && isClientRating(m.body) && (
-                      <div className="mb-1 text-[10px] font-semibold text-warning">
+                      <div className="mb-1 text-micro font-semibold text-warning">
                         ⭐ {t('تقييم العميل')}: {m.body}/5
                       </div>
                     )}
@@ -960,9 +1040,9 @@ export default function InboxPage() {
                       <p className="whitespace-pre-wrap" dir={messageDir(m.body)}>{m.body}</p>
                     )}
                     <div className="mt-1 flex items-center justify-between gap-2">
-                      <p className="text-[10px] opacity-40">{m.time}</p>
+                      <p className="text-micro opacity-40">{m.time}</p>
                       {m.dir === 'out' && (
-                        <span className="text-[10px] opacity-50">
+                        <span className="text-micro opacity-50">
                           {m.status === 'READ' ? '✓✓' : m.status === 'DELIVERED' ? '✓✓' : m.status === 'SENT' ? '✓' : m.status === 'FAILED' ? '✗' : '○'}
                         </span>
                       )}
@@ -976,7 +1056,7 @@ export default function InboxPage() {
               <button
                 type="button"
                 onClick={jumpToLatest}
-                className="absolute inset-x-0 bottom-3 mx-auto flex w-fit items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground shadow-lg transition-opacity hover:opacity-90"
+                className="absolute inset-x-0 bottom-3 mx-auto flex w-fit items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground shadow-lg transition-opacity hover:opacity-90"
               >
                 {t('رسائل جديدة')}
                 <span aria-hidden>↓</span>
@@ -1052,6 +1132,30 @@ export default function InboxPage() {
                   .catch(() => {});
               }}
               onShortCodePick={expandShortCode}
+              mentionMatches={mentionMatches}
+              onMentionQuery={(q) => {
+                // Mentions exist only on internal notes: a customer-facing
+                // reply must never notify someone the customer never saw named.
+                if (q === null || !isInternalNote) { setMentionMatches([]); return; }
+                const needle = q.toLowerCase();
+                setMentionMatches(
+                  techs
+                    .filter((agent) => agent.id !== currentUser?.id)
+                    .filter((agent) => !needle || agent.name.toLowerCase().includes(needle))
+                    .slice(0, 5)
+                    .map((agent) => ({ id: agent.id, name: agent.name })),
+                );
+              }}
+              onMentionPick={(user) => {
+                // Replace the partial `@fragment` the agent was typing, not
+                // every occurrence — the same fragment may appear earlier in
+                // the note as ordinary text.
+                setReply((prev) => prev.replace(/@[^\s@]*$/, `@${user.name} `));
+                setMentioned((prev) =>
+                  prev.some((u) => u.id === user.id) ? prev : [...prev, user],
+                );
+                setMentionMatches([]);
+              }}
               quickTemplates={quickTemplates}
               onQuickTemplate={(tpl) =>
                 setReply(renderTemplate(tpl.body, {
@@ -1091,7 +1195,7 @@ export default function InboxPage() {
               <Label htmlFor="new-phone" className="text-xs">{t('رقم الهاتف *')}</Label>
               <Input id="new-phone" dir="ltr" placeholder="0501234567 or +972501234567"
                 value={newPhone} onChange={(e) => setNewPhone(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleStartChat()} />
-              <p className="text-[11px] text-muted-foreground">{t('الصيغ المدعومة: 0501234567 أو +972501234567')}</p>
+              <p className="text-caption text-muted-foreground">{t('الصيغ المدعومة: 0501234567 أو +972501234567')}</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="new-name" className="text-xs">{t('اسم العميل (اختياري)')}</Label>
@@ -1153,7 +1257,7 @@ export default function InboxPage() {
                       setShowTplPicker(false);
                     }}>
                     <p className="text-xs font-semibold text-foreground">{tpl.title}</p>
-                    <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{tpl.body}</p>
+                    <p className="mt-0.5 line-clamp-2 text-caption text-muted-foreground">{tpl.body}</p>
                   </button>
                 ))}
               {allTemplates.filter((tpl) => !tplSearch || tpl.title.includes(tplSearch) || tpl.body.includes(tplSearch)).length === 0 && (

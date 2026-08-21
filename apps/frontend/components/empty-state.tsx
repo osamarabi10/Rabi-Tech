@@ -45,7 +45,7 @@ export function EmptyState({
       )}
       <p className={cn('font-medium text-foreground', compact ? 'text-xs' : 'text-sm')}>{title}</p>
       {hint && (
-        <p className={cn('max-w-sm text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>
+        <p className={cn('max-w-sm text-muted-foreground', compact ? 'text-caption' : 'text-xs')}>
           {hint}
         </p>
       )}

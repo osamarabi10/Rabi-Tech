@@ -152,10 +152,10 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
         >
           <BrandLogo size="sm" showText={false} />
           <div className="min-w-0 leading-tight">
-            <p className="truncate text-[13px] font-bold tracking-wide text-nav-foreground">
+            <p className="truncate text-small font-bold tracking-wide text-nav-foreground">
               {branding.productName}
             </p>
-            <p className="text-[10px] text-nav-muted">{t('لوحة التحكم')}</p>
+            <p className="text-micro text-nav-muted">{t('لوحة التحكم')}</p>
           </div>
         </Link>
 
@@ -165,16 +165,16 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
         */}
         {viewAs && (
           <div className="mx-3 mt-3 rounded-md border border-warning/40 bg-warning/15 px-2.5 py-2">
-            <p className="text-[10px] font-medium uppercase tracking-wide text-warning/90">
+            <p className="text-micro font-medium uppercase tracking-wide text-warning/90">
               {t('تعرض بيانات مشترك')}
             </p>
-            <p className="mt-0.5 truncate text-[12px] font-semibold text-warning" title={viewAs.name}>
+            <p className="mt-0.5 truncate text-small font-semibold text-warning" title={viewAs.name}>
               {viewAs.name}
             </p>
-            <p className="mt-0.5 text-[10px] text-warning/70">{t('للقراءة فقط')}</p>
+            <p className="mt-0.5 text-micro text-warning/70">{t('للقراءة فقط')}</p>
             <button
               onClick={exitViewAs}
-              className="mt-1.5 w-full rounded border border-warning/40 px-2 py-1 text-[11px] font-medium text-warning transition-colors hover:bg-warning/25"
+              className="mt-1.5 w-full rounded border border-warning/40 px-2 py-1 text-caption font-medium text-warning transition-colors hover:bg-warning/25"
             >
               {t('إنهاء العرض')}
             </button>
@@ -200,7 +200,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
                     key={item.href}
                     href={item.href}
                     className={cn(
-                      'group relative flex items-center gap-3 rounded-[6px] px-3 py-2 text-[13px] font-medium',
+                      'group relative flex items-center gap-3 rounded-[6px] px-3 py-2 text-small font-medium',
                       'transition-all duration-150',
                       active
                         ? 'bg-nav-accent text-nav-foreground'
@@ -235,7 +235,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
               <button
                 className={cn(
                   'flex w-full items-center gap-3 rounded-[6px] px-3 py-2',
-                  'text-[13px] font-medium text-nav-muted',
+                  'text-small font-medium text-nav-muted',
                   'transition-colors hover:bg-nav-accent/60 hover:text-nav-foreground',
                 )}
               >
@@ -263,7 +263,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
               <button
                 className={cn(
                   'flex w-full items-center gap-3 rounded-[6px] px-3 py-2',
-                  'text-[13px] font-medium text-nav-muted',
+                  'text-small font-medium text-nav-muted',
                   'transition-colors hover:bg-nav-accent/60 hover:text-nav-foreground',
                 )}
               >
@@ -294,7 +294,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
                 disabled={awayLoading}
                 className={cn(
                   'flex w-full items-center gap-3 rounded-[6px] px-3 py-2',
-                  'text-[13px] font-medium transition-colors',
+                  'text-small font-medium transition-colors',
                   isAway
                     ? 'bg-warning/15 text-warning hover:bg-warning/25'
                     : 'text-nav-muted hover:bg-nav-accent/60 hover:text-nav-foreground',
@@ -311,7 +311,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
 
           {/* User row + logout */}
           <div className="flex items-center gap-2 rounded-[6px] px-3 py-2">
-            <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground">
+            <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-caption font-bold text-primary-foreground">
               {(user?.name || 'م')?.charAt(0)}
               {/* Away indicator dot */}
               <span className={cn(
@@ -320,10 +320,10 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
               )} />
             </div>
             <div className="min-w-0 flex-1 leading-tight">
-              <p className="truncate text-[12px] font-semibold text-nav-foreground">
+              <p className="truncate text-small font-semibold text-nav-foreground">
                 {user?.name || t('المستخدم')}
               </p>
-              <p className="truncate text-[10px] text-nav-muted">
+              <p className="truncate text-micro text-nav-muted">
                 {user?.primaryTeam?.name || user?.role || ''}
               </p>
             </div>

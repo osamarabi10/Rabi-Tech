@@ -29,9 +29,16 @@ export function activeIntlLocale(): string {
 
 export function formatTimeOfDay(value: Date | string): string {
   const date = typeof value === 'string' ? new Date(value) : value;
-  // en-GB rather than en-US on purpose: a 24-hour clock avoids AM/PM entirely,
-  // which is what the operators of this product actually use.
-  return date.toLocaleTimeString(activeIntlLocale(), { hour: '2-digit', minute: '2-digit' });
+  // 12-hour, with the meridiem the *active* locale uses: ص/م in Arabic, am/pm
+  // in English and Hebrew. The bug this file exists to fix was never the clock
+  // — it was the hardcoded Arabic locale, which printed "م" inside an English
+  // screen. Passing the live locale keeps the familiar 12-hour reading while
+  // letting each language render its own marker.
+  return date.toLocaleTimeString(activeIntlLocale(), {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
 }
 
 export function formatDate(value: Date | string): string {

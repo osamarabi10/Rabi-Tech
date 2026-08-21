@@ -99,6 +99,47 @@
     --cyan:    200 72% 49%;
     --emerald: 160 84% 39%;
     --amber:    38 92% 50%;
+
+  /*
+   * Type scale.
+   *
+   * Nine steps, replacing 189 ad-hoc `text-[Npx]` literals that had drifted
+   * into five sizes with no relationship to each other. Sizes are rem so a
+   * reader who raises their browser font size actually gets larger text —
+   * a px literal ignores that setting completely.
+   *
+   * Line heights are bound to each step here rather than left to per-site
+   * classes, because the dense operator surfaces are exactly where an
+   * inherited 1.5 line-height silently breaks a row height.
+   */
+  --text-display: 1.75rem;   /* 28px — page-level number, one per screen */
+  --text-display-lh: 2rem;
+  --text-h1: 1.125rem;       /* 18px */
+  --text-h1-lh: 1.5rem;
+  --text-h2: 1rem;           /* 16px */
+  --text-h2-lh: 1.375rem;
+  --text-h3: 0.875rem;       /* 14px */
+  --text-h3-lh: 1.25rem;
+  --text-body: 0.875rem;     /* 14px — default reading size */
+  --text-body-lh: 1.25rem;
+  --text-small: 0.8125rem;   /* 13px */
+  --text-small-lh: 1.125rem;
+  --text-caption: 0.6875rem; /* 11px — the workhorse of the dense surfaces */
+  --text-caption-lh: 1rem;
+  --text-micro: 0.625rem;    /* 10px — badges and counts only */
+  --text-micro-lh: 0.875rem;
+
+  /*
+   * Motion.
+   *
+   * Three durations, one easing. The easing decelerates hard at the end
+   * (0.2,0,0,1), which reads as the element settling into place rather than
+   * coasting to a stop.
+   */
+  --motion-micro: 120ms;  /* hover, focus, colour */
+  --motion-panel: 200ms;  /* drawers, popovers, expanding rows */
+  --motion-modal: 300ms;  /* full overlays */
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
   }
 
   /* ─────────────────────────────────────────────────────────
@@ -250,11 +291,31 @@
 
   /* Compact variant for dense rows such as the filter builder. */
   .select-field-sm {
-    @apply h-8 px-1.5 text-[11px];
+    @apply h-8 px-1.5 text-caption;
   }
 }
 
 @layer utilities {
+  /*
+   * Type scale utilities.
+   *
+   * Named for role, not size, so a later decision to make captions 12px is
+   * one edit here instead of a search for `text-[11px]` across 35 files.
+   */
+  .text-display { font-size: var(--text-display); line-height: var(--text-display-lh); }
+  .text-h1 { font-size: var(--text-h1); line-height: var(--text-h1-lh); }
+  .text-h2 { font-size: var(--text-h2); line-height: var(--text-h2-lh); }
+  .text-h3 { font-size: var(--text-h3); line-height: var(--text-h3-lh); }
+  .text-body { font-size: var(--text-body); line-height: var(--text-body-lh); }
+  .text-small { font-size: var(--text-small); line-height: var(--text-small-lh); }
+  .text-caption { font-size: var(--text-caption); line-height: var(--text-caption-lh); }
+  .text-micro { font-size: var(--text-micro); line-height: var(--text-micro-lh); }
+
+  /* Motion utilities, so a component states its intent rather than a number. */
+  .motion-micro { transition-duration: var(--motion-micro); transition-timing-function: var(--motion-ease); }
+  .motion-panel { transition-duration: var(--motion-panel); transition-timing-function: var(--motion-ease); }
+  .motion-modal { transition-duration: var(--motion-modal); transition-timing-function: var(--motion-ease); }
+
   /* Phone numbers, IDs and counts. Tabular figures keep digits the same width
      so columns line up; the isolation utility stops a number reordering the
      RTL text around it — the most common bidi bug in this kind of product. */
@@ -332,4 +393,29 @@
  */
 .thread-scroll [data-radix-scroll-area-viewport] {
   overflow-anchor: none;
+}
+
+/*
+ * Reduced motion.
+ *
+ * The durations collapse to ~0 rather than the animations being removed, so
+ * every transitionend/animationend listener still fires. Deleting the
+ * animation instead is how a menu that closes on animationend gets stuck open
+ * for exactly the users who asked for less motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-micro: 0.01ms;
+    --motion-panel: 0.01ms;
+    --motion-modal: 0.01ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

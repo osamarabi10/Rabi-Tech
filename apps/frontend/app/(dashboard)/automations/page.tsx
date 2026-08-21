@@ -172,21 +172,21 @@ export default function AutomationsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate text-sm font-semibold">{workflow.name}</span>
-                    <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+                    <span className="rounded-full border border-border px-2 py-0.5 text-micro text-muted-foreground">
                       {t(triggerLabel(workflow.triggerType))}
                     </span>
                     {!workflow.isActive && (
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">
                         {t('متوقفة')}
                       </span>
                     )}
                   </div>
                   {workflow.description && (
-                    <p className="truncate text-[11px] text-muted-foreground">{workflow.description}</p>
+                    <p className="truncate text-caption text-muted-foreground">{workflow.description}</p>
                   )}
                 </div>
 
-                <div className="flex shrink-0 items-center gap-3 text-[11px]">
+                <div className="flex shrink-0 items-center gap-3 text-caption">
                   <span className="text-muted-foreground">
                     {total} {t('مرات التشغيل')}
                   </span>

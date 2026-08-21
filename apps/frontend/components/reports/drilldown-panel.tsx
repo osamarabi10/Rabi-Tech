@@ -81,7 +81,7 @@ export function DrilldownPanel({
           <div>
             <h2 className="text-sm font-semibold">{t(METRIC_LABEL[metric])}</h2>
             {result && (
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-caption text-muted-foreground">
                 {result.returned < result.total
                   ? `${t('عرض')} ${result.returned} ${t('من')} ${result.total}`
                   : `${result.total} ${t('نتيجة')}`}
@@ -114,7 +114,7 @@ export function DrilldownPanel({
                       <span className="block truncate font-medium">
                         {conv.contact?.name || conv.contact?.phone || t('غير معروف')}
                       </span>
-                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                      <span className="mt-0.5 block text-caption text-muted-foreground">
                         <span className="numeric" dir="ltr">
                           #{conv.displayId}
                         </span>

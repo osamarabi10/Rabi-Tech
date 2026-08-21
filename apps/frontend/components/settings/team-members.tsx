@@ -143,7 +143,7 @@ export function TeamMembers({ isAdmin, teams }: { isAdmin: boolean; teams: Team[
               </div>
             )}
             {seats.atLimit && (
-              <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-warning">
+              <p className="mt-1.5 flex items-center gap-1.5 text-caption text-warning">
                 <ShieldAlert className="h-3 w-3 shrink-0" />
                 {t('وصلت للحد الأقصى — رقّي الباقة لإضافة أعضاء')}
               </p>
@@ -157,19 +157,19 @@ export function TeamMembers({ isAdmin, teams }: { isAdmin: boolean; teams: Team[
 
         {!loading && users.map((u) => (
           <div key={u.id} className="flex items-center gap-2.5 rounded-md border border-border px-3 py-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-caption font-bold text-primary-foreground">
               {u.name?.charAt(0) || '?'}
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-semibold">{u.name}</p>
-              <p className="truncate text-[10px] text-muted-foreground" dir="ltr">{u.email}</p>
+              <p className="truncate text-micro text-muted-foreground" dir="ltr">{u.email}</p>
             </div>
             {u.primaryTeam && (
               <ColorPill color={u.primaryTeam.color}>
                 {u.primaryTeam.name}
               </ColorPill>
             )}
-            <span className="shrink-0 text-[10px] text-muted-foreground">{u.role}</span>
+            <span className="shrink-0 text-micro text-muted-foreground">{u.role}</span>
             {isAdmin && u.role !== 'ADMIN' && (
               <button
                 onClick={() => remove(u)}

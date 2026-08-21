@@ -108,7 +108,7 @@ export function HealthCell({
       <Button
         size="sm"
         variant="ghost"
-        className="h-6 px-1.5 text-[11px]"
+        className="h-6 px-1.5 text-caption"
         disabled={busy}
         onClick={() => check('status')}
         title="Run the free status probe now"
@@ -130,7 +130,7 @@ export function GatewayAlerts({ health }: { health: GatewayHealth | null }) {
       <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold">
         <AlertTriangle className={cn('h-3.5 w-3.5', open.length ? 'text-destructive' : 'text-muted-foreground')} />
         Gateway alerts
-        {open.length > 0 && <Badge variant="destructive" className="text-[10px]">{open.length} open</Badge>}
+        {open.length > 0 && <Badge variant="destructive" className="text-micro">{open.length} open</Badge>}
       </div>
       <div className="divide-y divide-border">
         {alerts.slice(0, 10).map((alert) => (
@@ -138,7 +138,7 @@ export function GatewayAlerts({ health }: { health: GatewayHealth | null }) {
             <span className={cn('truncate', alert.resolvedAt && 'text-muted-foreground line-through')}>
               {alert.message}
             </span>
-            <span className="shrink-0 text-[11px] text-muted-foreground">
+            <span className="shrink-0 text-caption text-muted-foreground">
               {alert.resolvedAt
                 ? `resolved ${ago(alert.resolvedAt)}`
                 : `open since ${ago(alert.createdAt)}`}

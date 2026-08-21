@@ -38,7 +38,7 @@ export function VolumeHeatmap({ cells }: { cells: HeatmapCell[] }) {
             {HOURS.map((hour) => (
               <th
                 key={hour}
-                className="numeric text-[9px] font-normal text-muted-foreground"
+                className="numeric text-micro font-normal text-muted-foreground"
                 // Every third hour, so the axis stays readable at this size.
                 aria-label={`${hour}:00`}
               >
@@ -50,7 +50,7 @@ export function VolumeHeatmap({ cells }: { cells: HeatmapCell[] }) {
         <tbody>
           {DAY_KEYS.map((dayKey, dayOfWeek) => (
             <tr key={dayKey}>
-              <th className="w-16 pe-1 text-end text-[10px] font-normal text-muted-foreground">
+              <th className="w-16 pe-1 text-end text-micro font-normal text-muted-foreground">
                 {t(dayKey)}
               </th>
               {HOURS.map((hour) => {
@@ -80,7 +80,7 @@ export function VolumeHeatmap({ cells }: { cells: HeatmapCell[] }) {
           ))}
         </tbody>
       </table>
-      <p className="mt-2 text-[11px] text-muted-foreground">
+      <p className="mt-2 text-caption text-muted-foreground">
         {t('الأعمدة ساعات اليوم بتوقيتك المحلي')}
       </p>
     </div>
