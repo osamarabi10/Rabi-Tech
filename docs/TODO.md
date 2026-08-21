@@ -324,20 +324,114 @@ Tabular figures via a `.numeric` utility on phone numbers so digit columns align
 
 ## M3 — Filter vocabulary · ~3 days · the campaign feature that sells
 
-Marasil §14.4. Ours: 3 categories × 6 operators. Theirs: ~20 dimensions.
+Marasil §14.4. Ours was 3 categories × 6 operators. Theirs: ~20 dimensions.
 
-- [ ] **1. Type-aware operators**: date (`within_last N`, `more_than_N_ago`,
-  `between`), number (`>`, `<`, `between`), multi-select (`has_any_of`,
-  `has_all_of`, `has_none_of`), text (`ends_with`, `matches_regex`)
-- [ ] **2. New dimensions**: `lifecycleStage`, `assignedUser`, `assignedTeam`,
-  `createdAt`, `lastInboundAt`, `lastOutboundAt`, `hasEverReplied`,
-  `conversationCount`, `marketingConsent`
-- [ ] **3. Broadcast-history dimensions** — *"received the July promo but never
-  replied"*, which the spec calls the single most common marketing request and
-  which our current six filters cannot express. Data already exists on
-  `CampaignRecipient`.
-- [ ] **4. Nested groups to depth 3** with AND/OR toggles (ours is flat `$and`)
+- [x] **1. Type-aware operators**: date (`withinLastDays`, `moreThanDaysAgo`,
+  `before`, `after`, `between`), number (`gt/gte/lt/lte/between`),
+  multi-value (`isOneOf`, `isNoneOf`), text (`endsWith`, `notContains`)
+  — `matchesRegex` deliberately **not** shipped, see evidence
+- [x] **2. New dimensions**: `lifecycleStage`, `assigneeId`, team,
+  `createdAt`, `updatedAt`, `lastInboundAt`, `hasEverReplied`,
+  `hasOpenConversation`, `conversationStatus`, `marketingConsent`,
+  `consentSource`, `consentUpdatedAt`, `notes`
+  — `conversationCount` deferred: Prisma cannot express a relation count in
+  `where`, so it needs the two-step `groupBy` idiom for the least valuable
+  dimension on the list
+- [x] **3. Broadcast-history dimensions** — received campaign X · read campaign X
+  · received any within N days · never received a broadcast
+- [x] **4. Nested groups to depth 3** with AND/OR toggles
 - [ ] **5. Estimated counts** above a threshold, labelled `~4,200 (estimated)`
+  — not needed at current data volumes; revisit when a tenant crosses ~50k
+  contacts and the exact count on every keystroke starts to bite
+
+**Not delivered this pass, and worth stating plainly:** the Marasil headline
+example *"received the July promo **but never replied since**"* is only half
+shipped. "Received campaign X" works; "never replied *since that campaign was
+sent*" needs a `Campaign.sentAt` lookup **inside** rule compilation, which makes
+`compileRule` async and changes every caller. What ships is the blunter
+composition — "received campaign X" AND "has never replied at all", ignoring
+timing — which covers many real cases but is **not** the same filter and is not
+labelled as if it were.
+
+**M3 evidence (2026-08-21).**
+
+*Consolidation first.* The "is this rule complete?" test existed as a literal
+`['isEmpty','isNotEmpty']` check in **three** places. Each site silently *drops*
+rules it judges incomplete, so any new valueless or two-value operator would
+have quietly stopped working wherever nobody remembered to update — and a
+dropped rule makes the audience *bigger* with no error. Now one helper, and it
+is recursive, because the flat version treated a nested group as a rule with no
+operator and deleted the whole branch.
+
+`contacts.routes.ts` spread the DSL last, so a filter carrying `$or`
+**overwrote** the search's own `OR` and search was silently ignored. Now merged
+under `AND`. Verified: `search=zzzznomatch` with an `$or` filter returns 0,
+where before it returned all 8.
+
+*Two inherited semantic bugs fixed rather than carried forward.* `isEmpty`
+compiled to `IS NULL` alone, missing every `''` row — and on a non-nullable
+column it produced an *invalid query* rather than a wrong answer (reproduced:
+`isNotEmpty` on `phone` returned "Argument `not` is missing"). `isNotEqualTo`
+dropped NULL rows, so "stage is not lead" silently excluded every contact with
+no stage set — the opposite of what people mean.
+
+*`lastInboundAt` reads `Message.timestamp`, not `Conversation.lastMessageAt`.*
+The latter also moves when **we** send, so "quiet for 90 days" would be reset by
+our own outbound message. The two-level `some` is the slower query and the
+correct answer. `moreThanDaysAgo` compiles to a `none`, not a `some` with
+`lt`: the latter matches anyone who was *ever* quiet that long, including
+someone who replied yesterday.
+
+*`matchesRegex` was cut.* Prisma exposes no regex predicate for PostgreSQL and
+the only route is `$queryRaw`, which bypasses the tenancy extension entirely.
+A regex operator is not worth being the one hole every other filter avoids.
+
+*The vocabulary is served, not hardcoded.* `GET /api/contacts/filter-schema`
+returns fields, per-type operators, and the org's own custom fields, tags, teams
+and sent campaigns. Only the backend can reject an unknown field, so a client
+copy drifts into offering filters that 400; and half the list is per-tenant and
+unknowable at build time. The operator dropdown was previously
+**category-independent** and would offer "within last N days" on a name.
+
+*Errors.* A bad filter was a bare 500, so the audience count just stopped
+updating with no reason given. Now 400 naming the offending field or operator,
+with internal messages filtered out rather than echoed into a toast.
+
+*Tenancy.* The compiler now **requires** an `organizationId` and writes it into
+every nested relation filter. The extension injects org scope at the top level
+of a `where` only and does **not** descend, so nested filters previously relied
+on composite FKs alone; stating it twice removes the reliance. Campaign ids in a
+filter are validated against the caller's org — unvalidated they fail safe, but
+"0 recipients" is itself an answer to a probe.
+
+*Verified live.* 28 filters through the real preview endpoint: old-shape
+compatibility (original six operators still compile and count identically),
+every new operator, depth-4 correctly rejected, and six error cases each
+returning a specific Arabic reason. Activity filters proven by inserting one
+INBOUND message and watching `hasEverReplied` move 0→1 and its complement 8→7.
+Broadcast filters proven against a real campaign with two recipients, one read:
+received=2, read=1, never=6. **Cross-tenant probe using org B's real campaign
+id** blocked at top level *and* when buried in a nested group.
+
+In the browser: selecting a date field snapped the operator from "Contains" to
+"Within last (days)" and the value input became a number field; the operator
+list then contained only the seven date operators. `between` widened the row to
+six columns with two date pickers — the old fixed five-column grid could not fit
+a second value. A nested group serialized as
+`{$and:[{createdAt between …},{$or:[{name contains …}]}]}` and returned 200.
+RTL checked: the row flows right-to-left with no overflow.
+
+Gate **46/46 → 48/48**, adding one relation-derived and one broadcast-history
+isolation case, plus a check that `campaignIdsInFilter` sees through nesting —
+otherwise the org validation is bypassed by putting the id one group deeper.
+All probe data removed; residue check clean.
+
+**Not visually verified:** the campaign composer's new error banner and filter
+count badge. Broadcasts are plan-gated and the demo org is on FREE; flipping the
+tier to reach the composer was blocked by a permission check, and working around
+it was not worth it — a raw tier flip is exactly what caused silent quota drift
+once already. The component beneath it (the builder) is the same one verified on
+the contacts page, and the 400 responses it renders were verified directly.
 
 ## M4 — Dark theme · ~1 day · fixes a regression we introduced
 

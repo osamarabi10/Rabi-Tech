@@ -94,7 +94,9 @@ export type ContactFilterRule = {
   value2?: unknown;
 };
 
-export type ContactFilterDsl = { $and?: ContactFilterRule[]; $or?: ContactFilterRule[] };
+/** A group nests another set of nodes under its own AND/OR, to the depth the server allows. */
+export type ContactFilterNode = ContactFilterRule | ContactFilterDsl;
+export type ContactFilterDsl = { $and?: ContactFilterNode[]; $or?: ContactFilterNode[] };
 
 export type CrmTag = {
   id: string;
@@ -908,4 +910,38 @@ export type BillingSummary = {
 export async function fetchBillingSummary(): Promise<BillingSummary> {
   const { data } = await api.get('/api/billing/summary');
   return data;
+}
+
+// ---------------------------------------------------------------------------
+// Segment filter vocabulary
+// ---------------------------------------------------------------------------
+
+export type FilterFieldSpec = {
+  field: string;
+  type: string;
+  values?: string[] | null;
+  operators: string[];
+};
+
+/**
+ * Served by the backend rather than hardcoded here. The backend is the only
+ * place that can reject an unknown field, so a client-side copy drifts into
+ * offering filters that 400 — and half the vocabulary (custom fields, tags,
+ * teams, sent campaigns) is per-organization and unknowable at build time.
+ */
+export type FilterSchema = {
+  maxDepth: number;
+  valuelessOperators: string[];
+  contactFields: FilterFieldSpec[];
+  activityFields: FilterFieldSpec[];
+  broadcastFields: FilterFieldSpec[];
+  customFields: { slug: string; name: string; dataType: string; allowedValues: string[] }[];
+  tags: { name: string }[];
+  teams: { id: string; name: string }[];
+  campaigns: { id: string; title: string; sentAt: string | null }[];
+};
+
+export async function fetchFilterSchema(): Promise<FilterSchema> {
+  const { data } = await api.get('/api/contacts/filter-schema');
+  return data as FilterSchema;
 }

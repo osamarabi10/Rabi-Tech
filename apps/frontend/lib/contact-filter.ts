@@ -16,7 +16,13 @@
  * rubbish. Keep the two in lockstep; the backend is the authority.
  */
 
-import type { ContactFilterRule } from '@/lib/data';
+import type { ContactFilterDsl, ContactFilterRule } from '@/lib/data';
+
+type Node = ContactFilterRule | ContactFilterDsl;
+
+function isGroup(node: Node): node is ContactFilterDsl {
+  return Array.isArray((node as ContactFilterDsl).$and) || Array.isArray((node as ContactFilterDsl).$or);
+}
 
 /**
  * Operators that are complete on their own. Asking "does this rule have a
@@ -46,7 +52,8 @@ function filled(value: unknown): boolean {
  * typing, so the audience count does not thrash on every keystroke.
  */
 export function isRuleComplete(rule: ContactFilterRule): boolean {
-  if (!rule?.field && rule?.category !== 'tag') return false;
+  if (!rule?.operator) return false;
+  if (!rule.field && rule.category !== 'tag') return false;
   if (VALUELESS_OPERATORS.has(rule.operator)) return true;
   if (TWO_VALUE_OPERATORS.has(rule.operator)) {
     return filled(rule.value) && filled(rule.value2);
@@ -54,7 +61,43 @@ export function isRuleComplete(rule: ContactFilterRule): boolean {
   return filled(rule.value);
 }
 
-/** Recursive: a group is active if any rule inside it is. */
+/**
+ * Drop unfinished rules, keeping the tree shape.
+ *
+ * Recursive because a group is a node too: the flat version treated a group as
+ * a rule with no operator, judged it incomplete, and silently deleted the whole
+ * branch — the exact class of bug this module exists to prevent. A group that
+ * ends up empty is dropped, since an empty group matches everything and would
+ * quietly widen the audience.
+ */
+export function pruneFilter(node: Node): Node | null {
+  if (!isGroup(node)) return isRuleComplete(node as ContactFilterRule) ? node : null;
+  const op: '$and' | '$or' = (node as ContactFilterDsl).$or ? '$or' : '$and';
+  const children = (((node as ContactFilterDsl).$or || (node as ContactFilterDsl).$and || []) as Node[])
+    .map(pruneFilter)
+    .filter((child): child is Node => child !== null);
+  if (!children.length) return null;
+  return { [op]: children } as ContactFilterDsl;
+}
+
+/**
+ * The filter to send, or null when nothing is filled in. Null means "everyone",
+ * which every caller already treats as the unfiltered case.
+ */
+export function activeFilter(filter: ContactFilterDsl | undefined | null): ContactFilterDsl | null {
+  if (!filter) return null;
+  return pruneFilter(filter) as ContactFilterDsl | null;
+}
+
+/** Flat convenience for callers that only ever build a single AND list. */
 export function activeRules(rules: ContactFilterRule[] | undefined): ContactFilterRule[] {
   return (rules || []).filter(isRuleComplete);
+}
+
+/** How many actual rules a (possibly nested) filter contains, for the "N filters" badge. */
+export function countRules(node: Node | null | undefined): number {
+  if (!node) return 0;
+  if (!isGroup(node)) return 1;
+  const children = ((node.$or || node.$and || []) as Node[]);
+  return children.reduce((total, child) => total + countRules(child), 0);
 }

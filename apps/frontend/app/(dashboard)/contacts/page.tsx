@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save } from 'lucide-react';
-import { activeRules } from '@/lib/contact-filter';
+import { activeFilter } from '@/lib/contact-filter';
 import { avatarColor } from '@/lib/constants';
 import {
   bulkUpdateContacts,
@@ -86,17 +86,16 @@ export default function ContactsPage() {
   const [mergeTargetId, setMergeTargetId] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const activeFilter = useMemo<ContactFilterDsl>(
-    () => ({ $and: activeRules(filter.$and) }),
-    [filter],
-  );
+  // Unfinished rules are stripped before every request, so a half-typed filter
+  // never widens the list behind the user's back.
+  const appliedFilter = useMemo(() => activeFilter(filter), [filter]);
 
   const load = useCallback(async (cursor: string | null = null) => {
     setLoading(true);
     try {
       const page = await fetchContactsPage({
         search,
-        filter: activeFilter.$and?.length ? activeFilter : undefined,
+        filter: appliedFilter || undefined,
         cursorId: cursor,
         limit: 25,
       });
@@ -108,7 +107,7 @@ export default function ContactsPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeFilter, search]);
+  }, [appliedFilter, search]);
 
   useEffect(() => {
     const timer = setTimeout(() => load(null), 250);

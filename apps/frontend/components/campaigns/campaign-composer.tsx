@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Loader2, Send, Users, CalendarClock, ArrowLeft, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
-import { activeRules } from '@/lib/contact-filter';
+import { activeFilter, countRules } from '@/lib/contact-filter';
+
+/** The server's own message, when it sent one. */
+function serverError(err: unknown): string | null {
+  const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+  return typeof message === 'string' && message ? message : null;
+}
 import {
   createCampaign,
   previewCampaignAudience,
@@ -53,6 +59,7 @@ export function CampaignComposer({
   const [scheduledAt, setScheduledAt] = useState('');
   const [audience, setAudience] = useState<{ count: number; sample: SampleContact[] } | null>(null);
   const [counting, setCounting] = useState(false);
+  const [audienceError, setAudienceError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const reset = () => {
@@ -66,19 +73,24 @@ export function CampaignComposer({
 
   // Recount whenever the audience changes — the number an admin approves must be
   // the number that actually receives the blast, not a stale figure.
-  const rules = filter.$and || [];
   const refreshAudience = useCallback(async () => {
     setCounting(true);
     try {
-      const active = activeRules(rules);
-      setAudience(await previewCampaignAudience(active.length ? { $and: active } : null));
-    } catch {
+      setAudience(await previewCampaignAudience(activeFilter(filter)));
+      setAudienceError(null);
+    } catch (err) {
+      // Show the reason the server gave — it names the offending field or
+      // operator. A generic "couldn't count" left the admin staring at a number
+      // that had quietly stopped updating with no way to tell which rule broke.
       setAudience(null);
-      toast.error(t('تعذّر حساب الجمهور'));
+      setAudienceError(serverError(err) || t('تعذّر حساب الجمهور'));
     } finally {
       setCounting(false);
     }
-  }, [JSON.stringify(rules), t]);
+    // Watch the whole filter, not just its top-level $and: with nested groups a
+    // change inside a group would otherwise never trigger a recount, leaving a
+    // stale audience number on screen — the one number that must never be stale.
+  }, [JSON.stringify(filter), t]);
 
   useEffect(() => {
     if (!open || step !== 'target') return;
@@ -96,8 +108,8 @@ export function CampaignComposer({
     phone: sample?.phone || '',
   });
 
-  const active = activeRules(rules);
-  const audienceFilter = active.length ? { $and: active } : null;
+  const audienceFilter = activeFilter(filter);
+  const activeCount = countRules(audienceFilter);
 
   const submit = async (mode: 'now' | 'schedule') => {
     if (!title.trim() || !message.trim()) {
@@ -202,9 +214,16 @@ export function CampaignComposer({
         {step === 'target' && (
           <div className="space-y-3">
             <ContactFilterBuilder value={filter} onChange={setFilter} />
-            <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
-              <Users className="h-4 w-4 shrink-0 text-primary" />
-              {counting ? (
+            <div
+              className={cn(
+                'flex items-center gap-2 rounded-md border px-3 py-2',
+                audienceError ? 'border-destructive/40 bg-destructive/10' : 'border-border bg-muted/40',
+              )}
+            >
+              <Users className={cn('h-4 w-4 shrink-0', audienceError ? 'text-destructive' : 'text-primary')} />
+              {audienceError ? (
+                <span className="text-xs text-destructive">{audienceError}</span>
+              ) : counting ? (
                 <span className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" /> {t('جاري الحساب...')}
                 </span>
@@ -212,7 +231,7 @@ export function CampaignComposer({
                 <span className="text-xs">
                   <strong className="text-foreground">{audience?.count ?? 0}</strong>{' '}
                   <span className="text-muted-foreground">
-                    {active.length ? t('جهة اتصال مطابقة') : t('جهة اتصال (الكل)')}
+                    {activeCount ? t('جهة اتصال مطابقة') : t('جهة اتصال (الكل)')}
                   </span>
                 </span>
               )}
@@ -239,7 +258,7 @@ export function CampaignComposer({
               <div className="rounded-md border border-border px-3 py-2">
                 <p className="text-[10px] text-muted-foreground">{t('الجمهور')}</p>
                 <p className="truncate font-medium">
-                  {active.length ? `${active.length} ${t('فلتر')}` : t('كل جهات الاتصال')}
+                  {activeCount ? `${activeCount} ${t('فلتر')}` : t('كل جهات الاتصال')}
                 </p>
               </div>
             </div>
