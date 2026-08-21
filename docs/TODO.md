@@ -173,32 +173,42 @@ are display and billing-input only until P10-b wires a real provider.
 ## P10-a — Saved segments · ~4 days
 
 **Full implementation plan: [docs/P10A-SAVED-SEGMENTS-PLAN.md](P10A-SAVED-SEGMENTS-PLAN.md)**
-— verified paths, migration SQL, validator design, and the six places the brief
-diverges from the code. Two of those would fail at runtime: `contact:manage`
-does not exist (`requirePermission` 500s on an unknown operation), and a plain
-unique name index makes a soft-deleted segment reserve its name forever.
+— verified paths, migration SQL, validator design, and the interactions the
+brief does not name. Read it before starting.
 
-- [ ] **1. Migration**: `Segment` model (id, organizationId, name, filter Json,
-  createdById, timestamps, `deletedAt`; composite FK `[id, organizationId]`)
+- [ ] **1. Migration**: `Segment` (id, organizationId, name, filter Json,
+  createdById, timestamps, `deletedAt`; composite FK `[id, organizationId]`;
+  composite FK to User so a segment cannot point at another tenant's user)
   — name uniqueness is a **partial, case-insensitive** SQL index
-  (`WHERE "deletedAt" IS NULL` on `lower(name)`); Prisma can express neither,
-  so do **not** add `@@unique([organizationId, name])`
-- [ ] **2. Filter validator** in `lib/contact-filter-dsl.ts` — walks the tree
-  calling the private `compileRule` per leaf so validation and compilation
-  cannot drift; collects **all** errors with paths, and rejects an empty filter
-  (a segment matching everyone is the dangerous case)
-- [ ] **3. CRUD routes** `/api/segments` (list/create/rename/delete/count)
-  with new `segment:*` permissions — verify: curl round-trip; cross-org id
-  returns 404 on **all three** verbs; name reusable after soft delete
-- [ ] **4. Contacts page**: "حفظ كشريحة" on the filter builder; segment chips
-  to load a saved filter — verify in browser
-- [ ] **5. Campaign Target step**: segment picker **above** the builder (a
-  segment is a starting point, not an alternative), audience preview keeps using
-  the consent-excluding campaign endpoint
-  — note: the chip count and the composer count legitimately differ by the
-  opted-out count; `excludedOptedOut` is the line that explains it
-- [ ] **6. Tenancy**: add harness case — segment from org A invisible to org B
-  — verify: gate **50/50 → 51/51**
+  (`LOWER(name) WHERE "deletedAt" IS NULL`). Prisma can express neither, so do
+  **not** add `@@unique([organizationId, name])`: a full unique index makes a
+  soft-deleted segment reserve its name forever
+- [ ] **2. Permissions**: `segment:view/create/rename/delete`. Rename and delete
+  sit above create — a segment is org-wide once saved, so an agent must not be
+  able to delete a view the team relies on.
+  (`contact:manage` does **not** exist; `requirePermission` 500s on unknown keys)
+- [ ] **3. Filter validator** in `lib/contact-filter-dsl.ts` — walks the tree
+  calling the private `compileRule` per leaf, so validation and compilation
+  cannot drift; collects **all** errors with their path; rejects an empty filter
+  (`{"$and":[]}` matches everyone — dangerous under a name like "VIP customers")
+- [ ] **4. Routes** `/api/segments` list/create/rename/delete/count, all
+  spreading one `ACTIVE = { deletedAt: null }` constant — the tenancy extension
+  injects `organizationId`, never `deletedAt`
+  — verify: round-trip; cross-org 404 on **all three** verbs; name reusable
+  after delete
+- [ ] **5. Extract `assertCampaignsInOrg`** out of `campaigns.routes.ts` into
+  `modules/campaigns/campaign-refs.ts` so segments and campaigns share one
+  "campaign must belong to my org" rule — verify the campaign preview is
+  unchanged **before** building on it
+- [ ] **6. Contacts page**: "حفظ كشريحة" button (disabled when the filter is
+  empty) + segment chips with lazy per-chip counts
+- [ ] **7. Campaign Target step**: picker **above** the builder (a segment is a
+  starting point, not an alternative); preview keeps using the consent-excluding
+  campaign endpoint so opt-outs cannot be bypassed via a segment
+  — the chip count and the composer count legitimately differ by the opted-out
+  count; `excludedOptedOut` is the line that explains it
+- [ ] **8. Tenancy**: harness case — org A's segment invisible and 404 to org B;
+  soft delete frees the name — verify: gate **50/50 → 51/51**
 
 ## P10-b — Payments live · ~1 week · **blocked on O5**
 

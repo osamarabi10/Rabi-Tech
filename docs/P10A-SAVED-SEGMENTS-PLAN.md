@@ -1,38 +1,43 @@
 # P10-a — Saved segments · implementation plan
 
-Builds directly on M3 (filter vocabulary), which is live. A segment is a named,
-stored M3 filter plus the plumbing to load it in the contacts page and the
-campaign composer.
+A segment is a named, stored M3 filter, plus the plumbing to load it in the
+contacts page and the campaign composer.
 
-Status: **plan only, nothing implemented.** Every path below was verified against
-the tree on 2026-08-21. Gate is currently **50/50**.
+Status: **plan only, nothing implemented.** Every path below was re-verified
+against the tree on 2026-08-21. Gate is currently **50/50**.
 
 ---
 
-## 0. Corrections to the brief
+## 0. Grounding — what the brief got right, and the two paths it did not
 
-Six things do not match the code. Two of them would fail at runtime.
+Confirmed against the live tree:
 
-| # | Brief says | Reality | Consequence |
-|---|---|---|---|
-| 1 | `requirePermission('contact:manage')` | **`contact:manage` does not exist.** The matrix has `contact:create/update/delete/read` (`rbac.middleware.ts:23-26`), and `requirePermission` returns **500 "Invalid operation"** for an unknown key (`rbac.middleware.ts:59-63`) | Every segment write would 500. See §3.1 |
-| 2 | Unique `[organizationId, name]` **and** soft delete | A plain unique index means a soft-deleted segment **permanently reserves its name** — deleting then re-creating "VIP customers" fails forever. The index must be **partial** (`WHERE "deletedAt" IS NULL`), and Prisma cannot express partial or functional indexes in the schema | Raw SQL index; do **not** declare `@@unique([organizationId, name])`. See §1.2 |
-| 3 | `apps/backend/src/modules/contacts/routes.ts` | `contacts.routes.ts` | path |
-| 4 | `apps/frontend/app/contacts/page.tsx` | `app/(dashboard)/contacts/page.tsx` | path |
-| 5 | `apps/frontend/components/contacts/filter-builder.tsx` | `contact-filter-builder.tsx` | path |
-| 6 | `apps/frontend/app/campaigns/composer/page.tsx` | `components/campaigns/campaign-composer.tsx` — the composer is a dialog inside the campaigns page, not a route | path |
+| Claim | Verdict |
+|---|---|
+| `contact:manage` does not exist; `requirePermission` 500s on unknown keys | ✅ `rbac.middleware.ts:59-63` |
+| `compileRule` is private | ✅ `contact-filter-dsl.ts:398` — no `export` |
+| `campaignIdsInFilter` is exported and sees through nesting | ✅ `contact-filter-dsl.ts:499` |
+| Contacts page applies filters live, no Apply button | ✅ `page.tsx:91` |
+| Composer is a dialog component, not a route | ✅ `components/campaigns/campaign-composer.tsx` |
+| `app/(dashboard)/contacts/page.tsx` | ✅ exists |
+| `contacts.routes.ts` | ✅ exists |
+| No `Segment` model yet | ✅ free |
 
-Also worth stating before building:
+Two paths in the brief are still wrong:
 
-- **"Next to Apply Filters" — there is no Apply button.** The contacts page
-  applies filters live (`page.tsx:91`, `activeFilter(filter)` in a `useMemo`).
-  The save button needs a home of its own; §5.1 places it.
-- **`compileRule` is not exported** from `contact-filter-dsl.ts`. The validator
-  therefore belongs *inside* that module — which is the right place anyway, and
-  is what makes "matches M3 exactly" true rather than aspirational (§2).
-- **Users are never hard-deleted** (`system.routes.ts:410` sets
-  `isActive: false`). A composite FK on `createdById` with `onDelete: Restrict`
-  is therefore safe and matches `Contact.assignee`.
+| Brief says | Actual |
+|---|---|
+| "Backend: `src/modules/contacts/` (for routes and DSL)" | Routes yes; **the DSL is at `src/lib/contact-filter-dsl.ts`**, not under `modules/contacts/` |
+| "Filter builder: `components/contact-filter-builder.tsx`" | `components/**contacts/**contact-filter-builder.tsx` |
+
+One thing the brief does not mention that changes a design choice:
+**`assertCampaignsInOrg` is private to `campaigns.routes.ts:58`.** The segment
+count endpoint needs the same rule, so it must be extracted rather than
+re-implemented — see §5.
+
+Project rule from the RabiTech guide, which this phase must satisfy:
+*"Never add a tenant table without both [`organizationId` and a composite FK
+`[id, organizationId]`]."*
 
 ---
 
@@ -40,13 +45,14 @@ Also worth stating before building:
 
 `apps/backend/prisma/migrations/20260823090000_saved_segments/migration.sql`
 
-### 1.1 Schema
+### 1.1 Prisma schema
 
-`apps/backend/prisma/schema.prisma`:
+`apps/backend/prisma/schema.prisma` — new model. **No `@@unique([organizationId, name])`**;
+see the comment and §1.2.
 
 ```prisma
-/// A named, saved contact filter. The `filter` column stores the same DSL shape
-/// the M3 builder produces and `contactWhereFromFilterDsl` compiles.
+/// A named, saved contact filter. `filter` stores the same DSL the M3 builder
+/// produces and `contactWhereFromFilterDsl` compiles.
 model Segment {
   id             String    @id @default(cuid())
   organizationId String
@@ -54,35 +60,34 @@ model Segment {
   /// ContactFilterDsl. Unversioned, exactly like Campaign.audienceFilter — the
   /// DSL is additive by contract, so stored filters keep compiling.
   filter         Json
-  /// Who saved it. Audit only: there is no sharing model, every segment in an
-  /// organization is visible to everyone in it.
+  /// Who saved it. Audit only: there is no sharing model, so every segment in
+  /// an organization is visible to everyone in it.
   createdById    String
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   /// Soft delete. Deliberately NOT `isArchived` (the Contact/Conversation
-  /// convention): archiving there is a product feature the user sees, whereas
-  /// this is deletion, and the timestamp answers "when" for free.
+  /// convention): archiving there is a product feature the user sees, this is
+  /// deletion, and a timestamp answers "when" for free.
   deletedAt      DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   createdBy    User         @relation(fields: [createdById, organizationId], references: [id, organizationId], onDelete: Restrict)
 
-  // Lets future models reference a segment tenant-locally, per the codebase rule
-  // that every cross-model join key carries organizationId.
   @@unique([id, organizationId])
-  @@index([organizationId, name])
   @@index([organizationId, deletedAt])
-  // NOTE: uniqueness on the name is a PARTIAL, CASE-INSENSITIVE index created in
-  // SQL — Prisma cannot express either. Do not add @@unique([organizationId, name]).
+  @@index([organizationId, name])
+  // Name uniqueness is a PARTIAL, CASE-INSENSITIVE index created in SQL.
+  // Prisma can express neither, so do NOT add @@unique([organizationId, name]) —
+  // a full unique index would make a soft-deleted segment reserve its name
+  // forever, and re-creating it would be impossible without a manual DB edit.
 }
 ```
 
-Add to `model Organization`: `segments Segment[]`
-Add to `model User`: `segments Segment[]`
+Back-references: `segments Segment[]` on both `Organization` and `User`.
 
-`Segment` must **not** be added to `PLATFORM_MODELS` in
-`src/prisma/extensions.ts` — it is tenant-scoped, so the default path (inject
-`organizationId` into every `where` and `data`) is exactly what is wanted.
+`Segment` must **not** go in `PLATFORM_MODELS` (`src/prisma/extensions.ts`) — it
+is tenant-scoped, so the default path (inject `organizationId` into every `where`
+and `data`) is exactly right.
 
 ### 1.2 SQL
 
@@ -101,26 +106,26 @@ CREATE TABLE IF NOT EXISTS "Segment" (
   CONSTRAINT "Segment_pkey" PRIMARY KEY ("id")
 );
 
--- Composite unique so other tables can reference a segment tenant-locally.
+-- Composite unique so another table could reference a segment tenant-locally,
+-- per the project rule that every cross-model join key carries organizationId.
 CREATE UNIQUE INDEX IF NOT EXISTS "Segment_id_organizationId_key"
   ON "Segment" ("id", "organizationId");
-CREATE INDEX IF NOT EXISTS "Segment_organizationId_name_idx"
-  ON "Segment" ("organizationId", "name");
 CREATE INDEX IF NOT EXISTS "Segment_organizationId_deletedAt_idx"
   ON "Segment" ("organizationId", "deletedAt");
+CREATE INDEX IF NOT EXISTS "Segment_organizationId_name_idx"
+  ON "Segment" ("organizationId", "name");
 
 -- Name uniqueness: PARTIAL and CASE-INSENSITIVE.
 --
---   partial  — a soft-deleted segment must not reserve its name forever;
---              without the WHERE clause, deleting "VIP" then re-creating it
---              fails permanently and the only fix is a manual DB edit.
---   lower()  — "VIP" and "vip" are the same segment to a person, and two chips
---              differing only in case is a support ticket.
+--   WHERE deletedAt IS NULL — a soft-deleted segment must not reserve its name
+--     forever. Without this, deleting "VIP" makes "VIP" permanently unusable.
+--   LOWER(name) — "VIP" and "vip" are the same segment to a person, and two
+--     chips differing only in case is a support ticket.
 --
--- Prisma supports neither in the schema, so this lives here and the model
--- carries a comment pointing at it.
-CREATE UNIQUE INDEX IF NOT EXISTS "Segment_org_name_active_key"
-  ON "Segment" ("organizationId", lower("name"))
+-- Prisma supports neither partial nor functional indexes in the schema, which
+-- is why this lives here and the model carries a pointer to it.
+CREATE UNIQUE INDEX IF NOT EXISTS "Segment_organizationId_name_unique_active"
+  ON "Segment" ("organizationId", LOWER("name"))
   WHERE "deletedAt" IS NULL;
 
 ALTER TABLE "Segment"
@@ -129,36 +134,52 @@ ALTER TABLE "Segment"
   ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- Composite FK: the join key carries organizationId on both sides, so a segment
--- can never point at a user in another tenant. Restrict is safe because users
--- are deactivated, never hard-deleted (system.routes.ts:410).
+-- can never point at a user in another tenant. RESTRICT is safe because users
+-- are deactivated, never hard-deleted (system.routes.ts:410 sets isActive).
 ALTER TABLE "Segment"
   ADD CONSTRAINT "Segment_createdById_organizationId_fkey"
   FOREIGN KEY ("createdById", "organizationId") REFERENCES "User"("id", "organizationId")
   ON DELETE RESTRICT ON UPDATE CASCADE;
 ```
 
-Apply per CLAUDE.md. The backend image bakes in `prisma/migrations`, so rebuild
-before `migrate deploy`, or apply the SQL directly and then
+Apply per CLAUDE.md. The backend image bakes in `prisma/migrations`, so either
+rebuild before `migrate deploy`, or apply the SQL directly and then
 `migrate resolve --applied 20260823090000_saved_segments`.
 
 ---
 
-## 2. Filter validation
+## 2. Permissions
 
-New export in **`apps/backend/src/lib/contact-filter-dsl.ts`** (not a new file —
-`compileRule` is private, and a validator that re-implements the rules is a
-validator that drifts from them).
+`apps/backend/src/middleware/rbac.middleware.ts`, beside the contact block:
 
 ```ts
-export type FilterValidationError = {
-  /** Where in the tree, e.g. "$and[0].$or[2]" — a bare message is unusable in a nested filter. */
-  path: string;
-  message: string;
-};
+// Segments — saved contact filters. Org-wide once saved, so renaming and
+// deleting sit above the role that can create one: an agent must not be able to
+// delete a view the whole team relies on.
+'segment:view':   new Set(['ADMIN', 'SUPERVISOR', 'AGENT', 'VIEWER', 'FINANCE']),
+'segment:create': new Set(['ADMIN', 'SUPERVISOR', 'AGENT']),
+'segment:rename': new Set(['ADMIN', 'SUPERVISOR']),
+'segment:delete': new Set(['ADMIN', 'SUPERVISOR']),
+```
 
+`segment:view` mirrors `contact:read`, `segment:create` mirrors
+`contact:create`. `segment:delete` is deliberately **not** ADMIN-only (unlike
+`contact:delete`) because deletion here is soft and reversible in the database,
+not destructive.
+
+---
+
+## 3. Filter validator
+
+Added to **`apps/backend/src/lib/contact-filter-dsl.ts`** — not a new file.
+`compileRule` is private, and a validator that re-implements the M3 rules is a
+validator that drifts from them.
+
+```ts
 export type FilterValidationResult = {
   valid: boolean;
-  errors: FilterValidationError[];
+  /** Human-readable, each prefixed with its path, e.g. "$and[0]: حقل غير مدعوم: foo". */
+  errors: string[];
 };
 
 export function validateContactFilter(
@@ -167,30 +188,33 @@ export function validateContactFilter(
 ): FilterValidationResult;
 ```
 
-**How it works, and why this shape.** It walks the tree and calls the existing
-`compileRule` on each leaf inside a `try/catch`, collecting failures instead of
-throwing on the first. That guarantees validation and compilation agree by
-construction: a filter that validates *will* compile, because validating it
-compiled it.
+**How.** Walk the tree; call the existing `compileRule` on each leaf inside a
+`try/catch`, pushing `` `${path}: ${message}` `` on failure instead of throwing.
+Validation and compilation then agree by construction — a filter that validates
+*has already compiled*.
 
-Points that matter:
+The brief specifies `errors: string[]`, so the path is embedded in the string
+rather than carried in a separate field. In a filter three groups deep, a bare
+`"حقل غير مدعوم: foo"` is unusable — the user cannot tell which of four rules is
+wrong.
 
-- **Collect all errors, do not stop at the first.** `contactWhereFromFilterDsl`
-  throws on the first problem, which is right for a request but wrong for a save
-  dialog — a user fixing four broken rules one round-trip at a time gives up.
-- **Enforce `MAX_FILTER_DEPTH` during the walk**, reusing the same constant, so
-  a filter saved via the API cannot exceed what the builder can render and edit.
-- **Reject an empty filter.** `{}` or `{"$and":[]}` compiles fine and matches
-  *everyone*. As a saved segment named "VIP customers" that is a loaded gun
-  pointed at a broadcast. Return an explicit error.
-- **Reject non-objects and arrays** before walking, so a `filter` of `"hello"`
-  or `null` fails with a message rather than a `TypeError`.
-- **Campaign ids get an existence check separately.** `campaignIdsInFilter()`
-  already exists (`contact-filter-dsl.ts:499`) and already sees through nesting.
-  A segment referencing `receivedCampaign` must have that id validated against
-  the caller's org on **save** — and note the consequence in §4.
+Rules it must enforce, in order:
 
-The route wraps it:
+1. **Not an object / is an array / is null** → `الفلتر غير صالح`. Guard before
+   walking so a `filter` of `"hello"` fails with a message, not a `TypeError`.
+2. **Empty** — `{}`, `{"$and":[]}`, or a tree whose groups are all empty →
+   `الفلتر فارغ — الشريحة ستشمل كل جهات الاتصال`. This compiles fine and matches
+   **everyone**; saved under the name "VIP customers" and pointed at a broadcast,
+   it is the single most dangerous thing this feature can store.
+3. **Depth** — reuse `MAX_FILTER_DEPTH`, so a filter saved through the API can
+   never exceed what the builder can render and edit back.
+4. **Every leaf** — via `compileRule`.
+
+**Collect all errors; do not stop at the first.** `contactWhereFromFilterDsl`
+throws on the first problem, which is right for a request and wrong for a save
+dialog: a user fixing four broken rules one round-trip at a time gives up.
+
+Route usage:
 
 ```ts
 const result = validateContactFilter(req.body?.filter, req.user!.organizationId);
@@ -199,128 +223,118 @@ if (!result.valid) {
 }
 ```
 
-`{ error, details }` matches the shape the brief specifies and the codebase's
-existing `{ error }` responses.
-
 ---
 
-## 3. API routes
+## 4. Routes
 
-New file **`apps/backend/src/modules/segments/segments.routes.ts`**, mounted at
-`/api/segments` in `src/index.ts` beside the other module routers.
-
-### 3.1 Permissions — add `segment:*`, do not reuse `contact:manage`
-
-`contact:manage` does not exist and would 500. Two options:
-
-| Option | Verdict |
-|---|---|
-| Map onto `contact:create` / `contact:update` / `contact:delete` | Rejected: `contact:delete` is ADMIN-only, so a SUPERVISOR could create a segment but not delete their own. And an AGENT (who has `contact:create`) could create one but not rename it. |
-| **Add `segment:*` to `ROLE_PERMISSIONS`** | Recommended. CLAUDE.md says to use `requirePermission('operation:action')` and never inline role checks; a new resource gets new entries. |
+New file **`apps/backend/src/modules/segments/segments.routes.ts`**, mounted in
+`src/index.ts` beside the others (after line 367):
 
 ```ts
-// rbac.middleware.ts, beside the contact block
-'segment:read':   new Set(['ADMIN', 'SUPERVISOR', 'AGENT', 'VIEWER', 'FINANCE']),
-'segment:create': new Set(['ADMIN', 'SUPERVISOR', 'AGENT']),
-'segment:update': new Set(['ADMIN', 'SUPERVISOR']),
-'segment:delete': new Set(['ADMIN', 'SUPERVISOR']),
+app.use('/api/segments',       segmentRoutes);
 ```
 
-Rationale: reading mirrors `contact:read`; creating mirrors `contact:create` so
-an agent can save their own working view; renaming and deleting are SUPERVISOR+
-because a segment is shared across the whole organization — one agent must not
-be able to delete a view the whole team is using. `segment:delete` is
-deliberately *not* ADMIN-only (unlike `contact:delete`) because deletion here is
-soft and reversible in the database, not destructive.
-
-### 3.2 Routes
-
-All four share one scoping helper. Soft delete is not automatic — the tenancy
-extension injects `organizationId`, not `deletedAt: null` — so a single helper
-is the only thing standing between this feature and a resurrected segment
-appearing in a list.
+Soft delete is **not** automatic — the tenancy extension injects
+`organizationId`, never `deletedAt: null` — so one shared constant is the only
+thing standing between this feature and a deleted segment reappearing:
 
 ```ts
-/** Live segments only. Every read MUST go through this. */
+/** Live segments only. Every read and write MUST spread this. */
 const ACTIVE = { deletedAt: null } as const;
 ```
 
-| Route | Permission | Notes |
+| Route | Permission | Behaviour |
 |---|---|---|
-| `GET /api/segments` | `segment:read` | `where: ACTIVE`, `orderBy: [{ name: 'asc' }]`. Accept `?sort=createdAt` for the documented alternative. Returns `{ id, name, filter, createdById, createdAt, updatedAt }`. |
-| `POST /api/segments` | `segment:create` | Validate name and filter, then create with `createdById: req.user!.id`. |
-| `PATCH /api/segments/:id` | `segment:update` | Rename only. **Read first, 404 if missing or soft-deleted**, then update. |
-| `DELETE /api/segments/:id` | `segment:delete` | `update({ data: { deletedAt: new Date() } })`, return **204**. 404 if already deleted — deleting twice is a caller bug worth surfacing. |
-| `GET /api/segments/:id/count` | `segment:read` | See §4. |
+| `GET /api/segments` | `segment:view` | `where: ACTIVE`, `orderBy: { name: 'asc' }`. Returns `{ id, name, filter, createdById, createdAt, updatedAt }`. |
+| `POST /api/segments` | `segment:create` | Validate name + filter, create with `createdById: req.user!.id`. 400 on duplicate. |
+| `PATCH /api/segments/:id` | `segment:rename` | Read with `ACTIVE` first → 404 if missing **or already deleted**, then update the name only. |
+| `DELETE /api/segments/:id` | `segment:delete` | Read with `ACTIVE` → 404, else set `deletedAt`, return **204** with no body. |
+| `GET /api/segments/:id/count` | `segment:view` | §5. |
 
-**Cross-tenant reads return 404, not 403** — matching
-`campaigns.routes.ts:113`'s comment that existence is itself information. The
-tenancy extension already makes another org's id match nothing, so this falls
-out naturally; the point is to return 404 rather than letting a `P2025` become a
-500.
+**Cross-tenant reads return 404, not 403**, matching the existing convention
+(`campaigns.routes.ts:113`: *"existence is itself information"*). The extension
+already makes another org's id match nothing; the job here is to turn Prisma's
+`P2025` into a clean 404 rather than a 500.
 
-**Name validation** (shared helper, used by POST and PATCH):
+**Name validation** — one helper used by POST and PATCH:
 
-- trim; reject empty; cap at 80 characters (a chip has to fit)
-- reject a name that is only punctuation or digits? No — over-reach. Only empty.
-- **case-insensitive duplicate pre-check** with
+- trim; reject empty; cap at 80 characters (a chip has to fit on one line)
+- **case-insensitive pre-check**:
   `findFirst({ where: { ...ACTIVE, name: { equals: name, mode: 'insensitive' } } })`
-  so the user gets *"يوجد شريحة بهذا الاسم"* rather than a database error
-- **also catch `P2002`** from the partial index. The pre-check races: two saves
-  in the same instant both pass it. The index is the real guarantee; the
-  pre-check exists only for the message.
-- on PATCH, exclude the row being renamed (`id: { not: req.params.id }`), or
+  → 400 `يوجد شريحة بهذا الاسم` — a friendly message, not a database error
+- **on PATCH, exclude the row being renamed** (`id: { not: req.params.id }`), or
   renaming "VIP" to "VIP" reports a duplicate against itself
+- **also catch `P2002`**. The pre-check races — two saves in the same instant
+  both pass it. The partial index is the real guarantee; the pre-check exists
+  only for the message.
 
-**Audit logging: not needed.** `auditLog()` is org-scoped and currently used
-only for conversations and system config. A segment is user data, not a billing
-or security event, and `createdById` + `updatedAt` already answer the questions
-anyone would ask. Revisit if segments ever become shareable or drive automation.
+**No audit logging.** `auditLog()` is used only for conversations and system
+config today. A segment is user data, not a billing or security event, and
+`createdById` + `updatedAt` already answer the questions anyone would ask.
 
 ---
 
-## 4. Counting a segment — the two-numbers problem
+## 5. Counting a segment
 
-`GET /api/segments/:id/count` returns `{ count }` compiled from the stored
+### 5.1 Extract the campaign-reference guard
+
+`assertCampaignsInOrg` is private to `campaigns.routes.ts:58`. The count endpoint
+needs the same rule, and two copies of "this campaign must belong to my org"
+will drift.
+
+New **`apps/backend/src/modules/campaigns/campaign-refs.ts`**:
+
+```ts
+/** Campaign ids referenced by a filter that do not exist in this organization. */
+export async function missingCampaignIds(filter: ContactFilterDsl | null): Promise<string[]>;
+
+/** Throws a 404-shaped error when any referenced campaign is missing. */
+export async function assertCampaignsInOrg(filter: ContactFilterDsl | null): Promise<void>;
+```
+
+`campaigns.routes.ts` imports `assertCampaignsInOrg` from here instead of
+defining it; behaviour is unchanged, so the campaign preview must be re-verified
+(§8.10) to prove the extraction was lossless.
+
+### 5.2 The endpoint
+
+`GET /api/segments/:id/count` → `{ count: number }`, compiled from the stored
 filter with `contactWhereFromFilterDsl(filter, organizationId)` plus
-`isArchived: false` — the **contacts-page** semantics.
+`isArchived: false` — **contacts-page semantics**.
 
-**This will not equal the campaign audience count for the same segment, and that
-is correct.** `audienceWhere()` (`campaigns.routes.ts:29`) additionally excludes
-`marketingConsent: 'OPTED_OUT'`, unconditionally and with no override. So a
-segment chip reading 1,240 can become 1,198 in the composer.
+A dangling campaign reference returns the specific shape the brief asks for:
 
-Two numbers for one segment looks like a bug unless it is labelled. Therefore:
+```json
+{ "error": "Campaign referenced in filter was deleted", "field": "campaignId" }
+```
 
-- The composer must keep using `POST /api/campaigns/audience/preview`, **not**
-  the segment count endpoint, so consent exclusion cannot be bypassed by routing
-  a broadcast through a segment.
-- The composer already returns `excludedOptedOut` and already renders it (M1.4).
-  Selecting a segment must keep that line visible — it is the sentence that
-  explains the difference.
-- Do **not** try to reconcile them by excluding opted-out contacts from the chip
-  count. The contacts page is a CRM view; hiding opted-out people from it would
-  be wrong, and an agent would lose the ability to see who opted out.
+Not a silent zero. A zero makes the segment look *empty*; the truth is that it is
+*broken*, and those call for opposite actions from the user.
 
-Second interaction: **a stored filter can reference a deleted campaign.** A
-segment saved with `receivedCampaign = X` keeps compiling after X is deleted, and
-`assertCampaignsInOrg` will now 404 it. The count endpoint must catch that and
-return a specific message (*"الحملة المشار إليها لم تعد موجودة"*) rather than a
-bare 500 or a silent zero — a silent zero is the worst outcome, because the
-segment looks empty rather than broken.
+### 5.3 Two numbers for one segment, by design
+
+`audienceWhere()` (`campaigns.routes.ts:41`) additionally excludes
+`marketingConsent: 'OPTED_OUT'`, unconditionally and with no override. So a chip
+reading 1,240 becomes 1,198 in the composer.
+
+- The composer keeps using `POST /api/campaigns/audience/preview`, **never** the
+  segment count endpoint — otherwise consent exclusion could be bypassed simply
+  by routing a broadcast through a segment.
+- The composer already returns and renders `excludedOptedOut` (M1.4). Selecting a
+  segment must keep that line visible; it is the sentence that explains the gap.
+- Do **not** reconcile them by hiding opted-out contacts from the chip count.
+  The contacts page is a CRM view, and an agent needs to see who opted out.
 
 ---
 
-## 5. Frontend — contacts page
-
-### 5.1 Save as segment
+## 6. Frontend — contacts page
 
 `apps/frontend/app/(dashboard)/contacts/page.tsx`, inside the existing filter
-`Card` (line ~200), in a row **below** `<ContactFilterBuilder>`:
+`Card` (around line 213), in a row **below** `<ContactFilterBuilder>`:
 
 ```tsx
 <div className="flex flex-wrap items-center justify-between gap-2">
-  <SegmentChips segments={segments} activeId={activeSegmentId} onSelect={applySegment} />
+  <SegmentChips segments={segments} activeId={activeSegmentId} onSelect={applySegment} … />
   <Button size="sm" variant="outline" disabled={!appliedFilter} onClick={() => setSaveOpen(true)}>
     <BookmarkPlus className="h-3.5 w-3.5" />
     {t('حفظ كشريحة')}
@@ -329,103 +343,104 @@ segment looks empty rather than broken.
 ```
 
 `disabled={!appliedFilter}` matters: `activeFilter()` returns `null` when nothing
-is filled in, and saving "everyone" under a name is the failure mode §2 rejects
-server-side. Disabling the button says so before the round trip.
+is filled in, so this stops the "matches everyone" save at the button rather than
+after a round trip — the same rule §3 enforces server-side.
 
-New component **`apps/frontend/components/contacts/save-segment-dialog.tsx`** —
-name input, required, `Enter` submits, duplicate-name error rendered inline
-under the field rather than only as a toast (a toast disappears while the user is
-still looking at the field they need to change).
+**New — `apps/frontend/components/contacts/save-segment-dialog.tsx`**
+Name input, required, `Enter` submits. A duplicate-name error renders **inline
+under the field**, not only as a toast: a toast disappears while the user is
+still looking at the field they have to change.
 
-### 5.2 Segment chips
+**New — `apps/frontend/components/contacts/segment-chips.tsx`**
 
-New component **`apps/frontend/components/contacts/segment-chips.tsx`**.
+- alphabetical, matching the API's default order
+- clicking a chip calls `setFilter(segment.filter)`, which flows through the
+  existing `appliedFilter` memo — the list refreshes with no extra plumbing
+- the active chip is marked, and clicking it again clears the filter; without
+  that there is no way back to "all contacts" except deleting rules by hand
+- **counts fetched lazily per chip**, not eagerly for all. Eager means N
+  `COUNT(*)` queries against `Contact` on every page load, and M3 filters
+  traverse relations (`hasEverReplied`, broadcast history). Fetch on first
+  render of a visible chip and cache in state; if it is still slow, ship chips
+  without counts — a chip is useful without one.
+- a small per-chip menu for rename / delete, hitting PATCH / DELETE
 
-- alphabetical by name, matching the API's default order
-- clicking a chip calls `setFilter(segment.filter)` — which flows through the
-  existing `appliedFilter` memo, so the list refreshes with no extra plumbing
-- the active chip is visually marked, and clicking it again clears the filter;
-  without that there is no way back to "all contacts" except deleting rules
-- **counts are fetched lazily and per chip**, not eagerly for all of them. Eager
-  counting means N `COUNT(*)` queries against Contact on every page load, and
-  these filters traverse relations (M3 added `hasEverReplied`, broadcast
-  history). Fetch on hover/first render of the visible chips, cache in state.
-  If that proves slow, show chips without counts — a chip is useful without one.
-- a rename/delete affordance per chip (small menu) calling PATCH/DELETE
-
-New in `apps/frontend/lib/data.ts`: `Segment` type plus `fetchSegments`,
-`createSegment`, `renameSegment`, `deleteSegment`, `fetchSegmentCount`.
+**`apps/frontend/lib/data.ts`** gains `Segment` plus `fetchSegments`,
+`createSegment`, `renameSegment`, `deleteSegment`, `fetchSegmentCount` — the
+single source for API types, per the project convention.
 
 ---
 
-## 6. Frontend — campaign composer
+## 7. Frontend — campaign composer
 
 `apps/frontend/components/campaigns/campaign-composer.tsx`, `step === 'target'`
-(line 214).
-
-Add a segment selector **above** the builder, not as a separate tab:
+(line 214). Picker **above** the builder:
 
 ```
-[ Saved segment: ▾ none ]      ← selecting one loads its filter into the builder
-────────────────────────────
-<ContactFilterBuilder …>       ← stays visible and editable
+[ شريحة محفوظة: ▾ بدون ]     ← selecting one loads its filter into the builder
+──────────────────────────
+<ContactFilterBuilder …>      ← stays visible and editable
 ```
 
-A tab would imply the two are alternatives; they are not. A segment is a
-*starting point* — the whole value is picking "lapsed customers" and then adding
-"and in Haifa" for this one campaign. Loading into the shared builder gets that
-for free, and reuses the existing debounced `refreshAudience`.
+Not a tab. A tab implies the two are alternatives; they are not. The value is
+picking "lapsed customers" and then adding "and in Haifa" for this one campaign,
+so a segment is a *starting point*. Loading into the shared builder gets that
+for free and reuses the existing debounced `refreshAudience`.
 
-Once the user edits the loaded filter, clear the selection label to
-`المخصص` / "custom" so nobody believes they are sending to the saved segment when
-they are not. Track this by comparing `JSON.stringify` of the current filter
-against the loaded one — cheap, and these objects are small.
+Once the user edits a loaded filter, flip the label to `شريحة مخصصة` ("custom")
+by comparing `JSON.stringify` of the current filter against the loaded one —
+cheap, and these objects are small. Without it, someone believes they are
+sending to the saved segment when they are not.
 
-The composer's audience line keeps showing `excludedOptedOut` (§4).
+The audience line keeps rendering `excludedOptedOut` (§5.3).
 
 ---
 
-## 7. Tenancy — gate 50 → 51
+## 8. Tenancy — gate 50 → 51
 
-One new case in `apps/backend/scripts/tenancy-bleed-harness.js`, placed beside
-the existing `crm:` checks.
+One case in `apps/backend/scripts/tenancy-bleed-harness.js`, beside the existing
+`crm:` checks. Use the HTTP layer for the 404s (as `crm: contact refs…` does) so
+the route guards are exercised, and the scoped client for row-level assertions.
 
 **`segments: saved segments are organization-scoped`**
 
-- create a segment in org A via the scoped client under `runAsOrganization`
-- org B's `GET /api/segments` does not list it
-- org B reading, renaming or deleting it by id returns **404** (all three verbs —
-  a read guard that a write path skips is the classic hole)
-- a filter stored by org A that references org A's tag resolves in org A and
-  matches **nothing** in org B, even though the tag name may be identical —
-  proves the compiled `where` is tenant-local, not just the row lookup
-- soft delete removes it from the list but leaves the row, and its **name becomes
-  reusable** — the partial index's whole purpose, and the thing a plain
-  `@@unique` would silently break
-
-Use the HTTP layer for the 404s (as `crm: contact refs…` does) so the route
-guards are exercised, and the scoped Prisma client for the row-level assertions.
+1. org A creates a segment → org A's `GET /api/segments` lists it
+2. org B's list does **not** contain it
+3. org B `GET /api/segments/:id/count` → 404
+4. org B `PATCH /api/segments/:id` → 404
+5. org B `DELETE /api/segments/:id` → 404
+   — all three verbs, because a read guard that a write path skips is the
+   classic hole
+6. a filter org A stored against org A's tag resolves in org A and matches
+   **nothing** in org B even when the tag name is identical — proving the
+   compiled `where` is tenant-local, not just the row lookup
+7. soft delete removes it from the list, leaves the row, and **frees the name** —
+   the partial index's whole purpose, and what a plain `@@unique` silently breaks
 
 ---
 
-## 8. Build order
+## 9. Build order
 
 1. Migration + `prisma generate` + apply. Gate stays 50/50.
-2. `validateContactFilter` in `contact-filter-dsl.ts`, plus `segment:*`
-   permissions. Nothing consumes them yet.
-3. Routes + count endpoint. Verify by curl round-trip (§9.3).
-4. Harness case → 51/51.
-5. `lib/data.ts` helpers, then the contacts page (save dialog + chips).
-6. Campaign composer selector.
-7. i18n: `حفظ كشريحة`, `تم حفظ الشريحة`, `يوجد شريحة بهذا الاسم`, `الشرائح`,
-   `شريحة مخصصة`, plus rename/delete strings — ar source → he/en, then re-run the
-   audit script and confirm it returns to its two known non-UI exclusions.
+2. `validateContactFilter` in the DSL + `segment:*` permissions. Nothing consumes
+   them yet; backend typechecks.
+3. Extract `campaign-refs.ts`; re-verify the campaign audience preview is
+   unchanged **before** building on it.
+4. Routes + count endpoint. curl round-trip.
+5. Harness case → 51/51.
+6. `lib/data.ts` helpers → contacts page (save dialog + chips).
+7. Composer picker.
+8. i18n ar→he/en: `حفظ كشريحة`, `تم حفظ الشريحة`, `يوجد شريحة بهذا الاسم`,
+   `الشرائح`, `شريحة محفوظة`, `شريحة مخصصة`, `بدون`, `إعادة تسمية`, `حذف`,
+   `الفلتر فارغ — الشريحة ستشمل كل جهات الاتصال`. Then re-run the audit script and
+   confirm it returns to its two known non-UI exclusions.
 
-Steps 1–3 are reversible and self-contained; 5–6 are additive UI.
+Steps 1–4 are self-contained and reversible; 6–7 are additive UI. Step 3 is the
+only one that touches working code, which is why it is verified in isolation.
 
 ---
 
-## 9. Verification
+## 10. Verification
 
 Standing gate at each step:
 
@@ -436,45 +451,44 @@ cd apps/frontend && npm run build
 docker compose build backend frontend && docker compose up -d
 ```
 
-There are still no unit tests, so this needs deliberate live checks:
+There are no unit tests in this repo, so each of these is a deliberate live check:
 
-1. **Migration applied**, `prisma migrate status` clean, and the partial index
-   exists (`\d "Segment"` shows the `WHERE (deletedAt IS NULL)` predicate).
-2. **Round trip**: POST → GET (appears) → PATCH rename → GET (renamed) →
-   DELETE (204) → GET (gone) → row still present in SQL with `deletedAt` set.
-3. **Name reuse after delete** — create "VIP", delete it, create "VIP" again.
-   This is the one a plain unique index breaks, and it must pass.
-4. **Case-insensitive duplicate**: create "VIP", then "vip" → 400 with the
-   friendly message, not a 500.
-5. **Empty filter rejected**: `{"$and":[]}` → 400. A segment matching everyone
-   is the dangerous case.
-6. **Invalid filter**: unknown field, wrong operator for the type, and depth 4 —
-   each 400 with `details` naming the offending path, and **more than one error
-   returned at once** for a filter with two bad rules.
-7. **Cross-tenant**: org B GET/PATCH/DELETE on org A's segment id → 404 for all
-   three.
-8. **Counts**: segment count on the contacts page vs the composer's audience for
-   the same segment — confirm they differ by exactly the opted-out count, and
-   that `excludedOptedOut` explains it on screen.
-9. **Dangling campaign reference**: save a segment using `receivedCampaign`,
-   delete the campaign, then count → specific 400, not 500 and not a silent 0.
-10. **Browser**: save from the contacts page, chip appears, clicking applies it,
-    clicking again clears it; composer selector loads it and the count matches;
-    editing after loading flips the label to "custom".
-11. **RTL and LTR** both checked, as with M3.
-
-**Remove all test data afterwards** — segments, and any campaign or contact
-touched. The demo org is linked to a live WhatsApp number, so no verification
-step may send a real message.
+1. **Migration applied** — `prisma migrate status` clean, and `\d "Segment"`
+   shows the partial predicate `WHERE (("deletedAt" IS NULL))`.
+2. **Gate 51/51.**
+3. **Round trip** — POST → GET (appears) → PATCH rename → GET (renamed) →
+   DELETE (**204**) → GET (absent) → PATCH again (**404**) → row still present in
+   SQL with `deletedAt` set.
+4. **Cross-org** — org B gets 404 on GET/PATCH/DELETE of org A's segment id.
+5. **Duplicate name** — create "VIP", create "VIP" again → 400.
+6. **Case-insensitive** — create "VIP", create "vip" → 400.
+7. **Name freed by delete** — create "VIP", delete, create "VIP" again →
+   **succeeds**. This is the one a plain unique index breaks.
+8. **Invalid filter** — unknown field, wrong operator for the type, and depth 4;
+   each 400 with `details`, and a filter with **two** bad rules returns **two**
+   errors, not one.
+9. **Empty filter** — `{"$and":[]}` → 400.
+10. **Deleted campaign reference** — save a segment using `receivedCampaign`,
+    delete the campaign, then count → `{ error, field: "campaignId" }`, not 500
+    and not `0`. Also re-check the campaign audience preview still works after
+    the §5.1 extraction.
+11. **Contacts page** — "حفظ كشريحة" appears, saves, the chip appears, clicking
+    applies the filter, clicking again clears it.
+12. **Composer** — the segment appears in the picker; its count equals the
+    contacts-page count **minus** `excludedOptedOut`; editing after loading flips
+    the label to "custom".
+13. **RTL and LTR** both checked, as with M3.
+14. **All test data removed** — segments, and any campaign or contact touched;
+    residue check clean. The demo org is on a live WhatsApp number, so no step
+    may send a real message.
 
 ---
 
-## 10. Out of scope (confirmed with the brief)
+## 11. Out of scope
 
 Sharing between users, folders/categories, auto-updating segments, export.
 
-One consequence worth writing down now: **there is no sharing model, so every
-segment is visible to everyone in the organization.** `createdById` is audit
-only. That is why §3.1 puts rename and delete at SUPERVISOR+ — an agent deleting
-a view the team relies on is the predictable failure of an org-wide list with
-per-user creation.
+Worth recording now: **there is no sharing model, so every segment is visible to
+everyone in the organization.** `createdById` is audit only. That is precisely
+why §2 puts rename and delete above create — an org-wide list with per-user
+creation and per-user deletion is how a team loses a view it depends on.
