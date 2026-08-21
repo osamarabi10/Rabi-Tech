@@ -165,7 +165,7 @@ numbers (display-only; the shared number now lives on `ostudio-primary`).
 
 | Phase | Evidence |
 |---|---|
-| **P0–P1 Hardening + Tenancy** | 45/45 gate; composite FKs; fail-closed scope; rate limits; secrets guard |
+| **P0–P1 Hardening + Tenancy** | **48/48** gate; composite FKs; fail-closed scope; rate limits; secrets guard |
 | **P1.5 Branding/white-label** | per-org tokens injected at runtime; "Powered by" tier-gated |
 | **P3 Metering** | UsageEvent ledger, exact MAC, rollups; quota errors block outbound |
 | **P4 Navigation & Settings IA** | 5-item nav; stubs redirect; `?tab=` honored; snippets restored; verified in browser |
@@ -175,6 +175,9 @@ numbers (display-only; the shared number now lives on `ostudio-primary`).
 | **P8 (client-facing part)** | seats enforced (402, no orphan identity, ENTERPRISE unlimited); seat meter; team mgmt; plan carries pricing→signup |
 | **Re-theme (user-decided)** | Respond.io palette live (`#0066FF`/`#0F172A`/`#F8FAFC` measured in-browser); WCAG sweep to 0 failures on inbox+reports; branding-inject pitfall documented |
 | **Gateway stabilization** | inbound self-healing + SSRF allowlist (50/0 deliveries); outbound fixed via image update (pins WA Web version); runbook written |
+| **M1 Consent & opt-out** | STOP/إلغاء/הפסק matched on the whole trimmed message, never a substring; broadcasts exclude `OPTED_OUT` unconditionally with the exclusion counted back to the admin; settable per contact by any agent; org-scoped in the gate |
+| **M2 RTL correctness** | per-message first-strong direction — an Arabic message renders `dir="rtl"` even with the interface in English; logical CSS; tabular figures |
+| **M3 Filter vocabulary** | typed date/number/multi-value operators; activity + broadcast-history dimensions; nested groups to depth 3; vocabulary **served** by `/api/contacts/filter-schema` rather than hardcoded; 28 filters verified live incl. a cross-tenant campaign-id probe blocked when buried in a nested group |
 
 ### Remaining — in build order, with definitions of done
 
@@ -232,6 +235,15 @@ Omnichannel (TG/FB/IG) only after Cloud API.
 `pgvector` (same DB, same isolation — **no** Mongo/Pinecone), doc ingestion,
 AI-assist drafting, then an AI node in P11's engine. Most-demoed,
 least-load-bearing; worthless before workflows exist.
+
+**Marasil-parity track (docs/TODO.md).** M1–M3 done. **M4** dark theme ·
+**M5** design-system hardening · **M6** inbox structure · **M7** reports
+consolidation · **M8** roles/restrictions **and building CSV import, which does
+not exist at all** — today the only way a contact enters RabiTech is by messaging
+in. Two things are deliberately deferred rather than forgotten: an **async rule
+compiler** (needed for "never replied *since campaign X was sent*", the Marasil
+headline filter we ship only half of) and **estimated audience counts** (not
+needed below ~50k contacts per tenant).
 
 **Continuous hardening backlog:** health monitor + scheduled self-send (gateway
 breakage is currently discovered by users); per-org plan-aware campaign rate
