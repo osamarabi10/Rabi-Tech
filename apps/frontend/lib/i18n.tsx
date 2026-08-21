@@ -761,6 +761,9 @@ const D: Dict = {
   "حسب النظام": { he: "לפי המערכת", en: "System" },
   "لون التمييز": { he: "צבע הדגשה", en: "Accent colour" },
   "زر إجراء": { he: "כפתור פעולה", en: "Action button" },
+  "رسائل جديدة": { he: "הודעות חדשות", en: "New messages" },
+  "تنقّل": { he: "ניווט", en: "navigate" },
+  "إدراج": { he: "הוספה", en: "insert" },
 };
 
 type I18nCtx = {

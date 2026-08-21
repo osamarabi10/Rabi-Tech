@@ -318,3 +318,18 @@
   .bg-emerald\/10 { background: hsl(var(--emerald) / 0.1); }
   .bg-cyan\/10    { background: hsl(var(--cyan) / 0.1); }
 }
+
+/**
+ * Older messages are prepended into the thread and the reading position is
+ * restored in JS by adding back the height that appeared above.
+ *
+ * Chrome's scroll anchoring compensates for that same insertion on its own,
+ * so the two corrections stacked: the thread moved twice the inserted height
+ * and the message the agent had asked to see left the screen entirely. Firefox
+ * anchors too and Safari does not, so leaving it on also made the behaviour
+ * differ per browser. Turning it off makes our own arithmetic the only
+ * correction, and the same one everywhere.
+ */
+.thread-scroll [data-radix-scroll-area-viewport] {
+  overflow-anchor: none;
+}

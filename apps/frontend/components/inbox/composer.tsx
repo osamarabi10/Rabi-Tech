@@ -184,7 +184,15 @@ export function Composer({
 
         <div className="relative flex-1">
           {shortCodeMatches.length > 0 && (
-            <div className="absolute bottom-full mb-1 w-full overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
+            <div
+              className={cn(
+                'absolute bottom-full mb-1.5 w-full max-w-md overflow-hidden rounded-lg border border-border bg-popover shadow-xl',
+                // Rises out of the composer rather than appearing on top of
+                // it, so the eye follows where it came from.
+                'animate-in fade-in-0 slide-in-from-bottom-1 duration-150',
+              )}
+              role="listbox"
+            >
               {shortCodeMatches.slice(0, 5).map((tpl, i) => (
                 <button
                   key={tpl.id}
@@ -196,10 +204,17 @@ export function Composer({
                   )}
                 >
                   <Zap className="h-3 w-3 shrink-0 opacity-50" />
-                  <span className="font-mono opacity-60">:{tpl.shortCode}</span>
+                  <span className="numeric font-mono opacity-60" dir="ltr">:{tpl.shortCode}</span>
                   <span className="truncate">{tpl.title}</span>
                 </button>
               ))}
+              {/* The list was already keyboard-navigable; nothing said so. */}
+              <div className="flex items-center gap-3 border-t border-border bg-secondary/50 px-3 py-1 text-[10px] text-muted-foreground">
+                <span dir="ltr">↑↓</span>
+                <span>{t('تنقّل')}</span>
+                <span dir="ltr">Tab</span>
+                <span>{t('إدراج')}</span>
+              </div>
             </div>
           )}
 

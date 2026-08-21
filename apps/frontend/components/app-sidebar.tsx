@@ -209,7 +209,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
                   >
                     {/* active pill — inline-start edge, so it flips with RTL */}
                     {active && (
-                      <span className="absolute inset-inline-start-0 start-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" />
+                      <span className="absolute start-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" />
                     )}
                     <Icon
                       className={cn(

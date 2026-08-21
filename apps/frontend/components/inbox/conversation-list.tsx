@@ -117,7 +117,7 @@ export function ConversationList({
         </div>
 
         <div className="relative">
-          <Search className="pointer-events-none absolute inset-inline-start-0 top-1/2 ms-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute start-0 top-1/2 ms-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="h-8 ps-8 text-xs"
             placeholder={t('بحث بالاسم أو الرقم...')}

@@ -155,6 +155,12 @@ export default function InboxPage() {
   const [isSearchMode, setIsSearchMode] = useState(false);
   const labelMenuRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  /** The conversation the thread is currently pinned to, to detect a switch. */
+  const pinnedConvRef = useRef<string | null>(null);
+  /** Scroll height captured before older messages are prepended. */
+  const restoreHeightRef = useRef<number | null>(null);
+  const [hasUnreadBelow, setHasUnreadBelow] = useState(false);
 
   const currentUser = (() => {
     try { return JSON.parse(localStorage.getItem('rabitech_user') || '{}'); } catch { return {}; }
@@ -313,7 +319,110 @@ export default function InboxPage() {
     };
   }, [selId, loadConvs, notify]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  /** Radix renders the scrollable element inside ScrollArea, not on it. */
+  const threadViewport = useCallback((): HTMLElement | null => {
+    return threadRef.current?.querySelector<HTMLElement>(
+      '[data-radix-scroll-area-viewport]',
+    ) ?? null;
+  }, []);
+
+  /**
+   * Whether the agent was at the bottom *before* this update.
+   *
+   * Recorded from real scroll events rather than measured inside the message
+   * effect. Measuring there reads a layout that has not settled yet — right
+   * after opening a conversation the thread has not finished laying out, so
+   * the distance looks enormous and the "new messages" pill appears
+   * immediately, on a thread the agent is already looking at the bottom of.
+   */
+  const atBottomRef = useRef(true);
+
+  /** Stable: reads geometry off the event target, so it never needs rebinding. */
+  const onThreadScroll = useCallback((event: Event) => {
+    const viewport = event.currentTarget as HTMLElement;
+    // A threshold, not equality: sub-pixel rounding and the composer resizing
+    // both leave you a few pixels off the true bottom.
+    const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    atBottomRef.current = distance <= 120;
+    if (atBottomRef.current) setHasUnreadBelow(false);
+  }, []);
+
+  const boundViewportRef = useRef<HTMLElement | null>(null);
+
+  /**
+   * Bind to whichever viewport is currently mounted, keyed on the element
+   * rather than on `selId`.
+   *
+   * The thread pane only renders once the conversation itself has loaded,
+   * which is a render *after* `selId` changes. An effect depending on `selId`
+   * alone therefore found no viewport, returned, and never ran again — so the
+   * listener was never attached and `atBottomRef` stayed stuck at its initial
+   * `true`. That failed silently: opening a thread still jumped to the newest
+   * message (a different effect does that), it just never noticed the agent
+   * scrolling away, so every inbound message yanked them back down.
+   *
+   * No dependency array on purpose. The body is an identity compare that exits
+   * immediately in the common case.
+   */
+  useEffect(() => {
+    const viewport = threadViewport();
+    if (viewport === boundViewportRef.current) return;
+    boundViewportRef.current?.removeEventListener('scroll', onThreadScroll);
+    boundViewportRef.current = viewport;
+    viewport?.addEventListener('scroll', onThreadScroll, { passive: true });
+  });
+
+  useEffect(
+    () => () => {
+      boundViewportRef.current?.removeEventListener('scroll', onThreadScroll);
+    },
+    [onThreadScroll],
+  );
+
+  /**
+   * Auto-scroll only when the agent was already at the bottom.
+   *
+   * This used to scroll on every messages change, unconditionally. Reading
+   * back through a thread and having an inbound message yank you to the
+   * bottom is bad; doing it after "load older messages" — which changes
+   * `messages` too — threw away the history the agent had just asked for.
+   */
+  useEffect(() => {
+    const viewport = threadViewport();
+    if (!viewport) return;
+
+    // Older messages were prepended: hold the reading position by adding back
+    // exactly the height that appeared above it.
+    if (restoreHeightRef.current !== null) {
+      const added = viewport.scrollHeight - restoreHeightRef.current;
+      viewport.scrollTop += added;
+      restoreHeightRef.current = null;
+      return;
+    }
+
+    // Switching conversation always starts at the newest message, with no
+    // animation — a smooth scroll through a long history looks like a bug.
+    if (pinnedConvRef.current !== selId) {
+      pinnedConvRef.current = selId;
+      atBottomRef.current = true;
+      setHasUnreadBelow(false);
+      endRef.current?.scrollIntoView({ behavior: 'auto' });
+      return;
+    }
+
+    if (atBottomRef.current) {
+      endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    } else {
+      // Position is kept. Tell them something arrived rather than moving them.
+      setHasUnreadBelow(true);
+    }
+  }, [messages, selId, threadViewport]);
+
+  const jumpToLatest = useCallback(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    atBottomRef.current = true;
+    setHasUnreadBelow(false);
+  }, []);
 
   // ── Actions ─────────────────────────────────────────────────────────────────
   const pushLocalMsg = (body: string, auto = false) => {
@@ -754,6 +863,7 @@ export default function InboxPage() {
             </div>
 
             {/* Messages */}
+            <div className="thread-scroll relative flex min-h-0 flex-1 flex-col" ref={threadRef}>
             <ScrollArea className="flex-1">
               <div className="flex min-h-full w-full flex-col justify-end gap-2 p-4">
                 {/* Load older messages */}
@@ -765,6 +875,10 @@ export default function InboxPage() {
                         setLoadingOlder(true);
                         try {
                           const res = await fetchOlderMessages(selId, oldestMsgId);
+                          // Captured before the state update so the effect can
+                          // add back exactly the height that appears above.
+                          restoreHeightRef.current =
+                            threadViewport()?.scrollHeight ?? null;
                           setMessages((prev) => [...res.messages, ...prev]);
                           setHasMoreMessages(res.hasMore);
                           setOldestMsgId(res.oldestId);
@@ -834,6 +948,17 @@ export default function InboxPage() {
                 <div ref={endRef} />
               </div>
             </ScrollArea>
+            {hasUnreadBelow && (
+              <button
+                type="button"
+                onClick={jumpToLatest}
+                className="absolute inset-x-0 bottom-3 mx-auto flex w-fit items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground shadow-lg transition-opacity hover:opacity-90"
+              >
+                {t('رسائل جديدة')}
+                <span aria-hidden>↓</span>
+              </button>
+            )}
+            </div>
 
             {/* Reply box */}
             <div className="border-t border-border bg-card p-3 space-y-2">
