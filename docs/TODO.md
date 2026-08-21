@@ -172,43 +172,71 @@ are display and billing-input only until P10-b wires a real provider.
 
 ## P10-a — Saved segments · ~4 days
 
-**Full implementation plan: [docs/P10A-SAVED-SEGMENTS-PLAN.md](P10A-SAVED-SEGMENTS-PLAN.md)**
-— verified paths, migration SQL, validator design, and the interactions the
-brief does not name. Read it before starting.
+**Plan: [docs/P10A-SAVED-SEGMENTS-PLAN.md](P10A-SAVED-SEGMENTS-PLAN.md)**
 
-- [ ] **1. Migration**: `Segment` (id, organizationId, name, filter Json,
-  createdById, timestamps, `deletedAt`; composite FK `[id, organizationId]`;
-  composite FK to User so a segment cannot point at another tenant's user)
-  — name uniqueness is a **partial, case-insensitive** SQL index
-  (`LOWER(name) WHERE "deletedAt" IS NULL`). Prisma can express neither, so do
-  **not** add `@@unique([organizationId, name])`: a full unique index makes a
-  soft-deleted segment reserve its name forever
-- [ ] **2. Permissions**: `segment:view/create/rename/delete`. Rename and delete
-  sit above create — a segment is org-wide once saved, so an agent must not be
-  able to delete a view the team relies on.
-  (`contact:manage` does **not** exist; `requirePermission` 500s on unknown keys)
-- [ ] **3. Filter validator** in `lib/contact-filter-dsl.ts` — walks the tree
-  calling the private `compileRule` per leaf, so validation and compilation
-  cannot drift; collects **all** errors with their path; rejects an empty filter
-  (`{"$and":[]}` matches everyone — dangerous under a name like "VIP customers")
-- [ ] **4. Routes** `/api/segments` list/create/rename/delete/count, all
-  spreading one `ACTIVE = { deletedAt: null }` constant — the tenancy extension
-  injects `organizationId`, never `deletedAt`
-  — verify: round-trip; cross-org 404 on **all three** verbs; name reusable
-  after delete
-- [ ] **5. Extract `assertCampaignsInOrg`** out of `campaigns.routes.ts` into
-  `modules/campaigns/campaign-refs.ts` so segments and campaigns share one
-  "campaign must belong to my org" rule — verify the campaign preview is
-  unchanged **before** building on it
-- [ ] **6. Contacts page**: "حفظ كشريحة" button (disabled when the filter is
-  empty) + segment chips with lazy per-chip counts
-- [ ] **7. Campaign Target step**: picker **above** the builder (a segment is a
-  starting point, not an alternative); preview keeps using the consent-excluding
-  campaign endpoint so opt-outs cannot be bypassed via a segment
-  — the chip count and the composer count legitimately differ by the opted-out
-  count; `excludedOptedOut` is the line that explains it
-- [ ] **8. Tenancy**: harness case — org A's segment invisible and 404 to org B;
-  soft delete frees the name — verify: gate **50/50 → 51/51**
+- [x] **1. Migration**: `Segment` with the composite FK pair, plus a composite
+  FK to User so a segment cannot cite another tenant's author. Name uniqueness
+  is a **partial, case-insensitive** SQL index (`LOWER(name) WHERE "deletedAt"
+  IS NULL`) — Prisma can express neither, so there is no `@@unique`
+- [x] **2. Permissions**: `segment:view/create/rename/delete`
+- [x] **3. Filter validator** in `lib/contact-filter-dsl.ts` — calls the private
+  `compileRule` per leaf, collects every error with its path, rejects empty
+- [x] **4. Routes** `/api/segments` list/create/rename/delete/count
+- [x] **5. Extracted `assertCampaignsInOrg`** into `modules/campaigns/campaign-refs.ts`
+- [x] **6. Contacts page**: "حفظ كشريحة" + segment chips with lazy counts
+- [x] **7. Campaign Target step**: picker above the builder, "Custom" on edit
+- [x] **8. Tenancy**: gate **50/50 → 52/52**
+
+**P10-a evidence (2026-08-21).** Migration `20260823090000_saved_segments`.
+
+**The find that mattered was not the feature.** Verifying cross-org access on the
+new count endpoint returned **200 with another tenant's data**. Root cause:
+`findFirst` and `findFirstOrThrow` were missing from *both* injection lists in
+the tenancy extension, so they ran completely unscoped. Not specific to segments
+— roughly twenty `findFirst` call sites exist across the backend, including
+auto-reply resolution, conversation-session lookup and WhatsApp-session
+resolution in the inbound path. Fixed centrally in `prisma/extensions.ts`;
+pinned by a static audit that the operation list still contains them, and by a
+runtime assertion that org B resolving org A's segment id returns null.
+
+Writes were already safe — the composite FK and where-injection on `update`
+meant the cross-tenant rename failed — but it failed as a **500 rather than a
+404**, which is its own small leak: a 500 on one id and a 404 on another
+distinguishes "exists elsewhere" from "does not exist". Both are 404 now.
+
+The partial index was verified **at SQL level before any route existed**: "vip"
+collides with "VIP"; the same name is free in another org; the name becomes
+reusable after a soft delete (the case a plain `@@unique` breaks permanently);
+and an author from another tenant is rejected by the composite FK.
+
+Validator: `{"$and":[]}` → 400 "الفلتر فارغ — الشريحة ستشمل كل جهات الاتصال". A
+filter with **two** bad rules returns **two** errors, each with its path
+(`$.$and[0]: حقل غير مدعوم: passwordHash`). Depth 4 rejected.
+
+Round trip verified live: create 201 → count 200 → duplicate 400 → case-dupe 400
+→ rename-to-own-name 200 (self-exclusion works) → rename 200 → delete **204** →
+list empty → PATCH/DELETE/count after delete all **404** → name reusable 201.
+
+**The two counts are different by design and both were confirmed.** With one
+contact opted out: the segment endpoint reports **8** (CRM semantics) and the
+campaign audience reports **7** with `excludedOptedOut: 1`. The composer keeps
+using the campaign endpoint, so consent cannot be bypassed by routing a
+broadcast through a segment.
+
+A stored filter referencing a deleted campaign returns
+`{ error, field: "campaignId" }`, not 0 — a zero makes a broken segment look
+merely empty. Campaign preview re-verified unchanged after the
+`campaign-refs.ts` extraction, and the cross-tenant campaign probe still blocks.
+
+Browser: the save button is disabled until the filter is non-empty; saving adds
+a chip; clicking loads the filter back; clicking again clears it; the composer
+picker sits above the builder and flips to "Custom" once a loaded segment is
+edited. RTL checked — chips right, button left, no overflow. One fix from
+looking rather than reasoning: a chip named "Phone has 9" showing a count of 0
+read as **"Phone has 90"**, so the count now has its own background rather than
+just a margin.
+
+All test data removed; residue check clean.
 
 ## P10-b — Payments live · ~1 week · **blocked on O5**
 

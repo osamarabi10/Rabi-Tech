@@ -16,6 +16,8 @@ import {
   sendCampaign,
   type ContactFilterDsl,
   type Template,
+  fetchSegments,
+  type Segment,
 } from '@/lib/data';
 import { renderTemplate } from '@/lib/utils';
 import { ContactFilterBuilder } from '@/components/contacts/contact-filter-builder';
@@ -60,6 +62,10 @@ export function CampaignComposer({
   const [audience, setAudience] = useState<{ count: number; sample: SampleContact[] } | null>(null);
   const [counting, setCounting] = useState(false);
   const [audienceError, setAudienceError] = useState<string | null>(null);
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [segmentId, setSegmentId] = useState<string>('');
+  /** The filter as the chosen segment defines it, to detect later edits. */
+  const [segmentBaseline, setSegmentBaseline] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
 
   const reset = () => {
@@ -93,6 +99,11 @@ export function CampaignComposer({
   }, [JSON.stringify(filter), t]);
 
   useEffect(() => {
+    if (!open) return;
+    fetchSegments().then(setSegments).catch(() => setSegments([]));
+  }, [open]);
+
+  useEffect(() => {
     if (!open || step !== 'target') return;
     const timer = window.setTimeout(refreshAudience, 350);
     return () => window.clearTimeout(timer);
@@ -109,6 +120,10 @@ export function CampaignComposer({
   });
 
   const audienceFilter = activeFilter(filter);
+  // Once a loaded segment is edited the audience is no longer that segment.
+  // Saying otherwise would let someone believe they are sending to the saved
+  // definition when they are not.
+  const edited = Boolean(segmentBaseline) && JSON.stringify(filter) !== segmentBaseline;
   const activeCount = countRules(audienceFilter);
 
   const submit = async (mode: 'now' | 'schedule') => {
@@ -213,6 +228,37 @@ export function CampaignComposer({
 
         {step === 'target' && (
           <div className="space-y-3">
+            {/*
+              Above the builder, not a tab. A tab would imply the two are
+              alternatives; the real value is picking a saved segment and then
+              adding a condition for this one campaign, so the segment is a
+              starting point that stays editable.
+            */}
+            {segments.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Label className="text-xs">{t('شريحة محفوظة')}</Label>
+                <select
+                  value={segmentId}
+                  onChange={(event) => {
+                    const next = segments.find((segment) => segment.id === event.target.value);
+                    setSegmentId(next?.id ?? '');
+                    setFilter(next ? next.filter : { $and: [] });
+                    setSegmentBaseline(next ? JSON.stringify(next.filter) : '');
+                  }}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  <option value="">{t('بدون')}</option>
+                  {segments.map((segment) => (
+                    <option key={segment.id} value={segment.id}>{segment.name}</option>
+                  ))}
+                </select>
+                {segmentId && edited && (
+                  <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+                    {t('شريحة مخصصة')}
+                  </span>
+                )}
+              </div>
+            )}
             <ContactFilterBuilder value={filter} onChange={setFilter} />
             <div
               className={cn(

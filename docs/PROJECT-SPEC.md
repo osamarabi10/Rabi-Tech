@@ -165,7 +165,7 @@ numbers (display-only; the shared number now lives on `ostudio-primary`).
 
 | Phase | Evidence |
 |---|---|
-| **P0–P1 Hardening + Tenancy** | **48/48** gate; composite FKs; fail-closed scope; rate limits; secrets guard |
+| **P0–P1 Hardening + Tenancy** | **52/52** gate; composite FKs; fail-closed scope; rate limits; secrets guard |
 | **P1.5 Branding/white-label** | per-org tokens injected at runtime; "Powered by" tier-gated |
 | **P3 Metering** | UsageEvent ledger, exact MAC, rollups; quota errors block outbound |
 | **P4 Navigation & Settings IA** | 5-item nav; stubs redirect; `?tab=` honored; snippets restored; verified in browser |
@@ -178,6 +178,7 @@ numbers (display-only; the shared number now lives on `ostudio-primary`).
 | **M1 Consent & opt-out** | STOP/إلغاء/הפסק matched on the whole trimmed message, never a substring; broadcasts exclude `OPTED_OUT` unconditionally with the exclusion counted back to the admin; settable per contact by any agent; org-scoped in the gate |
 | **M2 RTL correctness** | per-message first-strong direction — an Arabic message renders `dir="rtl"` even with the interface in English; logical CSS; tabular figures |
 | **P9 Platform pricing control** | plan/MAC/discount/credit overrides resolved at **read time** — never written into `OrganizationConfig`, so expiry needs no sweeper and drift detection stays meaningful; drift now distinguishes intentional override from genuine divergence; audit row written in the same transaction as the override; gate 50/50 |
+| **P10-a Saved segments** | named stored M3 filters; name uniqueness is a partial case-insensitive index so a soft delete frees the name; validator reuses the private `compileRule` per leaf so it cannot drift from the vocabulary; **found and fixed a tenancy hole — `findFirst`/`findFirstOrThrow` were unscoped in the extension, affecting ~20 call sites incl. the inbound path**; gate 52/52 |
 | **M3 Filter vocabulary** | typed date/number/multi-value operators; activity + broadcast-history dimensions; nested groups to depth 3; vocabulary **served** by `/api/contacts/filter-schema` rather than hardcoded; 28 filters verified live incl. a cross-tenant campaign-id probe blocked when buried in a nested group |
 
 ### Remaining — in build order, with definitions of done

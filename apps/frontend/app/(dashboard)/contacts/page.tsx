@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save } from 'lucide-react';
+import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save, BookmarkPlus } from 'lucide-react';
 import { activeFilter } from '@/lib/contact-filter';
 import { avatarColor } from '@/lib/constants';
 import {
@@ -18,6 +18,8 @@ import {
   type CrmTag,
   type CustomFieldDefinition,
   type SystemUser,
+  fetchSegments,
+  type Segment,
 } from '@/lib/data';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -46,6 +48,8 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ContactFilterBuilder } from '@/components/contacts/contact-filter-builder';
+import { SegmentChips } from '@/components/contacts/segment-chips';
+import { SaveSegmentDialog } from '@/components/contacts/save-segment-dialog';
 import { useT } from '@/lib/i18n';
 
 const COLUMNS = [
@@ -70,6 +74,9 @@ export default function ContactsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ContactFilterDsl>({ $and: [] });
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
+  const [saveSegmentOpen, setSaveSegmentOpen] = useState(false);
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [nextCursorId, setNextCursorId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -89,6 +96,17 @@ export default function ContactsPage() {
   // Unfinished rules are stripped before every request, so a half-typed filter
   // never widens the list behind the user's back.
   const appliedFilter = useMemo(() => activeFilter(filter), [filter]);
+
+  const loadSegments = useCallback(() => {
+    fetchSegments().then(setSegments).catch(() => setSegments([]));
+  }, []);
+  useEffect(() => { loadSegments(); }, [loadSegments]);
+
+  /** Load a saved filter into the builder, or clear back to all contacts. */
+  const applySegment = useCallback((segment: Segment | null) => {
+    setActiveSegmentId(segment?.id ?? null);
+    setFilter(segment ? segment.filter : { $and: [] });
+  }, []);
 
   const load = useCallback(async (cursor: string | null = null) => {
     setLoading(true);
@@ -210,7 +228,35 @@ export default function ContactsPage() {
               />
             </div>
           </div>
-          <ContactFilterBuilder value={filter} onChange={setFilter} />
+          <ContactFilterBuilder
+            value={filter}
+            onChange={(next) => {
+              setFilter(next);
+              // Editing a loaded segment means the view is no longer that
+              // segment; keeping the chip highlighted would be a lie.
+              setActiveSegmentId(null);
+            }}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SegmentChips
+              segments={segments}
+              activeId={activeSegmentId}
+              onSelect={applySegment}
+              onChanged={loadSegments}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              // activeFilter() returns null when nothing is filled in. Saving
+              // "everyone" under a name is what the server rejects, so the
+              // button says so before the round trip.
+              disabled={!appliedFilter}
+              onClick={() => setSaveSegmentOpen(true)}
+            >
+              <BookmarkPlus className="h-3.5 w-3.5" />
+              {t('حفظ كشريحة')}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -363,6 +409,16 @@ export default function ContactsPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <SaveSegmentDialog
+        open={saveSegmentOpen}
+        filter={appliedFilter}
+        onClose={() => setSaveSegmentOpen(false)}
+        onSaved={(segment) => {
+          loadSegments();
+          setActiveSegmentId(segment.id);
+        }}
+      />
     </div>
   );
 }

@@ -648,6 +648,19 @@ const D: Dict = {
   "الخصم": { he: "הנחה", en: "Discount" },
   "حتى": { he: "עד", en: "until" },
   "رصيد متاح": { he: "יתרה זמינה", en: "Available credit" },
+  "حفظ كشريحة": { he: "שמור כפלח", en: "Save as segment" },
+  "شريحة محفوظة": { he: "פלח שמור", en: "Saved segment" },
+  "شريحة مخصصة": { he: "פלח מותאם", en: "Custom" },
+  "تم حفظ الشريحة": { he: "הפלח נשמר", en: "Segment saved" },
+  "تعذّر حفظ الشريحة": { he: "לא ניתן לשמור את הפלח", en: "Could not save the segment" },
+  "اسم الشريحة": { he: "שם הפלח", en: "Segment name" },
+  "عملاء مميزون": { he: "לקוחות מובחרים", en: "Priority customers" },
+  "تم تحديث الشريحة": { he: "הפלח עודכן", en: "Segment updated" },
+  "تعذّر تحديث الشريحة": { he: "לא ניתן לעדכן את הפלח", en: "Could not update the segment" },
+  "تم حذف الشريحة": { he: "הפלח נמחק", en: "Segment deleted" },
+  "تعذّر حذف الشريحة": { he: "לא ניתן למחוק את הפלח", en: "Could not delete the segment" },
+  "خيارات": { he: "אפשרויות", en: "Options" },
+  "إعادة تسمية": { he: "שינוי שם", en: "Rename" },
 };
 
 type I18nCtx = {

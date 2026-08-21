@@ -964,3 +964,45 @@ export async function fetchFilterSchema(): Promise<FilterSchema> {
   const { data } = await api.get('/api/contacts/filter-schema');
   return data as FilterSchema;
 }
+
+// ---------------------------------------------------------------------------
+// Saved segments
+// ---------------------------------------------------------------------------
+
+export type Segment = {
+  id: string;
+  name: string;
+  filter: ContactFilterDsl;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function fetchSegments(): Promise<Segment[]> {
+  const { data } = await api.get('/api/segments');
+  return data as Segment[];
+}
+
+export async function createSegment(input: { name: string; filter: ContactFilterDsl }): Promise<Segment> {
+  const { data } = await api.post('/api/segments', input);
+  return data as Segment;
+}
+
+export async function renameSegment(id: string, name: string): Promise<Segment> {
+  const { data } = await api.patch(`/api/segments/${id}`, { name });
+  return data as Segment;
+}
+
+export async function deleteSegment(id: string): Promise<void> {
+  await api.delete(`/api/segments/${id}`);
+}
+
+/**
+ * Contacts matching a segment — CRM semantics, so opted-out contacts are
+ * included. The campaign composer deliberately uses its own audience endpoint,
+ * which excludes them, so the same segment shows a smaller number there.
+ */
+export async function fetchSegmentCount(id: string): Promise<number> {
+  const { data } = await api.get(`/api/segments/${id}/count`);
+  return (data as { count: number }).count;
+}
