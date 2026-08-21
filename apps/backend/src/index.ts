@@ -36,6 +36,7 @@ import { runAsOrganization, runAsPlatform } from './lib/tenant-context';
 import { assertKnownPaymentProvider } from './modules/billing/provider-registry';
 import { ensurePlans } from './modules/billing/billing.service';
 import { startBillingReconciliationWorker } from './workers/billing-reconciliation.worker';
+import { scheduleGatewayHealthChecks, startGatewayHealthWorker } from './workers/gateway-health.worker';
 import { LIMITS } from './middleware/rate-limit.middleware';
 import { verifySecrets } from './lib/verify-secrets';
 
@@ -481,5 +482,14 @@ httpServer.listen(Number(PORT), HOST, () => {
     logger.info('Billing reconciliation worker disabled (DISABLE_BILLING_RECONCILIATION_WORKER=1)');
   } else {
     startBillingReconciliationWorker();
+  }
+
+  if (process.env.DISABLE_GATEWAY_HEALTH_WORKER === '1') {
+    logger.info('Gateway health worker disabled (DISABLE_GATEWAY_HEALTH_WORKER=1)');
+  } else {
+    startGatewayHealthWorker();
+    scheduleGatewayHealthChecks().catch((error) =>
+      logger.error('Failed to schedule gateway health checks', { error: String(error) }),
+    );
   }
 });

@@ -318,26 +318,62 @@ working-hours util. Skip (documented): Random Split, Zapier/Make nodes, GraphQL.
 
 ## 🔧 Continuous hardening (slot between phases)
 
-- [ ] **H1. Gateway health monitor** —
-  **plan: [docs/H1-GATEWAY-HEALTH-PLAN.md](H1-GATEWAY-HEALTH-PLAN.md)**
-  Kills the "customer discovers the outage" mode (runbook: this WILL break
-  again). **Two tiers, not one**: a free session-status poll every 5 min, plus a
-  self-send every 6 hours to catch the fault a status poll is blind to — the
-  real outage was outbound 500s while the session reported healthy.
-  - the self-send must **bypass `meteredSend`**: at 15-minute intervals it is
-    ~2,880 messages/month, which is 28x a Free tenant's entire outbound
-    allowance (~25 hours to exhaust it), and `assertMetricAvailable` throws at
-    quota, so a metered monitor goes blind exactly when the system is stressed
-  - send to the channel's **own** number, not a configurable third party: 96
-    identical messages a day to a human on an unofficial gateway is how the
-    number running the platform gets banned
-  - `PlatformAlert` needs **no migration** — `resolvedAt: null` is already the
-    unresolved marker, with a resolve pattern at
-    `gateway-provisioning.service.ts:203`
-  - skip suspended / provisioning channels, or every suspended tenant emits
-    CRITICAL alerts forever
-  - gate **52/52 → 54/54** (org-scoped probe rows; and an internal send must
-    record no `UsageEvent`, since that flag is a bypass around billing)
+- [x] **H1. Gateway health monitor** —
+  plan: [docs/H1-GATEWAY-HEALTH-PLAN.md](H1-GATEWAY-HEALTH-PLAN.md)
+
+**H1 evidence (2026-08-21).** Migration `20260824090000_gateway_health_checks`.
+
+**Two probes, deliberately different cadences.** `status` is a free HTTP poll
+every 15 min and does the day-to-day work. `selfSend` is an **internal probe**
+every 6 hours: a real WhatsApp message to the channel's *own* number, never to a
+customer, never charged to the tenant. It exists only to catch outbound failing
+while the session still claims to be healthy — the fault a status poll is blind
+to, and the one that actually happened.
+
+**The find that justified the whole design.** The first live `selfSend` failed
+with a gateway 400 — and the `status` probe on the *same session* had just
+returned **ok**. `getStatus` answers HTTP 200 with a body saying
+`status: disconnected`, and the probe was only checking that the call did not
+throw. It now inspects the reported state via the existing
+`isConnectedStatus()` helper, so both modules agree on what "connected" means.
+A monitor that reports a dead session as healthy is worse than no monitor.
+
+**The metering bypass is real and pinned.** `OpenWAService.sendText` runs through
+`meteredSend`, so an unguarded probe would consume tenant quota — at 15-minute
+intervals ~2,880 messages/month against a Free plan's 100 — and
+`assertMetricAvailable` *throws* at the ceiling, so the monitor would go blind
+exactly when the system was most stressed. `OutboundUsageOptions.internal` is
+honoured at all three layers (`prepareOutboundSend`, `recordSuccessfulOutboundSend`,
+`meteredSend`), verified live: a self-send left `messages_outbound` **and**
+`active_contacts` unchanged at 0.
+
+**Audit-volume correction.** Every `runAsPlatform()` writes a `PlatformAuditLog`
+row. The first cut opened a scope per organization per probe — hundreds of rows a
+day of routine noise in the same table that records platform-owner commercial
+changes. Now one scope per cycle; verified as exactly one audit row per manual
+call.
+
+Verified live: 2-of-3 threshold (first failure → **no** alert, second → exactly
+one CRITICAL, third → still one, no duplicate); recovery resolves it with the
+row kept and sane timestamp ordering; `SUSPENDED` and `AWAITING_QR` channels
+return `skipped` with no row and no alert; a full cycle through the worker's own
+entry point reported `{checked:3, failed:3}`; all three repeatable jobs
+registered with the right cron patterns; retention sweep runs clean.
+
+Console: a Health column with two dots (status / self-send) whose tooltips carry
+the real error and age, a "check now" action, and an alerts panel showing open
+and resolved gateway alerts. English-only, matching the rest of the console.
+
+Gate **52/52 → 54/54**. The second new check is the one that matters: an
+internal send must record no `UsageEvent`, **and** a normal send must still
+record one — a bypass that swallowed everything would pass the first assertion
+while breaking all metering.
+
+**⚠️ This found a real outage on the first run:** all three WhatsApp sessions
+(`it-support`, `marketing`, `ostudio-primary`) are `disconnected`. The open
+CRITICAL alert for RabiTech Demo is genuine, not test residue, and was left in
+place deliberately. See the gateway runbook.
+
 - [ ] **H2. Per-org campaign rate limits** (plan-aware): queue-per-org or Redis
   token bucket — BullMQ group limiting is Pro-only, so not a one-liner
 - [ ] **H3. Reports onto `PlatformDailyMetric` rollups** (scale, not

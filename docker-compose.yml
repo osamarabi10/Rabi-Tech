@@ -81,6 +81,14 @@ services:
       - CAMPAIGN_SEND_SPACING_MS=${CAMPAIGN_SEND_SPACING_MS:-1200}
       - CAMPAIGN_RATE_MAX=${CAMPAIGN_RATE_MAX:-1}
       - CAMPAIGN_RATE_DURATION_MS=${CAMPAIGN_RATE_DURATION_MS:-1000}
+      # Gateway health probes (H1). The status poll is a free HTTP call; the
+      # self-send is an INTERNAL PROBE that sends a real WhatsApp message to the
+      # subscriber own number, so it runs rarely — frequent identical automated
+      # messages are how a number gets banned on an unofficial gateway.
+      - GATEWAY_HEALTH_STATUS_CRON=${GATEWAY_HEALTH_STATUS_CRON:-*/15 * * * *}
+      - GATEWAY_HEALTH_SELFSEND_CRON=${GATEWAY_HEALTH_SELFSEND_CRON:-0 */6 * * *}
+      - GATEWAY_HEALTH_SWEEP_CRON=${GATEWAY_HEALTH_SWEEP_CRON:-30 3 * * *}
+      - DISABLE_GATEWAY_HEALTH_WORKER=${DISABLE_GATEWAY_HEALTH_WORKER:-0}
     networks:
       default:
         aliases:

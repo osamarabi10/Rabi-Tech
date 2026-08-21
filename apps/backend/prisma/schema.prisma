@@ -71,6 +71,7 @@ model Organization {
   emailVerificationTokens EmailVerificationToken[]
   signupThrottleEvents    SignupThrottleEvent[]
   segments                Segment[]
+  healthChecks            GatewayHealthCheck[]
 
   /// The console sweeps for live and expiring overrides on every load.
   @@index([overrideExpiresAt])
@@ -937,4 +938,29 @@ model Segment {
   @@unique([id, organizationId])
   @@index([organizationId, deletedAt])
   @@index([organizationId, name])
+}
+
+/// Gateway health probe results (H1).
+///
+/// Append-only and swept after a week. Two probe kinds:
+///   `status`   — a plain HTTP call to the gateway. Costs nothing, sends
+///                nothing, runs often. Catches a dead or disconnected session.
+///   `selfSend` — a real WhatsApp message to the channel's OWN number. Runs
+///                rarely. Exists solely to catch outbound failing while the
+///                session still reports healthy, which is the fault a status
+///                poll is blind to and the one that actually happened.
+model GatewayHealthCheck {
+  id             String   @id @default(cuid())
+  organizationId String
+  probe          String
+  ok             Boolean
+  error          String?
+  latencyMs      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, probe, createdAt])
+  @@index([createdAt])
 }

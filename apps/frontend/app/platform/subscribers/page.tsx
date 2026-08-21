@@ -20,6 +20,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CommercialTermsDialog } from '@/components/platform/commercial-terms-dialog';
+import { GatewayAlerts, HealthCell, useGatewayHealth } from '@/components/platform/gateway-health';
 
 type ProvisioningState =
   | 'PENDING' | 'PROVISIONING' | 'AWAITING_QR' | 'ACTIVE' | 'SUSPENDED' | 'FAILED';
@@ -68,6 +69,7 @@ export default function SubscribersPage() {
   const [actionId, setActionId] = useState<string | null>(null);
   const [destroyTarget, setDestroyTarget] = useState<Subscriber | null>(null);
   const [termsTarget, setTermsTarget] = useState<Subscriber | null>(null);
+  const { health, refresh: refreshHealth } = useGatewayHealth();
   const [form, setForm] = useState(EMPTY_FORM);
 
   const load = useCallback(async () => {
@@ -225,9 +227,10 @@ export default function SubscribersPage() {
 
       <section className="mx-auto max-w-7xl px-5 py-6">
         <h1 className="mb-4 text-lg font-bold">Subscribers</h1>
+        <GatewayAlerts health={health} />
         <div className="overflow-x-auto rounded-md border border-border">
-          <div className="grid min-w-[1380px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_130px_140px_130px_minmax(190px,1.3fr)_70px] gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold text-muted-foreground">
-            <span>Name</span><span>Slug</span><span>Billing</span><span>Users</span><span>WhatsApp</span><span>Active contacts</span><span>Outbound messages</span><span>Campaign sends</span><span>Gateway</span><span className="sr-only">Actions</span>
+          <div className="grid min-w-[1472px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_130px_140px_130px_minmax(190px,1.3fr)_92px_70px] gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold text-muted-foreground">
+            <span>Name</span><span>Slug</span><span>Billing</span><span>Users</span><span>WhatsApp</span><span>Active contacts</span><span>Outbound messages</span><span>Campaign sends</span><span>Gateway</span><span title="Left dot: status poll. Right dot: internal self-send probe.">Health</span><span className="sr-only">Actions</span>
           </div>
           {loading && <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading...</p>}
           {!loading && subscribers.length === 0 && (
@@ -236,7 +239,7 @@ export default function SubscribersPage() {
           {subscribers.map((subscriber) => {
             const channel = subscriber.channels[0];
             return (
-              <div key={subscriber.id} className="grid min-w-[1380px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_130px_140px_130px_minmax(190px,1.3fr)_70px] items-center gap-3 border-b border-border px-4 py-3 text-sm last:border-0">
+              <div key={subscriber.id} className="grid min-w-[1472px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_130px_140px_130px_minmax(190px,1.3fr)_92px_70px] items-center gap-3 border-b border-border px-4 py-3 text-sm last:border-0">
                 <span className="truncate font-semibold">{subscriber.name}</span>
                 <span className="truncate font-mono text-xs text-muted-foreground">{subscriber.slug}</span>
                 <div className="min-w-0">
@@ -263,6 +266,11 @@ export default function SubscribersPage() {
                     {channel?.failureReason || channel?.provisioningStep?.replaceAll('_', ' ') || 'Unmanaged'}
                   </p>
                 </div>
+                <HealthCell
+                  organizationId={subscriber.id}
+                  health={health}
+                  onRefresh={refreshHealth}
+                />
                 <Button
                   size="sm"
                   variant="outline"

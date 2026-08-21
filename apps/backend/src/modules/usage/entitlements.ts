@@ -157,12 +157,32 @@ async function contactIsActiveThisMonth(contactId: string): Promise<boolean> {
 export type OutboundUsageOptions = {
   campaign?: boolean;
   campaignSubjectId?: string | null;
+  /**
+   * Platform-originated traffic that must not touch tenant meters.
+   *
+   * Today the only user is the gateway health probe (H1). Such a send is
+   * neither charged to the tenant nor blocked when they are at quota, for two
+   * reasons: it is our traffic, not theirs, and `assertMetricAvailable` throws
+   * at the ceiling — so a metered monitor would stop running exactly when the
+   * system is most stressed, and record the quota block as a gateway fault.
+   *
+   * This is a deliberate bypass around billing. The tenancy gate asserts that
+   * an internal send records no UsageEvent, because one careless
+   * `internal: true` on a customer-facing path would silently under-bill every
+   * tenant.
+   */
+  internal?: boolean;
 };
 
 export async function prepareOutboundSend(
   address: string,
   options: OutboundUsageOptions = {},
 ): Promise<{ contactId: string | null }> {
+  // Platform traffic is not the tenant's and must not be refused on their
+  // quota. Guarded here as well as in meteredSend so the flag behaves the same
+  // whichever entry point a future caller uses.
+  if (options.internal) return { contactId: null };
+
   await assertMetricAvailable('messages_outbound');
   if (options.campaign) await assertMetricAvailable('campaign_sends');
 
@@ -178,6 +198,9 @@ export async function recordSuccessfulOutboundSend(
   messageSubjectId?: string | null,
   options: OutboundUsageOptions = {},
 ): Promise<void> {
+  // Never bill the tenant for platform traffic. See OutboundUsageOptions.internal.
+  if (options.internal) return;
+
   try {
     await recordMessageUsage('OUTBOUND', contactId, messageSubjectId);
     if (options.campaign) {

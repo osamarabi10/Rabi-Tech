@@ -888,6 +888,38 @@ async function databaseAudits() {
       });
     });
 
+    await check('gateway health: probe results are organization-scoped', async () => {
+      const probeRow = (organizationId, ok) => ({
+        organizationId,
+        probe: 'status',
+        ok,
+        latencyMs: 12,
+      });
+
+      await runAsOrganization(orgA.organizationId, () =>
+        scoped.gatewayHealthCheck.create({ data: probeRow(orgA.organizationId, false) }));
+      await runAsOrganization(orgB.organizationId, () =>
+        scoped.gatewayHealthCheck.create({ data: probeRow(orgB.organizationId, true) }));
+
+      const [seenByA, seenByB] = await Promise.all([
+        runAsOrganization(orgA.organizationId, () => scoped.gatewayHealthCheck.findMany({})),
+        runAsOrganization(orgB.organizationId, () => scoped.gatewayHealthCheck.findMany({})),
+      ]);
+      assert.equal(seenByA.length, 1, 'org A saw more than its own probe rows');
+      assert.equal(seenByB.length, 1, 'org B saw more than its own probe rows');
+      assert.equal(seenByA[0].ok, false);
+      assert.equal(seenByB[0].ok, true, 'org B read an org A probe result');
+
+      // The failure window drives alerting. If it could see another tenant's
+      // results, one subscriber's outage would raise alerts against another.
+      const crossWindow = await runAsOrganization(orgB.organizationId, () =>
+        scoped.gatewayHealthCheck.findMany({ where: { ok: false } }));
+      assert.equal(crossWindow.length, 0, 'org B could see org A failures in its window');
+
+      await runAsOrganization(orgA.organizationId, () => scoped.gatewayHealthCheck.deleteMany({}));
+      await runAsOrganization(orgB.organizationId, () => scoped.gatewayHealthCheck.deleteMany({}));
+    });
+
     await check('segments: saved segments are organization-scoped', async () => {
       // Segments hold a stored filter, so a leak here is not one row but a
       // whole audience definition plus the counts derived from it.
@@ -1221,6 +1253,36 @@ async function databaseAudits() {
       assert.equal(meteredMessages, 500n);
       assert.equal(mac, 50n);
     });
+    await check('usage: an internal send records no usage event', async () => {
+      // Runs after the usage checks that assert absolute fixture counts: this
+      // writes one real UsageEvent and UsageEvent is append-only by design, so
+      // it cannot undo itself.
+      //
+      // OutboundUsageOptions.internal is a deliberate bypass around billing,
+      // added for the gateway health probe. One careless `internal: true` on a
+      // customer-facing path would silently under-bill every tenant, so the
+      // bypass is pinned here rather than trusted to review.
+      const { recordSuccessfulOutboundSend } = require('../src/modules/usage/entitlements');
+
+      const before = await runAsOrganization(orgA.organizationId, () =>
+        scoped.usageEvent.count({ where: { metric: 'messages_outbound' } }));
+
+      await runAsOrganization(orgA.organizationId, () =>
+        recordSuccessfulOutboundSend(null, 'probe-message-id', { internal: true }));
+
+      const afterInternal = await runAsOrganization(orgA.organizationId, () =>
+        scoped.usageEvent.count({ where: { metric: 'messages_outbound' } }));
+      assert.equal(afterInternal, before, 'an internal send was billed to the tenant');
+
+      // ...and a normal send still is. A bypass that swallowed everything
+      // would pass the assertion above while breaking all metering.
+      await runAsOrganization(orgA.organizationId, () =>
+        recordSuccessfulOutboundSend(null, 'normal-message-id', {}));
+      const afterNormal = await runAsOrganization(orgA.organizationId, () =>
+        scoped.usageEvent.count({ where: { metric: 'messages_outbound' } }));
+      assert.equal(afterNormal, before + 1, 'a normal send stopped being metered');
+    });
+
     await check('provisioning: concurrent subscribers receive isolated resources and secrets', async () => {
       const { processGatewayAction } = require('../src/modules/provisioning/gateway-provisioning.service');
       const fakes = provisioningFakes();

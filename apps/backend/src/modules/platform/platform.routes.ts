@@ -14,6 +14,7 @@ import {
 } from '../billing/billing.service';
 import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { probeOrganization } from '../gateway/health-monitor';
 import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
 
 const router = Router();
@@ -497,6 +498,67 @@ async function queueOwnerAction(req: Request, res: Response, action: 'suspend' |
   await queueGatewayAction(req.params.id, action);
   return res.status(202).json({ organizationId: req.params.id, action });
 }
+
+/**
+ * POST /api/platform/gateway/health-check/:orgId
+ *
+ * Run a probe now. `probe` defaults to 'status' — the free HTTP poll.
+ *
+ * Passing `probe: 'selfSend'` sends a REAL WhatsApp message to that
+ * subscriber's own number. It is an internal probe: platform traffic, never
+ * sent to a customer, and not charged to the tenant. It is exposed manually
+ * because verifying the outbound path after a fix is exactly when you want it
+ * on demand — that is the fault a status poll cannot see.
+ */
+router.post('/gateway/health-check/:orgId', requirePlatformOwner, async (req, res) => {
+  try {
+    const probe = req.body?.probe === 'selfSend' ? 'selfSend' : 'status';
+    const result = await probeOrganization(req.params.orgId, probe);
+    res.json(result);
+  } catch (err) {
+    logger.error('Manual gateway health check failed', {
+      organizationId: req.params.orgId,
+      error: String(err),
+    });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/**
+ * GET /api/platform/gateway/health
+ *
+ * Latest probe result per organization plus any open alert, for the console.
+ */
+router.get('/gateway/health', requirePlatformOwner, async (_req, res) => {
+  try {
+    const [recent, alerts] = await Promise.all([
+      prisma.gatewayHealthCheck.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 400,
+        select: { organizationId: true, probe: true, ok: true, error: true, latencyMs: true, createdAt: true },
+      }),
+      prisma.platformAlert.findMany({
+        where: { type: 'GATEWAY_UNHEALTHY' },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      }),
+    ]);
+
+    // Collapse to the newest row per org+probe. Done here rather than with a
+    // distinct-on query because $queryRaw would bypass the tenancy extension,
+    // and the row count is bounded by the take above.
+    const latest = new Map<string, (typeof recent)[number]>();
+    for (const row of recent) {
+      const key = `${row.organizationId}--${row.probe}`;
+      if (!latest.has(key)) latest.set(key, row);
+    }
+
+    res.json({ latest: [...latest.values()], alerts });
+  } catch (err) {
+    logger.error('Gateway health read failed', { error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 router.post('/subscribers/:id/gateway/retry', requirePlatformOwner, async (req, res) => {
   try {

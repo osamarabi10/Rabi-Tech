@@ -225,6 +225,10 @@ async function meteredSend<T extends { data?: any }>(
   options: OutboundUsageOptions,
   send: () => Promise<T>,
 ): Promise<T> {
+  // Internal traffic skips BOTH halves: the quota check that would block it and
+  // the usage record that would bill for it. See OutboundUsageOptions.internal.
+  if (options.internal) return send();
+
   const { contactId } = await prepareOutboundSend(address, options);
   const response = await send();
   await recordSuccessfulOutboundSend(contactId, responseMessageId(response), options);
