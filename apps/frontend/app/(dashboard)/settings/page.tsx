@@ -687,7 +687,7 @@ export default function SettingsPage() {
           {wh && (
             <StatusBadge
               label={wh.isOpenNow ? t('مفتوح الآن') : t('مغلق الآن')}
-              color={wh.isOpenNow ? '#047857' : '#B45309'}
+              color={wh.isOpenNow ? 'hsl(var(--status-resolved))' : 'hsl(var(--status-pending))'}
             />
           )}
         </CardHeader>
@@ -899,7 +899,7 @@ export default function SettingsPage() {
                   )}
                   <StatusBadge
                     label={s.connected ? t('متصل') : t('غير متصل')}
-                    color={s.connected ? '#047857' : '#DC2626'}
+                    color={s.connected ? 'hsl(var(--success))' : 'hsl(var(--danger))'}
                   />
                 </div>
               </div>

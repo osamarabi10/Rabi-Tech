@@ -57,10 +57,10 @@ export default function CampaignsPage() {
         // Darkened for the light canvas — the mid shades these replace sat at
         // ~2.3:1 on white, which is unreadable even for large numerals.
         { label: t('بالانتظار'), value: report.counts.pending, color: '#475569' },
-        { label: t('أُرسلت'), value: report.counts.sent, color: '#0052CC' },
-        { label: t('وصلت'), value: report.counts.delivered, color: '#047857' },
+        { label: t('أُرسلت'), value: report.counts.sent, color: 'hsl(var(--status-open))' },
+        { label: t('وصلت'), value: report.counts.delivered, color: 'hsl(var(--status-resolved))' },
         { label: t('قُرئت'), value: report.counts.read, color: '#6D28D9' },
-        { label: t('فشلت'), value: report.counts.failed, color: '#DC2626' },
+        { label: t('فشلت'), value: report.counts.failed, color: 'hsl(var(--danger))' },
       ]
     : [];
 

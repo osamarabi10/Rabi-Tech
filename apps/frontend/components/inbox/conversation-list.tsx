@@ -3,6 +3,7 @@
 import { Search, MessageSquarePlus } from 'lucide-react';
 import type { Conv } from '@/lib/data';
 import { avatarColor, STATUS_CONFIG } from '@/lib/constants';
+import { ContactAvatar } from '@/components/contact-avatar';
 import { useT } from '@/lib/i18n';
 import { messageDir } from '@/lib/text-direction';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -148,17 +149,12 @@ export function ConversationList({
                 active ? 'bg-primary/10' : 'hover:bg-accent/40',
               )}
             >
-              <Avatar className="h-9 w-9 shrink-0">
-                <AvatarFallback
-                  className="text-xs font-bold"
-                  style={{
-                    backgroundColor: `${avatarColor(c.phone)}22`,
-                    color: avatarColor(c.phone),
-                  }}
-                >
-                  {c.avatar}
-                </AvatarFallback>
-              </Avatar>
+              <ContactAvatar
+                phone={c.phone}
+                label={c.avatar}
+                className="h-9 w-9 shrink-0"
+                textClassName="font-bold"
+              />
 
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">

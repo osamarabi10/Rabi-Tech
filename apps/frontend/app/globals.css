@@ -61,9 +61,22 @@
        and fail AA. The *-vivid variants keep the original hues for fills and
        dots, where contrast rules don't apply. */
     --success: 163 94% 24%;          /* #047857 — 4.9:1 on white */
-    --warning:  32 94% 37%;          /* #B45309 — 4.8:1 on white */
+    /* The HSL triple here used to be 32 94% 37%, which renders rgb(183,100,6)
+       and measures 4.34:1 — the comment said #B45309 but the value was a
+       different colour, so this quietly failed AA. This is #B45309 exactly. */
+    --warning:  26 90% 37%;          /* #B45309 — 5.0:1 on white */
     --danger:    0 74% 50%;          /* #DC2626 — 4.5:1 on white */
     --note:     55 97% 77%;          /* #FEF08A — internal note tint */
+
+    /* ── Conversation / campaign status ──
+       These were hardcoded hexes in lib/constants.ts, picked to clear AA on a
+       pale tint. That made them permanently light-only: a literal cannot
+       re-theme. As tokens they follow the theme like everything else. */
+    --status-open:     217 100% 40%;
+    --status-resolved: 163  94% 24%;
+    --status-closed:   215  19% 35%;
+    --status-pending:   26  90% 37%;
+    --status-waiting:  244  55% 52%;
 
     --success-vivid: 160 84% 39%;    /* #10B981 — fills, status dots */
     --warning-vivid:  38 92% 50%;    /* #F59E0B */
@@ -86,6 +99,100 @@
     --cyan:    200 72% 49%;
     --emerald: 160 84% 39%;
     --amber:    38 92% 50%;
+  }
+
+  /* ─────────────────────────────────────────────────────────
+     Dark theme.
+
+     Same token names, different values — that is the whole design. Because
+     every component reads `bg-card`, `text-muted-foreground` and friends
+     rather than literal colours, redefining the tokens themes the entire
+     product without touching a single component.
+
+     Three things are deliberately inverted rather than merely darkened:
+
+     1. **Elevation runs the other way.** On light, a raised surface is
+        *whiter* than the canvas. On dark it must be *lighter* than the canvas,
+        so --card sits above --background rather than below it.
+
+     2. **The status colours go lighter, not darker.** The light palette
+        darkened #10B981 / #F59E0B / #EF4444 because they failed AA as text on
+        white. On a dark canvas the same colours fail for the opposite reason,
+        so these are lifted instead. Same names, opposite direction.
+
+     3. **The nav rail becomes the darkest layer, not the darkest contrast.**
+        On light it is navy against a pale canvas and reads as chrome. On dark,
+        navy-on-dark would simply vanish, so the rail drops *below* the canvas
+        and gains a border — recessed chrome, with content still the brightest
+        thing on screen.
+
+     Not redefined here: --primary, --ring and --brand-*. Those are the
+     tenant's own brand colour, injected as inline styles on <body> by
+     brandingCssVars(). A subscriber's blue is their blue in both themes, and
+     an inline style would win over this block regardless.
+     ───────────────────────────────────────────────────────── */
+  .dark {
+    --background:     222 47%  9%;   /* canvas */
+    --foreground:     210 40% 96%;
+
+    --card:           222 40% 13%;   /* raised above the canvas */
+    --card-foreground: 210 40% 96%;
+
+    --popover:        222 40% 15%;
+    --popover-foreground: 210 40% 96%;
+
+    --primary-foreground: 0 0% 100%;
+
+    --secondary:      217 33% 18%;
+    --secondary-foreground: 210 40% 96%;
+
+    --muted:          217 33% 18%;
+    /* Lifted until it clears AA on --card AND on --muted, the two surfaces it
+       actually sits on. The light palette had to solve the same problem in the
+       opposite direction. */
+    --muted-foreground: 215 22% 72%;
+
+    --accent:         217 33% 24%;   /* hover fill on dark surfaces */
+    --accent-foreground: 210 40% 96%;
+
+    --destructive:      0 72% 62%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border:         217 25% 24%;
+    --input:          217 25% 27%;
+
+    /* ── Navigation: the recessed layer ── */
+    --nav:             222 47%  6%;
+    --nav-foreground:  210 40% 96%;
+    --nav-muted:       215 20% 62%;
+    --nav-accent:      217 33% 18%;
+    --nav-border:      217 25% 20%;
+
+    /* ── Surfaces, canvas → progressively lighter ── */
+    --surface-1: 222 40% 13%;
+    --surface-2: 217 33% 17%;
+    --surface-3: 217 33% 22%;
+
+    /* ── Status: lifted for contrast on a dark canvas ── */
+    --success: 160 65% 62%;
+    --warning:  38 92% 66%;
+    --danger:    0 84% 70%;
+    /* The internal-note tint cannot stay pale yellow on dark — it would be a
+       glare block. It becomes a dark amber wash with light text over it. */
+    --note:     45 60% 20%;
+
+    /* Vivid variants are fills and dots, where contrast rules do not apply, so
+       they keep their hues and only lift enough to read on the dark canvas. */
+    --success-vivid: 160 70% 48%;
+    --warning-vivid:  38 92% 58%;
+    --danger-vivid:    0 84% 66%;
+
+    /* Status, lifted to clear AA on the dark tint they sit on. */
+    --status-open:     217 90% 72%;
+    --status-resolved: 160 65% 62%;
+    --status-closed:   215 20% 74%;
+    --status-pending:   38 92% 68%;
+    --status-waiting:  244 85% 80%;
   }
 }
 
@@ -136,6 +243,39 @@
   .nav-surface {
     background: hsl(var(--nav));
     color: hsl(var(--nav-foreground));
+  }
+
+  /*
+   * The tenant's brand colour is injected as an inline `--primary` on <body>,
+   * so a .dark rule cannot override it — and should not: a subscriber's blue is
+   * their blue in both themes.
+   *
+   * But a brand colour chosen to read on white is usually too dark to read as
+   * TEXT on a dark canvas (the default #0066FF lands at 3.4:1). Mixing it
+   * toward white lifts it just enough while keeping the hue recognisably
+   * theirs, and works for any brand colour rather than a hardcoded override.
+   */
+  /*
+   * --destructive is a BUTTON FILL (white text sits on it), so it is tuned for
+   * that job and lands at 3.8:1 when used as text on white — below AA. The
+   * palette already carries --danger for exactly this case; this maps the text
+   * utility onto it without changing the fill, which would break every
+   * destructive button.
+   */
+  .text-destructive {
+    color: hsl(var(--danger));
+  }
+
+  .dark .text-primary {
+    color: color-mix(in srgb, hsl(var(--primary)) 55%, white);
+  }
+
+  /* On light, the navy rail separates itself from the pale canvas by contrast
+     alone. On dark both are dark, so contrast stops doing the work and the rail
+     needs an actual edge — otherwise the chrome and the content merge into one
+     surface and the layout loses its structure. */
+  .dark .nav-surface {
+    border-inline-end: 1px solid hsl(var(--nav-border));
   }
 
   /* Cards on a light canvas need elevation, not glow, to read as raised. */

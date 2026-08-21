@@ -52,9 +52,9 @@ export default function OverviewPage() {
 
   const cards = stats ? [
     // Darkened for the light canvas; the previous mid shades failed contrast on white.
-    { value: stats.conversations?.open ?? 0, label: t('محادثات مفتوحة'), color: '#0052CC' },
-    { value: stats.conversations?.pending ?? 0, label: t('معلقة'), color: '#B45309' },
-    { value: stats.conversations?.resolvedToday ?? 0, label: t('حُلّت اليوم'), color: '#047857' },
+    { value: stats.conversations?.open ?? 0, label: t('محادثات مفتوحة'), color: 'hsl(var(--status-open))' },
+    { value: stats.conversations?.pending ?? 0, label: t('معلقة'), color: 'hsl(var(--status-pending))' },
+    { value: stats.conversations?.resolvedToday ?? 0, label: t('حُلّت اليوم'), color: 'hsl(var(--status-resolved))' },
     { value: stats.conversations?.campaignsSent ?? 0, label: t('حملات مرسلة'), color: '#6D28D9' },
   ] : [];
 
@@ -109,7 +109,7 @@ export default function OverviewPage() {
               <CardContent className="flex flex-wrap gap-2 pb-4">
                 {agents.map((tech) => (
                   <div key={tech.id} className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs">
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: tech.avail ? '#047857' : '#DC2626' }} />
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: tech.avail ? 'hsl(var(--success-vivid))' : 'hsl(var(--danger-vivid))' }} />
                     {tech.name}
                   </div>
                 ))}

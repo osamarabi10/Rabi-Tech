@@ -16,11 +16,13 @@ import {
   ChevronRight,
   Moon,
   Sun,
+  SunMedium,
   CreditCard,
   Building2,
   Workflow,
 } from 'lucide-react';
 import { NotificationBell } from '@/components/notification-bell';
+import { useTheme, type Theme } from '@/lib/theme';
 import { BrandLogo } from '@/components/brand-logo';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -58,6 +60,13 @@ const NAV_ITEMS = [
 /** Shown only to the RabiTech platform owner, never to subscribers. */
 const PLATFORM_ITEM = { href: '/platform/subscribers', icon: Building2, label: 'المشتركون' };
 
+/** Per-user display preference. `system` follows the OS and is the default. */
+const THEMES: Array<{ value: Theme; label: string }> = [
+  { value: 'light', label: 'فاتح' },
+  { value: 'dark', label: 'داكن' },
+  { value: 'system', label: 'حسب النظام' },
+];
+
 /**
  * `open`/`onClose` drive the mobile drawer only. From `md` up the rail is
  * always a static column and these are ignored.
@@ -66,6 +75,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
   const pathname = usePathname();
   const router   = useRouter();
   const { t, locale, setLocale } = useT();
+  const { theme, resolved: resolvedTheme, setTheme } = useTheme();
   const branding = useBranding();
   const [isAway, setIsAway] = useState(false);
   const [awayLoading, setAwayLoading] = useState(false);
@@ -241,6 +251,36 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
                   className={cn(locale === l.code && 'bg-primary/10 text-primary')}
                 >
                   {l.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Theme picker. Sits beside the language picker because both are
+              per-user display preferences rather than workspace settings. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-[6px] px-3 py-2',
+                  'text-[13px] font-medium text-nav-muted',
+                  'transition-colors hover:bg-nav-accent/60 hover:text-nav-foreground',
+                )}
+              >
+                {resolvedTheme === 'dark'
+                  ? <Moon className="h-4 w-4 shrink-0" />
+                  : <SunMedium className="h-4 w-4 shrink-0" />}
+                <span className="flex-1 text-right">{t('المظهر')}</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="left" align="end" className="w-36">
+              {THEMES.map((option) => (
+                <DropdownMenuItem
+                  key={option.value}
+                  onClick={() => setTheme(option.value)}
+                  className={cn(theme === option.value && 'bg-primary/10 text-primary')}
+                >
+                  {t(option.label)}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

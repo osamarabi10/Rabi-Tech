@@ -755,6 +755,10 @@ const D: Dict = {
   "ينقصه رمز الدولة": { he: "חסרה קידומת מדינה", en: "Missing country code" },
   "قصير جدًا": { he: "קצר מדי", en: "Too short" },
   "طويل جدًا": { he: "ארוך מדי", en: "Too long" },
+  "المظهر": { he: "מראה", en: "Theme" },
+  "فاتح": { he: "בהיר", en: "Light" },
+  "داكن": { he: "כהה", en: "Dark" },
+  "حسب النظام": { he: "לפי המערכת", en: "System" },
 };
 
 type I18nCtx = {

@@ -4,10 +4,21 @@ import { Toaster } from '@/components/ui/sonner';
 import { BrandingProvider } from '@/lib/branding-context';
 import type { Branding } from '@/lib/branding';
 import { I18nProvider, useT } from '@/lib/i18n';
+import { ThemeProvider, useTheme } from '@/lib/theme';
 
 function ThemedToaster() {
   const { locale } = useT();
-  return <Toaster position="bottom-center" richColors dir={locale === 'en' ? 'ltr' : 'rtl'} />;
+  const { resolved } = useTheme();
+  // Sonner renders in a portal outside the themed tree, so it needs telling
+  // which scheme it is in — otherwise toasts stay white on a dark page.
+  return (
+    <Toaster
+      position="bottom-center"
+      richColors
+      theme={resolved}
+      dir={locale === 'en' ? 'ltr' : 'rtl'}
+    />
+  );
 }
 
 export function Providers({
@@ -19,10 +30,12 @@ export function Providers({
 }) {
   return (
     <BrandingProvider branding={branding}>
-      <I18nProvider>
-        {children}
-        <ThemedToaster />
-      </I18nProvider>
+      <ThemeProvider>
+        <I18nProvider>
+          {children}
+          <ThemedToaster />
+        </I18nProvider>
+      </ThemeProvider>
     </BrandingProvider>
   );
 }

@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/select';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { ColorPill } from '@/components/color-pill';
 
 const ROLES = [
   { value: 'SUPERVISOR', label: 'مشرف' },
@@ -164,12 +165,9 @@ export function TeamMembers({ isAdmin, teams }: { isAdmin: boolean; teams: Team[
               <p className="truncate text-[10px] text-muted-foreground" dir="ltr">{u.email}</p>
             </div>
             {u.primaryTeam && (
-              <span
-                className="shrink-0 rounded-full px-2 py-0.5 text-[10px]"
-                style={{ backgroundColor: `${u.primaryTeam.color}1A`, color: u.primaryTeam.color, borderColor: `${u.primaryTeam.color}40` }}
-              >
+              <ColorPill color={u.primaryTeam.color}>
                 {u.primaryTeam.name}
-              </span>
+              </ColorPill>
             )}
             <span className="shrink-0 text-[10px] text-muted-foreground">{u.role}</span>
             {isAdmin && u.role !== 'ADMIN' && (

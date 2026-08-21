@@ -616,15 +616,61 @@ the contacts page, and the 400 responses it renders were verified directly.
 
 ## M4 — Dark theme · ~1 day · fixes a regression we introduced
 
-Marasil §30.1: both themes at v1, same token names, separate palette. *"Dark is
-not an afterthought"* — respond.io runs dark and 8-hour agents prefer it. We
-dropped dark when flipping to the light palette.
+- [x] **1. Dark palette** under the same token names
+- [x] **2. Theme toggle** (light / dark / system) persisted per user
+- [x] **3. Contrast audit in dark** — zero failures across inbox, contacts,
+  automations and settings
+- [x] **4. Nav rail** re-tuned for a dark canvas
 
-- [ ] **1. Dark palette** under the same token names + `prefers-color-scheme`
-- [ ] **2. Theme toggle** (light / dark / system) persisted per user
-- [ ] **3. Contrast audit in dark** — same zero-failure bar as light
-- [ ] **4. Nav rail** re-tuned: on a dark canvas it needs a different treatment
-  from navy-on-white
+**M4 evidence (2026-08-21).**
+
+**The regression left a fingerprint:** `<html className="dark">` was still
+hardcoded in the layout. The class survived the flip to the light palette; the
+`.dark` token block did not — so it did nothing, and that is exactly why the
+regression stayed invisible. The class is now set before paint by an inline
+script and owned by ThemeProvider thereafter.
+
+Because every component reads tokens (`bg-card`, `text-muted-foreground`) rather than
+literal colours, one `.dark` block re-themes the product without a single
+`dark:` utility anywhere. Three things are inverted rather than merely
+darkened: elevation runs the other way (raised surfaces get *lighter*), the
+status colours go *lighter* where light mode darkened them, and the nav rail
+becomes the darkest layer plus a border — navy-on-dark would simply vanish.
+
+**Not redefined in dark: the tenant's brand colour.** `--primary` is injected
+as an inline style on `<body>`, so a subscriber's blue stays theirs in both
+themes. But a brand colour chosen to read on white is usually illegible as
+*text* on dark (the default lands at 3.4:1), so `.dark .text-primary` mixes
+it toward white — which works for any brand colour rather than hardcoding one.
+
+**What the audit found, which palette work alone could not have fixed:**
+
+- `STATUS_CONFIG` hardcoded hex values picked for AA on a pale tint. A
+  literal cannot follow a theme, so these became `--status-*` tokens. Same
+  for six more hardcoded hexes across campaigns, reports and settings.
+- A raw `text-indigo-400` class on the inbox that failed AA in **light**
+  too (2.98:1) and could never theme.
+- `--warning` was documented as `#B45309 — 4.8:1` but the HSL triple
+  written (`32 94% 37%`) renders a different colour measuring **4.34:1**.
+  The comment and the value had disagreed since the re-theme, so it quietly
+  failed AA.
+- Avatar initials and team pills use tenant-chosen colours as *text over a tint
+  of themselves* — fine on white, ~2.4:1 on dark. No palette change fixes that;
+  only changing the colour's role does. Both were the same duplicated inline
+  style, so they were extracted into `ContactAvatar` and `ColorPill`,
+  which invert to a solid fill with white text in dark.
+
+Two of my own mistakes, caught by re-measuring rather than by reading: I
+substituted `*-vivid` tokens (which are fills) where the original was the
+AA-safe text colour, and I gave `--status-pending` the warning token's HSL
+instead of converting `#B45309`.
+
+**Result: 0 failures in dark across all four core views** (91 / 82 / 20 / 258
+elements checked). Light regressed to 8 on settings and is now at 2 — both
+pre-existing colour-swatch preview labels in the branding panel, which need a
+design change rather than a palette one. Left for M5.
+
+Gate stays 57/57.
 
 ## M5 — Design system hardening · ~1 day
 

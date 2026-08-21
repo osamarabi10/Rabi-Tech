@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save, BookmarkPlus, Upload } from 'lucide-react';
 import { activeFilter } from '@/lib/contact-filter';
 import { avatarColor } from '@/lib/constants';
+import { ContactAvatar } from '@/components/contact-avatar';
 import {
   bulkUpdateContacts,
   fetchContactsPage,
@@ -321,11 +322,7 @@ export default function ContactsPage() {
                   {visibleColumns.name && (
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <Avatar className="h-8 w-8">
-                          <AvatarFallback className="text-xs" style={{ backgroundColor: `${avatarColor(contact.phone)}22`, color: avatarColor(contact.phone) }}>
-                            {(contact.name || '?').charAt(0)}
-                          </AvatarFallback>
-                        </Avatar>
+                        <ContactAvatar phone={contact.phone} label={contact.name} />
                         <span className="font-medium">{contact.name}</span>
                       </div>
                     </TableCell>

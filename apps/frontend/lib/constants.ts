@@ -23,15 +23,27 @@ export function avatarColor(seed: string): string {
  * been darkened, because the mid shades that worked on a near-black background
  * fall under AA contrast once they sit on a pale tint.
  */
+/**
+ * Status colours as token references, not literals.
+ *
+ * These used to be hex values picked to clear AA on a pale tint — which made
+ * them permanently light-only, because a literal cannot follow a theme. Reading
+ * `--status-*` means the dark palette re-themes them with everything else.
+ */
+const statusToken = (name: string) => ({
+  color: `hsl(var(--status-${name}))`,
+  bg: `hsl(var(--status-${name}) / 0.14)`,
+});
+
 export const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  OPEN:        { label: 'مفتوح',  color: '#0052CC', bg: 'rgba(0,102,255,0.10)' },
-  RESOLVED:    { label: 'محلول',  color: '#047857', bg: 'rgba(16,185,129,0.12)' },
-  CLOSED:      { label: 'مغلق',   color: '#475569', bg: 'rgba(100,116,139,0.12)' },
-  DRAFT:       { label: 'مسودة',  color: '#475569', bg: 'rgba(100,116,139,0.12)' },
-  SENDING:     { label: 'يُرسَل', color: '#B45309', bg: 'rgba(245,158,11,0.14)' },
-  SENT:        { label: 'مرسل',   color: '#0052CC', bg: 'rgba(0,102,255,0.10)' },
-  PENDING:         { label: 'معلق',          color: '#B45309', bg: 'rgba(245,158,11,0.14)' },
-  AWAITING_CLIENT: { label: 'انتظار العميل', color: '#4338CA', bg: 'rgba(99,102,241,0.12)' },
+  OPEN:            { label: 'مفتوح',         ...statusToken('open') },
+  RESOLVED:        { label: 'محلول',         ...statusToken('resolved') },
+  CLOSED:          { label: 'مغلق',          ...statusToken('closed') },
+  DRAFT:           { label: 'مسودة',         ...statusToken('closed') },
+  SENDING:         { label: 'يُرسَل',        ...statusToken('pending') },
+  SENT:            { label: 'مرسل',          ...statusToken('open') },
+  PENDING:         { label: 'معلق',          ...statusToken('pending') },
+  AWAITING_CLIENT: { label: 'انتظار العميل', ...statusToken('waiting') },
 };
 
 /** Darkened for legibility on the light canvas; hue order is unchanged. */

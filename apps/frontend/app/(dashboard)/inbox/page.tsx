@@ -859,7 +859,8 @@ export default function InboxPage() {
                   </Button>
                 )}
                 {sel.status !== 'RESOLVED' && sel.status !== 'AWAITING_CLIENT' && (
-                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-indigo-400 border-indigo-500/20 hover:bg-indigo-500/10"
+                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs"
+                    style={{ color: 'hsl(var(--status-waiting))', borderColor: 'hsl(var(--status-waiting) / 0.25)' }}
                     onClick={() => {
                       updateConversation(sel.id, { status: 'AWAITING_CLIENT' }).then(() => {
                         setConvs((p) => p.map((c) => c.id === sel.id ? { ...c, status: 'AWAITING_CLIENT' } : c));
