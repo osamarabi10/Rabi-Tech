@@ -79,12 +79,18 @@ explicitly or they don't exist in the container.
 
 ## P9 — Platform owner pricing control · ~1 week
 
+**Full implementation plan: [docs/P9-PRICING-CONTROL-PLAN.md](P9-PRICING-CONTROL-PLAN.md)**
+— verified file paths, migration SQL, resolver design, and the nine places the
+original brief diverged from the code. Read it before starting: three items
+below are subtly wrong on their own (the audit table already exists, `tier` is
+a String not an enum, and `BUSINESS` is missing from the override list).
+
 - [ ] **1. Migration**: `Organization` + `planOverride`, `macQuotaOverride`,
   `discountPercent`, `creditCents`, `overrideReason`, `overrideExpiresAt`
   (hand-written SQL, `prisma generate`, `migrate deploy`)
 - [ ] **2. Entitlement resolution honors overrides** in one place
   (`plans.ts` resolver: override → subscription plan → tier), incl. expiry
-  — verify: tenancy gate still 45/45 + unit check on resolver
+  — verify: tenancy gate 48/48 → 50/50 (two new checks, see plan §6)
 - [ ] **3. `PATCH /api/platform/subscribers/:id/commercials`**
   (requirePlatformOwner) writes overrides + `PlatformAuditLog` row
   — verify: curl sets a MAC override; audit row exists
