@@ -697,6 +697,82 @@ async function databaseAudits() {
       assert.equal(receivedA.length, 1, 'org A did not receive its conversation event');
       assert.equal(receivedB.length, 0, 'org B received org A conversation event');
     });
+    await check('filter DSL: relation-derived filters stay organization-scoped', async () => {
+      // These are the first filters that traverse a relation, so the first that
+      // could leak. The tenancy extension injects organizationId at the TOP LEVEL
+      // of a where clause only — it does not descend into nested relation filters
+      // — so what protects these is the composite FKs plus the explicit scope the
+      // compiler writes. This asserts both actually hold.
+      const { contactWhereFromFilterDsl, campaignIdsInFilter } = require('../src/lib/contact-filter-dsl');
+      const replied = { $and: [{ category: 'activity', field: 'hasEverReplied', operator: 'isTrue' }] };
+
+      // Every fixture contact has one INBOUND message, so each org sees exactly
+      // its own — never the other's, which would be the leak.
+      const [inA, inB] = await Promise.all([
+        runAsOrganization(orgA.organizationId, () =>
+          scoped.contact.findMany({ where: contactWhereFromFilterDsl(replied, orgA.organizationId), select: { id: true, organizationId: true } })),
+        runAsOrganization(orgB.organizationId, () =>
+          scoped.contact.findMany({ where: contactWhereFromFilterDsl(replied, orgB.organizationId), select: { id: true, organizationId: true } })),
+      ]);
+      assert.equal(inA.length, 1, 'org A should match its single fixture contact');
+      assert.equal(inB.length, 10, 'org B should match its ten fixture contacts');
+      assert.ok(inA.every((c) => c.organizationId === orgA.organizationId), 'org A result contained a foreign contact');
+      assert.ok(inB.every((c) => c.organizationId === orgB.organizationId), 'org B result contained a foreign contact');
+
+      // Compiling org B's scope while *running* as org A must still return
+      // nothing: neither layer alone is trusted to be the boundary.
+      const crossScoped = await runAsOrganization(orgA.organizationId, () =>
+        scoped.contact.count({ where: contactWhereFromFilterDsl(replied, orgB.organizationId) }));
+      assert.equal(crossScoped, 0, 'org A saw rows through an org B scoped filter');
+
+      // campaignIdsInFilter must see through nesting, or the route's org check
+      // is bypassed by putting the id one group deeper.
+      const nested = { $and: [{ $or: [{ $and: [
+        { category: 'broadcast', field: 'receivedCampaign', operator: 'isEqualTo', value: 'buried-id' },
+      ] }] }] };
+      assert.deepEqual(campaignIdsInFilter(nested), ['buried-id'], 'a nested campaign id escaped validation');
+    });
+
+    await check('filter DSL: broadcast history cannot read another tenant', async () => {
+      const { contactWhereFromFilterDsl } = require('../src/lib/contact-filter-dsl');
+      const campaignId = 'bleed_campaign_b';
+      await raw.campaign.create({
+        data: {
+          id: campaignId,
+          organizationId: orgB.organizationId,
+          title: 'Org B broadcast',
+          message: 'x',
+          status: 'SENT',
+          sessionId: orgB.sessionId,
+          sentAt: new Date(),
+        },
+      });
+      await raw.campaignRecipient.create({
+        data: {
+          id: 'bleed_recipient_b',
+          organizationId: orgB.organizationId,
+          campaignId,
+          contactId: orgB.records[0].contact.id,
+          status: 'delivered',
+          sentAt: new Date(),
+          deliveredAt: new Date(),
+        },
+      });
+
+      const received = { $and: [{ category: 'broadcast', field: 'receivedCampaign', operator: 'isEqualTo', value: campaignId }] };
+      const ownerSees = await runAsOrganization(orgB.organizationId, () =>
+        scoped.contact.count({ where: contactWhereFromFilterDsl(received, orgB.organizationId) }));
+      assert.equal(ownerSees, 1, 'org B could not see its own broadcast history');
+
+      // Org A pointing at org B's real campaign id must resolve to nobody, even
+      // before the route's 404 guard runs.
+      const intruderSees = await runAsOrganization(orgA.organizationId, () =>
+        scoped.contact.count({ where: contactWhereFromFilterDsl(received, orgA.organizationId) }));
+      assert.equal(intruderSees, 0, 'org A read org B broadcast history');
+
+      await raw.campaignRecipient.delete({ where: { id: 'bleed_recipient_b' } });
+      await raw.campaign.delete({ where: { id: campaignId } });
+    });
     await check('consent: marketing consent is organization-scoped', async () => {
       // Consent is the one contact field with legal weight: honouring a STOP in
       // one tenant must never mute — or un-mute — the same phone number in another.

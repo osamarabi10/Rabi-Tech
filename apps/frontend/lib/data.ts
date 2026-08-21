@@ -80,11 +80,18 @@ export type Contact = {
   customFields?: Record<string, string | null>;
 };
 
+/**
+ * Mirror of the backend rule type. `value` is `unknown` rather than `string`
+ * deliberately: numeric and date operators carry numbers and ISO strings, and a
+ * `string`-only type here would have fought every one of them.
+ */
 export type ContactFilterRule = {
   category: 'contactField' | 'tag' | 'customField';
   field: string;
-  operator: 'isEqualTo' | 'isNotEqualTo' | 'contains' | 'startsWith' | 'isEmpty' | 'isNotEmpty';
-  value?: string;
+  operator: string;
+  value?: unknown;
+  /** Second operand for range operators (`between`). */
+  value2?: unknown;
 };
 
 export type ContactFilterDsl = { $and?: ContactFilterRule[]; $or?: ContactFilterRule[] };

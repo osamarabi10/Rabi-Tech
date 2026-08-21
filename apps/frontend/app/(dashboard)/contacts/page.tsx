@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save } from 'lucide-react';
+import { activeRules } from '@/lib/contact-filter';
 import { avatarColor } from '@/lib/constants';
 import {
   bulkUpdateContacts,
@@ -86,7 +87,7 @@ export default function ContactsPage() {
   const [saving, setSaving] = useState(false);
 
   const activeFilter = useMemo<ContactFilterDsl>(
-    () => ({ $and: (filter.$and || []).filter((rule) => rule.field && (rule.value || ['isEmpty', 'isNotEmpty'].includes(rule.operator))) }),
+    () => ({ $and: activeRules(filter.$and) }),
     [filter],
   );
 

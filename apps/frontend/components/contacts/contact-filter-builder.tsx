@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/select';
 import { useT } from '@/lib/i18n';
 import type { ContactFilterDsl, ContactFilterRule } from '@/lib/data';
+import { VALUELESS_OPERATORS } from '@/lib/contact-filter';
 
 /**
  * Labels are Arabic source strings passed through t() — never "English / عربي"
@@ -119,7 +120,7 @@ export function ContactFilterBuilder({
 
           <Select
             value={rule.operator}
-            onValueChange={(operator) => updateRule(index, { ...rule, operator: operator as ContactFilterRule['operator'] })}
+            onValueChange={(operator) => updateRule(index, { ...rule, operator })}
           >
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -130,8 +131,8 @@ export function ContactFilterBuilder({
           </Select>
 
           <Input
-            value={rule.value || ''}
-            disabled={rule.operator === 'isEmpty' || rule.operator === 'isNotEmpty'}
+            value={String(rule.value ?? '')}
+            disabled={VALUELESS_OPERATORS.has(rule.operator)}
             onChange={(event) => updateRule(index, { ...rule, value: event.target.value })}
             placeholder={t('القيمة')}
           />

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Loader2, Send, Users, CalendarClock, ArrowLeft, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
+import { activeRules } from '@/lib/contact-filter';
 import {
   createCampaign,
   previewCampaignAudience,
@@ -69,9 +70,7 @@ export function CampaignComposer({
   const refreshAudience = useCallback(async () => {
     setCounting(true);
     try {
-      const active = rules.filter((r) =>
-        ['isEmpty', 'isNotEmpty'].includes(r.operator) || String(r.value ?? '').trim(),
-      );
+      const active = activeRules(rules);
       setAudience(await previewCampaignAudience(active.length ? { $and: active } : null));
     } catch {
       setAudience(null);
@@ -97,10 +96,8 @@ export function CampaignComposer({
     phone: sample?.phone || '',
   });
 
-  const activeRules = rules.filter((r) =>
-    ['isEmpty', 'isNotEmpty'].includes(r.operator) || String(r.value ?? '').trim(),
-  );
-  const audienceFilter = activeRules.length ? { $and: activeRules } : null;
+  const active = activeRules(rules);
+  const audienceFilter = active.length ? { $and: active } : null;
 
   const submit = async (mode: 'now' | 'schedule') => {
     if (!title.trim() || !message.trim()) {
@@ -215,7 +212,7 @@ export function CampaignComposer({
                 <span className="text-xs">
                   <strong className="text-foreground">{audience?.count ?? 0}</strong>{' '}
                   <span className="text-muted-foreground">
-                    {activeRules.length ? t('جهة اتصال مطابقة') : t('جهة اتصال (الكل)')}
+                    {active.length ? t('جهة اتصال مطابقة') : t('جهة اتصال (الكل)')}
                   </span>
                 </span>
               )}
@@ -242,7 +239,7 @@ export function CampaignComposer({
               <div className="rounded-md border border-border px-3 py-2">
                 <p className="text-[10px] text-muted-foreground">{t('الجمهور')}</p>
                 <p className="truncate font-medium">
-                  {activeRules.length ? `${activeRules.length} ${t('فلتر')}` : t('كل جهات الاتصال')}
+                  {active.length ? `${active.length} ${t('فلتر')}` : t('كل جهات الاتصال')}
                 </p>
               </div>
             </div>

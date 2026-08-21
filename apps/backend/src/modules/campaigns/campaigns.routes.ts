@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
 import { campaignQueue } from '../../workers/campaign.worker';
@@ -13,7 +14,18 @@ import {
   parseContactFilterDsl,
   contactWhereFromFilterDsl,
   type ContactFilterDsl,
+  campaignIdsInFilter,
 } from '../../lib/contact-filter-dsl';
+
+/**
+ * Filter-compilation failures carry a message written for the user (in Arabic,
+ * naming the offending field or operator). Anything else is ours and must not
+ * be echoed back — an internal message in a UI toast is a leak, not a hint.
+ */
+function isFilterError(err: unknown): boolean {
+  return err instanceof Error && typeof err.message === 'string' && err.message.length > 0
+    && !/prisma|invocation|ECONN|ENOTFOUND/i.test(err.message);
+}
 
 const router = Router();
 router.use(verifyToken);
@@ -26,12 +38,32 @@ router.use(verifyToken);
  * override parameter. On the official WhatsApp API Meta enforces this; on our
  * gateway nothing does, so it is enforced here or nowhere.
  */
-function audienceWhere(filter: ContactFilterDsl | null) {
+function audienceWhere(filter: ContactFilterDsl | null, organizationId: string) {
   return {
-    ...contactWhereFromFilterDsl(filter),
+    ...contactWhereFromFilterDsl(filter, organizationId),
     isArchived: false,
     marketingConsent: { not: 'OPTED_OUT' as const },
   };
+}
+
+/**
+ * A campaign id inside a filter must belong to the caller's organization.
+ *
+ * Unvalidated it already fails safe — the nested filter carries organizationId,
+ * so another tenant's campaign simply matches nobody. But "0 recipients" is an
+ * answer, and returning it for a probed id confirms nothing exists there while
+ * a real id would eventually return a number. 404 for both, matching the
+ * existing convention in this file: existence is itself information.
+ */
+async function assertCampaignsInOrg(filter: ContactFilterDsl | null): Promise<void> {
+  const ids = campaignIdsInFilter(filter);
+  if (!ids.length) return;
+  const found = await prisma.campaign.count({ where: { id: { in: ids } } });
+  if (found !== ids.length) {
+    const error = new Error('حملة غير موجودة');
+    (error as Error & { statusCode?: number }).statusCode = 404;
+    throw error;
+  }
 }
 
 /**
@@ -41,10 +73,10 @@ function audienceWhere(filter: ContactFilterDsl | null) {
  * admin who sees 3,605 become 3,028 with no reason given assumes the filter is
  * broken and works around it.
  */
-async function countExcludedByConsent(filter: ContactFilterDsl | null): Promise<number> {
+async function countExcludedByConsent(filter: ContactFilterDsl | null, organizationId: string): Promise<number> {
   return prisma.contact.count({
     where: {
-      ...contactWhereFromFilterDsl(filter),
+      ...contactWhereFromFilterDsl(filter, organizationId),
       isArchived: false,
       marketingConsent: 'OPTED_OUT',
     },
@@ -83,7 +115,8 @@ router.get('/', async (_req, res) => {
 router.post('/audience/preview', requirePermission('campaign:create'), async (req, res) => {
   try {
     const filter = parseContactFilterDsl(req.body?.audienceFilter);
-    const where = audienceWhere(filter);
+    await assertCampaignsInOrg(filter);
+    const where = audienceWhere(filter, req.user!.organizationId);
     const [count, sample, excludedOptedOut] = await Promise.all([
       prisma.contact.count({ where }),
       prisma.contact.findMany({
@@ -92,10 +125,17 @@ router.post('/audience/preview', requirePermission('campaign:create'), async (re
         take: 5,
         orderBy: { createdAt: 'desc' },
       }),
-      countExcludedByConsent(filter),
+      countExcludedByConsent(filter, req.user!.organizationId),
     ]);
     res.json({ count, sample, excludedOptedOut });
-  } catch {
+  } catch (err) {
+    // A bad filter is a user error, not a server error. Returning a bare 500
+    // told the admin nothing at all — the audience count just stopped updating
+    // and they had no way to know which rule was wrong.
+    const status = (err as Error & { statusCode?: number }).statusCode;
+    if (status) return res.status(status).json({ error: (err as Error).message });
+    if (isFilterError(err)) return res.status(400).json({ error: (err as Error).message });
+    logger.error('Audience preview failed', { error: String(err) });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -171,7 +211,7 @@ router.post('/', requirePermission('campaign:create'), async (req, res) => {
     });
 
     const contacts = await prisma.contact.findMany({
-      where: audienceWhere(filter),
+      where: audienceWhere(filter, req.user!.organizationId),
       select: { id: true },
     });
 

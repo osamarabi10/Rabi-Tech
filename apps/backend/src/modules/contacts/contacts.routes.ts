@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
 import {
@@ -6,6 +7,7 @@ import {
   normalizeContactLimit,
   normalizeCursor,
   parseContactFilterDsl,
+  filterVocabulary,
 } from '../../lib/contact-filter-dsl';
 import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
 import { setContactConsent } from '../../utils/consent';
@@ -56,19 +58,25 @@ async function listContacts(req: any, paginated: boolean) {
   const { search } = req.query;
   const limit = normalizeContactLimit(req.query.limit);
   const cursorId = normalizeCursor(req.query.cursorId);
-  const dslWhere = contactWhereFromFilterDsl(parseContactFilterDsl(req.query.filter));
+  const dslWhere = contactWhereFromFilterDsl(parseContactFilterDsl(req.query.filter), req.user.organizationId);
+  // Search and the filter DSL are combined under AND rather than spread into one
+  // object. Spreading meant a filter carrying `$or` overwrote the search's own
+  // `OR` key, so typing a name while a filter was active silently ignored the
+  // name and returned the unsearched list — a wrong result with no error.
+  const searchWhere = search
+    ? {
+        OR: [
+          { name: { contains: String(search), mode: 'insensitive' as const } },
+          { firstName: { contains: String(search), mode: 'insensitive' as const } },
+          { lastName: { contains: String(search), mode: 'insensitive' as const } },
+          { email: { contains: String(search), mode: 'insensitive' as const } },
+          { phone: { contains: String(search) } },
+        ],
+      }
+    : null;
   const where = {
     isArchived: false,
-    ...(search ? {
-      OR: [
-        { name: { contains: String(search), mode: 'insensitive' as const } },
-        { firstName: { contains: String(search), mode: 'insensitive' as const } },
-        { lastName: { contains: String(search), mode: 'insensitive' as const } },
-        { email: { contains: String(search), mode: 'insensitive' as const } },
-        { phone: { contains: String(search) } },
-      ],
-    } : {}),
-    ...dslWhere,
+    AND: [searchWhere, dslWhere].filter(Boolean) as Prisma.ContactWhereInput[],
   };
 
   const contacts = await prisma.contact.findMany({
@@ -89,6 +97,38 @@ async function listContacts(req: any, paginated: boolean) {
     },
   };
 }
+
+/**
+ * GET /api/contacts/filter-schema
+ *
+ * The segment builder's vocabulary, served rather than hardcoded in the client.
+ * Two reasons: the backend is the only place that can reject an unknown field,
+ * so a client copy would drift into offering filters that 400; and custom
+ * fields, tags and teams are per-organization, so half of this list cannot be
+ * known at build time anyway.
+ */
+router.get('/filter-schema', async (req, res) => {
+  try {
+    const [customFields, tags, teams, campaigns] = await Promise.all([
+      prisma.customFieldDefinition.findMany({
+        select: { slug: true, name: true, dataType: true, allowedValues: true },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.tag.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.team.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      // Only campaigns that actually went out can appear in broadcast history.
+      prisma.campaign.findMany({
+        where: { sentAt: { not: null } },
+        select: { id: true, title: true, sentAt: true },
+        orderBy: { sentAt: 'desc' },
+        take: 50,
+      }),
+    ]);
+    res.json({ ...filterVocabulary(), customFields, tags, teams, campaigns });
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
 
 router.get('/', async (req, res) => {
   try {
@@ -217,8 +257,8 @@ router.post('/bulk', async (req, res) => {
 
 router.post('/merge', async (req, res) => {
   try {
-    const { primaryContactId, secondaryContactId } = req.body || {};
     const organizationId = req.user!.organizationId;
+    const { primaryContactId, secondaryContactId } = req.body || {};
     if (!primaryContactId || !secondaryContactId || primaryContactId === secondaryContactId) {
       return res.status(400).json({ error: 'Distinct primaryContactId and secondaryContactId are required' });
     }
