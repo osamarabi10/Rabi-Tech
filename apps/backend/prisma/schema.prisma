@@ -736,6 +736,9 @@ model Message {
   waMessageId    String?
   direction      MessageDirection
   status         MessageStatus    @default(PENDING)
+  /// Why the last send attempt failed, in the words the agent is shown.
+  /// NULL on anything that has not failed, and on failures predating it.
+  failureReason  String?
   body           String?
   mediaUrl       String?
   mediaType      String?

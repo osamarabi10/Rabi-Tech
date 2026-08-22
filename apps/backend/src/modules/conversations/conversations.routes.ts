@@ -19,6 +19,7 @@ import { requirePermission, requireSupervisor } from '../../middleware/rbac.midd
 import { sendCsatPrompt } from '../../utils/client-feedback';
 import { notifyAssigned, notifyMentioned, notifyResolved } from '../../utils/notification-service';
 import { isQuotaExceededError, quotaErrorResponse } from '../usage/entitlements';
+import { describeSendFailure } from '../../utils/send-failure';
 import { requireTeamId } from '../../utils/teams';
 
 const router = Router();
@@ -393,9 +394,14 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
         msg.status = 'SENT';
       } catch (openwaErr) {
         sendError = openwaErr;
-        logger.error('OpenWA send failed', { error: String(openwaErr), messageId: msg.id, sessionName: conv.session.sessionName, requestId: (req as any).id });
-        await prisma.message.update({ where: { id: msg.id }, data: { status: 'FAILED' } });
+        const failure = describeSendFailure(openwaErr);
+        logger.error('OpenWA send failed', { error: String(openwaErr), code: failure.code, messageId: msg.id, sessionName: conv.session.sessionName, requestId: (req as any).id });
+        await prisma.message.update({
+          where: { id: msg.id },
+          data: { status: 'FAILED', failureReason: failure.reason },
+        });
         msg.status = 'FAILED';
+        msg.failureReason = failure.reason;
       }
     }
 
@@ -415,12 +421,79 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
       if (isQuotaExceededError(sendError)) {
         return res.status((sendError as any).status).json({ ...quotaErrorResponse(sendError as any), message: msg });
       }
-      return res.json({ ...msg, sendError: 'تعذّر الإرسال عبر واتساب — الرسالة محفوظة، فيك تعيد المحاولة' });
+      return res.json({ ...msg, sendError: describeSendFailure(sendError).reason });
     }
     res.json(msg);
   } catch (err) {
     logger.error('reply send failed', { error: String(err), requestId: (req as any).id, userId: req.user?.id });
     res.status(500).json({ error: 'فشل إرسال الرسالة', requestId: (req as any).id });
+  }
+});
+
+/**
+ * POST /api/conversations/:id/messages/:messageId/retry
+ *
+ * Re-attempt one failed outbound send. The message row already exists — the
+ * reply route persists before it sends, precisely so a transport error never
+ * loses what the agent wrote — so a retry updates that row rather than
+ * creating a second one. Retrying is not re-sending: a duplicate would reach
+ * the customer twice on any failure that happened after delivery.
+ */
+router.post('/:id/messages/:messageId/retry', requirePermission('conversation:create'), async (req, res) => {
+  try {
+    const message = await prisma.message.findUnique({
+      where: { id: req.params.messageId },
+      include: { conversation: { include: { contact: true, session: true } } },
+    });
+
+    // The conversation is checked as well as the id: a message id from
+    // another thread would otherwise be retried through this thread's route.
+    if (!message || message.conversationId !== req.params.id) {
+      return res.status(404).json({ error: 'الرسالة غير موجودة' });
+    }
+    if (message.direction !== 'OUTBOUND' || message.isInternal) {
+      return res.status(400).json({ error: 'هذه الرسالة ما بتنبعت عبر واتساب' });
+    }
+    if (message.status !== 'FAILED') {
+      // Not an error the agent caused: someone else's retry, or a late ack,
+      // may have already resolved it. Report the state rather than resend.
+      return res.status(409).json({ error: 'الرسالة مش بحالة فشل', status: message.status });
+    }
+
+    const { conversation } = message;
+    try {
+      if (message.mediaUrl) {
+        await OpenWAService.sendMedia(conversation.session.sessionName, conversation.contact.phone, message.mediaUrl, message.body ?? undefined);
+      } else {
+        await OpenWAService.sendText(conversation.session.sessionName, conversation.contact.phone, message.body ?? '');
+      }
+    } catch (retryErr) {
+      const failure = describeSendFailure(retryErr);
+      logger.error('OpenWA retry failed', { error: String(retryErr), code: failure.code, messageId: message.id, requestId: (req as any).id });
+      await prisma.message.update({
+        where: { id: message.id },
+        data: { failureReason: failure.reason },
+      });
+      if (isQuotaExceededError(retryErr)) {
+        return res.status((retryErr as any).status).json(quotaErrorResponse(retryErr as any));
+      }
+      return res.status(502).json({ error: failure.reason, code: failure.code, retryable: failure.retryable });
+    }
+
+    const sent = await prisma.message.update({
+      where: { id: message.id },
+      data: { status: 'SENT', failureReason: null },
+    });
+
+    await auditConversation(req.user!.id, conversation.id, 'message-retried', req.ip, req.get('user-agent'));
+    getIO()
+      .to(socketRoom.conversation(req.user!.organizationId, conversation.id))
+      .emit(SocketEvents.MESSAGE_ACK, { conversationId: conversation.id, messageId: sent.id, status: sent.status });
+
+    res.json(sent);
+  } catch (err) {
+    logger.error('message retry failed', { error: String(err), requestId: (req as any).id, userId: req.user?.id });
+    res.status(500).json({ error: 'فشل إعادة إرسال الرسالة', requestId: (req as any).id });
   }
 });
 

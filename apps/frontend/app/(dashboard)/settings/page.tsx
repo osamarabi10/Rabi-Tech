@@ -65,6 +65,7 @@ import { renderTemplate } from '@/lib/utils';
 import { Activity, CheckCircle2, Clock, Copy, ImageIcon, Loader2, LogOut, Palette, PowerOff, Plus, QrCode, Search, Tags, Trash2, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
+import { PermissionNotice } from '@/components/permission-notice';
 
 const QR_POLL_MS = 5000;
 
@@ -946,6 +947,7 @@ export default function SettingsPage() {
                       </Button>
                     </>
                   )}
+                  {!isAdmin && <PermissionNotice action="إدارة القناة" />}
                   <StatusBadge
                     label={s.connected ? t('متصل') : t('غير متصل')}
                     color={s.connected ? 'hsl(var(--success))' : 'hsl(var(--danger))'}
@@ -1056,6 +1058,7 @@ export default function SettingsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {!isAdmin && <PermissionNotice action="إدارة الفرق" />}
           {isAdmin && (
             <div className="grid gap-2 sm:grid-cols-[1fr_180px_auto]">
               <Input

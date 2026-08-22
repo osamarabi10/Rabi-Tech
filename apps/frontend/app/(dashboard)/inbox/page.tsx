@@ -21,6 +21,8 @@ import {
   PanelRight,
   Plus,
   MessageSquare,
+  RotateCw,
+  AlertCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Composer } from '@/components/inbox/composer';
@@ -47,6 +49,7 @@ import {
   type InboxConfig,
   isClientRating,
   fetchSessions,
+  retryMessage,
   type Session,
 } from '@/lib/data';
 import { renderTemplate } from '@/lib/utils';
@@ -60,6 +63,11 @@ import {
   scopeMatches,
   type InboxScope,
 } from '@/components/inbox/inbox-selector';
+import {
+  ConversationListEmpty,
+  ConversationListSkeleton,
+  emptyReason,
+} from '@/components/inbox/conversation-list-states';
 import {
   ComposerReadinessStrip,
   isSendBlocked,
@@ -212,6 +220,14 @@ export default function InboxPage() {
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [oldestMsgId, setOldestMsgId] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  /**
+   * True until the first conversation fetch settles.
+   *
+   * Only the *first* one. A refresh keeps the existing rows on screen and
+   * updates them in place — replacing a list the agent is reading with a
+   * skeleton every sixty seconds would be worse than showing nothing at all.
+   */
+  const [firstLoad, setFirstLoad] = useState(true);
   const [techs, setTechs] = useState<Agent[]>([]);
   const [reply, setReply] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
@@ -255,12 +271,49 @@ export default function InboxPage() {
   /** Scroll height captured before older messages are prepended. */
   const restoreHeightRef = useRef<number | null>(null);
   const [hasUnreadBelow, setHasUnreadBelow] = useState(false);
+  /**
+   * The message currently being retried.
+   *
+   * A single id rather than a boolean: the thread can hold several failed
+   * sends, and disabling all of their buttons because one is in flight would
+   * be wrong about the other ones.
+   */
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const currentUser = (() => {
     try { return JSON.parse(localStorage.getItem('rabitech_user') || '{}'); } catch { return {}; }
   })();
 
   const sel = convs.find((c) => c.id === selId) || null;
+
+  /**
+   * Re-attempt a send that failed.
+   *
+   * The server updates the same row, so the thread swaps the bubble in place
+   * instead of appending a second copy of the message.
+   */
+  const handleRetry = async (messageId: string) => {
+    if (!selId || retryingId) return;
+    setRetryingId(messageId);
+    try {
+      const updated = await retryMessage(selId, messageId);
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, ...updated } : m)));
+      toast.success(t('تم إرسال الرسالة'));
+    } catch (err: any) {
+      // The server's reason, not a generic failure: it already classified
+      // this into something the agent can act on, and replacing it with
+      // "retry failed" would throw that away.
+      const reason = err?.response?.data?.error ?? t('تعذّرت إعادة الإرسال');
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, failureReason: reason } : m)),
+      );
+      // Through t() for the same reason the bubble is: the server writes
+      // these in Arabic and this workspace may not be reading Arabic.
+      toast.error(t(reason));
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   // ── Data loading ────────────────────────────────────────────────────────────
   const loadConvs = useCallback(async (keepSel = false, filter: ConvStatus = convFilter, forceLoad = false) => {
@@ -272,6 +325,7 @@ export default function InboxPage() {
       const includeResolved = filter === 'resolved' || filter === 'all' || !!requestedConvId;
       const list = await fetchConversations({ includeResolved });
       setConvs(list);
+      setFirstLoad(false);
       if (!keepSel) {
         // On a phone the thread replaces the list, so auto-selecting would drop
         // the user straight into a conversation they never picked. Desktop shows
@@ -293,8 +347,32 @@ export default function InboxPage() {
       }
     } catch {
       toast.error(t('فشل تحميل المحادثات'));
+      // Cleared on failure too, otherwise the skeleton runs for ever and the
+      // list looks like it is still working when it has already given up.
+      setFirstLoad(false);
     }
   }, [convFilter, isSearchMode, requestedConvId]);
+
+  /**
+   * Leave server-side search and put the normal list back.
+   *
+   * This lived inline in the search box's onChange, which meant the only way
+   * out of search mode was to empty that one input. Clearing filters from
+   * anywhere else reset the text but left `isSearchMode` true, so the list
+   * stayed pinned to the last (often empty) search result while every count
+   * in the sidebar read zero and nothing on screen explained why. Deleting
+   * back to one or two characters stranded it the same way.
+   */
+  const exitSearchMode = useCallback(() => {
+    setSearchDebounceTimer((pending) => {
+      if (pending) clearTimeout(pending);
+      return null;
+    });
+    setIsSearchMode(false);
+    // `true` forces the load past the isSearchMode guard, which is still
+    // reading the pre-update value in this render.
+    loadConvs(true, convFilter, true);
+  }, [convFilter, loadConvs]);
 
   useEffect(() => { loadConvs(); }, [convFilter, loadConvs]);
 
@@ -853,9 +931,11 @@ export default function InboxPage() {
                       } catch { /* ignore */ }
                     }, 300);
                     setSearchDebounceTimer(t2);
-                  } else if (val.length === 0) {
-                    setIsSearchMode(false);
-                    loadConvs(true, convFilter, true);
+                  } else if (isSearchMode) {
+                    // Under three characters there is no server-side search to
+                    // show, so fall back to the full list rather than leaving
+                    // the previous query's results on screen.
+                    exitSearchMode();
                   }
                 }} />
               </div>
@@ -869,11 +949,31 @@ export default function InboxPage() {
 
         {/* List */}
         <ScrollArea className="flex-1">
-          {filtered.length === 0 && (
-            <EmptyState
-              compact
-              icon={MessageSquarePlus}
-              title={t('لا توجد محادثات')}
+          {firstLoad && <ConversationListSkeleton />}
+
+          {!firstLoad && filtered.length === 0 && (
+            <ConversationListEmpty
+              reason={emptyReason({
+                // `null` means the gateway has not answered yet — treated as
+                // "channel present" so a slow request never flashes a fault
+                // that is not there. A session row that exists but has never
+                // been scanned is not a channel: nothing can arrive on it.
+                hasChannel:
+                  liveSessions === null ||
+                  liveSessions.some((session) => session.connected),
+                isFiltered:
+                  scope.value !== 'all' ||
+                  convFilter !== 'all' ||
+                  Boolean(labelFilter) ||
+                  Boolean(search.trim()),
+                onClear: () => {
+                  setScope(DEFAULT_SCOPE);
+                  setConvFilter('all');
+                  setLabelFilter(null);
+                  setSearch('');
+                  exitSearchMode();
+                },
+              })}
             />
           )}
 
@@ -1125,6 +1225,36 @@ export default function InboxPage() {
                         </span>
                       )}
                     </div>
+                    {/*
+                      A failed send used to be a grey ✗ in the corner and
+                      nothing else — no cause, and no way to try again short
+                      of retyping the whole message. The reason comes from the
+                      server, which classified it; the button is only offered
+                      because the row still holds what was written.
+                    */}
+                    {m.dir === 'out' && m.status === 'FAILED' && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-micro text-destructive">
+                        <AlertCircle className="h-3 w-3 shrink-0" aria-hidden />
+                        <span className="min-w-0 flex-1">
+                          {/* Through t() as well: the server stores the reason
+                              in Arabic, and a Hebrew or English workspace must
+                              not get one Arabic sentence inside its own UI. */}
+                          {m.failureReason ? t(m.failureReason) : t('تعذّر الإرسال عبر واتساب')}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRetry(m.id)}
+                          disabled={retryingId === m.id}
+                          className="flex shrink-0 items-center gap-1 font-medium underline underline-offset-2 hover:no-underline disabled:opacity-60"
+                        >
+                          <RotateCw
+                            className={`h-3 w-3 ${retryingId === m.id ? 'animate-spin' : ''}`}
+                            aria-hidden
+                          />
+                          {retryingId === m.id ? t('جاري الإرسال...') : t('إعادة المحاولة')}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
                 <div ref={endRef} />

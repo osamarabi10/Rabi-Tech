@@ -25,6 +25,7 @@ import {
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { ColorPill } from '@/components/color-pill';
+import { PermissionNotice } from '@/components/permission-notice';
 
 const ROLES = [
   { value: 'SUPERVISOR', label: 'مشرف' },
@@ -108,11 +109,13 @@ export function TeamMembers({ isAdmin, teams }: { isAdmin: boolean; teams: Team[
             <Users className="h-4 w-4 text-primary" />
             {t('أعضاء الفريق')}
           </CardTitle>
-          {isAdmin && (
+          {isAdmin ? (
             <Button size="sm" onClick={() => setOpen(true)} disabled={seats?.atLimit}>
               <UserPlus className="h-3.5 w-3.5" />
               {t('إضافة عضو')}
             </Button>
+          ) : (
+            <PermissionNotice action="إدارة الأعضاء" className="shrink-0" />
           )}
         </div>
       </CardHeader>

@@ -15,6 +15,47 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Server-stored send-failure reasons (U5.3) ----
+  'القناة غير متصلة — الرسالة محفوظة وفيك تعيد الإرسال لما ترجع': { he: 'הערוץ מנותק — ההודעה נשמרה ותוכלו לשלוח שוב כשיחזור', en: 'Channel disconnected — the message is saved, retry when it is back' },
+  'الرقم مش مسجّل على واتساب': { he: 'המספר אינו רשום בוואטסאפ', en: 'That number is not on WhatsApp' },
+  'المرفق مرفوض من واتساب — جرّب ملف أصغر أو صيغة تانية': { he: 'הקובץ נדחה בוואטסאפ — נסו קובץ קטן יותר או פורמט אחר', en: 'WhatsApp rejected the attachment — try a smaller file or another format' },
+  'تعذّر الإرسال عبر واتساب — الرسالة محفوظة، فيك تعيد المحاولة': { he: 'השליחה בוואטסאפ נכשלה — ההודעה נשמרה, אפשר לנסות שוב', en: 'Sending over WhatsApp failed — the message is saved, you can retry' },
+  'هذه الرسالة ما بتنبعت عبر واتساب': { he: 'ההודעה הזו לא נשלחת בוואטסאפ', en: 'This message is not sent over WhatsApp' },
+  'الرسالة مش بحالة فشل': { he: 'ההודעה אינה במצב כשל', en: 'This message is not in a failed state' },
+  'الرسالة غير موجودة': { he: 'ההודעה לא נמצאה', en: 'Message not found' },
+  'فشل إعادة إرسال الرسالة': { he: 'שליחת ההודעה מחדש נכשלה', en: 'Resending the message failed' },
+  // ---- Permission-denied states (U5.6) ----
+  'متاح لـ': { he: 'זמין ל', en: 'available to' },
+  'مدير المؤسسة': { he: 'מנהל הארגון', en: 'the workspace admin' },
+  'إدارة القناة': { he: 'ניהול הערוץ', en: 'Channel management' },
+  'إدارة الأعضاء': { he: 'ניהול החברים', en: 'Member management' },
+  'إدارة الردود الجاهزة': { he: 'ניהול התגובות המוכנות', en: 'Snippet management' },
+  'إدارة الفرق': { he: 'ניהול הצוותים', en: 'Team management' },
+  // ---- Gateway states (U5.4) ----
+  'ما في رقم واتساب مربوط': { he: 'אין מספר וואטסאפ מחובר', en: 'No WhatsApp number linked' },
+  'ما رح توصل ولا تنبعت أي رسالة': { he: 'שום הודעה לא תגיע ולא תישלח', en: 'No message can arrive or be sent' },
+  'القناة بانتظار مسح رمز QR': { he: 'הערוץ ממתין לסריקת קוד QR', en: 'Channel is waiting for a QR scan' },
+  'ما رح توصل ولا تنبعت أي رسالة لحد ما تربط الرقم': { he: 'שום הודעה לא תגיע ולא תישלח עד שהמספר יחובר', en: 'Nothing arrives or sends until the number is linked' },
+  'مسح الرمز': { he: 'סריקת הקוד', en: 'Scan the code' },
+  'الرسائل الواردة ضايعة والردود ما بتنبعت': { he: 'הודעות נכנסות אובדות ותשובות לא נשלחות', en: 'Incoming messages are lost and replies do not send' },
+  'بعض القنوات غير متصلة': { he: 'חלק מהערוצים מנותקים', en: 'Some channels are disconnected' },
+  'المحادثات على القنوات المفصولة متوقفة': { he: 'השיחות בערוצים המנותקים תקועות', en: 'Conversations on the disconnected channels are stalled' },
+  'مراجعة القنوات': { he: 'בדיקת הערוצים', en: 'Review channels' },
+  // ---- Consent exclusion (U5.5) ----
+  'مستثنى بسبب إلغاء الاشتراك': { he: 'הוחרגו בשל ביטול הרשמה', en: 'Excluded — opted out' },
+  // ---- Delivery failure + retry (U5.3) ----
+  'تعذّر الإرسال عبر واتساب': { he: 'שליחה בוואטסאפ נכשלה', en: 'Sending over WhatsApp failed' },
+  'إعادة المحاولة': { he: 'ניסיון חוזר', en: 'Retry' },
+  'تم إرسال الرسالة': { he: 'ההודעה נשלחה', en: 'Message sent' },
+  'تعذّرت إعادة الإرسال': { he: 'הניסיון החוזר נכשל', en: 'Retry failed' },
+  // ---- Conversation list states (U5) ----
+  'اربط رقم واتساب لتبدأ المحادثات بالوصول': { he: 'חברו מספר וואטסאפ כדי שהשיחות יתחילו להגיע', en: 'Connect a WhatsApp number so conversations can arrive' },
+  'ربط رقم': { he: 'חיבור מספר', en: 'Connect a number' },
+  'لا توجد نتائج مطابقة': { he: 'אין תוצאות תואמות', en: 'No matching results' },
+  'جرّب توسيع التصفية أو البحث': { he: 'נסו להרחיב את הסינון או החיפוש', en: 'Try widening the filter or search' },
+  'مسح التصفية': { he: 'ניקוי הסינון', en: 'Clear filters' },
+  'لا توجد محادثات بعد': { he: 'אין עדיין שיחות', en: 'No conversations yet' },
+  'ستظهر المحادثات هنا فور وصول أول رسالة': { he: 'שיחות יופיעו כאן ברגע שתגיע ההודעה הראשונה', en: 'Conversations appear here as soon as the first message arrives' },
   // ---- Composer readiness (U4) ----
   'غير متصلة': { he: 'מנותקת', en: 'offline' },
   'لن تصل الردود حتى تعود': { he: 'תשובות לא יגיעו עד שהערוץ יחזור', en: 'Replies will not arrive until it is back' },

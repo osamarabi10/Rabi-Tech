@@ -23,6 +23,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { PermissionNotice } from '@/components/permission-notice';
 
 /**
  * Snippet management.
@@ -151,11 +152,13 @@ export function SnippetsCard({ isAdmin, teams }: { isAdmin: boolean; teams: Team
             <FileText className="h-4 w-4 text-primary" />
             {t('القوالب والردود السريعة')}
           </CardTitle>
-          {isAdmin && (
+          {isAdmin ? (
             <Button size="sm" onClick={openNew}>
               <Plus className="h-3.5 w-3.5" />
               {t('قالب جديد')}
             </Button>
+          ) : (
+            <PermissionNotice action="إدارة الردود الجاهزة" className="shrink-0" />
           )}
         </div>
       </CardHeader>

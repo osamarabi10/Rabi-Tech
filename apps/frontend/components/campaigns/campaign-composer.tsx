@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, Send, Users, CalendarClock, ArrowLeft, ArrowRight } from 'lucide-react';
+import { Loader2, Send, Users, CalendarClock, ArrowLeft, ArrowRight, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { activeFilter, countRules } from '@/lib/contact-filter';
 
@@ -59,7 +59,7 @@ export function CampaignComposer({
   const [message, setMessage] = useState('');
   const [filter, setFilter] = useState<ContactFilterDsl>({ $and: [] });
   const [scheduledAt, setScheduledAt] = useState('');
-  const [audience, setAudience] = useState<{ count: number; sample: SampleContact[] } | null>(null);
+  const [audience, setAudience] = useState<{ count: number; sample: SampleContact[]; excludedOptedOut: number } | null>(null);
   const [counting, setCounting] = useState(false);
   const [audienceError, setAudienceError] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -274,11 +274,27 @@ export function CampaignComposer({
                   <Loader2 className="h-3 w-3 animate-spin" /> {t('جاري الحساب...')}
                 </span>
               ) : (
-                <span className="text-xs">
-                  <strong className="text-foreground">{audience?.count ?? 0}</strong>{' '}
-                  <span className="text-muted-foreground">
-                    {activeCount ? t('جهة اتصال مطابقة') : t('جهة اتصال (الكل)')}
+                <span className="flex flex-wrap items-center gap-x-2 text-xs">
+                  <span>
+                    <strong className="text-foreground">{audience?.count ?? 0}</strong>{' '}
+                    <span className="text-muted-foreground">
+                      {activeCount ? t('جهة اتصال مطابقة') : t('جهة اتصال (الكل)')}
+                    </span>
                   </span>
+                  {/*
+                    Consent is enforced on the server whatever this says, so the
+                    line is not a control — it is the explanation for a count
+                    that is smaller than the filter implies.
+                  */}
+                  {(audience?.excludedOptedOut ?? 0) > 0 && (
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      <ShieldOff className="h-3 w-3 shrink-0" aria-hidden />
+                      {t('مستثنى بسبب إلغاء الاشتراك')}:{' '}
+                      <strong className="numeric font-mono tabular-nums text-foreground">
+                        {audience?.excludedOptedOut}
+                      </strong>
+                    </span>
+                  )}
                 </span>
               )}
             </div>
@@ -300,6 +316,16 @@ export function CampaignComposer({
               <div className="rounded-md border border-border px-3 py-2">
                 <p className="text-micro text-muted-foreground">{t('المستقبلون')}</p>
                 <p className="text-base font-bold">{counting ? '…' : audience?.count ?? 0}</p>
+                {/* Last screen before the send: the exclusion is stated here
+                    too, so nobody approves a number without knowing what it
+                    already leaves out. */}
+                {(audience?.excludedOptedOut ?? 0) > 0 && (
+                  <p className="mt-0.5 flex items-center gap-1 text-micro text-muted-foreground">
+                    <ShieldOff className="h-3 w-3 shrink-0" aria-hidden />
+                    {t('مستثنى بسبب إلغاء الاشتراك')}:{' '}
+                    <span className="numeric font-mono tabular-nums">{audience?.excludedOptedOut}</span>
+                  </p>
+                )}
               </div>
               <div className="rounded-md border border-border px-3 py-2">
                 <p className="text-micro text-muted-foreground">{t('الجمهور')}</p>

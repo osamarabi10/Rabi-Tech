@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { ChevronDown, Inbox, UserCheck, UserX, Wifi, WifiOff } from 'lucide-react';
 import {
   fetchLifecycleStages,
@@ -11,6 +12,7 @@ import {
   type Session,
   type Team,
 } from '@/lib/data';
+import { gatewayCopy, gatewayState } from '@/lib/gateway-state';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -187,7 +189,8 @@ export function InboxSelector({
 
   const connected = sessions?.filter((s) => s.connected).length ?? 0;
   const total = sessions?.length ?? 0;
-  const gatewayHealthy = sessions !== null && total > 0 && connected === total;
+  const gateway = gatewayState(sessions);
+  const gatewayText = gatewayCopy(gateway);
 
   return (
     <aside
@@ -264,36 +267,44 @@ export function InboxSelector({
         number, here a dead session is silent until a send fails.
       */}
       <div className="shrink-0 border-t border-border p-2">
-        {sessions === null ? (
-          <div className="flex items-center gap-2 px-1 py-1.5 text-micro text-muted-foreground">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-muted-foreground/40" />
-            {t('جاري التحقق من القناة')}
-          </div>
-        ) : total === 0 ? (
-          <div className="flex items-center gap-2 px-1 py-1.5 text-micro text-warning">
-            <WifiOff className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 flex-1">{t('لا توجد قناة متصلة')}</span>
-          </div>
-        ) : (
-          <div
-            className={cn(
-              'flex items-center gap-2 px-1 py-1.5 text-micro',
-              gatewayHealthy ? 'text-success' : 'text-destructive',
-            )}
-          >
-            {gatewayHealthy ? (
+        <div
+          className={cn(
+            'px-1 py-1.5 text-micro',
+            gatewayText.tone === 'success' && 'text-success',
+            gatewayText.tone === 'warning' && 'text-warning',
+            gatewayText.tone === 'destructive' && 'text-destructive',
+            gatewayText.tone === 'muted' && 'text-muted-foreground',
+          )}
+        >
+          <div className="flex items-center gap-2">
+            {gateway.kind === 'checking' ? (
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-muted-foreground/40" />
+            ) : gateway.kind === 'healthy' ? (
               <Wifi className="h-3.5 w-3.5 shrink-0" />
             ) : (
               <WifiOff className="h-3.5 w-3.5 shrink-0" />
             )}
-            <span className="min-w-0 flex-1 truncate">
-              {gatewayHealthy ? t('القناة تعمل') : t('القناة غير متصلة')}
-            </span>
-            <span className="numeric shrink-0 tabular-nums" dir="ltr">
-              {connected}/{total}
-            </span>
+            <span className="min-w-0 flex-1 truncate">{t(gatewayText.label)}</span>
+            {/* The ratio only means anything once there is more than one
+                number: "0/1" restates the sentence beside it. */}
+            {total > 1 && (
+              <span className="numeric shrink-0 tabular-nums" dir="ltr">
+                {connected}/{total}
+              </span>
+            )}
           </div>
-        )}
+          {gatewayText.impact && (
+            <p className="mt-0.5 ps-5 opacity-80">{t(gatewayText.impact)}</p>
+          )}
+          {gatewayText.action && (
+            <Link
+              href={gatewayText.action.href}
+              className="mt-0.5 inline-block ps-5 font-medium underline underline-offset-2 hover:no-underline"
+            >
+              {t(gatewayText.action.label)}
+            </Link>
+          )}
+        </div>
       </div>
     </aside>
   );

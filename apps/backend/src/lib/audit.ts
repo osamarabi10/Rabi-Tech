@@ -90,7 +90,17 @@ export async function auditLog(opts: AuditOptions): Promise<void> {
 export async function auditConversation(
   userId: string | undefined,
   conversationId: string,
-  action: 'opened' | 'assigned' | 'resolved' | 'reopened' | 'pending' | 'updated',
+  action:
+    | 'opened'
+    | 'assigned'
+    | 'resolved'
+    | 'reopened'
+    | 'pending'
+    | 'updated'
+    // A resend of a message that failed. Worth its own entry: it is the one
+    // conversation action that can put the same text in front of a customer
+    // twice, so "who pressed retry, and when" has to be answerable.
+    | 'message-retried',
   ipAddress?: string,
   userAgent?: string
 ) {

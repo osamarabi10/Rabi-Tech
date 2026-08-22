@@ -92,12 +92,12 @@ actually hurt a subscriber.
 
 ## U5 — Operational states · brief step 8
 
-- [ ] **1. Skeletons** matching the real final layout, not spinners.
-- [ ] **2. Distinguishable empties**: no channel · no messages · no filter match.
-- [ ] **3. Delivery failure** with reason and a retry path.
-- [ ] **4. Gateway offline / degraded / needs-QR**, each explaining its impact.
-- [ ] **5. Consent exclusion** shown wherever an audience is built.
-- [ ] **6. Permission-denied** states rather than absent controls.
+- [x] **1. Skeletons** matching the real final layout, not spinners.
+- [x] **2. Distinguishable empties**: no channel · no messages · no filter match.
+- [x] **3. Delivery failure** with reason and a retry path.
+- [x] **4. Gateway offline / degraded / needs-QR**, each explaining its impact.
+- [x] **5. Consent exclusion** shown wherever an audience is built.
+- [x] **6. Permission-denied** states rather than absent controls.
 
 ## U6 — Platform finance · brief step 5
 

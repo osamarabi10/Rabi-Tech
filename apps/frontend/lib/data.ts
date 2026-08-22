@@ -53,6 +53,8 @@ export type Msg = {
   mediaType?: string | null;
   sentByName?: string | null;
   status?: 'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
+  /** Why the last send attempt failed. Only ever set alongside FAILED. */
+  failureReason?: string | null;
   isInternal?: boolean;
 };
 
@@ -154,7 +156,19 @@ export type SystemUser = {
   isAway: boolean;
   createdAt: string;
 };
-export type Session = { sessionName: string; label: string; connected: boolean };
+export type Session = {
+  sessionName: string;
+  label: string;
+  connected: boolean;
+  /**
+   * The linked number, or null when this session has never been paired.
+   *
+   * Carried so a disconnected channel can say which kind of disconnected it
+   * is: never scanned (needs a QR) or dropped after pairing (needs a
+   * reconnect, which the gateway often does by itself).
+   */
+  phoneNumber: string | null;
+};
 export type InboxConfig = {
   sessions: { id: string; sessionName: string; label: string | null; phoneNumber: string | null; teamId: string | null }[];
 };
@@ -340,6 +354,7 @@ function mapMsg(m: any): Msg {
     mediaType: m.mediaType ?? null,
     sentByName: m.sentBy?.name ?? null,
     status: m.status ?? undefined,
+    failureReason: m.failureReason ?? null,
     isInternal: m.isInternal ?? false,
   };
 }
@@ -446,7 +461,19 @@ export async function fetchCampaigns(): Promise<Campaign[]> {
 /** Resolved audience for a filter, shown before anything is sent. */
 export async function previewCampaignAudience(
   audienceFilter: ContactFilterDsl | null,
-): Promise<{ count: number; sample: Array<{ id: string; name: string | null; phone: string; firstName: string | null }> }> {
+): Promise<{
+  count: number;
+  sample: Array<{ id: string; name: string | null; phone: string; firstName: string | null }>;
+  /**
+   * Contacts the filter matched but consent removed.
+   *
+   * The server has always computed this and the client has always thrown it
+   * away, which is how an audience could shrink by six hundred people with
+   * nothing on screen saying why. An unexplained drop reads as a broken filter,
+   * and the usual response to a broken filter is to work around it.
+   */
+  excludedOptedOut: number;
+}> {
   const { data } = await api.post('/api/campaigns/audience/preview', { audienceFilter });
   return data;
 }
@@ -616,6 +643,7 @@ export async function fetchSessions(): Promise<Session[]> {
     sessionName: s.sessionName,
     label: s.label,
     connected: !!s.connected,
+    phoneNumber: s.phoneNumber ?? null,
   }));
 }
 
@@ -1438,3 +1466,28 @@ export type ConversationFile = {
   direction: 'in' | 'out';
   time: string;
 };
+
+/**
+ * Retry one failed outbound message.
+ *
+ * The server updates the existing row rather than creating a second one, so
+ * a retry that turns out to have succeeded the first time cannot double-send.
+ * Throws with the server's reason so the caller can show why it failed again.
+ */
+export async function retryMessage(conversationId: string, messageId: string): Promise<Msg> {
+  const { data } = await api.post(
+    `/api/conversations/${conversationId}/messages/${messageId}/retry`,
+  );
+  return {
+    id: data.id,
+    dir: 'out',
+    body: data.body ?? '',
+    time: new Date(data.timestamp).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }),
+    auto: !!data.isAuto,
+    mediaUrl: data.mediaUrl ?? null,
+    mediaType: data.mediaType ?? null,
+    status: data.status ?? undefined,
+    failureReason: data.failureReason ?? null,
+    isInternal: !!data.isInternal,
+  };
+}
