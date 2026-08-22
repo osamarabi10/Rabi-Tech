@@ -15,6 +15,7 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  'أقسام الإعدادات': { he: 'מדורי הגדרות', en: 'Settings sections' },
   // ---- Contact context tabs (U2) ----
   'التفاصيل': { he: 'פרטים', en: 'Details' },
   'الملفات': { he: 'קבצים', en: 'Files' },

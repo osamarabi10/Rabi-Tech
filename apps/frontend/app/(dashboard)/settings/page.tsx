@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { toast } from 'sonner';
 import { AutoRepliesCard } from '@/components/settings/auto-replies-card';
 import { TeamRouting } from '@/components/settings/team-routing';
@@ -39,6 +39,7 @@ import {
   type BrandingDomainVerification,
 } from '@/lib/data';
 import { StatusBadge } from '@/components/status-badge';
+import { SettingsSubNavigation } from '@/components/settings/settings-sub-navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -419,27 +420,46 @@ export default function SettingsPage() {
         })
       : '';
 
+  const visibleSections = useMemo(
+    () => SETTINGS_SECTIONS.filter((section) => !section.adminOnly || isAdmin),
+    [isAdmin],
+  );
+
   return (
     <div className="flex-1 overflow-y-auto p-5">
       <h1 className="mb-3 text-base font-extrabold">{t('الإعدادات')}</h1>
 
       {/*
-        Section navigation. Settings is long by nature — an admin should be able to
-        reach any section in one click instead of scrolling 1,000 lines.
+        Two columns: a persistent numbered sub-navigation beside the content,
+        replacing a horizontal anchor strip that scrolled sideways on narrow
+        screens and never showed which section you were in.
+
+        The sub-nav is sticky and the sections stay stacked and anchor-linked,
+        so a link to #branding still lands and the page still works without
+        JavaScript. Below lg the nav returns to a horizontal scroller above the
+        content — two columns on a tablet leaves neither one usable.
       */}
-      <nav className="sticky top-0 z-20 -mx-5 mb-4 border-b border-border bg-background/95 px-5 py-2 backdrop-blur">
-        <div className="flex gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden">
-          {SETTINGS_SECTIONS.filter((s) => !s.adminOnly || isAdmin).map((s) => (
-            <a
-              key={s.id}
-              href={'href' in s && s.href ? s.href : `#${s.id}`}
-              className="shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              {t(s.label)}
-            </a>
-          ))}
-        </div>
-      </nav>
+      <div className="lg:grid lg:grid-cols-[224px_minmax(0,1fr)] lg:gap-5">
+        <SettingsSubNavigation
+          sections={visibleSections}
+          className="mb-4 hidden lg:sticky lg:top-0 lg:mb-0 lg:flex"
+        />
+
+        <nav className="sticky top-0 z-20 -mx-5 mb-4 border-b border-border bg-background/95 px-5 py-2 backdrop-blur lg:hidden">
+          <div className="flex gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden">
+            {visibleSections.map((s) => (
+              <a
+                key={s.id}
+                href={'href' in s && s.href ? s.href : `#${s.id}`}
+                className="shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                {t(s.label)}
+              </a>
+            ))}
+          </div>
+        </nav>
+
+        <div className="min-w-0">
 
       {isAdmin && branding && (
         <Card id="branding" className="mb-4 scroll-mt-16">
@@ -1098,6 +1118,11 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+        </div>
+      </div>
+
+      {/* Portalled, so it sits outside the settings grid rather than inside a
+          column that would constrain it. */}
       <Dialog open={!!qrSession} onOpenChange={(open) => !open && closeQrDialog()}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
