@@ -48,11 +48,30 @@ actually hurt a subscriber.
 
 ## U2 — Contact context tabs · brief step 3
 
-- [ ] **1. `Details` / `Files` / `Activity` tabs** in the contact panel.
-- [ ] **2. Files** from existing message attachments (`mediaUrl`).
-- [ ] **3. Activity** — **needs a new endpoint.** `AuditLog` rows are written but
-  nothing reads them. `GET /api/conversations/:id/activity`, tenant-scoped.
-- [ ] **4. Details** keeps consent provenance: source, timestamp, who recorded it.
+- [x] **1. `Details` / `Files` / `Activity` tabs** — **done 2026-08-22.** Panel
+  widened 280 → 320px per the brief. Scrolling moved off the pane onto each tab
+  body, so the strip stays fixed while a long timeline scrolls under it.
+  Switching conversation resets to Details — staying on Activity briefly showed
+  the previous contact's history as though it were the new one's.
+- [x] **2. Files** from attachments already in the thread, newest first, each
+  showing direction: whether we sent it or they did is the first question anyone
+  asks of a file in a support thread. The count badge appears only when non-zero.
+- [x] **3. Activity** — new endpoint `GET /api/conversations/:id/activity`,
+  tenant-scoped, 404 on an unknown id so a caller cannot tell a quiet
+  conversation from one in another tenant. It merges `AuditLog` rows — their
+  first ever consumer, written since the module was built and never read — with
+  automated messages, because what happened here includes the auto-replies no
+  human triggered. Automated events render as hollow dots, so the distinction is
+  not carried by colour alone. Verified live: real audit events with actor
+  names, 404 on an unknown id.
+- [ ] **4. Details** — consent provenance (source, timestamp, who recorded it) is
+  **not surfaced**. The consent value is editable but no per-change history is
+  stored, so there is nothing truthful to show yet. Needs a `ConsentEvent` row
+  written on every change before this box can be ticked.
+
+  **Calls** — respond.io tabs a fourth `Calls` here. Deliberately absent: a
+  WhatsApp Web gateway has none, and a tab opening onto a permanent empty state
+  is worse than one never offered.
 
 ## U3 — Settings sub-navigation · brief step 4
 
