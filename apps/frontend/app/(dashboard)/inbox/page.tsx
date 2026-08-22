@@ -46,6 +46,8 @@ import {
   type Template,
   type InboxConfig,
   isClientRating,
+  fetchSessions,
+  type Session,
 } from '@/lib/data';
 import { renderTemplate } from '@/lib/utils';
 import { getBackendBaseUrl } from '@/lib/runtime-url';
@@ -58,6 +60,11 @@ import {
   scopeMatches,
   type InboxScope,
 } from '@/components/inbox/inbox-selector';
+import {
+  ComposerReadinessStrip,
+  isSendBlocked,
+  resolveReadiness,
+} from '@/components/inbox/composer-readiness';
 import { DENSITY_CLASSES, useDensity, type Density } from '@/lib/density';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -149,6 +156,34 @@ export default function InboxPage() {
    * pills already in the list.
    */
   const [scope, setScope] = useState<InboxScope>(DEFAULT_SCOPE);
+
+  /**
+   * Live gateway sessions, for the composer readiness strip.
+   *
+   * `null` means not yet known, which the strip renders as "checking" rather
+   * than as a fault — an agent should never be told the channel is down
+   * because a request has not come back yet.
+   */
+  const [liveSessions, setLiveSessions] = useState<Session[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const read = () =>
+      fetchSessions()
+        .then((next) => {
+          if (!cancelled) setLiveSessions(next);
+        })
+        .catch(() => {
+          if (!cancelled) setLiveSessions([]);
+        });
+
+    read();
+    const timer = setInterval(read, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
   const [convs, setConvs] = useState<Conv[]>([]);
   const [selId, setSelId] = useState<string | null>(null);
 
@@ -627,6 +662,15 @@ export default function InboxPage() {
     .filter((c) => !search.trim() || c.name.includes(search) || c.phone.includes(search))
     .filter((c) => !labelFilter || c.labels.includes(labelFilter));
 
+
+  const readiness = resolveReadiness(
+    sel?.sessionName ?? null,
+    sel?.sessionPhone ?? null,
+    liveSessions,
+  );
+  // Naming the channel only earns its place on a multi-number workspace.
+  const multiChannel = (liveSessions?.length ?? 0) > 1;
+  const sendBlocked = isSendBlocked(readiness);
 
   const z: { color: string } | null = sel ? { color: avatarColor(sel.phone) } : null;
   const sc = sel ? STATUS_CONFIG[sel.status] || STATUS_CONFIG.OPEN : null;
@@ -1150,13 +1194,21 @@ export default function InboxPage() {
 
             </div>
 
+            <ComposerReadinessStrip
+              readiness={readiness}
+              showChannel={multiChannel}
+            />
+
             <Composer
               value={reply}
               onChange={(v) => { setReply(v); setSendError(null); }}
               isInternal={isInternalNote}
               onInternalChange={setIsInternalNote}
               onSend={handleSend}
-              disabled={!sel}
+              // Blocked outright while the channel is down. Letting an agent
+              // write a considered reply and discover the failure on send is
+              // exactly what the strip above exists to prevent.
+              disabled={!sel || (sendBlocked && !isInternalNote)}
               error={sendError}
               shortCodeMatches={shortCodeMatches}
               onShortCodeQuery={(q) => {

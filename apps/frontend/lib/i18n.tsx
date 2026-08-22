@@ -15,6 +15,11 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Composer readiness (U4) ----
+  'غير متصلة': { he: 'מנותקת', en: 'offline' },
+  'لن تصل الردود حتى تعود': { he: 'תשובות לא יגיעו עד שהערוץ יחזור', en: 'Replies will not arrive until it is back' },
+  'إعادة الربط': { he: 'חיבור מחדש', en: 'Reconnect' },
+  'يُرسل من': { he: 'נשלח מ', en: 'Sending from' },
   'أقسام الإعدادات': { he: 'מדורי הגדרות', en: 'Settings sections' },
   // ---- Contact context tabs (U2) ----
   'التفاصيل': { he: 'פרטים', en: 'Details' },

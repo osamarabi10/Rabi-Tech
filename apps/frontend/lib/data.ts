@@ -30,6 +30,15 @@ export type Conv = {
    * contact can hold a value no longer in that list — see LifecycleSelect.
    */
   lifecycleStage: string | null;
+  /**
+   * The WhatsApp session this thread sends from.
+   *
+   * The backend has always included it; nothing carried it to the client. The
+   * composer needs it to say which number a reply will leave from, and to check
+   * whether that specific session is connected.
+   */
+  sessionName: string | null;
+  sessionPhone: string | null;
   labels: string[];
 };
 
@@ -279,6 +288,8 @@ export async function startConversation(input: {
     contactNotes: data.contact?.notes ?? null,
     marketingConsent: data.contact?.marketingConsent ?? 'UNKNOWN',
     lifecycleStage: data.contact?.lifecycleStage ?? null,
+    sessionName: data.session?.sessionName ?? null,
+    sessionPhone: data.session?.phoneNumber ?? null,
     labels: data.labels ?? [],
   };
 }
@@ -311,6 +322,8 @@ export async function fetchConversations(
     contactNotes: c.contact?.notes ?? null,
     marketingConsent: c.contact?.marketingConsent ?? 'UNKNOWN',
     lifecycleStage: c.contact?.lifecycleStage ?? null,
+    sessionName: c.session?.sessionName ?? null,
+    sessionPhone: c.session?.phoneNumber ?? null,
     labels: c.labels ?? [],
   }));
 }
