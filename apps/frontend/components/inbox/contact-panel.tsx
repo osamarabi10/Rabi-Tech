@@ -4,10 +4,22 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { ExternalLink, Tag, User, X } from 'lucide-react';
-import { updateContact, type Agent, type Conv, type MarketingConsent } from '@/lib/data';
+import {
+  updateContact,
+  type Agent,
+  type Conv,
+  type MarketingConsent,
+  type Msg,
+} from '@/lib/data';
 import { avatarColor } from '@/lib/constants';
 import { useT } from '@/lib/i18n';
 import { LifecycleSelect, useLifecycleStages } from './lifecycle-select';
+import {
+  ActivityTab,
+  ContactTabStrip,
+  FilesTab,
+  type ContactTab,
+} from './contact-context-tabs';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -21,6 +33,14 @@ import { cn } from '@/lib/utils';
  */
 export interface ContactPanelProps {
   conversation: Conv;
+  /**
+   * The thread's messages, for the Files tab.
+   *
+   * Passed down rather than fetched again: the parent already holds them, and
+   * a second fetch would show a different set from the thread beside it the
+   * moment a new attachment arrives.
+   */
+  messages: Msg[];
   agents: Agent[];
   onAssign: (agentId: string | null) => void | Promise<void>;
   assigning?: boolean;
@@ -32,6 +52,7 @@ export interface ContactPanelProps {
 
 export function ContactPanel({
   conversation,
+  messages,
   agents,
   onAssign,
   assigning,
@@ -42,6 +63,14 @@ export function ContactPanel({
   const { t } = useT();
   const [showAllAgents, setShowAllAgents] = useState(false);
   const [savingConsent, setSavingConsent] = useState(false);
+  const [tab, setTab] = useState<ContactTab>('details');
+
+  // Back to Details when the agent switches conversation. Staying on Activity
+  // would briefly show the previous contact's timeline, which reads as the new
+  // contact's history.
+  useEffect(() => {
+    setTab('details');
+  }, [conversation.contactId]);
   const stages = useLifecycleStages();
   const [stage, setStage] = useState<string | null>(conversation.lifecycleStage);
   const [savingStage, setSavingStage] = useState(false);
@@ -87,7 +116,9 @@ export function ContactPanel({
 
   return (
     // Third pane only earns its space on a wide screen; below xl the thread needs it.
-    <aside className="hidden w-[280px] shrink-0 flex-col overflow-y-auto border-s border-border bg-[hsl(var(--surface-1))] xl:flex">
+    // Scrolling moved off the pane and onto each tab body, so the tab strip
+    // stays fixed while a long Activity timeline scrolls beneath it.
+    <aside className="hidden w-[320px] shrink-0 flex-col overflow-hidden border-s border-border bg-[hsl(var(--surface-1))] xl:flex">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t('معلومات جهة الاتصال')}
@@ -100,6 +131,27 @@ export function ContactPanel({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      <ContactTabStrip
+        active={tab}
+        onChange={setTab}
+        fileCount={messages.filter(message => message.mediaUrl).length}
+      />
+
+      {tab === 'files' && (
+        <div className="flex-1 overflow-y-auto">
+          <FilesTab messages={messages} />
+        </div>
+      )}
+
+      {tab === 'activity' && (
+        <div className="flex-1 overflow-y-auto">
+          <ActivityTab conversationId={conversation.id} />
+        </div>
+      )}
+
+      {tab === 'details' && (
+      <div className="flex-1 overflow-y-auto">
 
       {/* Identity */}
       <div className="border-b border-border p-4">
@@ -273,6 +325,8 @@ export function ContactPanel({
           </Link>
         </Button>
       </div>
+      </div>
+      )}
     </aside>
   );
 }

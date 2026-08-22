@@ -1207,6 +1207,7 @@ export default function InboxPage() {
       {sel && showDetails && (
         <ContactPanel
           conversation={sel}
+          messages={messages}
           agents={techs}
           assigning={assigning}
           onAssign={handleAssign}

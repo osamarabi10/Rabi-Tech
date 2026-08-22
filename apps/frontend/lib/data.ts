@@ -1390,3 +1390,38 @@ export async function deleteLifecycleStage(
   const { data } = await api.delete(`/api/lifecycle-stages/${id}`);
   return data;
 }
+
+// ---------- conversation activity (U2) ----------
+
+/**
+ * One thing that happened to a conversation, other than a message.
+ *
+ * `audit` events have a person behind them; `automated` events do not, and the
+ * null actor is the signal rather than an omission — "resolved by Kamal" and
+ * "closing reply sent" are different kinds of fact.
+ */
+export type ActivityEvent = {
+  id: string;
+  kind: 'audit' | 'automated';
+  action: string;
+  actorName: string | null;
+  detail: string | null;
+  at: string;
+};
+
+export async function fetchConversationActivity(
+  convId: string,
+): Promise<ActivityEvent[]> {
+  const { data } = await api.get(`/api/conversations/${convId}/activity`);
+  return data.events ?? [];
+}
+
+/** An attachment already sent or received in this conversation. */
+export type ConversationFile = {
+  id: string;
+  url: string;
+  mediaType: string | null;
+  body: string | null;
+  direction: 'in' | 'out';
+  time: string;
+};

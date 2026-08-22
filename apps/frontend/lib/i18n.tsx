@@ -15,6 +15,26 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Contact context tabs (U2) ----
+  'التفاصيل': { he: 'פרטים', en: 'Details' },
+  'الملفات': { he: 'קבצים', en: 'Files' },
+  'لا توجد ملفات في هذه المحادثة': { he: 'אין קבצים בשיחה זו', en: 'No files in this conversation' },
+  'لا يوجد نشاط مسجّل': { he: 'לא נרשמה פעילות', en: 'No activity recorded' },
+  'تعذّر جلب النشاط': { he: 'טעינת הפעילות נכשלה', en: 'Could not load the activity' },
+  'وارد': { he: 'נכנס', en: 'In' },
+  'صادر': { he: 'יוצא', en: 'Out' },
+  'آلي': { he: 'אוטומטי', en: 'Automated' },
+  'بدأت المحادثة': { he: 'השיחה נפתחה', en: 'Conversation started' },
+  'فُتحت': { he: 'נפתחה', en: 'Opened' },
+  'تم الإسناد': { he: 'שויכה', en: 'Assigned' },
+  'تم الإغلاق': { he: 'נסגרה', en: 'Resolved' },
+  'أُعيد فتحها': { he: 'נפתחה מחדש', en: 'Reopened' },
+  'وضعها معلّق': { he: 'סומנה כממתינה', en: 'Marked pending' },
+  'رسالة ترحيب آلية': { he: 'הודעת פתיחה אוטומטית', en: 'Automatic welcome' },
+  'رد خارج الدوام': { he: 'מענה מחוץ לשעות', en: 'Out-of-hours reply' },
+  'رسالة إغلاق آلية': { he: 'הודעת סגירה אוטומטית', en: 'Automatic closing note' },
+  'استطلاع الرضا': { he: 'סקר שביעות רצון', en: 'Satisfaction survey' },
+  'رد آلي': { he: 'מענה אוטומטי', en: 'Automatic reply' },
   // ---- Inbox selector column (U1) ----
   'اختيار صندوق الوارد': { he: 'בחירת תיבה', en: 'Inbox selector' },
   'صناديق الوارد': { he: 'תיבות דואר', en: 'Inboxes' },

@@ -196,6 +196,93 @@ router.get('/', async (req, res) => {
   }
 });
 
+
+/**
+ * GET /api/conversations/:id/activity
+ *
+ * What happened to this conversation, other than the messages themselves.
+ *
+ * `AuditLog` rows have been written since the conversation module was built,
+ * and nothing has ever read them — the Activity tab is the first consumer. The
+ * rows are the record of who did what: opened, assigned, resolved, reopened.
+ *
+ * Automated events are merged in from the messages themselves. An agent asking
+ * "what happened here" means the whole story, and half of it is the auto-replies
+ * and workflow sends that no human triggered. Splitting those into a separate
+ * surface would make the tab answer a narrower question than the one being
+ * asked.
+ */
+router.get('/:id/activity', async (req, res) => {
+  try {
+    // Existence check first: without it a caller learns nothing from an empty
+    // list, and cannot tell a quiet conversation from one in another tenant.
+    const conversation = await prisma.conversation.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, createdAt: true },
+    });
+    if (!conversation) return res.status(404).json({ error: 'محادثة غير موجودة' });
+
+    const [audits, automated] = await Promise.all([
+      prisma.auditLog.findMany({
+        where: { resource: 'conversation', resourceId: req.params.id },
+        select: {
+          id: true,
+          action: true,
+          description: true,
+          timestamp: true,
+          user: { select: { id: true, name: true } },
+        },
+        orderBy: { timestamp: 'desc' },
+        take: 100,
+      }),
+      prisma.message.findMany({
+        where: { conversationId: req.params.id, isAuto: true },
+        select: { id: true, autoType: true, timestamp: true, body: true },
+        orderBy: { timestamp: 'desc' },
+        take: 50,
+      }),
+    ]);
+
+    const events = [
+      ...audits.map((row) => ({
+        id: row.id,
+        kind: 'audit' as const,
+        // 'conversation.resolved' -> 'resolved'. The resource prefix is
+        // redundant on a surface that only ever shows one conversation.
+        action: row.action.replace(/^conversation\./, ''),
+        actorName: row.user?.name ?? null,
+        detail: row.description ?? null,
+        at: row.timestamp,
+      })),
+      ...automated.map((row) => ({
+        id: row.id,
+        kind: 'automated' as const,
+        action: row.autoType || 'auto_reply',
+        // Null actor is the point: nobody did this, the system did.
+        actorName: null,
+        detail: row.body ? row.body.slice(0, 140) : null,
+        at: row.timestamp,
+      })),
+      {
+        id: `created-${conversation.id}`,
+        kind: 'audit' as const,
+        action: 'created',
+        actorName: null,
+        detail: null,
+        at: conversation.createdAt,
+      },
+    ].sort((a, b) => b.at.getTime() - a.at.getTime());
+
+    res.json({ events });
+  } catch (err) {
+    logger.error('conversation activity failed', {
+      error: String(err),
+      conversationId: req.params.id,
+      requestId: (req as any).id,
+    });
+    res.status(500).json({ error: 'فشل جلب النشاط', requestId: (req as any).id });
+  }
+});
 // GET /api/conversations/:id/messages?before=<msgId>&limit=<n>
 // Returns up to `limit` messages (default 60, max 100), newest-first when using cursor,
 // then reversed to ASC for the client. Supports cursor-based pagination via `before` msgId.
