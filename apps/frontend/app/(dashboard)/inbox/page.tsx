@@ -50,6 +50,8 @@ import {
   isClientRating,
   fetchSessions,
   retryMessage,
+  contactDisplayName,
+  UNKNOWN_CONTACT,
   type Session,
 } from '@/lib/data';
 import { renderTemplate } from '@/lib/utils';
@@ -63,6 +65,7 @@ import {
   scopeMatches,
   type InboxScope,
 } from '@/components/inbox/inbox-selector';
+import { GatewayNotice, InboxScopeMenu } from '@/components/inbox/inbox-scope-menu';
 import {
   ConversationListEmpty,
   ConversationListSkeleton,
@@ -895,8 +898,23 @@ export default function InboxPage() {
           )}
         </div>
 
+        {/*
+          Below `lg` the scope pane is gone, so its two irreplaceable parts
+          come back here: the scopes themselves, and gateway trouble. Both
+          are `lg:hidden` — on a wide screen the pane already has them, and
+          two copies of the same control is its own kind of confusion.
+        */}
+        <GatewayNotice sessions={liveSessions} className="lg:hidden" />
+
         {/* Search + actions */}
         <div className="border-b border-border px-3 py-2 space-y-2">
+          <InboxScopeMenu
+            convs={convs}
+            scope={scope}
+            onScopeChange={setScope}
+            currentUserId={currentUser?.id}
+            className="lg:hidden"
+          />
           {(
             <>
               <div className="relative">
@@ -917,12 +935,12 @@ export default function InboxPage() {
                           id: c.id, displayId: c.displayId ?? 0,
                           teamId: c.teamId ?? c.session?.teamId ?? null,
                           teamName: c.team?.name ?? c.session?.team?.name ?? null,
-                          name: c.contact?.name || c.contact?.phone || 'غير معروف',
+                          name: c.contact?.name || c.contact?.phone || UNKNOWN_CONTACT,
                           phone: c.contact?.phone || '',
                           zoneId: c.contact?.zoneId || '', zoneNameAr: c.contact?.zone?.nameAr || '',
                           status: c.status, ticketId: null, ticketStatus: null, ticketPriority: null,
                           lastMsg: c.messages?.[0]?.body || '', lastTime: '',
-                          sessionDate: '', unread: 0, avatar: (c.contact?.name || c.contact?.phone || '؟').charAt(0),
+                          sessionDate: '', unread: 0, avatar: (c.contact?.name || c.contact?.phone || '?').charAt(0),
                           assigneeId: c.assignee?.id ?? null, assigneeName: c.assignee?.name ?? null,
                           contactId: c.contact?.id ?? '', contactTags: c.contact?.tags ?? [],
                           contactNotes: c.contact?.notes ?? null, labels: c.labels ?? [],
@@ -1007,7 +1025,7 @@ export default function InboxPage() {
                 <div className="min-w-0 flex-1">
                   <div className="mb-0.5 flex items-start justify-between gap-1">
                     <span className={cn('truncate text-small font-semibold', isActive ? 'text-foreground' : 'text-foreground/90')}>
-                      {c.name}
+                      {contactDisplayName(c.name, t)}
                     </span>
                     <span className="shrink-0 text-micro text-muted-foreground">{c.lastTime}</span>
                   </div>
@@ -1090,7 +1108,7 @@ export default function InboxPage() {
               </Avatar>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="truncate text-sm font-bold">{sel.name}</span>
+                  <span className="truncate text-sm font-bold">{contactDisplayName(sel.name, t)}</span>
                   <span className="shrink-0 text-micro font-mono text-muted-foreground opacity-60">#{sel.displayId}</span>
                   <StatusBadge label={sc!.label} color={sc!.color} className="shrink-0 px-1.5 py-0 text-micro" />
                   {/* Where this contact stands, beside the conversation status.
@@ -1435,7 +1453,7 @@ export default function InboxPage() {
           {sel && (
             <p className="text-sm text-muted-foreground">
               {t('سيتم إغلاق التذكرة وإرسال رسالة تقييم تلقائية للعميل')}{' '}
-              <strong className="text-foreground">{sel.name}</strong>.
+              <strong className="text-foreground">{contactDisplayName(sel.name, t)}</strong>.
             </p>
           )}
           <DialogFooter className="flex-col gap-2 sm:flex-col">

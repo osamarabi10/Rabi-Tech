@@ -37,7 +37,18 @@ function isThemeAware(color: string): boolean {
 export function tintedStyle(color: string, dark: boolean): CSSProperties {
   const tinted: CSSProperties = {
     backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
-    color,
+    /*
+     * Deepened for its text role.
+     *
+     * A colour picked for a team is picked to look right as a *colour* —
+     * usually a mid-tone, which reads at 3.8:1 as 10px text over a pale tint
+     * of itself. Mixing toward black keeps the hue the subscriber chose and
+     * makes it legible; overriding it with a palette colour would not.
+     *
+     * Theme-aware tokens are left alone: the palette already darkens those
+     * for light mode, and darkening them twice makes amber look brown.
+     */
+    color: isThemeAware(color) ? color : `color-mix(in srgb, ${color} 68%, black)`,
     borderColor: `color-mix(in srgb, ${color} 28%, transparent)`,
   };
 

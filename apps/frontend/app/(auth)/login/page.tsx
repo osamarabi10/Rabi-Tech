@@ -97,7 +97,7 @@ export default function LoginPage() {
               ) : (
                 <>
                   <p className="font-medium">{t('تعذّر الاتصال بالخادم')}</p>
-                  <p className="text-destructive/70">{t('جرّب تحديث الصفحة، وإذا استمرت المشكلة تواصل مع الدعم')}</p>
+                  <p className="text-destructive">{t('جرّب تحديث الصفحة، وإذا استمرت المشكلة تواصل مع الدعم')}</p>
                 </>
               )}
             </div>

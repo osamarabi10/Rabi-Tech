@@ -15,6 +15,10 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Contacts, import, inbox (U7.2) ----
+  'جاري الإرسال...': { he: 'שולח…', en: 'Sending…' },
+  // ---- Settings, templates, teams, subscription, segments (U7.2) ----
+  'تم حفظ الإعدادات': { he: 'ההגדרות נשמרו', en: 'Settings saved' },
   // ---- Server-stored send-failure reasons (U5.3) ----
   'القناة غير متصلة — الرسالة محفوظة وفيك تعيد الإرسال لما ترجع': { he: 'הערוץ מנותק — ההודעה נשמרה ותוכלו לשלוח שוב כשיחזור', en: 'Channel disconnected — the message is saved, retry when it is back' },
   'الرقم مش مسجّل على واتساب': { he: 'המספר אינו רשום בוואטסאפ', en: 'That number is not on WhatsApp' },

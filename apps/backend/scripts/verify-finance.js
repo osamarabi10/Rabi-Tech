@@ -9,6 +9,10 @@
  * Everything it creates is deleted again on the way out, including on failure.
  * A verification script that leaves invoices behind in a live ledger is worse
  * than no verification script.
+ *
+ * Runs against the compiled output in dist/, which is why the npm script builds
+ * first. Importing the TypeScript sources directly would need a second toolchain
+ * in a repo that already has one, and would test code the server does not run.
  */
 const { runAsPlatform } = require('../dist/lib/tenant-context');
 const { prisma } = require('../dist/prisma');

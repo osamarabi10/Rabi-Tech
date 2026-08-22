@@ -123,7 +123,10 @@ export function SettingsSubNavigation({
             <span
               className={cn(
                 'numeric shrink-0 font-mono text-micro tabular-nums',
-                isActive ? 'text-primary' : 'text-muted-foreground/70',
+                // Full strength, not /70. Faded to 70% these numbers sat at
+                // 3.1:1 on the light theme, and a position marker nobody can
+                // read is a position marker that is not there.
+                isActive ? 'text-primary' : 'text-muted-foreground',
               )}
             >
               {number}

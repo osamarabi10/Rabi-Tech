@@ -1,7 +1,7 @@
 'use client';
 
 import { Search, MessageSquarePlus } from 'lucide-react';
-import type { Conv } from '@/lib/data';
+import { contactDisplayName, type Conv } from '@/lib/data';
 import { avatarColor, STATUS_CONFIG } from '@/lib/constants';
 import { ContactAvatar } from '@/components/contact-avatar';
 import { useT } from '@/lib/i18n';
@@ -197,7 +197,7 @@ export function ConversationList({
 
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-small font-semibold">{c.name}</span>
+                  <span className="truncate text-small font-semibold">{contactDisplayName(c.name, t)}</span>
                   <span className="shrink-0 text-micro text-muted-foreground">{c.lastTime}</span>
                 </div>
 

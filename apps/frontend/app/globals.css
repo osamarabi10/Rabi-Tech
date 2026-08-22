@@ -64,8 +64,15 @@
     /* The HSL triple here used to be 32 94% 37%, which renders rgb(183,100,6)
        and measures 4.34:1 — the comment said #B45309 but the value was a
        different colour, so this quietly failed AA. This is #B45309 exactly. */
-    --warning:  26 90% 37%;          /* #B45309 — 5.0:1 on white */
-    --danger:    0 74% 50%;          /* #DC2626 — 4.5:1 on white */
+    /* Deepened from 37%. Like --danger this was measured against pure white,
+       and every real use sits on a card or a tinted panel where it came in at
+       4.41:1. */
+    --warning:  26 90% 31%;          /* #96450A */
+    /* Deepened from 50% lightness. The old value cleared 4.5:1 on pure
+       white and nothing else: every real use puts it on a tinted panel
+       (bg-destructive/10) or a card, where it measured 4.06:1. This clears
+       AA on those surfaces, which are the ones it is actually read on. */
+    --danger:    0 74% 44%;          /* #C21C1C */
     --note:     55 97% 77%;          /* #FEF08A — internal note tint */
 
     /* ── Conversation / campaign status ──
@@ -75,7 +82,10 @@
     --status-open:     217 100% 40%;
     --status-resolved: 163  94% 24%;
     --status-closed:   215  19% 35%;
-    --status-pending:   26  90% 37%;
+    /* 31%, matching --warning: at 37% the pending chip measured 4.29:1 on
+       its own 12% tint, and orange is the one status that has to be legible
+       at a glance because it means someone is waiting. */
+    --status-pending:   26  90% 31%;
     --status-waiting:  244  55% 52%;
 
     --success-vivid: 160 84% 39%;    /* #10B981 — fills, status dots */
@@ -354,6 +364,20 @@
 
   .dark .text-primary {
     color: color-mix(in srgb, hsl(var(--primary)) 55%, white);
+  }
+
+  /*
+   * The same correction in the other direction.
+   *
+   * A brand colour chosen to work as a button fill is usually a little too
+   * light to read as text on the 10% tint of itself — the default #0066FF
+   * lands at 4.34:1 on bg-primary/10, just under AA, and that combination is
+   * every active row in the inbox. Mixing toward black deepens whatever
+   * colour the subscriber picked rather than overriding it with one we
+   * chose, which is the only approach that survives white-labelling.
+   */
+  .text-primary {
+    color: color-mix(in srgb, hsl(var(--primary)) 86%, black);
   }
 
   /* On light, the navy rail separates itself from the pale canvas by contrast

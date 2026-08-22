@@ -385,9 +385,9 @@ export default function SettingsPage() {
       const saved = await saveOrganizationBranding(branding);
       setBranding({ ...branding, ...saved });
       setDomainVerification(await fetchBrandingDomainVerification());
-      toast.success(t('ØªÙ… Ø­ÙØ¸ Ø§Ù„Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª'));
+      toast.success(t('تم حفظ الإعدادات'));
     } catch (err: any) {
-      toast.error(err?.response?.data?.error || t('ÙØ´Ù„ Ø­ÙØ¸ Ø§Ù„Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª'));
+      toast.error(err?.response?.data?.error || t('فشل حفظ الإعدادات'));
     } finally {
       setSavingBranding(false);
     }

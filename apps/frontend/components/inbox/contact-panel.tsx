@@ -8,6 +8,7 @@ import {
   updateContact,
   type Agent,
   type Conv,
+  contactDisplayName,
   type MarketingConsent,
   type Msg,
 } from '@/lib/data';
@@ -165,7 +166,7 @@ export function ContactPanel({
             </AvatarFallback>
           </Avatar>
           <div className="min-w-0">
-            <p className="truncate text-sm font-bold">{conversation.name}</p>
+            <p className="truncate text-sm font-bold">{contactDisplayName(conversation.name, t)}</p>
             <p className="numeric font-mono text-caption text-muted-foreground" dir="ltr">
               {conversation.phone}
             </p>

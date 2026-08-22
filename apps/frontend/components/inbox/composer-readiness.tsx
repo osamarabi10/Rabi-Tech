@@ -82,7 +82,13 @@ export function ComposerReadinessStrip({
             ? `${readiness.label} — ${t('غير متصلة')}`
             : t('القناة غير متصلة')}
         </span>
-        <span className="text-destructive/80">{t('لن تصل الردود حتى تعود')}</span>
+        {/*
+          Full strength, not /80. This sentence is the consequence — the part
+          that decides whether the agent stops typing — and at 10px the fade
+          put it at 2.6:1 on the light theme, the worst contrast anywhere in
+          the inbox. Fading the most important line is backwards anyway.
+        */}
+        <span className="text-destructive">{t('لن تصل الردود حتى تعود')}</span>
         {/* A recovery path, not just a warning. The QR scan lives in settings. */}
         <Link
           href="/settings#channels"

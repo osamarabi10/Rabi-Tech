@@ -192,7 +192,7 @@ export default function ContactsPage() {
   return (
     <div className="flex-1 overflow-y-auto p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-base font-extrabold">{t('Ø¬Ù‡Ø§Øª Ø§Ù„Ø§ØªØµØ§Ù„')}</h1>
+        <h1 className="text-base font-extrabold">{t('جهات الاتصال')}</h1>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm">

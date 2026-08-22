@@ -56,6 +56,46 @@ export function scopeMatches(
   return true;
 }
 
+/**
+ * Lifecycle stages and teams, fetched once and shared.
+ *
+ * Two components need them — the full pane on a wide screen and the compact
+ * menu below it — and both are mounted at every width because the choice
+ * between them is CSS, not JavaScript. Without the cache that is two extra
+ * requests on every desktop page load for data that does not change during
+ * a session.
+ */
+let taxonomyCache: Promise<{ stages: LifecycleStage[]; teams: Team[] }> | null = null;
+
+function loadTaxonomy() {
+  if (!taxonomyCache) {
+    taxonomyCache = Promise.all([
+      fetchLifecycleStages().catch(() => [] as LifecycleStage[]),
+      fetchTeams().catch(() => [] as Team[]),
+    ]).then(([stages, teams]) => ({ stages, teams }));
+  }
+  return taxonomyCache;
+}
+
+export function useInboxTaxonomy() {
+  const [taxonomy, setTaxonomy] = useState<{ stages: LifecycleStage[]; teams: Team[] }>({
+    stages: [],
+    teams: [],
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    loadTaxonomy().then((next) => {
+      if (!cancelled) setTaxonomy(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return taxonomy;
+}
+
 function sameScope(a: InboxScope, b: InboxScope): boolean {
   return a.kind === b.kind && a.value === b.value;
 }
@@ -153,14 +193,8 @@ export function InboxSelector({
   className?: string;
 }) {
   const { t } = useT();
-  const [stages, setStages] = useState<LifecycleStage[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
+  const { stages, teams } = useInboxTaxonomy();
   const [sessions, setSessions] = useState<Session[] | null>(null);
-
-  useEffect(() => {
-    fetchLifecycleStages().then(setStages).catch(() => {});
-    fetchTeams().then(setTeams).catch(() => {});
-  }, []);
 
   useEffect(() => {
     // Gateway state is live, so it is polled rather than read once. An agent

@@ -42,6 +42,24 @@ export type Conv = {
   labels: string[];
 };
 
+/**
+ * Stand-in for a contact with neither a name nor a usable phone number.
+ *
+ * The value is the Arabic source string, which is also its dictionary key —
+ * that is how every UI string in this app works. What makes it different from
+ * the rest is that it is produced in the data layer, where there is no `t()`,
+ * so it reached the screen untranslated and a Hebrew workspace showed one
+ * Arabic phrase in the middle of its conversation list. Display sites compare
+ * against this and translate; a real contact called something else passes
+ * through untouched.
+ */
+export const UNKNOWN_CONTACT = 'غير معروف';
+
+/** The contact's name as it should be shown, placeholder translated. */
+export function contactDisplayName(name: string, t: (key: string) => string): string {
+  return name === UNKNOWN_CONTACT ? t(UNKNOWN_CONTACT) : name;
+}
+
 export type Msg = {
   id: string;
   dir: 'in' | 'out';
@@ -287,14 +305,17 @@ export async function startConversation(input: {
     displayId: data.displayId ?? 0,
     teamId: data.teamId ?? data.session?.teamId ?? null,
     teamName: data.team?.name ?? data.session?.team?.name ?? null,
-    name: data.contact?.name || formatPhone(data.contact?.phone) || 'غير معروف',
+    name: data.contact?.name || formatPhone(data.contact?.phone) || UNKNOWN_CONTACT,
     phone: formatPhone(data.contact?.phone),
     status: data.status,
     lastMsg: data.messages?.[0]?.body || '',
     lastTime: fmtTime(data.lastMessageAt),
     sessionDate: fmtDate(data.createdAt),
     unread: data._count?.messages ?? 0,
-    avatar: (data.contact?.name || data.contact?.phone || '؟').charAt(0),
+    // ASCII '?', not the Arabic '؟'. It is a placeholder glyph, not a
+    // sentence — a Hebrew or English workspace should not get an Arabic
+    // question mark in its avatar circle, and no locale needs a translated one.
+    avatar: (data.contact?.name || data.contact?.phone || '?').charAt(0),
     assigneeId: data.assignee?.id ?? null,
     assigneeName: data.assignee?.name ?? null,
     contactId: data.contact?.id ?? '',
@@ -321,14 +342,14 @@ export async function fetchConversations(
     displayId: c.displayId ?? 0,
     teamId: c.teamId ?? c.session?.teamId ?? null,
     teamName: c.team?.name ?? c.session?.team?.name ?? null,
-    name: c.contact?.name || formatPhone(c.contact?.phone) || 'غير معروف',
+    name: c.contact?.name || formatPhone(c.contact?.phone) || UNKNOWN_CONTACT,
     phone: formatPhone(c.contact?.phone),
     status: c.status,
     lastMsg: c.messages?.[0]?.body || '',
     lastTime: fmtTime(c.lastMessageAt),
     sessionDate: fmtDate(c.createdAt),
     unread: c._count?.messages ?? 0,
-    avatar: (c.contact?.name || c.contact?.phone || '؟').charAt(0),
+    avatar: (c.contact?.name || c.contact?.phone || '?').charAt(0),
     assigneeId: c.assignee?.id ?? null,
     assigneeName: c.assignee?.name ?? null,
     contactId: c.contact?.id ?? '',

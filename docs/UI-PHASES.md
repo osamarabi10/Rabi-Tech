@@ -43,7 +43,7 @@ actually hurt a subscriber.
 - [x] **4. Gateway state is polled**, not read once. An agent whose session
   dropped must see it here rather than discover it from a failed send — this
   column is the only always-visible surface in the inbox.
-- [ ] **5. Verify** live: counts match the list, every scope filters, RTL mirrors,
+- [x] **5. Verify** live: counts match the list, every scope filters, RTL mirrors,
   tablet and mobile behaviour.
 
 ## U2 — Contact context tabs · brief step 3
@@ -129,12 +129,58 @@ prints to PDF everywhere. The file downloads either way.
 
 ## U7 — Responsive, RTL and theme pass · brief step 8
 
-- [ ] **1. Desktop / tablet / mobile** — mobile uses sequential panels, never a
+- [x] **1. Desktop / tablet / mobile** — mobile uses sequential panels, never a
   squeezed four-column layout.
-- [ ] **2. English / Arabic / Hebrew**, translated rather than mirrored English.
-- [ ] **3. Light and dark**, every new surface in both.
-- [ ] **4. Logical properties only.** No `left`/`right` in new code.
-- [ ] **5. Contrast audit** on every new surface, both themes.
+- [x] **2. English / Arabic / Hebrew**, translated rather than mirrored English.
+- [x] **3. Light and dark**, every new surface in both.
+- [x] **4. Logical properties only.** No `left`/`right` in new code.
+- [x] **5. Contrast audit** on every new surface, both themes.
+
+**Two permanent checks added**, both wired into package.json:
+`npm run check:i18n` (every literal `t()` key translated in Hebrew and English,
+no duplicates, no blanks) and `npm run check:mojibake` (Arabic or Hebrew text
+that was decoded as Latin-1 somewhere and written back as UTF-8).
+
+**What the i18n sweep actually found.** The first version of the checker read
+the dictionary line by line, which missed every entry a formatter had wrapped,
+and it compared raw literal text, which treats `"a \"b\""` and `'a "b"'` as
+different keys. It reported 303 missing strings; 296 of them were already
+translated. The real defects were five: three strings corrupted into mojibake
+(the Contacts page heading and both settings-save toasts, garbage on screen for
+every user), and two genuinely untranslated. The checker was corrected before
+the count was believed — a checker that cries wolf is how a team learns to
+ignore one.
+
+**Also found and fixed, none of it visible from the source:**
+
+- `cn()` was deleting the role type scale. `text-caption` and friends are plain
+  CSS classes, not Tailwind theme sizes, so tailwind-merge treated
+  `cn('text-caption', 'text-primary')` as a conflict and dropped the size. The
+  settings sub-navigation shipped at 16px instead of 11px with both classes
+  present in the source. Registered as font sizes in `lib/utils.ts`.
+- `inset-inline-0` is not a class Tailwind generates. The mobile scope menu had
+  no horizontal anchoring and sized itself to its longest label.
+- Pane 1 is hidden below `lg`, and the comment claimed its scopes stayed
+  reachable elsewhere. They did not: Mine, Unassigned, every lifecycle stage and
+  every team queue existed only on a desktop, and gateway trouble — the one
+  fault this product cannot detect for you — was invisible on a phone. Both are
+  back as `lg:hidden` controls sharing the pane's own counting code.
+- Contrast, measured rather than eyeballed, in both themes: `text-destructive/80`
+  at 2.62:1, the sub-nav numbers at 3.1:1, tenant team colours at 3.84:1, and
+  `--danger`, `--warning` and `--status-pending` all tuned against pure white
+  when every real use puts them on a tinted panel. Fixed at the token where the
+  cause was a token, and at the call site where the cause was a fade.
+- A Hebrew workspace showed `غير معروف` for an unnamed contact: the placeholder
+  is produced in the data layer, where there is no `t()`.
+
+**Verified live** at 375, 768 and 1440 — no horizontal overflow at any width,
+the scope menu appearing and filtering correctly below `lg` and hidden above it,
+the gateway notice never duplicated. Arabic and Hebrew both render RTL with the
+rail on the correct edge. Contrast swept over inbox, settings, contacts and
+reports in both themes: zero failures, worst ratio 4.6:1.
+
+**Not verified:** the campaign composer, because this workspace is on the Free
+plan and the page renders its upgrade gate instead.
 
 ## U8 — Documentation · brief step 9
 
