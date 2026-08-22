@@ -15,6 +15,21 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Consent provenance (U2.4) ----
+  'من رسالة العميل': { he: 'מהודעת הלקוח', en: 'From the customer' },
+  'من الموظف': { he: 'מהנציג', en: 'By an agent' },
+  'من استيراد ملف': { he: 'מייבוא קובץ', en: 'From a file import' },
+  'عبر الـAPI': { he: 'דרך ה-API', en: 'Via the API' },
+  'ما تسجّل مصدر للموافقة': { he: 'לא נרשם מקור להסכמה', en: 'No consent source recorded' },
+  'قبل تسجيل السجل': { he: 'לפני תחילת התיעוד', en: 'before history was kept' },
+  'غير مربوط': { he: 'לא מחובר', en: 'not linked' },
+  // ---- Custom footer (U3.3) ----
+  'اترك الحقل فارغاً وما رح يظهر أي تذييل نهائياً.': { he: 'השאירו את השדה ריק ולא יוצג כלל כיתוב תחתון.', en: 'Leave the field empty and no footer is shown at all.' },
+  'باقتا FREE و GROWTH بتحتفظا بعبارة الإسناد. BUSINESS و ENTERPRISE فيهن يغيّروها أو يشيلوها.': { he: 'חבילות FREE ו-GROWTH שומרות על כיתוב הייחוס. חבילות BUSINESS ו-ENTERPRISE יכולות להחליף אותו או להסירו.', en: 'FREE and GROWTH keep the attribution line. BUSINESS and ENTERPRISE can replace or remove it.' },
+  // ---- Sending-number picker (U4.4) ----
+  'اختيار تلقائي': { he: 'בחירה אוטומטית', en: 'Choose automatically' },
+  // ---- Composer affordances (U4.3) ----
+  'إدراج إيموجي': { he: 'הוספת אימוג׳י', en: 'Insert emoji' },
   // ---- Contacts, import, inbox (U7.2) ----
   'جاري الإرسال...': { he: 'שולח…', en: 'Sending…' },
   // ---- Settings, templates, teams, subscription, segments (U7.2) ----

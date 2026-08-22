@@ -651,11 +651,20 @@ export default function SettingsPage() {
                   disabled={!branding.canCustomizeFooter}
                   onChange={(event) => setBranding({ ...branding, customFooter: event.target.value || null })}
                 />
-                {!branding.canCustomizeFooter && (
-                  <p className="text-xs text-muted-foreground">
-                    FREE and GROWTH keep the required Powered by RabiTech attribution. BUSINESS and ENTERPRISE can replace or remove it.
-                  </p>
-                )}
+                {/*
+                  Both branches say something, and both go through t().
+                  The English sentence here was a raw literal — the one piece of
+                  prose in this page that stayed English in an Arabic interface.
+                  And the plans that *can* edit the field were told nothing at
+                  all about what happens when they empty it: the footer
+                  disappears entirely rather than falling back to anything,
+                  which is the audit finding this carries over.
+                */}
+                <p className="text-xs text-muted-foreground">
+                  {branding.canCustomizeFooter
+                    ? t('اترك الحقل فارغاً وما رح يظهر أي تذييل نهائياً.')
+                    : t('باقتا FREE و GROWTH بتحتفظا بعبارة الإسناد. BUSINESS و ENTERPRISE فيهن يغيّروها أو يشيلوها.')}
+                </p>
               </div>
             </div>
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { AtSign, Loader2, Paperclip, Send, Zap } from 'lucide-react';
+import { AtSign, Loader2, Paperclip, Send, Smile, Zap } from 'lucide-react';
 import type { Template } from '@/lib/data';
 import { useT } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,21 @@ import { cn } from '@/lib/utils';
  * Comment mode visibly recolours the whole composer and swaps the send button, so
  * the current mode is unmissable at a glance.
  */
+/**
+ * Emoji offered in the composer.
+ *
+ * A curated row rather than a full picker. A complete picker means a search
+ * index, skin-tone variants and a dependency, and none of that earns its
+ * place on a support desk where the same dozen glyphs cover almost every
+ * message: acknowledgement, thanks, apology, and the handful that soften a
+ * refusal. An agent who needs something else can paste it — the field is a
+ * plain textarea.
+ */
+const EMOJI = [
+  '👍', '🙏', '✅', '❌', '⏳', '📞', '📶', '🔧', '💰', '📄',
+  '😊', '😅', '🙌', '❤️', '🎉', '⚠️', '🔴', '🟢', '⭐', '📌',
+];
+
 /** A teammate who can be mentioned. Id-based, never matched by name. */
 export type MentionCandidate = { id: string; name: string };
 
@@ -74,6 +89,29 @@ export function Composer({
 }: ComposerProps) {
   const { t } = useT();
   const fileRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+
+  /**
+   * Insert at the caret, not at the end.
+   *
+   * An agent adding a 👍 to the front of a sentence they have already written
+   * should not have it land after the full stop. The caret is restored after
+   * the update so the next character typed continues where they were.
+   */
+  const insertEmoji = (emoji: string) => {
+    const field = textareaRef.current;
+    const at = field ? field.selectionStart ?? value.length : value.length;
+    const next = value.slice(0, at) + emoji + value.slice(field?.selectionEnd ?? at);
+    onChange(next);
+    setEmojiOpen(false);
+    requestAnimationFrame(() => {
+      if (!field) return;
+      field.focus();
+      const caret = at + emoji.length;
+      field.setSelectionRange(caret, caret);
+    });
+  };
   const [highlight, setHighlight] = useState(0);
 
   // Leaving note mode closes the mention list — the suggestions are only valid
@@ -233,6 +271,49 @@ export function Composer({
           <Paperclip className="h-4 w-4" />
         </Button>
 
+        {/*
+          Emoji. Available on notes as well as replies — a note is written by a
+          person for people, and there is no channel constraint on it.
+        */}
+        <div className="relative shrink-0">
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-9 w-9"
+            disabled={disabled}
+            aria-expanded={emojiOpen}
+            title={t('إدراج إيموجي')}
+            onClick={() => setEmojiOpen((previous) => !previous)}
+          >
+            <Smile className="h-4 w-4" />
+          </Button>
+
+          {emojiOpen && (
+            <>
+              {/* A click anywhere else closes it, including on the message
+                  the agent meant to click next. */}
+              <button
+                type="button"
+                aria-label={t('إغلاق')}
+                className="fixed inset-0 z-20 cursor-default"
+                onClick={() => setEmojiOpen(false)}
+              />
+              <div className="absolute bottom-11 start-0 z-30 grid w-56 grid-cols-10 gap-0.5 rounded-lg border border-border bg-popover p-1.5 shadow-xl">
+                {EMOJI.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => insertEmoji(emoji)}
+                    className="rounded p-0.5 text-base leading-none transition-colors hover:bg-accent"
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
         <div className="relative flex-1">
           {mentionMatches.length > 0 && (
             <div
@@ -301,6 +382,7 @@ export function Composer({
           )}
 
           <Textarea
+            ref={textareaRef}
             rows={1}
             dir="auto"
             className={cn(

@@ -18,6 +18,8 @@ The authoritative RabiTech target architecture, implementation checkpoint, relea
 
 [docs/ROADMAP-REMAINING.md](docs/ROADMAP-REMAINING.md) keeps the detailed per-phase execution notes behind the spec's ledger.
 
+**[docs/UI-SURFACE-MAP.md](docs/UI-SURFACE-MAP.md) — read before editing any UI.** Route and component map, and the places where the obvious edit is the wrong one. [docs/UI-PHASES.md](docs/UI-PHASES.md) records what the U1–U8 UI phases changed; [docs/API-CONTRACTS-U2-U6.md](docs/API-CONTRACTS-U2-U6.md) documents the endpoints they added.
+
 **[docs/WHATSAPP-GATEWAY-RUNBOOK.md](docs/WHATSAPP-GATEWAY-RUNBOOK.md) — read first when "WhatsApp isn't working".** Inbound-broken and outbound-broken are separate faults with separate causes; it covers both, plus which operations discard WhatsApp credentials.
 
 [docs/BILLING-PROVIDER-GUIDE.md](docs/BILLING-PROVIDER-GUIDE.md) — everything needed to switch on online payments later. Activation is already automatic; only checkout is stubbed.
@@ -73,7 +75,21 @@ cd apps/backend && npx tsc --noEmit -p .
 cd apps/backend && npm run test:tenancy
 ```
 
-The gate uses a disposable PostgreSQL schema and must stay **green (45/45)**. Treat a red gate as a release blocker, not a known issue.
+The gate uses a disposable PostgreSQL schema and must stay **green (67/67)**. Treat a red gate as a release blocker, not a known issue.
+
+### Platform finance check
+```bash
+cd apps/backend && npm run test:finance
+```
+
+Exercises the platform ledger against the real database (16/16): reference
+numbering, receipt-and-invoice-in-one-transaction, part payments, overpayment
+refusal, HTML escaping, CSV quoting. Builds first because it runs the compiled
+output the server actually runs, and deletes everything it creates.
+
+**Finance documents are not tax documents.** No fiscal numbering, no VAT, no
+`חשבונית מס` / `فاتورة ضريبية` labelling. Do not add any without a real
+accounting provider behind it — see [docs/API-CONTRACTS-U2-U6.md](docs/API-CONTRACTS-U2-U6.md).
 
 ### Check migration status
 ```bash
@@ -144,6 +160,54 @@ WhatsApp media URLs are internal to the OpenWA container. The backend proxies th
 - All API calls and types live in `lib/data.ts`
 - Socket connection and inbox state live in `app/(dashboard)/inbox/page.tsx`
 - Arabic dialect: Palestinian/Arab48 colloquial — "أهلين" not "مرحباً", "شو" not "ماذا", "فيني/فيك" for can. Match the tone in `constants/default-auto-replies.ts`.
+
+#### UI rules that are load-bearing
+
+Each of these was a bug that shipped and looked correct in the source. See
+[docs/UI-SURFACE-MAP.md](docs/UI-SURFACE-MAP.md) for the full map.
+
+- **Every control does something.** No toast-only buttons, no controls that
+  vanish for users who lack permission — show the restriction
+  (`components/permission-notice.tsx`). A blank space is indistinguishable
+  from an empty card and from an ungranted feature.
+- **Never state a fault you have not confirmed.** "Not yet known" renders as
+  nothing or as "checking", never as an error. An agent sent to fix a working
+  channel is worse off than one told nothing.
+- **Logical properties only.** `ms/me`, `ps/pe`, `start-*`/`end-*`,
+  `text-start`. Two of the three languages are RTL. `inset-inline-0` reads
+  like a logical property and is **not** a Tailwind class — use `start-0
+  end-0`.
+- **`dir="ltr"` on numbers only** — phone numbers, money, dates, numeric
+  inputs. Never on a container.
+- **`cn()` is an extended twMerge.** The role type scale (`text-caption`,
+  `text-micro`, …) is registered as font sizes in `lib/utils.ts`. Without
+  that, tailwind-merge drops the size when a colour is in the same call and
+  the component silently renders at 16px. Adding a role to the scale means
+  adding it there too.
+- **Never concatenate alpha onto a colour string.** `hsl(var(--x))20` is
+  invalid CSS and fails silently. Use `color-mix()` — see `lib/tint.ts`.
+- **Tenant colours are deepened, never replaced.** A subscriber picked that
+  colour; mixing toward black keeps their hue and makes it legible.
+- **Contrast is measured against the surface the text sits on**, not against
+  white, in both themes. Tokens tuned as button fills (`--destructive`) are
+  too light as text; the palette carries `--danger`/`--warning` for that, and
+  `app/globals.css` maps the text utilities onto them.
+- **Arabic source strings are dictionary keys.** A missing key falls back to
+  itself, so the UI keeps working and the failure hides — which is what the
+  checks below exist to catch.
+
+```bash
+cd apps/frontend && npm run check:i18n
+```
+
+```bash
+cd apps/frontend && npm run check:mojibake
+```
+
+`check:i18n` verifies every literal `t()` key is translated in Hebrew and
+English, with no duplicate or blank entries. `check:mojibake` finds Arabic or
+Hebrew that was decoded as Latin-1 and written back as UTF-8 — valid UTF-8,
+so nothing else complains, and unreadable to whoever is shown it.
 
 ### Key enums (Prisma schema)
 - `ConversationStatus`: `OPEN | PENDING | RESOLVED`

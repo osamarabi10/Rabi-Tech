@@ -9,11 +9,14 @@ import {
   type Agent,
   type Conv,
   contactDisplayName,
+  fetchConsentProvenance,
+  type ConsentProvenance,
   type MarketingConsent,
   type Msg,
 } from '@/lib/data';
 import { avatarColor } from '@/lib/constants';
 import { useT } from '@/lib/i18n';
+import { ConsentProvenanceLine } from '@/components/inbox/consent-provenance';
 import { LifecycleSelect, useLifecycleStages } from './lifecycle-select';
 import {
   ActivityTab,
@@ -99,12 +102,41 @@ export function ContactPanel({
     }
   };
 
+  /**
+   * Where the current consent value came from.
+   *
+   * Loaded per contact rather than carried on every conversation row: the
+   * list, the audience preview and the campaign worker all read contacts and
+   * none of them wants to pay for a history.
+   */
+  const [provenance, setProvenance] = useState<ConsentProvenance | null>(null);
+
+  useEffect(() => {
+    if (!conversation.contactId) return;
+    let cancelled = false;
+    fetchConsentProvenance(conversation.contactId)
+      .then((next) => {
+        if (!cancelled) setProvenance(next);
+      })
+      .catch(() => {
+        // Silent. Provenance is context, and a red toast about a missing
+        // subtitle would be louder than the thing it describes.
+        if (!cancelled) setProvenance(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation.contactId]);
+
   const saveConsent = async (consent: MarketingConsent) => {
     setSavingConsent(true);
     try {
       await updateContact(conversation.contactId, { marketingConsent: consent });
       toast.success(t('تم تحديث حالة التسويق'));
       onConsentChange?.(consent);
+      // Re-read rather than patch locally: the server decides whether that
+      // was a change at all, and a no-op toggle writes no history.
+      fetchConsentProvenance(conversation.contactId).then(setProvenance).catch(() => {});
     } catch {
       toast.error(t('فشل التحديث'));
     } finally {
@@ -220,6 +252,13 @@ export function ContactPanel({
                 <option value="OPTED_IN">{t('موافق')}</option>
                 <option value="OPTED_OUT">{t('ملغى الاشتراك')}</option>
               </select>
+              {/*
+                Provenance under the control, not in a tooltip. A consent
+                value with no answer to "where did this come from" is a claim
+                the subscriber may one day have to stand behind in front of
+                someone who is not their customer.
+              */}
+              <ConsentProvenanceLine provenance={provenance} />
             </dd>
           </div>
         </dl>

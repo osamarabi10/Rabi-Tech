@@ -1681,6 +1681,47 @@ async function databaseAudits() {
         }),
       );
     });
+    await check('consent: composite FK rejects a cross-org consent event', async () => {
+      // Consent history is the record a subscriber stands behind if anyone
+      // asks why they messaged someone. An event attached to another
+      // organization's contact would put one tenant's evidence on another
+      // tenant's customer.
+      await assert.rejects(() =>
+        raw.consentEvent.create({
+          data: {
+            organizationId: orgA.organizationId,
+            contactId: orgB.records[0].contact.id,
+            fromValue: 'UNKNOWN',
+            toValue: 'OPTED_OUT',
+            source: 'agent',
+          },
+        }),
+      );
+    });
+    await check('consent: events never cross organizations on read', async () => {
+      const write = (org) =>
+        runAsOrganization(org.organizationId, () =>
+          scoped.consentEvent.create({
+            data: {
+              organizationId: org.organizationId,
+              contactId: org.records[0].contact.id,
+              fromValue: 'UNKNOWN',
+              toValue: 'OPTED_IN',
+              source: 'agent',
+              actorName: 'bleed-probe',
+            },
+          }),
+        );
+
+      await write(orgA);
+      await write(orgB);
+
+      const seenByA = await runAsOrganization(orgA.organizationId, () =>
+        scoped.consentEvent.findMany({ select: { organizationId: true } }),
+      );
+      assert.ok(seenByA.length > 0);
+      assert.ok(seenByA.every((row) => row.organizationId === orgA.organizationId));
+    });
     await check('billing: composite FK rejects cross-org receipt invoice writes', async () => {
       // A receipt is the record that money was taken. Pointing one at another
       // organization's invoice would credit that org's balance from this org's

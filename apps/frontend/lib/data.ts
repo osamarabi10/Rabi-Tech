@@ -1512,3 +1512,25 @@ export async function retryMessage(conversationId: string, messageId: string): P
     isInternal: !!data.isInternal,
   };
 }
+
+/** How a contact's marketing consent got to its current value. */
+export type ConsentProvenance = {
+  current: MarketingConsent;
+  /** keyword | agent | import | api, or null if never recorded. */
+  source: string | null;
+  updatedAt: string | null;
+  history: Array<{
+    id: string;
+    fromValue: string | null;
+    toValue: string;
+    source: string;
+    /** Null when a customer's own keyword caused it, and on imports. */
+    actorName: string | null;
+    at: string;
+  }>;
+};
+
+export async function fetchConsentProvenance(contactId: string): Promise<ConsentProvenance> {
+  const { data } = await api.get(`/api/contacts/${contactId}/consent`);
+  return data;
+}

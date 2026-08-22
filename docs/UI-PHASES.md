@@ -64,10 +64,24 @@ actually hurt a subscriber.
   human triggered. Automated events render as hollow dots, so the distinction is
   not carried by colour alone. Verified live: real audit events with actor
   names, 404 on an unknown id.
-- [ ] **4. Details** — consent provenance (source, timestamp, who recorded it) is
-  **not surfaced**. The consent value is editable but no per-change history is
-  stored, so there is nothing truthful to show yet. Needs a `ConsentEvent` row
-  written on every change before this box can be ticked.
+- [x] **4. Details** — consent provenance: source, date and, where a person did
+  it, who. `ConsentEvent` now records every change, written by both paths — a
+  customer's keyword and an agent's toggle — through one function. `Contact`
+  already carried the current value, its source and its date; what it could
+  never answer was *who*, and each change overwrote the last.
+
+  Three states are distinguished, because the differences matter: a recorded
+  change with an actor; a value set before the table existed (source and date,
+  no actor, said plainly rather than dressed up as complete); and never recorded
+  at all. Loading and failure render nothing — "no source recorded" is a claim
+  about the data, not something to say when the request has not come back.
+
+  The history write is deliberately **not** fail-closed, unlike everything else
+  around consent: refusing a customer's STOP because an audit row failed to
+  write would be the worse outcome by a distance.
+
+  Verified live: setting consent produced `agent · مدير النظام · 2026-08-22`
+  under the control, and two rows in `ConsentEvent` with from/to values.
 
   **Calls** — respond.io tabs a fourth `Calls` here. Deliberately absent: a
   WhatsApp Web gateway has none, and a tab opening onto a permanent empty state
@@ -75,20 +89,20 @@ actually hurt a subscriber.
 
 ## U3 — Settings sub-navigation · brief step 4
 
-- [ ] **1. Two-column settings**: persistent numbered sub-navigation, content beside it.
-- [ ] **2. Keep every working section.** Omit only genuinely unsupported ones.
-- [ ] **3. Carry over the audit findings** in `docs/SETTINGS-AUDIT.md` —
+- [x] **1. Two-column settings**: persistent numbered sub-navigation, content beside it.
+- [x] **2. Keep every working section.** Omit only genuinely unsupported ones.
+- [x] **3. Carry over the audit findings** in `docs/SETTINGS-AUDIT.md` —
   the "Secondary color" label overselling a logo-only accent, and an emptied
   custom footer rendering no footer at all.
 
 ## U4 — Composer readiness strip · brief step 7
 
-- [ ] **1. `ComposerReadinessStrip`** above the composer, from real gateway state.
-- [ ] **2. Gateway loss makes affected sends visibly unavailable**, with a
+- [x] **1. `ComposerReadinessStrip`** above the composer, from real gateway state.
+- [x] **2. Gateway loss makes affected sends visibly unavailable**, with a
   recovery path — not a send that fails after the fact.
-- [ ] **3. Explicit affordances**: snippet, attach, emoji — shown only where the
+- [x] **3. Explicit affordances**: snippet, attach, emoji — shown only where the
   capability exists. Attachments stay disabled on internal notes.
-- [ ] **4. Sending-number selection** visible where the tenant has more than one.
+- [x] **4. Sending-number selection** visible where the tenant has more than one.
 
 ## U5 — Operational states · brief step 8
 
@@ -184,9 +198,25 @@ plan and the page renders its upgrade gate instead.
 
 ## U8 — Documentation · brief step 9
 
-- [ ] **1. Final route and component map.**
-- [ ] **2. New API contracts** introduced by U2 and U6.
-- [ ] **3. Update `CLAUDE.md`** with anything a future agent must not undo.
+- [x] **1. Final route and component map.**
+- [x] **2. New API contracts** introduced by U2 and U6.
+- [x] **3. Update `CLAUDE.md`** with anything a future agent must not undo.
+
+Written as three documents rather than one:
+
+- **[UI-SURFACE-MAP.md](UI-SURFACE-MAP.md)** — routes, the components that carry
+  a rule, the lib modules with a trap in them, and the conventions that are
+  load-bearing. Deliberately not a list of every file: a map that includes the
+  shadcn primitives is a map nobody reads twice.
+- **[API-CONTRACTS-U2-U6.md](API-CONTRACTS-U2-U6.md)** — the conversation
+  activity endpoint, the message retry route and its guards, and the six
+  platform finance routes, each with the constraint that shapes it.
+- **CLAUDE.md** — the short list a future agent must not undo, with the two new
+  checks and the corrected tenancy count (65/65).
+
+Every UI rule recorded there was a bug that shipped and looked correct in the
+source. That is the selection criterion: a convention nobody can violate by
+accident does not need writing down.
 
 ---
 

@@ -643,6 +643,7 @@ model Contact {
   assignee           User?                @relation("ContactAssignee", fields: [assigneeId, organizationId], references: [id, organizationId], onDelete: Restrict)
   contactTags        ContactTag[]
   customFieldValues  CustomFieldValue[]
+  consentEvents      ConsentEvent[]
 
   // Composite unique: phone per org
   @@unique([id, organizationId])
@@ -670,6 +671,35 @@ model Tag {
   @@unique([id, organizationId])
   @@unique([organizationId, name])
   @@index([organizationId])
+}
+
+/// Every recorded change to a contact's marketing consent.
+///
+/// Contact carries the current value, its source and its timestamp; this
+/// carries the history and the actor. "This customer opted out" is a claim a
+/// business may have to stand behind, and standing behind it means being able
+/// to say where it came from and who recorded it.
+model ConsentEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  contactId      String
+  /// Null on the first recorded change: earlier history predates this table.
+  fromValue      String?
+  toValue        String
+  /// keyword | agent | import | api
+  source         String
+  /// The agent, when a person made the change. Null for a keyword the
+  /// customer sent and for an import.
+  actorUserId    String?
+  /// Denormalised on purpose: the record must stay readable after the user is
+  /// deleted. An audit trail that becomes a dangling id is not an audit trail.
+  actorName      String?
+  at             DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, contactId, at])
 }
 
 model ContactTag {

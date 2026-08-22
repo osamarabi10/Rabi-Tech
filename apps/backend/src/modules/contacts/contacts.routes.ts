@@ -376,7 +376,13 @@ router.patch('/:id', async (req, res) => {
       if (!CONSENT_VALUES.includes(consent)) {
         return res.status(400).json({ error: 'قيمة الموافقة غير صالحة' });
       }
-      await setContactConsent(req.params.id, consent, 'agent');
+      // The actor, not just the source. "An agent changed it" is not an
+      // answer to "who changed it", and consent is the one field where that
+      // difference can matter to somebody outside this company.
+      await setContactConsent(req.params.id, consent, 'agent', {
+        id: req.user!.id,
+        name: req.user!.name,
+      });
     }
 
     const contact = await prisma.contact.update({
@@ -387,6 +393,44 @@ router.patch('/:id', async (req, res) => {
     res.json(contact);
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+/**
+ * GET /api/contacts/:id/consent — the current value and how it got there.
+ *
+ * Its own endpoint rather than a field on the contact: the panel asks for it
+ * when the Details tab is open, and every other consumer of a contact — the
+ * list, the audience preview, the campaign worker — has no use for a history
+ * it would pay to load on every row.
+ */
+router.get('/:id/consent', async (req, res) => {
+  try {
+    const contact = await prisma.contact.findUnique({
+      where: { id: req.params.id },
+      select: { marketingConsent: true, consentSource: true, consentUpdatedAt: true },
+    });
+    if (!contact) return res.status(404).json({ error: 'جهة الاتصال غير موجودة' });
+
+    const history = await prisma.consentEvent.findMany({
+      where: { contactId: req.params.id },
+      orderBy: { at: 'desc' },
+      take: 10,
+      select: { id: true, fromValue: true, toValue: true, source: true, actorName: true, at: true },
+    });
+
+    res.json({
+      current: contact.marketingConsent,
+      // From the contact row, which predates the history table. A contact
+      // whose consent was last set before it existed has a source and a date
+      // and no event — reported honestly rather than shown as never set.
+      source: contact.consentSource,
+      updatedAt: contact.consentUpdatedAt,
+      history,
+    });
+  } catch (err) {
+    logger.error('Consent provenance failed', { contactId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

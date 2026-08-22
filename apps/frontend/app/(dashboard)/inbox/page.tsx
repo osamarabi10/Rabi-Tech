@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -245,7 +245,60 @@ export default function InboxPage() {
   const [newPhone, setNewPhone] = useState('');
   const [newName, setNewName] = useState('');
   const [startingChat, setStartingChat] = useState(false);
+  /**
+   * The workspace's configured numbers, each with the team it belongs to.
+   *
+   * This state existed and was never populated — declared, typed, and always
+   * null. It is what the new-conversation dialog needs to say which number a
+   * customer will see the message from, so it is filled in now rather than
+   * deleted.
+   */
   const [inboxSessions, setInboxSessions] = useState<InboxConfig['sessions'] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchInboxConfig()
+      .then((config) => {
+        if (!cancelled) setInboxSessions(config.sessions);
+      })
+      .catch(() => {
+        if (!cancelled) setInboxSessions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Which number a new conversation should go out from, by its team. */
+  const [newTeamId, setNewTeamId] = useState<string>('');
+
+  /**
+   * The sending options, one per team.
+   *
+   * Sessions are listed per session, and a team can own more than one — which
+   * produced two entries carrying the same value. The server resolves the
+   * session from the team, so both would have sent from the same number: a
+   * choice that is not a choice. Deduplicated here, preferring whichever of a
+   * team's sessions is actually linked.
+   */
+  const senderOptions = useMemo(() => {
+    const byTeam = new Map<string, { teamId: string; label: string; phone: string | null }>();
+
+    for (const session of inboxSessions ?? []) {
+      if (!session.teamId) continue;
+      const existing = byTeam.get(session.teamId);
+      // A linked session wins: its number is the one a customer will see, and
+      // an unlinked one cannot send at all.
+      if (existing?.phone && !session.phoneNumber) continue;
+      byTeam.set(session.teamId, {
+        teamId: session.teamId,
+        label: session.label || session.sessionName,
+        phone: session.phoneNumber,
+      });
+    }
+
+    return [...byTeam.values()];
+  }, [inboxSessions]);
   const [showDetails, setShowDetails] = useState(true);
   const [assigning, setAssigning] = useState(false);
   const [isInternalNote, setIsInternalNote] = useState(false);
@@ -716,8 +769,14 @@ export default function InboxPage() {
     if (!newPhone.trim()) { toast.error(t('أدخل رقم الهاتف')); return; }
     setStartingChat(true);
     try {
-      const conv = await startConversation({ phone: newPhone.trim(), name: newName.trim() || undefined });
-      setShowNewChat(false); setNewPhone(''); setNewName('');
+      const conv = await startConversation({
+        phone: newPhone.trim(),
+        name: newName.trim() || undefined,
+        // Empty means "let the server decide", which is the right default for
+        // an agent who has only one number and never saw the picker.
+        teamId: newTeamId || undefined,
+      });
+      setShowNewChat(false); setNewPhone(''); setNewName(''); setNewTeamId('');
       await loadConvs(true);
       setSelId(conv.id);
       fetchMessages(conv.id).then((res) => { setMessages(res.messages); setHasMoreMessages(res.hasMore); setOldestMsgId(res.oldestId); });
@@ -1437,6 +1496,40 @@ export default function InboxPage() {
               <Input id="new-name" placeholder={t('مثال: أحمد محمد')}
                 value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleStartChat()} />
             </div>
+
+            {/*
+              Which number the customer will see this from.
+              Offered only on a workspace with more than one — on a single-number
+              tenant it is a select with one option, which is a decision nobody
+              is being asked to make. The server resolves the session from the
+              team, so the team is what gets sent.
+            */}
+            {senderOptions.length > 1 && (
+              <div className="space-y-1.5">
+                <Label htmlFor="new-sender" className="text-xs">{t('يُرسل من')}</Label>
+                <select
+                  id="new-sender"
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                  value={newTeamId}
+                  onChange={(event) => setNewTeamId(event.target.value)}
+                >
+                  <option value="">{t('اختيار تلقائي')}</option>
+                  {senderOptions.map((option) => (
+                    <option
+                      key={option.teamId}
+                      value={option.teamId}
+                      // No linked number means nothing can go out on it. Shown
+                      // rather than hidden: "this team cannot send yet" is
+                      // information, and its absence from the list is not.
+                      disabled={!option.phone}
+                    >
+                      {option.label}
+                      {option.phone ? ` — ${option.phone}` : ` — ${t('غير مربوط')}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <DialogFooter className="flex-col gap-2 sm:flex-col">
             <Button className="w-full" disabled={startingChat || !newPhone.trim()} onClick={handleStartChat}>
