@@ -15,6 +15,15 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Inbox selector column (U1) ----
+  'اختيار صندوق الوارد': { he: 'בחירת תיבה', en: 'Inbox selector' },
+  'صناديق الوارد': { he: 'תיבות דואר', en: 'Inboxes' },
+  'كل المحادثات': { he: 'כל השיחות', en: 'All conversations' },
+  'صناديق الفرق': { he: 'תיבות צוותים', en: 'Team inboxes' },
+  'جاري التحقق من القناة': { he: 'בודק את הערוץ', en: 'Checking the channel' },
+  'لا توجد قناة متصلة': { he: 'אין ערוץ מחובר', en: 'No channel connected' },
+  'القناة تعمل': { he: 'הערוץ פעיל', en: 'Channel live' },
+  'القناة غير متصلة': { he: 'הערוץ מנותק', en: 'Channel offline' },
   // ---- Navigation rail ----
   'قراءة الكل': { he: 'סמן הכל כנקרא', en: 'Mark all read' },
   'التنقل': { he: 'ניווט', en: 'Navigation' },

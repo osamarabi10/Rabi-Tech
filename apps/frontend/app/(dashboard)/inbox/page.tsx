@@ -52,6 +52,12 @@ import { getBackendBaseUrl } from '@/lib/runtime-url';
 import { getSocket } from '@/lib/socket';
 import { StatusBadge } from '@/components/status-badge';
 import { LifecycleChip, useLifecycleStages } from '@/components/inbox/lifecycle-select';
+import {
+  DEFAULT_SCOPE,
+  InboxSelector,
+  scopeMatches,
+  type InboxScope,
+} from '@/components/inbox/inbox-selector';
 import { DENSITY_CLASSES, useDensity, type Density } from '@/lib/density';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -133,6 +139,16 @@ const DENSITY_OPTIONS: { key: Density; label: string }[] = [
 export default function InboxPage() {
   const { t } = useT();
   const [convFilter, setConvFilter] = useState<ConvStatus>('all');
+
+  /**
+   * Which queue is being looked at, as opposed to which status it is in.
+   *
+   * Scope and status are orthogonal and combine — "my conversations that are
+   * still open", "the Sales queue at the Qualified stage". Keeping them apart
+   * is what lets the selector column exist without duplicating the status
+   * pills already in the list.
+   */
+  const [scope, setScope] = useState<InboxScope>(DEFAULT_SCOPE);
   const [convs, setConvs] = useState<Conv[]>([]);
   const [selId, setSelId] = useState<string | null>(null);
 
@@ -599,6 +615,7 @@ export default function InboxPage() {
   // ── Filtered list ───────────────────────────────────────────────────────────
   const filtered = convs
     .filter((c) => !c.phone.includes('status@broadcast') && !c.name.includes('status@broadcast'))
+    .filter((c) => scopeMatches(c, scope, currentUser?.id))
     .filter((c) => {
       if (convFilter === 'open') return c.status === 'OPEN';
       if (convFilter === 'pending') return c.status === 'PENDING';
@@ -620,7 +637,6 @@ export default function InboxPage() {
     { key: 'open',     label: t('مفتوحة'),        count: convs.filter((c) => c.status === 'OPEN').length },
     { key: 'pending',  label: t('معلقة'),          count: convs.filter((c) => c.status === 'PENDING').length },
     { key: 'awaiting', label: t('انتظار العميل'),  count: convs.filter((c) => c.status === 'AWAITING_CLIENT').length },
-    { key: 'mine',     label: t('مُسندة لي'),      count: convs.filter((c) => c.assigneeId === currentUser?.id).length },
     { key: 'resolved', label: t('محلولة'),         count: convs.filter((c) => c.status === 'RESOLVED').length },
   ];
 
@@ -634,6 +650,19 @@ export default function InboxPage() {
         conversation is picked, then it yields to the thread. Both are always
         side by side from md up.
       */}
+      {/*
+        Pane 1 of four. Hidden below `lg` so a tablet keeps the three working
+        panes rather than squeezing in a fourth; every scope it offers stays
+        reachable from the status pills and search inside the list itself.
+      */}
+      <InboxSelector
+        convs={convs}
+        scope={scope}
+        onScopeChange={setScope}
+        currentUserId={currentUser?.id}
+        className={cn('hidden lg:flex', selId && 'max-lg:hidden')}
+      />
+
       <div className={cn(
         // Conversation list is a white panel on the light canvas, per Respond.io's
         // three-surface split: dark rail, white list, tinted chat canvas.
