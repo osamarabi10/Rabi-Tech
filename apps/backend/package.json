@@ -7,6 +7,7 @@
     "start": "node dist/index.js",
     "lint": "node scripts/lint-prisma-client.js",
     "test:tenancy": "node scripts/tenancy-bleed-harness.js",
+    "test:finance": "node scripts/verify-finance.js",
     "usage:backfill": "ts-node scripts/backfill-usage-rollups.ts",
     "gateway:worker": "ts-node src/workers/gateway-provisioning.worker.ts",
     "db:migrate": "prisma migrate dev",

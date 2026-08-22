@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, LogOut, MessageCircle, MoreHorizontal, Pause, Play,
-  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye,
+  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api, { setViewAsOrg } from '@/lib/api';
@@ -20,6 +20,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CommercialTermsDialog } from '@/components/platform/commercial-terms-dialog';
+import { FinanceDocumentTable } from '@/components/platform/finance-document-table';
 import { GatewayAlerts, HealthCell, useGatewayHealth } from '@/components/platform/gateway-health';
 
 type ProvisioningState =
@@ -69,6 +70,14 @@ export default function SubscribersPage() {
   const [actionId, setActionId] = useState<string | null>(null);
   const [destroyTarget, setDestroyTarget] = useState<Subscriber | null>(null);
   const [termsTarget, setTermsTarget] = useState<Subscriber | null>(null);
+  /**
+   * The subscriber whose finance ledger is open.
+   *
+   * A dialog rather than a row expansion: the ledger has its own table and
+   * two of its own dialogs, and nesting that inside a list row makes both
+   * the row and the ledger harder to read than either is alone.
+   */
+  const [financeTarget, setFinanceTarget] = useState<Subscriber | null>(null);
   const { health, refresh: refreshHealth } = useGatewayHealth();
   const [form, setForm] = useState(EMPTY_FORM);
 
@@ -298,6 +307,14 @@ export default function SubscribersPage() {
                     <Badge variant="secondary" className="ms-1 px-1 text-micro">عرض خاص</Badge>
                   )}
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  title="Invoices, payments and receipts"
+                  onClick={() => setFinanceTarget(subscriber)}
+                >
+                  <Wallet className="h-3.5 w-3.5" /> Finance
+                </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button size="icon" variant="ghost" disabled={actionId === subscriber.id || !channel?.managedByProvisioner} title="Gateway actions">
@@ -341,6 +358,20 @@ export default function SubscribersPage() {
           })}
         </div>
       </section>
+
+      <Dialog
+        open={!!financeTarget}
+        onOpenChange={(next) => !next && setFinanceTarget(null)}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              Finance — {financeTarget?.name}
+            </DialogTitle>
+          </DialogHeader>
+          {financeTarget && <FinanceDocumentTable subscriberId={financeTarget.id} />}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md">

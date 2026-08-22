@@ -68,6 +68,7 @@ model Organization {
   customFieldValues       CustomFieldValue[]
   subscriptions           Subscription[]
   invoices                Invoice[]
+  paymentReceipts         PaymentReceipt[]
   emailVerificationTokens EmailVerificationToken[]
   signupThrottleEvents    SignupThrottleEvent[]
   segments                Segment[]
@@ -147,11 +148,46 @@ model Invoice {
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   subscription Subscription? @relation(fields: [subscriptionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  receipts     PaymentReceipt[]
 
   @@unique([id, organizationId])
   @@unique([provider, invoiceRef])
   @@index([organizationId, createdAt])
   @@index([provider, customerRef])
+}
+
+/// Confirmation that money was taken, as opposed to Invoice, which records
+/// what is owed.
+///
+/// Deliberately not a tax document: no sequential fiscal numbering, no VAT
+/// breakdown, and the renderer states as much on the page. `reference` names
+/// this system's own document and carries no fiscal meaning. Issuing anything
+/// tax-valid needs a real accounting provider behind it.
+model PaymentReceipt {
+  id             String   @id @default(cuid())
+  organizationId String
+  invoiceId      String?
+  reference      String   @unique
+  amountCents    Int      @default(0)
+  currency       String   @default("USD")
+  /// bank_transfer | cash | card | other. Free text on purpose: the platform
+  /// owner settles however they settle, and a new method must not need a
+  /// migration to record.
+  method         String   @default("other")
+  /// The payer's own reference — a transfer id, a cheque number.
+  externalRef    String?
+  note           String?
+  paidAt         DateTime
+  /// The platform actor who recorded it. Nullable: an imported or
+  /// provider-driven payment has no human behind it.
+  issuedByEmail  String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice?     @relation(fields: [invoiceId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, paidAt])
 }
 
 model PaymentEvent {

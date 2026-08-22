@@ -1681,6 +1681,58 @@ async function databaseAudits() {
         }),
       );
     });
+    await check('billing: composite FK rejects cross-org receipt invoice writes', async () => {
+      // A receipt is the record that money was taken. Pointing one at another
+      // organization's invoice would credit that org's balance from this org's
+      // payment — the database refuses it rather than trusting the caller.
+      const invoiceB = await raw.invoice.create({
+        data: {
+          organizationId: orgB.organizationId,
+          provider: 'manual',
+          invoiceRef: `invoice-receipt-cross-${Date.now()}`,
+          status: 'OPEN',
+          amountDueCents: 1000,
+        },
+      });
+      await assert.rejects(() =>
+        raw.paymentReceipt.create({
+          data: {
+            organizationId: orgA.organizationId,
+            invoiceId: invoiceB.id,
+            reference: `rcpt-cross-${Date.now()}`,
+            amountCents: 1000,
+            currency: 'USD',
+            method: 'cash',
+            paidAt: new Date(),
+          },
+        }),
+      );
+    });
+    await check('billing: receipts never cross organizations on read', async () => {
+      const write = (organizationId, reference) =>
+        runAsOrganization(organizationId, () =>
+          scoped.paymentReceipt.create({
+            data: {
+              organizationId,
+              reference,
+              amountCents: 500,
+              currency: 'USD',
+              method: 'cash',
+              paidAt: new Date(),
+            },
+          }),
+        );
+
+      const stamp = Date.now();
+      await write(orgA.organizationId, `rcpt-a-${stamp}`);
+      await write(orgB.organizationId, `rcpt-b-${stamp}`);
+
+      const seenByA = await runAsOrganization(orgA.organizationId, () =>
+        scoped.paymentReceipt.findMany({ select: { organizationId: true } }),
+      );
+      assert.ok(seenByA.length > 0);
+      assert.ok(seenByA.every((row) => row.organizationId === orgA.organizationId));
+    });
     await check('webhooks: delivery logs never cross organizations', async () => {
       const write = (organizationId, direction, ok) =>
         runAsOrganization(organizationId, () =>

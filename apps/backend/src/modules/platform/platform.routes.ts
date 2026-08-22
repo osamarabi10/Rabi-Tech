@@ -16,6 +16,15 @@ import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { probeOrganization } from '../gateway/health-monitor';
 import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
+import { auditPlatformScope } from '../../lib/audit';
+import {
+  PaymentError,
+  createInvoice,
+  formatMoney,
+  listFinanceDocuments,
+  recordPayment,
+} from './finance.service';
+import { renderFinanceCsv, renderFinanceDocument } from './finance.document';
 
 const router = Router();
 
@@ -608,6 +617,278 @@ router.post('/subscribers/:id/gateway/restart', requirePlatformOwner, async (req
     await queueOwnerAction(req, res, 'restart');
   } catch {
     res.status(503).json({ error: 'Failed to queue gateway restart' });
+  }
+});
+
+
+// ── Finance ────────────────────────────────────────────────────────────────
+//
+// Every route below is owner-only and writes a PlatformAuditLog row. Money
+// moving through a system with no record of who moved it is the failure mode
+// this console exists to prevent, and a platform owner has no User row in the
+// subscriber's organization, so the tenant-scoped AuditLog cannot carry these.
+
+/** Name on issued documents. Set per deployment; falls back to the product. */
+const ISSUER_NAME = process.env.PLATFORM_ISSUER_NAME || 'RabiTech';
+
+/**
+ * The subscriber a finance route is acting on, with an address to put on the
+ * document.
+ *
+ * Organization has no owner email of its own, so the workspace's admin is
+ * used. `findFirst` ordered by creation because a workspace can have several
+ * admins and the founding one is the one whose name is on the account.
+ */
+async function subscriberOr404(id: string) {
+  const organization = await prisma.organization.findUnique({
+    where: { id },
+    select: { id: true, name: true },
+  });
+  if (!organization) return null;
+
+  const admin = await prisma.user.findFirst({
+    where: { organizationId: id, role: 'ADMIN' },
+    orderBy: { createdAt: 'asc' },
+    // The address lives on Identity, not User: a person signs in once and can
+    // hold a User row in several workspaces.
+    select: { identity: { select: { email: true } } },
+  });
+
+  return { ...organization, ownerEmail: admin?.identity?.email ?? null };
+}
+
+router.get('/subscribers/:id/finance', requirePlatformOwner, async (req, res) => {
+  try {
+    const subscriber = await subscriberOr404(req.params.id);
+    if (!subscriber) return res.status(404).json({ error: 'Subscriber not found' });
+
+    const documents = await listFinanceDocuments(subscriber.id);
+    const outstandingCents = documents
+      .filter((doc) => doc.kind === 'invoice')
+      .reduce((sum, doc) => sum + (doc.amountCents - doc.amountPaidCents), 0);
+
+    res.json({ subscriber, documents, outstandingCents });
+  } catch (err) {
+    logger.error('Finance list failed', { organizationId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/subscribers/:id/invoices', requirePlatformOwner, async (req, res) => {
+  try {
+    const subscriber = await subscriberOr404(req.params.id);
+    if (!subscriber) return res.status(404).json({ error: 'Subscriber not found' });
+
+    // Cents from the client, never a float. A price typed as 49.99 and parsed
+    // as a float is 4998.999… cents, and a ledger that rounds is a ledger that
+    // eventually disagrees with the bank.
+    const amountCents = Number(req.body?.amountCents);
+    if (!Number.isInteger(amountCents) || amountCents <= 0) {
+      return res.status(400).json({ error: 'amountCents must be a positive whole number of cents' });
+    }
+    const currency = String(req.body?.currency || 'USD').toUpperCase().slice(0, 3);
+    const dueAt = req.body?.dueAt ? new Date(req.body.dueAt) : null;
+    if (dueAt && Number.isNaN(dueAt.getTime())) {
+      return res.status(400).json({ error: 'dueAt is not a valid date' });
+    }
+
+    const subscription = await prisma.subscription.findFirst({
+      where: { organizationId: subscriber.id },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    const invoice = await createInvoice({
+      organizationId: subscriber.id,
+      amountCents,
+      currency,
+      dueAt,
+      subscriptionId: subscription?.id ?? null,
+    });
+
+    await auditPlatformScope(
+      'invoice ' + invoice.invoiceRef + ' issued for ' + formatMoney(amountCents, currency),
+      {
+        action: 'platform.invoice.issued',
+        actorIdentityId: req.platformUser!.id,
+        actorEmail: req.platformUser!.email,
+        targetOrgId: subscriber.id,
+        targetOrgName: subscriber.name,
+        afterState: invoice,
+        ipAddress: req.ip,
+      },
+    );
+
+    res.status(201).json(invoice);
+  } catch (err) {
+    logger.error('Invoice issue failed', { organizationId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/**
+ * Record a payment against an invoice. The receipt is issued by the same
+ * transaction — see recordPayment() for why neither half is allowed alone.
+ */
+router.post('/subscribers/:id/invoices/:invoiceId/payments', requirePlatformOwner, async (req, res) => {
+  try {
+    const subscriber = await subscriberOr404(req.params.id);
+    if (!subscriber) return res.status(404).json({ error: 'Subscriber not found' });
+
+    const amountCents = Number(req.body?.amountCents);
+    if (!Number.isInteger(amountCents) || amountCents <= 0) {
+      return res.status(400).json({ error: 'amountCents must be a positive whole number of cents' });
+    }
+    const paidAt = req.body?.paidAt ? new Date(req.body.paidAt) : new Date();
+    if (Number.isNaN(paidAt.getTime())) {
+      return res.status(400).json({ error: 'paidAt is not a valid date' });
+    }
+
+    const { receipt, invoice } = await recordPayment({
+      organizationId: subscriber.id,
+      invoiceId: req.params.invoiceId,
+      amountCents,
+      method: String(req.body?.method || 'other').slice(0, 40),
+      externalRef: req.body?.externalRef ? String(req.body.externalRef).slice(0, 120) : null,
+      note: req.body?.note ? String(req.body.note).slice(0, 500) : null,
+      paidAt,
+      issuedByEmail: req.platformUser!.email,
+    });
+
+    await auditPlatformScope(
+      'payment ' + formatMoney(amountCents, receipt.currency) + ' recorded, receipt ' + receipt.reference,
+      {
+        action: 'platform.payment.recorded',
+        actorIdentityId: req.platformUser!.id,
+        actorEmail: req.platformUser!.email,
+        targetOrgId: subscriber.id,
+        targetOrgName: subscriber.name,
+        afterState: { receipt, invoice },
+        ipAddress: req.ip,
+      },
+    );
+
+    res.status(201).json({ receipt, invoice });
+  } catch (err) {
+    if (err instanceof PaymentError) return res.status(err.status).json({ error: err.message });
+    logger.error('Payment record failed', { organizationId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/** One document, as a printable HTML file the browser downloads. */
+router.get('/subscribers/:id/finance/:kind/:documentId', requirePlatformOwner, async (req, res) => {
+  try {
+    const { kind } = req.params;
+    if (kind !== 'invoice' && kind !== 'receipt') {
+      return res.status(400).json({ error: 'Unknown document kind' });
+    }
+    const subscriber = await subscriberOr404(req.params.id);
+    if (!subscriber) return res.status(404).json({ error: 'Subscriber not found' });
+
+    const shared = {
+      issuerName: ISSUER_NAME,
+      subscriberName: subscriber.name,
+      subscriberEmail: subscriber.ownerEmail,
+    };
+
+    let html: string;
+    let filename: string;
+
+    if (kind === 'invoice') {
+      const invoice = await prisma.invoice.findFirst({
+        where: { id: req.params.documentId, organizationId: subscriber.id },
+      });
+      if (!invoice) return res.status(404).json({ error: 'Document not found' });
+      const reference = invoice.invoiceRef || invoice.id;
+      filename = reference + '.html';
+      html = renderFinanceDocument({
+        ...shared,
+        kind: 'invoice',
+        reference,
+        amountCents: invoice.amountDueCents,
+        amountPaidCents: invoice.amountPaidCents,
+        currency: invoice.currency,
+        dateLabel: 'Issued',
+        date: invoice.createdAt,
+        dueAt: invoice.dueAt,
+        method: null,
+        externalRef: null,
+        note: null,
+      });
+    } else {
+      const receipt = await prisma.paymentReceipt.findFirst({
+        where: { id: req.params.documentId, organizationId: subscriber.id },
+      });
+      if (!receipt) return res.status(404).json({ error: 'Document not found' });
+      filename = receipt.reference + '.html';
+      html = renderFinanceDocument({
+        ...shared,
+        kind: 'receipt',
+        reference: receipt.reference,
+        amountCents: receipt.amountCents,
+        amountPaidCents: null,
+        currency: receipt.currency,
+        dateLabel: 'Paid',
+        date: receipt.paidAt,
+        dueAt: null,
+        method: receipt.method,
+        externalRef: receipt.externalRef,
+        note: receipt.note,
+      });
+    }
+
+    // attachment, not inline: this is a document the owner keeps, and a page
+    // that merely opens in a tab is one refresh away from being gone.
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"');
+    res.send(html);
+  } catch (err) {
+    logger.error('Document render failed', { organizationId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/** The whole ledger for one subscriber, as CSV. */
+router.get('/subscribers/:id/finance-export.csv', requirePlatformOwner, async (req, res) => {
+  try {
+    const subscriber = await subscriberOr404(req.params.id);
+    if (!subscriber) return res.status(404).json({ error: 'Subscriber not found' });
+
+    const documents = await listFinanceDocuments(subscriber.id);
+    const csv = renderFinanceCsv(
+      documents.map((doc) => ({
+        kind: doc.kind,
+        reference: doc.reference,
+        status: doc.status,
+        // Major units in the export: this file is opened in a spreadsheet by a
+        // person, not parsed by the code that stores cents.
+        amount: (doc.amountCents / 100).toFixed(2),
+        paid: (doc.amountPaidCents / 100).toFixed(2),
+        currency: doc.currency,
+        issued_at: doc.issuedAt.slice(0, 10),
+        effective_at: doc.effectiveAt?.slice(0, 10) ?? '',
+        method: doc.method ?? '',
+        note: doc.note ?? '',
+      })),
+      ['kind', 'reference', 'status', 'amount', 'paid', 'currency', 'issued_at', 'effective_at', 'method', 'note'],
+    );
+
+    await auditPlatformScope('finance ledger exported for ' + subscriber.name, {
+      action: 'platform.finance.exported',
+      actorIdentityId: req.platformUser!.id,
+      actorEmail: req.platformUser!.email,
+      targetOrgId: subscriber.id,
+      targetOrgName: subscriber.name,
+      ipAddress: req.ip,
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="finance-' + subscriber.id + '.csv"');
+    res.send(csv);
+  } catch (err) {
+    logger.error('Finance export failed', { organizationId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

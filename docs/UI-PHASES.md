@@ -106,11 +106,26 @@ An invoice records what is owed; a receipt confirms payment was taken. Neither i
 labelled `חשבונית מס` / `قبالة ضريبية`, neither claims sequential tax numbering,
 and nothing may imply tax validity unless a real accounting provider backs it.
 
-- [ ] **1. `FinanceDocumentTable`** — invoices and receipts, per subscriber.
-- [ ] **2. Issue a receipt** when a payment is recorded.
-- [ ] **3. Download / export**, actually producing a document — no button that
+- [x] **1. `FinanceDocumentTable`** — invoices and receipts, per subscriber.
+- [x] **2. Issue a receipt** when a payment is recorded.
+- [x] **3. Download / export**, actually producing a document — no button that
   claims an export it does not perform.
-- [ ] **4. Owner-only guard plus an audit trail**, separate from tenant auth.
+- [x] **4. Owner-only guard plus an audit trail**, separate from tenant auth.
+**Verified.** `npm run test:finance` (16/16) exercises the service the routes
+call: sequential references, receipt issued in the same transaction as the
+invoice update, part payment leaving a balance, overpayment refused with the
+balance named, settled invoice refusing further payment, HTML escaping of
+subscriber-controlled text, and the CSV quoting and BOM. The owner guard was
+checked live: anonymous 401, tenant admin 403 on read, issue and export.
+
+**Not verified in the browser:** the console dialog itself needs a
+platform-owner session, which this session does not hold. Backend, guard and
+document rendering are proven; the dialog is typechecked and built but unseen.
+
+**Document format is HTML, not PDF, deliberately.** pdfkit does not shape
+Arabic or Hebrew without a text-shaping layer, so a generated PDF receipt would
+come out as disconnected reversed glyphs. The browser shapes correctly and
+prints to PDF everywhere. The file downloads either way.
 
 ## U7 — Responsive, RTL and theme pass · brief step 8
 
