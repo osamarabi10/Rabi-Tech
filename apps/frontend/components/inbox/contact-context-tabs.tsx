@@ -23,21 +23,25 @@ import { cn } from '@/lib/utils';
  * worse than one that was never offered.
  */
 
-export type ContactTab = 'details' | 'files' | 'activity';
+export type ContactTab = 'details' | 'conversations' | 'files' | 'activity';
 
 export function ContactTabStrip({
   active,
   onChange,
   fileCount,
+  conversationCount,
 }: {
   active: ContactTab;
   onChange: (next: ContactTab) => void;
   fileCount: number;
+  /** How many threads this contact has. Undefined until counted. */
+  conversationCount?: number;
 }) {
   const { t } = useT();
 
   const tabs: { key: ContactTab; label: string; badge?: number }[] = [
     { key: 'details', label: t('التفاصيل') },
+    { key: 'conversations', label: t('المحادثات'), badge: conversationCount },
     { key: 'files', label: t('الملفات'), badge: fileCount },
     { key: 'activity', label: t('النشاط') },
   ];

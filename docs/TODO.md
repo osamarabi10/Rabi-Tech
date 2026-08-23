@@ -801,7 +801,7 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   tenant has configured no stages: an empty "Lifecycle" heading over nothing
   is a dead section, and this product's whole vocabulary is subscriber-defined.
 - [ ] **3. Custom inboxes** — saved views, the filter grammar's fourth consumer
-- [ ] **4. Contact panel tabs** — Details / Conversations / Files / Activity
+- [x] **4. Contact panel tabs** — Details / Conversations / Files / Activity
   (horizontal at the bottom; short labels beat icons for infrequent actions)
   — **Details / Files / Activity done 2026-08-22 (U2).**
   `components/inbox/contact-context-tabs.tsx`. Activity merges `AuditLog` rows
@@ -809,7 +809,15 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   events as hollow dots so the distinction is not carried by colour alone.
   Details gained consent provenance in U2.4.
 
-  **Remaining: the Conversations tab** — this contact's other threads.
+  — **Conversations tab done 2026-08-23.** Every thread this contact has had,
+  newest first, with status, date, message count, team and assignee. Selecting
+  one switches the thread pane to it; the thread already open is marked rather
+  than hidden, because a list that silently omits where you are standing is
+  harder to read than one that says so.
+
+  Resolved threads are included deliberately — they hold the answers, and the
+  inbox default filter hides them, which is exactly why they were unreachable
+  from anywhere else.
 - [ ] **5. Session-health bar** on each conversation row — our analogue of their
   service-window bar
 - [x] **6. @mentions** + a Mentions inbox

@@ -1549,3 +1549,23 @@ export async function fetchMentionedConversations(): Promise<{
   const { data } = await api.get('/api/notifications/mentions');
   return data;
 }
+
+/** One of a contact's threads, as the Conversations tab lists them. */
+export type ContactConversation = {
+  id: string;
+  displayId: number;
+  status: 'OPEN' | 'PENDING' | 'RESOLVED' | string;
+  lastMessageAt: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+  team: { name: string; color: string | null } | null;
+  assignee: { name: string } | null;
+  _count: { messages: number };
+};
+
+export async function fetchContactConversations(
+  contactId: string,
+): Promise<ContactConversation[]> {
+  const { data } = await api.get(`/api/contacts/${contactId}/conversations`);
+  return data;
+}

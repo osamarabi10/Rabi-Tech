@@ -17,6 +17,7 @@ import {
 import { avatarColor } from '@/lib/constants';
 import { useT } from '@/lib/i18n';
 import { ConsentProvenanceLine } from '@/components/inbox/consent-provenance';
+import { ContactConversationsTab } from '@/components/inbox/contact-conversations-tab';
 import { LifecycleSelect, useLifecycleStages } from './lifecycle-select';
 import {
   ActivityTab,
@@ -52,6 +53,8 @@ export interface ContactPanelProps {
   currentUserId?: string;
   /** Lets the parent keep its Conv copy in step after a consent change. */
   onConsentChange?: (consent: MarketingConsent) => void;
+  /** Switch the thread pane to another of this contact's conversations. */
+  onOpenConversation: (conversationId: string) => void;
 }
 
 export function ContactPanel({
@@ -63,6 +66,7 @@ export function ContactPanel({
   onClose,
   currentUserId,
   onConsentChange,
+  onOpenConversation,
 }: ContactPanelProps) {
   const { t } = useT();
   const [showAllAgents, setShowAllAgents] = useState(false);
@@ -110,6 +114,8 @@ export function ContactPanel({
    * none of them wants to pay for a history.
    */
   const [provenance, setProvenance] = useState<ConsentProvenance | null>(null);
+  /** Badge on the Conversations tab, reported by the tab body once counted. */
+  const [conversationCount, setConversationCount] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     if (!conversation.contactId) return;
@@ -169,7 +175,19 @@ export function ContactPanel({
         active={tab}
         onChange={setTab}
         fileCount={messages.filter(message => message.mediaUrl).length}
+        conversationCount={conversationCount}
       />
+
+      {tab === 'conversations' && (
+        <div className="flex-1 overflow-y-auto">
+          <ContactConversationsTab
+            contactId={conversation.contactId}
+            currentConversationId={conversation.id}
+            onOpen={onOpenConversation}
+            onCount={setConversationCount}
+          />
+        </div>
+      )}
 
       {tab === 'files' && (
         <div className="flex-1 overflow-y-auto">

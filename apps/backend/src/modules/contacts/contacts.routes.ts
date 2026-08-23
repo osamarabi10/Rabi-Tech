@@ -404,6 +404,50 @@ router.patch('/:id', async (req, res) => {
  * list, the audience preview, the campaign worker — has no use for a history
  * it would pay to load on every row.
  */
+/**
+ * GET /api/contacts/:id/conversations — this contact's threads.
+ *
+ * The contact panel could show the conversation you are in and nothing about
+ * the four before it. On a support desk that history is most of the context:
+ * whether this is a first complaint or the fourth about the same line, and
+ * how the previous ones ended.
+ *
+ * Resolved threads are included deliberately — they are the ones that carry
+ * the answer. The default inbox filter hides them, which is exactly why they
+ * are unreachable from anywhere else.
+ */
+router.get('/:id/conversations', async (req, res) => {
+  try {
+    const contact = await prisma.contact.findUnique({
+      where: { id: req.params.id },
+      select: { id: true },
+    });
+    if (!contact) return res.status(404).json({ error: 'جهة الاتصال غير موجودة' });
+
+    const conversations = await prisma.conversation.findMany({
+      where: { contactId: contact.id },
+      orderBy: { lastMessageAt: 'desc' },
+      take: 20,
+      select: {
+        id: true,
+        displayId: true,
+        status: true,
+        lastMessageAt: true,
+        createdAt: true,
+        resolvedAt: true,
+        team: { select: { name: true, color: true } },
+        assignee: { select: { name: true } },
+        _count: { select: { messages: true } },
+      },
+    });
+
+    res.json(conversations);
+  } catch (err) {
+    logger.error('Contact conversations failed', { contactId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.get('/:id/consent', async (req, res) => {
   try {
     const contact = await prisma.contact.findUnique({
