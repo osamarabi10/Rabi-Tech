@@ -45,30 +45,46 @@ Nobody but the account owner can do these. They are not development work.
 
 ---
 
-## F1 — Finish the owner console · ~1–2 days · **can start now**
+## F1 — Finish the owner console · ✅ done 2026-08-23
 
 The backend has 27 platform endpoints. The console is **one page**. Several
 features that exist and work are unreachable by the person who owns the
 business.
 
-- [ ] **F1.1 Dunning controls.** `GET/PATCH /api/platform/dunning/settings` and
+- [x] **F1.1 Dunning controls.** Done: a settings page carrying the grace
+      period and a "run now" button that says it acts on real subscribers
+      before it is pressed rather than after.
+      What it replaced: `GET/PATCH /api/platform/dunning/settings` and
       `POST /api/platform/dunning/run` have no UI at all. This is the
       overdue → deadline → suspend automation that was specifically asked for;
       the grace period is configurable in the database and nowhere else.
-- [ ] **F1.2 Trial controls.** Same story, newer: trial length is a
+- [x] **F1.2 Trial controls.** Done: length and plan, with a plan that grants
+      no gateway refused rather than honoured.
+      What it replaced: Same story, newer: trial length is a
       `PlatformSetting` with no control surface. The owner can extend one
       subscriber's trial from the table but cannot change what every new signup
       gets.
-- [ ] **F1.3 Revenue summary.** `GET /api/platform/billing/summary` returns
+- [x] **F1.3 Revenue summary.** Done — and MRR turned out to be overstating
+      itself, counting every open trial at full list price. Fixed, and covered
+      by a gate check so it cannot come back.
+      What it replaced: `GET /api/platform/billing/summary` returns
       platform-wide figures nothing renders. The owner has no view of what the
       business earns.
-- [ ] **F1.4 Commercial history.** `GET /subscribers/:id/commercials/history`
+- [x] **F1.4 Commercial history.** Done: shown under the terms, with the
+      reason and not only the timestamp.
+      What it replaced: `GET /subscribers/:id/commercials/history`
       records who granted which discount and why. The audit trail is written and
       unreadable.
-- [ ] **F1.5 A console home.** There is no landing view — signing in as the
+- [x] **F1.5 A console home.** Done: money first, then what needs a person,
+      with each block hidden when it is empty.
+      What it replaced: There is no landing view — signing in as the
       owner drops you into a subscriber table. Needs: subscribers by state,
       trials expiring today, gateways down, unpaid invoices, MRR.
-- [ ] **F1.6 Gateway channel editing.** `PATCH /subscribers/:id/openwa-channel`
+- [x] **F1.6 Gateway channel editing.** Done, offered only on hand-configured
+      gateways where the endpoint accepts it. Closing it also surfaced a bug:
+      the actions menu was disabling every *billing* action on exactly those
+      subscribers.
+      What it replaced: `PATCH /subscribers/:id/openwa-channel`
       is API-only.
 
 **Done when:** every platform endpoint is reachable from the console or
