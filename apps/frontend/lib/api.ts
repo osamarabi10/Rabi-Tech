@@ -45,9 +45,31 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * Where a locked-out workspace is sent.
+ *
+ * Keyed on the response *code*, never on the bare 403: a 403 also means "you
+ * lack that permission", and sending an agent to the pricing page because
+ * they tried to delete a shared view would be nonsense.
+ */
+const GATE_DESTINATIONS: Record<string, string> = {
+  TRIAL_EXPIRED: '/pricing?trial=expired',
+  SUBSCRIBER_SUSPENDED: '/pricing?account=suspended',
+};
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    const gateCode = err.response?.status === 403 ? err.response?.data?.code : undefined;
+    const destination = gateCode ? GATE_DESTINATIONS[gateCode] : undefined;
+    if (destination && typeof window !== 'undefined') {
+      // The session stays valid — they are a real user of a workspace that
+      // owes money, not someone who has been signed out. Clearing the token
+      // here would make them log in again just to reach the checkout.
+      const alreadyThere = window.location.pathname === '/pricing';
+      if (!alreadyThere) window.location.href = destination;
+      return Promise.reject(err);
+    }
     if (err.response?.status === 401 && typeof window !== 'undefined') {
       const path = window.location.pathname;
       const isLogin = path === '/login' || err.config?.url?.includes('/api/auth/login');

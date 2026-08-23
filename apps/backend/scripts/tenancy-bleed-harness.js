@@ -1552,7 +1552,12 @@ async function databaseAudits() {
     await check('database: tenant query without context throws', async () => {
       await assert.rejects(() => scoped.contact.findMany(), /TENANT_ISOLATION_VIOLATION/);
     });
-    await check('billing: free signup verifies email without auto-provisioning a gateway', async () => {
+    // This check used to assert the opposite: that a free signup verified its
+    // email and got no gateway. That was correct while FREE was a permanent
+    // tier. It is now a 3-hour trial of a paid plan, by an explicit product
+    // decision, and a trial that cannot connect a WhatsApp number demonstrates
+    // nothing — so the expectation is inverted deliberately, not relaxed.
+    await check('billing: a trial signup provisions a gateway once its email is verified', async () => {
       const response = await fetch(`${baseUrl}/api/billing/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1582,10 +1587,32 @@ async function databaseAudits() {
         }),
       ]);
       assert.ok(organization.emailVerifiedAt);
-      assert.equal(organization.status, 'ACTIVE');
-      assert.equal(organization.tier, 'FREE');
-      assert.equal(channel.provisioningState, 'PENDING');
-      assert.equal(channel.apiPort, null);
+      // Verification takes the organization off PENDING; provisioning then
+      // moves it to PROVISIONING. Which of the two is visible here depends on
+      // whether the queued job has run, so both are accepted — asserting one
+      // exactly would be a test that fails on timing rather than on truth.
+      assert.ok(
+        ['ACTIVE', 'PROVISIONING'].includes(organization.status),
+        `expected the organization off PENDING, got ${organization.status}`,
+      );
+      // The trial runs on a real paid plan, and tier must agree with the
+      // subscription or detectQuotaDrift fires on every trial in the system.
+      assert.notEqual(organization.tier, 'FREE');
+      const subscription = await raw.subscription.findFirstOrThrow({
+        where: { organizationId: signup.organizationId },
+      });
+      assert.equal(subscription.status, 'TRIALING');
+      assert.equal(subscription.planCode, organization.tier);
+      assert.ok(subscription.trialEndsAt, 'a trial must carry a deadline');
+      // Nothing was paid, so nothing was activated.
+      assert.equal(subscription.activatedAt, null);
+      // The property that actually matters, and the only one here that is not
+      // subject to a queue: the plan being trialled grants a WhatsApp
+      // connection. A trial without one is a trial of a product the tenant
+      // cannot use.
+      const { PLAN_ENTITLEMENTS } = require('../src/modules/billing/plans');
+      assert.equal(PLAN_ENTITLEMENTS[subscription.planCode].autoProvisionGateway, true);
+      assert.ok(channel, 'the workspace has a gateway channel row');
     });
     await check('billing: invalid webhook signatures are rejected by the active provider', async () => {
       const response = await fetch(`${baseUrl}/api/billing/webhook`, {

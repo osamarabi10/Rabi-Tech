@@ -1,5 +1,5 @@
 import { prisma } from '../../prisma';
-import { isPaidPlan, normalizePlanCode } from './plans';
+import { isPaidPlan, normalizePlanCode, type PlanCode } from './plans';
 
 /**
  * The free trial: full access for a fixed window, then a paywall.
@@ -75,6 +75,40 @@ export async function setTrialHours(hours: number, updatedBy: string | null): Pr
   return hours;
 }
 
+const TRIAL_PLAN_KEY = 'billing.trialPlan';
+const TRIAL_PLAN_DEFAULT: PlanCode = 'GROWTH';
+
+/**
+ * Which plan a trial actually runs on.
+ *
+ * Not FREE. Free grants no gateway (`autoProvisionGateway: false`), one user
+ * and no broadcasts — so a trial on Free would be a trial of a product the
+ * tenant cannot connect a WhatsApp number to, which is the one thing the
+ * trial exists to demonstrate. The entry paid plan is the default.
+ *
+ * A setting, because which plan you put in the shop window is a commercial
+ * decision. A stored value naming an unpaid plan is refused rather than
+ * honoured: it would silently produce trials with no QR connection, and the
+ * symptom — 'the trial does not work' — would point nowhere near the cause.
+ */
+export async function getTrialPlanCode(): Promise<PlanCode> {
+  const row = await prisma.platformSetting.findUnique({ where: { key: TRIAL_PLAN_KEY } });
+  if (!row?.value) return TRIAL_PLAN_DEFAULT;
+  const code = normalizePlanCode(row.value);
+  return isPaidPlan(code) ? code : TRIAL_PLAN_DEFAULT;
+}
+
+export async function setTrialPlanCode(input: string, updatedBy: string | null): Promise<PlanCode> {
+  const code = normalizePlanCode(input);
+  if (!isPaidPlan(code)) throw new Error('A trial must run on a paid plan, or it grants no WhatsApp connection');
+  await prisma.platformSetting.upsert({
+    where: { key: TRIAL_PLAN_KEY },
+    create: { key: TRIAL_PLAN_KEY, value: code, updatedBy },
+    update: { value: code, updatedBy },
+  });
+  return code;
+}
+
 /** The deadline for a workspace created now. */
 export async function trialDeadlineFrom(start: Date): Promise<Date> {
   const hours = await getTrialHours();
@@ -100,11 +134,17 @@ export function trialStateOf(
 ): TrialState {
   if (!subscription) return { kind: 'none' };
 
-  // A paid plan is never on trial, whatever the dates say. Someone who
-  // converted mid-trial keeps a `trialEndsAt` in the past, and reading that as
-  // "expired" would lock out the customer who just paid.
-  if (isPaidPlan(normalizePlanCode(subscription.planCode))) return { kind: 'none' };
-  if (subscription.status === 'ACTIVE' && !subscription.trialEndsAt) return { kind: 'none' };
+  // TRIALING is the marker — never the plan code. A trial runs on a real paid
+  // plan, because otherwise it grants no gateway, so the plan cannot be what
+  // separates a trial from a paying customer.
+  //
+  // Converting sets the status to ACTIVE, which ends the trial regardless of
+  // what `trialEndsAt` still says. Reading a stale date on a converted
+  // subscription would lock out the customer who just paid.
+  if (subscription.status !== 'TRIALING') return { kind: 'none' };
+
+  // TRIALING with no deadline is not something this code writes, and it is
+  // not a licence to lock anyone out. Absence reads as "no trial applies".
   if (!subscription.trialEndsAt) return { kind: 'none' };
 
   const endsAt = subscription.trialEndsAt;

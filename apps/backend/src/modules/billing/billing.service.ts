@@ -6,7 +6,11 @@ import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { queueGatewayAction } from '../../workers/gateway-provisioning.queue';
 import logger from '../../lib/logger';
 import { getCurrentUsage, getMetricUsage } from '../usage/usage.service';
-import { ACCESS_GRANTING_SUBSCRIPTION_STATUSES, trialDeadlineFrom } from './trial.service';
+import {
+  ACCESS_GRANTING_SUBSCRIPTION_STATUSES,
+  getTrialPlanCode,
+  trialDeadlineFrom,
+} from './trial.service';
 import { getPaymentProvider } from './provider-registry';
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode } from './plans';
 import { resolveEntitlements } from './entitlements.resolver';
@@ -169,11 +173,23 @@ export async function createSignup(input: {
     const verificationToken = crypto.randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
-    // Inside the platform context — this reads a platform setting, and the
-    // tenancy extension fails closed on a query with no scope. Outside the
-    // transaction, because a transaction held open across an unrelated read is
-    // a lock held for no reason.
-    const trialEndsAt = isPaidPlan(planCode) ? null : await trialDeadlineFrom(new Date());
+    /*
+     * Whether this signup is a trial, and what it is a trial *of*.
+     *
+     * Choosing a paid plan up front still goes to checkout — someone ready to
+     * buy should not be made to wait out a trial first. Everyone else gets the
+     * trial, and it runs on a real plan rather than on Free, because Free
+     * grants no WhatsApp connection and a trial without one demonstrates
+     * nothing.
+     *
+     * Read inside the platform context — these load platform settings and the
+     * tenancy extension fails closed on an unscoped query — but outside the
+     * transaction, since a transaction held open across unrelated reads is a
+     * lock held for no reason.
+     */
+    const isTrial = !isPaidPlan(planCode);
+    const effectivePlanCode = isTrial ? await getTrialPlanCode() : planCode;
+    const trialEndsAt = isTrial ? await trialDeadlineFrom(new Date()) : null;
 
     const created = await prisma.$transaction(async (tx) => {
       const organization = await tx.organization.create({
@@ -181,7 +197,13 @@ export async function createSignup(input: {
           name: input.organizationName.trim(),
           slug,
           status: 'PENDING',
-          tier: 'FREE',
+          // The plan actually in force, which for a trial is the plan the
+          // trial is *of*. Hardcoding FREE here while the subscription said
+          // otherwise would leave tier and subscription disagreeing, and
+          // detectQuotaDrift — which exists because those two drifted once
+          // already — would then fire on every trial in the system. A detector
+          // that always fires is a detector nobody reads.
+          tier: effectivePlanCode,
           paymentProvider: provider.provider,
         },
       });
@@ -230,9 +252,10 @@ export async function createSignup(input: {
         data: {
           organizationId: organization.id,
           sharedLine: false,
-          monthlyActiveContactsLimit: PLAN_ENTITLEMENTS.FREE.monthlyActiveContactsLimit ?? 1_000_000_000,
-          monthlyOutboundMessagesLimit: PLAN_ENTITLEMENTS.FREE.monthlyOutboundMessagesLimit ?? 1_000_000_000,
-          monthlyCampaignSendsLimit: PLAN_ENTITLEMENTS.FREE.monthlyCampaignSendsLimit ?? 1_000_000_000,
+          // Seeded from the same plan as the tier, for the same reason.
+          monthlyActiveContactsLimit: PLAN_ENTITLEMENTS[effectivePlanCode].monthlyActiveContactsLimit ?? 1_000_000_000,
+          monthlyOutboundMessagesLimit: PLAN_ENTITLEMENTS[effectivePlanCode].monthlyOutboundMessagesLimit ?? 1_000_000_000,
+          monthlyCampaignSendsLimit: PLAN_ENTITLEMENTS[effectivePlanCode].monthlyCampaignSendsLimit ?? 1_000_000_000,
         },
       });
       await tx.organizationBranding.create({ data: { organizationId: organization.id, productName: organization.name } });
@@ -259,13 +282,12 @@ export async function createSignup(input: {
       const subscription = await tx.subscription.create({
         data: {
           organizationId: organization.id,
-          planCode,
+          planCode: effectivePlanCode,
           provider: provider.provider,
-          // An unpaid plan is a trial now, not a permanent tier. The deadline
-          // is stamped once, here, so a later change to the trial length
-          // cannot retroactively expire somebody who is already inside one.
-          status: isPaidPlan(planCode) ? 'MANUAL_REVIEW' : 'TRIALING',
-          trialEndsAt: isPaidPlan(planCode) ? null : trialEndsAt,
+          // The deadline is stamped once, here, so a later change to the trial
+          // length cannot retroactively expire somebody already inside one.
+          status: isTrial ? 'TRIALING' : 'MANUAL_REVIEW',
+          trialEndsAt,
           // Nothing has been paid, so nothing is activated. `activatedAt` is
           // the moment money changed hands, and a trial is not that moment.
           activatedAt: null,

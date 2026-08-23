@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Check, Loader2, QrCode } from 'lucide-react';
+import { AlertCircle, Check, Clock, Loader2, QrCode } from 'lucide-react';
 import { PublicShell } from '@/components/public/public-shell';
 import { Button } from '@/components/ui/button';
 import api from '@/lib/api';
@@ -35,16 +36,14 @@ type Plan = {
 /**
  * A price, or the fact that there isn't a published one.
  *
- * Zero means two different things in this catalogue. FREE is genuinely free;
- * ENTERPRISE is zero because its price is negotiated, and rendering that as
- * "0" tells a customer the most expensive plan costs nothing. The plan code
- * is what separates them, because the number cannot.
+ * ENTERPRISE is stored at zero because its price is negotiated, and rendering
+ * that as "0" tells a customer the most expensive plan costs nothing.
  */
 function priceLabel(plan: Plan, t: (key: string) => string): string {
   if (plan.monthlyPriceCents > 0) {
     return `${(plan.monthlyPriceCents / 100).toLocaleString('en-US')} ${plan.currency ?? 'USD'}`;
   }
-  return plan.code === 'FREE' ? t('مجاني') : t('حسب الاتفاق');
+  return t('حسب الاتفاق');
 }
 
 /** `null` means no ceiling, which is a promise and not a missing value. */
@@ -52,17 +51,24 @@ function limit(value: number | null, t: (k: string) => string): string {
   return value === null ? t('بلا حد') : value.toLocaleString('en-US');
 }
 
-/** Enterprise is negotiated, so "start with this plan" is a cheque signup cannot cash. */
+/** Enterprise is negotiated, so "start the trial" is a cheque signup cannot cash. */
 function ctaFor(plan: Plan, t: (key: string) => string): string {
-  if (plan.code === 'FREE') return t('ابدأ مجاناً');
-  if (plan.monthlyPriceCents === 0) return t('احكي معنا');
-  return t('ابدأ بهالباقة');
+  return plan.monthlyPriceCents === 0 ? t('احكي معنا') : t('ابدأ التجربة المجانية');
 }
 
 export default function PricingPage() {
   const { t } = useT();
+  const params = useSearchParams();
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [failed, setFailed] = useState(false);
+
+  /*
+   * Why they landed here. Set by the API client when a workspace is refused, so
+   * somebody who was working a second ago is told what happened rather than
+   * being dropped on a price list with no explanation.
+   */
+  const trialExpired = params.get('trial') === 'expired';
+  const suspended = params.get('account') === 'suspended';
 
   useEffect(() => {
     api
@@ -71,20 +77,59 @@ export default function PricingPage() {
       .catch(() => setFailed(true));
   }, []);
 
+  /*
+   * Free is no longer a plan anyone stays on — it is the trial, and the trial
+   * runs on a real paid plan so that a WhatsApp number can actually be
+   * connected. Showing a Free card here would advertise a tier that no longer
+   * exists.
+   */
+  const sellable = (plans ?? []).filter((plan) => plan.code !== 'FREE');
+
   return (
     <PublicShell>
       <section className="mx-auto max-w-6xl px-6 py-14">
+        {(trialExpired || suspended) && (
+          <div className="mb-8 flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/10 p-4">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+            <div>
+              <p className="font-semibold text-warning">
+                {trialExpired ? t('خلصت فترتك التجريبية') : t('اشتراكك موقوف')}
+              </p>
+              <p className="mt-1 text-caption leading-6 text-muted-foreground">
+                {trialExpired
+                  ? t('شغلك ومحادثاتك محفوظة زي ما هي. اختار باقة وبترجع تشتغل من نفس المكان.')
+                  : t('تواصل معنا لإعادة تفعيل الاشتراك. بياناتك محفوظة.')}
+              </p>
+            </div>
+          </div>
+        )}
+
         <h1 className="text-3xl font-bold">{t('اختار الباقة اللي بتناسب شغلك')}</h1>
         <p className="mt-3 max-w-2xl text-caption leading-6 text-muted-foreground">
           {t('كل الباقات فيها نفس المنصة: صندوق الوارد المشترك، الردود التلقائية، الأتمتة، والتقارير. الفرق بالحدود الشهرية وعدد المستخدمين — مش بالمزايا.')}
         </p>
 
         {/*
-          The pricing model, stated before the numbers.
-          Bound to the QR connection every time it appears — the claim is about
-          the connection that exists, not a promise about every future one.
+          The trial, stated before the prices. It is the first thing anyone on
+          this page wants to know, and burying it under four cards means the
+          people most likely to try are the ones least likely to see it.
         */}
-        <div className="mt-6 max-w-2xl rounded-lg border border-border bg-muted/40 p-4">
+        <div className="mt-6 max-w-2xl rounded-lg border border-primary/30 bg-primary/5 p-4">
+          <p className="flex items-start gap-2 font-semibold">
+            <Clock className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
+            {t('جرّب المنصة كاملة ٣ ساعات، بدون بطاقة دفع.')}
+          </p>
+          <p className="mt-1.5 ps-6 text-caption leading-6 text-muted-foreground">
+            {t('بتربط رقم واتساب بمسح QR وبتشتغل عليه فوراً — نفس المنصة اللي بتشتريها، مش نسخة مقصوصة. بعد ما تخلص، بتختار باقة وبتكمّل من نفس المكان.')}
+          </p>
+        </div>
+
+        {/*
+          The pricing model, bound to the QR connection every time it appears —
+          the claim is about the connection that exists, not a promise about
+          every future one.
+        */}
+        <div className="mt-4 max-w-2xl rounded-lg border border-border bg-muted/40 p-4">
           <p className="flex items-start gap-2 font-semibold">
             <QrCode className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
             {t('مع الربط بمسح QR: سعر شهري ثابت، وبدون أي رسوم على كل رسالة.')}
@@ -106,8 +151,8 @@ export default function PricingPage() {
         )}
 
         {plans && (
-          <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            {plans.map((plan) => (
+          <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {sellable.map((plan) => (
               <div
                 key={plan.code}
                 className="flex flex-col rounded-lg border border-border bg-card p-5"
@@ -116,16 +161,15 @@ export default function PricingPage() {
                 <p className="mt-3 text-3xl font-bold">
                   <span className="numeric" dir="ltr">{priceLabel(plan, t)}</span>
                 </p>
-                {/* Only a real monthly price is "per month". */}
                 {plan.monthlyPriceCents > 0 && (
                   <p className="mt-1 text-caption text-muted-foreground">{t('شهرياً')}</p>
                 )}
 
                 {/*
-                  Promoted out of the footnote it used to live in. Whether a plan
-                  connects a WhatsApp number is the single most important fact on
-                  the card, and it was set in 10px underneath everything else —
-                  where a customer finds it after paying, at the QR screen.
+                  Whether a plan connects a WhatsApp number is the single most
+                  important fact on the card. It used to sit in 10px underneath
+                  the limits — where a customer finds it after paying, at the QR
+                  screen.
                 */}
                 <p className="mt-4 border-t border-border pt-4 text-caption leading-6">
                   {plan.autoProvisionGateway
@@ -136,15 +180,7 @@ export default function PricingPage() {
                 <ul className="mt-4 space-y-2 text-caption">
                   <Row label={t('جهة اتصال نشطة بالشهر')} value={limit(plan.monthlyActiveContactsLimit, t)} />
                   <Row label={t('رسالة صادرة بالشهر')} value={limit(plan.monthlyOutboundMessagesLimit, t)} />
-                  {/*
-                    A quota of zero reads as a broken number. Saying broadcasts
-                    are not part of this plan reads as a decision.
-                  */}
-                  {plan.monthlyCampaignSendsLimit === 0 ? (
-                    <li className="text-muted-foreground">{t('الحملات مش مشمولة بالمجاني')}</li>
-                  ) : (
-                    <Row label={t('رسالة حملات بالشهر')} value={limit(plan.monthlyCampaignSendsLimit, t)} />
-                  )}
+                  <Row label={t('رسالة حملات بالشهر')} value={limit(plan.monthlyCampaignSendsLimit, t)} />
                   <Row label={t('مستخدم')} value={limit(plan.usersLimit, t)} />
                   {plan.customDomain && <Row label={t('نطاقك الخاص')} value="✓" />}
                   {plan.whiteLabel && <Row label={t('علامتك بدون ذكرنا')} value="✓" />}
@@ -176,10 +212,10 @@ export default function PricingPage() {
 
         <div className="mt-10 flex flex-wrap items-center gap-4">
           <p className="text-caption text-muted-foreground">
-            {t('مش متأكد أي باقة؟ ابدأ بالمجاني وارفع لما تحتاج.')}
+            {t('مش متأكد أي باقة؟ ابدأ التجربة وقرّر بعدين.')}
           </p>
           <Button asChild>
-            <Link href="/signup?plan=FREE">{t('ابدأ مجاناً')}</Link>
+            <Link href="/signup">{t('ابدأ التجربة المجانية')}</Link>
           </Button>
         </div>
       </section>

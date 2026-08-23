@@ -15,6 +15,19 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Trial + pricing rewrite ----
+  'ابدأ التجربة المجانية': { he: 'התחילו תקופת ניסיון', en: 'Start free trial' },
+  'خلصت فترتك التجريبية': { he: 'תקופת הניסיון הסתיימה', en: 'Your free trial has ended' },
+  'اشتراكك موقوف': { he: 'המנוי שלכם מושהה', en: 'Your subscription is paused' },
+  'شغلك ومحادثاتك محفوظة زي ما هي. اختار باقة وبترجع تشتغل من نفس المكان.': { he: 'העבודה והשיחות שלכם נשמרו כמו שהן. בחרו חבילה ותמשיכו בדיוק מאותה נקודה.', en: 'Your work and conversations are exactly as you left them. Pick a plan and carry on from the same place.' },
+  'تواصل معنا لإعادة تفعيل الاشتراك. بياناتك محفوظة.': { he: 'דברו איתנו כדי להפעיל מחדש את המנוי. הנתונים שלכם שמורים.', en: 'Talk to us to reactivate the subscription. Your data is safe.' },
+  'جرّب المنصة كاملة ٣ ساعات، بدون بطاقة دفع.': { he: 'נסו את המערכת המלאה 3 שעות, בלי כרטיס אשראי.', en: 'Try the whole platform for 3 hours, no card needed.' },
+  'بتربط رقم واتساب بمسح QR وبتشتغل عليه فوراً — نفس المنصة اللي بتشتريها، مش نسخة مقصوصة. بعد ما تخلص، بتختار باقة وبتكمّل من نفس المكان.': { he: 'מחברים מספר וואטסאפ בסריקת QR ומתחילים לעבוד מיד — אותה מערכת שאתם קונים, לא גרסה מקוצצת. בסיום בוחרים חבילה וממשיכים מאותה נקודה.', en: 'Connect a WhatsApp number by QR and start working straight away — the same platform you\'d buy, not a cut-down version. When it\'s up, pick a plan and carry on from the same place.' },
+  'مش متأكد أي باقة؟ ابدأ التجربة وقرّر بعدين.': { he: 'לא בטוחים איזו חבילה? התחילו בניסיון ותחליטו אחר כך.', en: 'Not sure which plan? Start the trial and decide later.' },
+  'أقل من دقيقة على انتهاء التجربة': { he: 'פחות מדקה לסיום הניסיון', en: 'Less than a minute left in your trial' },
+  'باقي': { he: 'נותרו', en: 'You have' },
+  'من تجربتك المجانية': { he: 'מתקופת הניסיון שלכם', en: 'left in your free trial' },
+  'اختار باقة': { he: 'בחרו חבילה', en: 'Pick a plan' },
   // ---- M6.3 saved views (3) ----
   'حرّكه فوق': { he: 'העברה למעלה', en: 'Move up' },
   'حرّكه تحت': { he: 'העברה למטה', en: 'Move down' },

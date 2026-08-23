@@ -8,6 +8,7 @@ import { AppSidebar } from '@/components/app-sidebar';
 import { BrandLogo } from '@/components/brand-logo';
 import { EntitlementsProvider } from '@/lib/entitlements';
 import { DashboardFooter } from '@/components/dashboard-footer';
+import { TrialBanner } from '@/components/trial-banner';
 import { useT } from '@/lib/i18n';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -71,6 +72,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </button>
           <BrandLogo size="sm" showText={false} />
         </div>
+        {/*
+          Above the content and below the nav, on every dashboard page: a
+          countdown that only appears on one screen is one a tenant meets by
+          accident, and this one is telling them their access ends today.
+        */}
+        <TrialBanner />
         {children}
         <DashboardFooter />
       </main>
