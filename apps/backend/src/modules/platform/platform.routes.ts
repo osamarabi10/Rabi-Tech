@@ -32,8 +32,48 @@ import {
   setDunningGraceDays,
 } from '../billing/dunning.service';
 import { getTrialHours, setTrialHours, getTrialPlanCode, setTrialPlanCode } from '../billing/trial.service';
+import {
+  ALL_PLATFORM_PERMISSIONS,
+  PLATFORM_PERMISSIONS,
+  SUGGESTED_ADVISOR_PERMISSIONS,
+  hasPlatformPermission,
+  isPlatformPermission,
+  type PlatformPermission,
+} from './platform-permissions';
 
 const router = Router();
+
+/** Unknown permission strings are dropped, not stored. */
+function normalizePermissions(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return [...new Set(input.map(String).filter(isPlatformPermission))];
+}
+
+/**
+ * Every staff change is written down.
+ *
+ * Who can see every subscriber in the system is exactly the question an
+ * owner will be asked one day, and "I think so" is not an answer.
+ */
+async function auditStaff(
+  req: Request,
+  action: string,
+  targetId: string,
+  targetEmail: string,
+  afterState: unknown,
+) {
+  await prisma.platformAuditLog.create({
+    data: {
+      reason: `${action} for ${targetEmail}`,
+      action,
+      actorIdentityId: req.platformUser!.id,
+      actorEmail: req.platformUser!.email,
+      targetOrgId: null,
+      targetOrgName: targetEmail,
+      afterState: { targetId, ...(afterState as object) } as never,
+    },
+  });
+}
 
 function requirePlatformOwner(req: Request, res: Response, next: NextFunction) {
   if (req.platformUser?.platformRole !== 'OWNER') {
@@ -42,7 +82,141 @@ function requirePlatformOwner(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-router.get('/subscribers', async (_req, res) => {
+/**
+ * A route an advisor may reach if they were granted it.
+ *
+ * The owner passes everything without being listed anywhere — see
+ * platform-permissions.ts for why. Everyone else needs the exact permission,
+ * and the refusal names it so the owner reading a support ticket knows which
+ * box to tick rather than guessing.
+ */
+function requirePlatformPermission(permission: PlatformPermission) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (hasPlatformPermission(req.platformUser, permission)) return next();
+    return res.status(403).json({
+      error: 'This action is not part of your access',
+      permission,
+    });
+  };
+}
+
+/**
+ * Platform staff.
+ *
+ * Owner-only, and not grantable — an advisor who can manage staff can grant
+ * themselves anything, and every other permission becomes decoration.
+ *
+ * Before this existed, hiring a support advisor meant an UPDATE against the
+ * production database.
+ */
+router.get('/staff', requirePlatformOwner, async (_req, res) => {
+  try {
+    const staff = await prisma.identity.findMany({
+      where: { platformRole: { in: ['OWNER', 'SUPPORT'] } },
+      orderBy: [{ platformRole: 'asc' }, { email: 'asc' }],
+      select: {
+        id: true,
+        email: true,
+        platformRole: true,
+        platformPermissions: true,
+        platformDisabledAt: true,
+        createdAt: true,
+      },
+    });
+    res.json({ staff, catalogue: PLATFORM_PERMISSIONS, suggested: SUGGESTED_ADVISOR_PERMISSIONS });
+  } catch (error) {
+    logger.error('Staff list failed', { error: String(error) });
+    res.status(500).json({ error: 'Failed to load staff' });
+  }
+});
+
+router.post('/staff', requirePlatformOwner, async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+    const permissions = normalizePermissions(req.body.permissions);
+
+    if (!email.includes('@')) return res.status(400).json({ error: 'A valid email is required' });
+    if (password.length < 12) {
+      // Longer than a tenant user, deliberately: this account can read every
+      // subscriber in the system.
+      return res.status(400).json({ error: 'Staff passwords must be at least 12 characters' });
+    }
+
+    const existing = await prisma.identity.findUnique({ where: { email } });
+    if (existing) {
+      /*
+       * An existing identity is promoted rather than duplicated.
+       *
+       * Email is globally unique and is how someone signs in, so a second row
+       * is impossible anyway — but refusing outright would leave the owner
+       * unable to make an advisor out of someone who already has a workspace
+       * account, which is the normal case for a small team.
+       */
+      if (existing.platformRole === 'OWNER') {
+        return res.status(409).json({ error: 'That address already belongs to an owner' });
+      }
+      const promoted = await prisma.identity.update({
+        where: { id: existing.id },
+        data: { platformRole: 'SUPPORT', platformPermissions: permissions, platformDisabledAt: null },
+        select: { id: true, email: true, platformRole: true, platformPermissions: true },
+      });
+      await auditStaff(req, 'platform.staff.promoted', promoted.id, email, { permissions });
+      return res.status(200).json(promoted);
+    }
+
+    const created = await prisma.identity.create({
+      data: {
+        email,
+        passwordHash: await bcrypt.hash(password, 10),
+        platformRole: 'SUPPORT',
+        platformPermissions: permissions,
+      },
+      select: { id: true, email: true, platformRole: true, platformPermissions: true },
+    });
+    await auditStaff(req, 'platform.staff.created', created.id, email, { permissions });
+    res.status(201).json(created);
+  } catch (error) {
+    logger.error('Staff create failed', { error: String(error) });
+    res.status(500).json({ error: 'Failed to create staff account' });
+  }
+});
+
+router.patch('/staff/:id', requirePlatformOwner, async (req, res) => {
+  try {
+    const target = await prisma.identity.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, email: true, platformRole: true },
+    });
+    if (!target) return res.status(404).json({ error: 'Staff account not found' });
+    if (target.platformRole === 'OWNER') {
+      // The owner is not editable through the staff screen. There is no
+      // version of this product where the person who owns it can be locked
+      // out of it by a mis-click on a permission list.
+      return res.status(403).json({ error: 'The owner account cannot be edited here' });
+    }
+
+    const data: Record<string, unknown> = {};
+    if (req.body.permissions !== undefined) data.platformPermissions = normalizePermissions(req.body.permissions);
+    if (req.body.disabled !== undefined) {
+      data.platformDisabledAt = req.body.disabled ? new Date() : null;
+    }
+    if (Object.keys(data).length === 0) return res.status(400).json({ error: 'Nothing to change' });
+
+    const updated = await prisma.identity.update({
+      where: { id: target.id },
+      data,
+      select: { id: true, email: true, platformRole: true, platformPermissions: true, platformDisabledAt: true },
+    });
+    await auditStaff(req, 'platform.staff.updated', target.id, target.email, data);
+    res.json(updated);
+  } catch (error) {
+    logger.error('Staff update failed', { error: String(error) });
+    res.status(500).json({ error: 'Failed to update staff account' });
+  }
+});
+
+router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (_req, res) => {
   try {
     const subscribers = await prisma.organization.findMany({
       select: {
@@ -128,7 +302,7 @@ router.get('/subscribers', async (_req, res) => {
   }
 });
 
-router.get('/billing/summary', async (_req, res) => {
+router.get('/billing/summary', requirePlatformPermission('billing:view'), async (_req, res) => {
   try {
     /*
      * MRR counts ACTIVE only.
@@ -177,7 +351,7 @@ router.get('/billing/summary', async (_req, res) => {
   }
 });
 
-router.get('/subscribers/:id/usage', async (req, res) => {
+router.get('/subscribers/:id/usage', requirePlatformPermission('subscriber:read'), async (req, res) => {
   try {
     const organization = await prisma.organization.findUnique({
       where: { id: req.params.id },
@@ -312,7 +486,7 @@ router.post('/subscribers', requirePlatformOwner, async (req, res) => {
   }
 });
 
-router.patch('/subscribers/:id/status', requirePlatformOwner, async (req, res) => {
+router.patch('/subscribers/:id/status', requirePlatformPermission('subscriber:suspend'), async (req, res) => {
   try {
     const status = String(req.body.status || '').toUpperCase();
     if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
@@ -364,7 +538,7 @@ const COMMERCIAL_SELECT = {
  * OrganizationConfig — see the header of modules/billing/entitlements.resolver.ts
  * for why write-through was rejected.
  */
-router.patch('/subscribers/:id/commercials', requirePlatformOwner, async (req, res) => {
+router.patch('/subscribers/:id/commercials', requirePlatformPermission('commercials:manage'), async (req, res) => {
   try {
     // Read first: this snapshot is both the validation baseline and beforeState.
     // Taken after the write it would be worthless.
@@ -419,7 +593,7 @@ router.patch('/subscribers/:id/commercials', requirePlatformOwner, async (req, r
 });
 
 /** Commercial terms plus the resolved entitlement, for the console dialog. */
-router.get('/subscribers/:id/commercials', requirePlatformOwner, async (req, res) => {
+router.get('/subscribers/:id/commercials', requirePlatformPermission('billing:view'), async (req, res) => {
   try {
     const organization = await prisma.organization.findUnique({
       where: { id: req.params.id },
@@ -460,7 +634,7 @@ router.get('/subscribers/:id/commercials/history', requirePlatformOwner, async (
   }
 });
 
-router.post('/subscribers/:id/billing/activate', requirePlatformOwner, async (req, res) => {
+router.post('/subscribers/:id/billing/activate', requirePlatformPermission('billing:activate'), async (req, res) => {
   try {
     const planCode = normalizePlanCode(req.body.planCode || 'GROWTH');
     const subscription = await activateManualSubscription(req.params.id, planCode);
@@ -481,7 +655,7 @@ router.post('/subscribers/:id/billing/activate', requirePlatformOwner, async (re
  * Nothing else has to be undone: expiry is decided at read time, so moving the
  * date is the whole operation — no status to un-flip, no gateway to resume.
  */
-router.post('/subscribers/:id/billing/extend-trial', requirePlatformOwner, async (req, res) => {
+router.post('/subscribers/:id/billing/extend-trial', requirePlatformPermission('trial:extend'), async (req, res) => {
   try {
     const hours = Number(req.body.hours);
     if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 365) {
@@ -669,7 +843,7 @@ router.get('/gateway/health', requirePlatformOwner, async (_req, res) => {
   }
 });
 
-router.post('/subscribers/:id/gateway/retry', requirePlatformOwner, async (req, res) => {
+router.post('/subscribers/:id/gateway/retry', requirePlatformPermission('gateway:operate'), async (req, res) => {
   try {
     const channel = await prisma.organizationChannel.findUnique({
       where: { organizationId_kind: { organizationId: req.params.id, kind: 'OPENWA' } },
@@ -696,7 +870,7 @@ router.post('/subscribers/:id/gateway/retry', requirePlatformOwner, async (req, 
   }
 });
 
-router.post('/subscribers/:id/gateway/suspend', requirePlatformOwner, async (req, res) => {
+router.post('/subscribers/:id/gateway/suspend', requirePlatformPermission('gateway:suspend'), async (req, res) => {
   try {
     await queueOwnerAction(req, res, 'suspend');
   } catch {
@@ -704,7 +878,7 @@ router.post('/subscribers/:id/gateway/suspend', requirePlatformOwner, async (req
   }
 });
 
-router.post('/subscribers/:id/gateway/resume', requirePlatformOwner, async (req, res) => {
+router.post('/subscribers/:id/gateway/resume', requirePlatformPermission('gateway:operate'), async (req, res) => {
   try {
     await queueOwnerAction(req, res, 'resume');
   } catch {
@@ -712,7 +886,7 @@ router.post('/subscribers/:id/gateway/resume', requirePlatformOwner, async (req,
   }
 });
 
-router.post('/subscribers/:id/gateway/restart', requirePlatformOwner, async (req, res) => {
+router.post('/subscribers/:id/gateway/restart', requirePlatformPermission('gateway:operate'), async (req, res) => {
   try {
     await queueOwnerAction(req, res, 'restart');
   } catch {
@@ -829,7 +1003,7 @@ async function subscriberOr404(id: string) {
   return { ...organization, ownerEmail: admin?.identity?.email ?? null };
 }
 
-router.get('/subscribers/:id/finance', requirePlatformOwner, async (req, res) => {
+router.get('/subscribers/:id/finance', requirePlatformPermission('billing:view'), async (req, res) => {
   try {
     const subscriber = await subscriberOr404(req.params.id);
     if (!subscriber) return res.status(404).json({ error: 'Subscriber not found' });
@@ -902,7 +1076,7 @@ router.post('/subscribers/:id/invoices', requirePlatformOwner, async (req, res) 
  * Record a payment against an invoice. The receipt is issued by the same
  * transaction — see recordPayment() for why neither half is allowed alone.
  */
-router.post('/subscribers/:id/invoices/:invoiceId/payments', requirePlatformOwner, async (req, res) => {
+router.post('/subscribers/:id/invoices/:invoiceId/payments', requirePlatformPermission('billing:record-payment'), async (req, res) => {
   try {
     const subscriber = await subscriberOr404(req.params.id);
     if (!subscriber) return res.status(404).json({ error: 'Subscriber not found' });

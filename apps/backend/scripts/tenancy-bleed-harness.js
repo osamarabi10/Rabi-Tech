@@ -1682,6 +1682,172 @@ async function databaseAudits() {
       await raw.subscription.delete({ where: { id: subscription.id } });
       await raw.identity.delete({ where: { id: ownerIdentity.id } });
     });
+    const mintPlatformToken = (identity) =>
+      jwt.sign(
+        { scope: 'PLATFORM', id: identity.id, email: identity.email, platformRole: identity.platformRole },
+        jwtSecret,
+        { expiresIn: '10m' },
+      );
+
+    await check('staff: the owner can hire, scope and disable an advisor', async () => {
+      // Before this existed, hiring a support advisor meant an UPDATE against
+      // the production database.
+      const owner = await raw.identity.create({
+        data: {
+          email: `owner-staff-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const ownerToken = mintPlatformToken(owner);
+      const asOwner = (method, path, body) =>
+        fetch(`${baseUrl}${path}`, {
+          method,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+
+      const listed = await (await asOwner('GET', '/api/platform/staff')).json();
+      assert.ok(Object.keys(listed.catalogue).length > 5, 'the catalogue comes from the server');
+      assert.ok(listed.suggested.length > 0, 'a starting point is offered');
+
+      const email = `advisor-gate-${Date.now()}@platform.test`;
+      const short = await asOwner('POST', '/api/platform/staff', {
+        email, password: 'tooshort', permissions: ['subscriber:read'],
+      });
+      assert.equal(short.status, 400, 'a short staff password is refused');
+
+      const created = await asOwner('POST', '/api/platform/staff', {
+        email,
+        password: 'a-long-enough-staff-password',
+        // One that does not exist, beside two that do.
+        permissions: ['subscriber:read', 'trial:extend', 'not:a:permission'],
+      });
+      assert.equal(created.status, 201);
+      const advisor = await created.json();
+      assert.deepEqual(
+        [...advisor.platformPermissions].sort(),
+        ['subscriber:read', 'trial:extend'],
+        'unknown permissions are dropped rather than stored',
+      );
+
+      // Who can see every subscriber is exactly the question an owner gets
+      // asked one day, and 'I think so' is not an answer.
+      const audited = await raw.platformAuditLog.count({
+        where: { action: 'platform.staff.created', targetOrgName: email },
+      });
+      assert.equal(audited, 1, 'hiring is written down');
+
+      // The owner is not editable from the staff screen: there is no version
+      // of this product where a mis-click locks the owner out of it.
+      const touchOwner = await asOwner('PATCH', `/api/platform/staff/${owner.id}`, { disabled: true });
+      assert.equal(touchOwner.status, 403);
+
+      const disabled = await asOwner('PATCH', `/api/platform/staff/${advisor.id}`, { disabled: true });
+      assert.equal(disabled.status, 200);
+      assert.ok((await disabled.json()).platformDisabledAt, 'disabling is recorded, not deleted');
+
+      await raw.platformAuditLog.deleteMany({ where: { targetOrgName: email } });
+      await raw.identity.delete({ where: { id: advisor.id } });
+      await raw.identity.delete({ where: { id: owner.id } });
+    });
+    await check('staff: an advisor reaches only what they were granted', async () => {
+      // The whole point of scoped support access. An advisor granted trials
+      // and nothing else must be able to extend a trial and must not be able
+      // to move money or switch a business off.
+      const advisor = await raw.identity.create({
+        data: {
+          email: `advisor-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'SUPPORT',
+          platformPermissions: ['subscriber:read', 'trial:extend'],
+        },
+      });
+      const token = mintPlatformToken(advisor);
+      const as = (method, path, body) =>
+        fetch(`${baseUrl}${path}`, {
+          method,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+
+      assert.equal((await as('GET', '/api/platform/subscribers')).status, 200, 'granted read must work');
+
+      // Granted, and the subscriber has no trial — so the refusal must be
+      // about the trial, never about permission.
+      const extend = await as('POST', `/api/platform/subscribers/${orgA.organizationId}/billing/extend-trial`, { hours: 3 });
+      assert.notEqual(extend.status, 403, 'a granted permission must not 403');
+
+      for (const [method, path, body] of [
+        ['POST', `/api/platform/subscribers/${orgA.organizationId}/billing/activate`, { planCode: 'BUSINESS' }],
+        ['PATCH', `/api/platform/subscribers/${orgA.organizationId}/commercials`, { discountPercent: 90 }],
+        ['PATCH', `/api/platform/subscribers/${orgA.organizationId}/status`, { status: 'SUSPENDED' }],
+        ['POST', `/api/platform/subscribers/${orgA.organizationId}/gateway/suspend`, {}],
+        ['GET', '/api/platform/billing/summary', undefined],
+      ]) {
+        const response = await as(method, path, body);
+        assert.equal(response.status, 403, `${method} ${path} must be refused`);
+        const payload = await response.json();
+        // The refusal names the permission, so an owner reading a support
+        // ticket knows which box to tick rather than guessing.
+        assert.ok(payload.permission, 'the refusal must name the permission');
+      }
+
+      // Staff management is never grantable: an advisor who could grant
+      // permissions could grant themselves permissions.
+      await raw.identity.update({
+        where: { id: advisor.id },
+        data: { platformPermissions: ['subscriber:read', 'trial:extend', 'staff:manage'] },
+      });
+      assert.equal((await as('GET', '/api/platform/staff')).status, 403,
+        'staff management must stay owner-only even if somebody stores the string');
+
+      await raw.identity.delete({ where: { id: advisor.id } });
+    });
+    await check('staff: a disabled advisor is refused mid-token', async () => {
+      // Tokens last seven days. Disabling at login alone leaves whatever token
+      // they hold working for the rest of the week — the week you disabled
+      // them for.
+      const advisor = await raw.identity.create({
+        data: {
+          email: `disabled-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'SUPPORT',
+          platformPermissions: ['subscriber:read'],
+        },
+      });
+      const token = mintPlatformToken(advisor);
+      const read = () =>
+        fetch(`${baseUrl}/api/platform/subscribers`, { headers: { Authorization: `Bearer ${token}` } });
+
+      assert.equal((await read()).status, 200);
+      await raw.identity.update({ where: { id: advisor.id }, data: { platformDisabledAt: new Date() } });
+      // Same token, immediately after.
+      assert.equal((await read()).status, 403, 'the existing token must stop working at once');
+
+      await raw.identity.delete({ where: { id: advisor.id } });
+    });
+    await check('staff: revoking a permission takes effect on the next request', async () => {
+      // The permissions are read from the database per request rather than
+      // trusted from the token, so a revocation cannot wait for expiry.
+      const advisor = await raw.identity.create({
+        data: {
+          email: `revoked-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'SUPPORT',
+          platformPermissions: ['subscriber:read'],
+        },
+      });
+      const token = mintPlatformToken(advisor);
+      const read = () =>
+        fetch(`${baseUrl}/api/platform/subscribers`, { headers: { Authorization: `Bearer ${token}` } });
+
+      assert.equal((await read()).status, 200);
+      await raw.identity.update({ where: { id: advisor.id }, data: { platformPermissions: [] } });
+      assert.equal((await read()).status, 403, 'the same token must lose the permission immediately');
+
+      await raw.identity.delete({ where: { id: advisor.id } });
+    });
     await check('billing: MRR counts money paid, not money hoped for', async () => {
       // The bug this exists to prevent: MRR used to include TRIALING. That
       // cost nothing while trials ran on the free plan at zero, and became a

@@ -10,6 +10,7 @@ import {
   CreditCard,
   RefreshCw,
   Settings2,
+  Users,
   Wallet,
   WifiOff,
 } from 'lucide-react';
@@ -132,6 +133,12 @@ export default function PlatformHome() {
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
             <RefreshCw className={cn('me-1.5 h-3.5 w-3.5', loading && 'animate-spin')} />
             Refresh
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <Link href="/platform/staff">
+              <Users className="me-1.5 h-3.5 w-3.5" />
+              Staff
+            </Link>
           </Button>
           <Button asChild size="sm" variant="outline">
             <Link href="/platform/settings">

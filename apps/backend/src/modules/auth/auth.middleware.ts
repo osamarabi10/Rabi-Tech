@@ -20,6 +20,16 @@ export interface PlatformJwtPayload {
   id: string;
   email: string;
   platformRole: 'OWNER' | 'SUPPORT';
+  /**
+   * What a SUPPORT advisor may do.
+   *
+   * Read from the database on every request rather than trusted from the
+   * token: revoking a permission has to take effect now, not when a
+   * seven-day token happens to expire. The field on the payload is
+   * informational — `verifyPlatformToken` overwrites it with the stored
+   * value before any handler sees it.
+   */
+  platformPermissions?: string[];
 }
 
 declare global {
@@ -168,11 +178,27 @@ export async function verifyPlatformToken(req: Request, res: Response, next: Nex
     const identity = await runAsPlatform('verify-platform-token', () =>
       prisma.identity.findUnique({
         where: { id: decoded.id },
-        select: { id: true, email: true, platformRole: true },
+        select: {
+          id: true,
+          email: true,
+          platformRole: true,
+          platformPermissions: true,
+          platformDisabledAt: true,
+        },
       })
     );
     if (!identity || !['OWNER', 'SUPPORT'].includes(identity.platformRole)) {
       return res.status(403).json({ error: 'Platform access required' });
+    }
+    /*
+     * A disabled advisor is refused here, not only at login.
+     *
+     * Tokens last seven days. Switching somebody off at login alone leaves
+     * whatever token they are holding working for the rest of the week —
+     * which is precisely the week you switched them off for.
+     */
+    if (identity.platformDisabledAt) {
+      return res.status(403).json({ error: 'This staff account is disabled' });
     }
 
     req.platformUser = {
@@ -180,6 +206,9 @@ export async function verifyPlatformToken(req: Request, res: Response, next: Nex
       id: identity.id,
       email: identity.email,
       platformRole: identity.platformRole as 'OWNER' | 'SUPPORT',
+      // From the database, never from the token: a revoked permission must
+      // stop working immediately.
+      platformPermissions: identity.platformPermissions,
     };
     next();
   } catch {
