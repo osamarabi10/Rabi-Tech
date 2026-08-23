@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save, BookmarkPlus, Upload } from 'lucide-react';
+import { toast } from 'sonner';
+import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save, BookmarkPlus, Upload, Users } from 'lucide-react';
 import { activeFilter } from '@/lib/contact-filter';
 import { avatarColor } from '@/lib/constants';
 import { ContactAvatar } from '@/components/contact-avatar';
@@ -51,6 +52,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ContactFilterBuilder } from '@/components/contacts/contact-filter-builder';
 import { SegmentChips } from '@/components/contacts/segment-chips';
+import { SaveGroupDialog } from '@/components/contacts/save-group-dialog';
 import { SaveSegmentDialog } from '@/components/contacts/save-segment-dialog';
 import { useT } from '@/lib/i18n';
 
@@ -79,6 +81,7 @@ export default function ContactsPage() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
   const [saveSegmentOpen, setSaveSegmentOpen] = useState(false);
+  const [saveGroupOpen, setSaveGroupOpen] = useState(false);
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [nextCursorId, setNextCursorId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -287,7 +290,19 @@ export default function ContactsPage() {
             </div>
             <Button onClick={applyBulk} disabled={saving}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tag className="h-4 w-4" />}
-              Apply to {selectedIds.length}
+              {t('طبّق على')} {selectedIds.length}
+            </Button>
+
+            {/*
+              Saving a *selection* as a group. "Save as segment" above saves a
+              filter and is disabled until there is one, which covers
+              "everyone in Nablus who bought last month" and not "these eleven
+              are our VIPs" — the more common ask, and the one that cannot be
+              written as a rule.
+            */}
+            <Button variant="outline" onClick={() => setSaveGroupOpen(true)} disabled={saving}>
+              <Users className="h-4 w-4" />
+              {t('حفظ كمجموعة')}
             </Button>
           </CardContent>
         </Card>
@@ -413,6 +428,19 @@ export default function ContactsPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <SaveGroupDialog
+        open={saveGroupOpen}
+        contactIds={selectedIds}
+        onClose={() => setSaveGroupOpen(false)}
+        onSaved={(segment, tagName) => {
+          toast.success(`${t('تم إنشاء المجموعة')} ${segment.name}`);
+          // Reload so the new tag shows on the rows it was just applied to,
+          // and clear the selection: it has become the group.
+          setSelectedIds([]);
+          load();
+        }}
+      />
 
       <SaveSegmentDialog
         open={saveSegmentOpen}

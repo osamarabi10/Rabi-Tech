@@ -15,6 +15,16 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Contact groups from a selection ----
+  'حفظ كمجموعة': { he: 'שמירה כקבוצה', en: 'Save as group' },
+  'اسم المجموعة': { he: 'שם הקבוצה', en: 'Group name' },
+  'اسم المجموعة مطلوب': { he: 'שם הקבוצה הוא שדה חובה', en: 'A group name is required' },
+  'مثال: عملاء VIP': { he: 'לדוגמה: לקוחות VIP', en: 'For example: VIP customers' },
+  'رح ينضاف وسم بنفس الاسم لـ': { he: 'תתווסף תווית באותו שם ל-', en: 'A tag with the same name will be added to' },
+  'جهة اتصال، والمجموعة رح تتحدث لحالها لما تضيف أو تشيل الوسم.': { he: 'אנשי קשר, והקבוצה תתעדכן מעצמה כשתוסיפו או תסירו את התווית.', en: 'contacts, and the group updates itself as the tag is added or removed.' },
+  'تعذّر حفظ المجموعة': { he: 'שמירת הקבוצה נכשלה', en: 'Could not save the group' },
+  'تم إنشاء المجموعة': { he: 'הקבוצה נוצרה', en: 'Group created' },
+  'طبّق على': { he: 'החלה על', en: 'Apply to' },
   // ---- Empty reporting period ----
   'ما في نشاط بآخر': { he: 'אין פעילות ב-', en: 'No activity in the last' },
   'وسّع المدة': { he: 'הרחבת התקופה', en: 'Widen the period' },
