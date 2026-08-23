@@ -221,6 +221,8 @@ Change it now — see [`docs/SECURITY-ROTATION.md`](docs/SECURITY-ROTATION.md).
   current state, full surface map, feature parity against Respond.io, and every
   phase of remaining work with its definition of done.
 - **[`docs/TODO.md`](docs/TODO.md)** — the working checklist, phase by phase.
+- **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)** — putting this on a domain: one VPS,
+  TLS, and the two things that break if you skip them.
 - **[`docs/WHATSAPP-GATEWAY-RUNBOOK.md`](docs/WHATSAPP-GATEWAY-RUNBOOK.md)** — read first
   whenever "WhatsApp isn't working."
 - **[`docs/BILLING-PROVIDER-GUIDE.md`](docs/BILLING-PROVIDER-GUIDE.md)** — how to switch

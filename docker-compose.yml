@@ -113,7 +113,13 @@ services:
           - backend.local
 
   frontend:
-    build: ./apps/frontend
+    build:
+      context: ./apps/frontend
+      args:
+        # Empty on a laptop, where the client falls back to localhost.
+        # Set to the public https origin before building for a domain.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-}
     restart: always
     ports:
       - "8080:8080"
@@ -121,8 +127,10 @@ services:
       - backend
     environment:
       - NEXT_SERVER_API_URL=http://backend:4000
-      - NEXT_PUBLIC_API_URL=
-      - NEXT_PUBLIC_SOCKET_URL=
+      # Present so `next start` agrees with what was compiled in, but the
+      # build args below are what actually reach the browser.
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+      - NEXT_PUBLIC_SOCKET_URL=${NEXT_PUBLIC_SOCKET_URL:-}
 
 volumes:
   pgdata:

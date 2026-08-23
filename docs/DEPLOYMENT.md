@@ -1,0 +1,201 @@
+# Putting RabiTech on a domain
+
+One machine, the compose stack you already run, and a reverse proxy in front.
+About an hour, most of it waiting for DNS.
+
+---
+
+## Why not Vercel
+
+Worth stating once, because it is the obvious question and the answer is not
+"we prefer Docker".
+
+Vercel is serverless: a function starts, responds, and dies. Four things in this
+codebase need a process that stays alive, and one of them is the product.
+
+| | Needs a live process |
+|---|---|
+| 13 BullMQ workers | inbound routing, campaigns, dunning, mail outbox, backups, gateway health |
+| Socket.io | the live inbox holds a WebSocket open |
+| `spawn('docker', …)` in `gateway-runtime.ts` | the provisioner launches containers per subscriber |
+| `execFile('pg_dump')` | backups need a filesystem that survives the request |
+
+And the one that settles it regardless: **OpenWA cannot be serverless.** It is a
+persistent container holding an authenticated WhatsApp session in a browser. If
+it stops, the session drops and every subscriber re-scans a QR code.
+
+The Next.js frontend *could* live on Vercel — it is a pure client with no
+`route.ts` handlers. But the backend needs a VPS either way, so splitting it
+buys a CDN in exchange for two deployments, a CORS configuration and a socket
+origin to keep in sync. Put both on the one machine until there is a reason not
+to.
+
+---
+
+## Before you point a domain at anything
+
+**Rotate the secrets first.** This repository is public and shipped known
+defaults; the database password and `OPENWA_API_KEY` are still those defaults
+unless you have changed them. Publishing a domain in front of a known password
+is the specific mistake this ordering avoids.
+
+See [`SECURITY-ROTATION.md`](SECURITY-ROTATION.md). Do it before DNS, not after.
+
+---
+
+## 1. A machine
+
+Any VPS with Docker and Docker Compose. Realistic minimum:
+
+- **2 vCPU, 4 GB RAM, 40 GB disk** for the platform itself
+- **plus roughly 400 MB of RAM per subscriber gateway** — OpenWA runs a headless
+  browser per WhatsApp number, and that is the number that grows
+
+Open only 80 and 443. Postgres and Redis stay on the internal network; the
+compose file exposes them on the host for local development and those port
+mappings should be removed on a server.
+
+---
+
+## 2. DNS
+
+Two records at your registrar, both pointing at the VPS:
+
+```
+A    app.yourdomain.com      →  <server ip>
+A    api.yourdomain.com      →  <server ip>
+```
+
+One host is possible with path routing, but two is simpler and keeps the socket
+origin unambiguous.
+
+---
+
+## 3. TLS, with Caddy
+
+Caddy obtains and renews certificates without being asked. Create `Caddyfile`
+beside `docker-compose.yml`:
+
+```caddyfile
+app.yourdomain.com {
+	reverse_proxy frontend:8080
+}
+
+api.yourdomain.com {
+	# Socket.io upgrades this connection; Caddy passes it through unchanged.
+	reverse_proxy backend:4000
+}
+```
+
+Add the service to `docker-compose.yml`:
+
+```yaml
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - frontend
+      - backend
+```
+
+…and `caddy_data:` under `volumes:`. **That volume holds your certificates** —
+losing it means re-issuing, and Let's Encrypt rate-limits that.
+
+---
+
+## 4. The environment
+
+In `.env`:
+
+```bash
+FRONTEND_URL=https://app.yourdomain.com
+APP_BASE_URL=https://app.yourdomain.com
+FRONTEND_PUBLIC_URL=https://app.yourdomain.com
+
+# Read by the browser. See the warning below.
+NEXT_PUBLIC_API_URL=https://api.yourdomain.com
+NEXT_PUBLIC_SOCKET_URL=https://api.yourdomain.com
+
+TRUST_PROXY=1
+ALLOW_INSECURE_SECRETS=0
+```
+
+> **`NEXT_PUBLIC_*` are compiled in, not read at runtime.**
+>
+> Next.js inlines them into the JavaScript bundle when `next build` runs.
+> Setting them in `.env` and restarting does nothing — the value in the bundle
+> is whatever was present at build time. They were previously absent, so the
+> browser fell back to `http://localhost:4000`: correct on a laptop, and a
+> browser talking to itself on a real domain.
+>
+> They are build arguments now. **Changing the domain means rebuilding the
+> frontend image**, not restarting it.
+
+---
+
+## 5. Go
+
+```bash
+docker compose build
+docker compose up -d
+docker compose exec backend npx prisma migrate deploy
+```
+
+---
+
+## 6. Check it, rather than assume it
+
+```bash
+# TLS is real, not self-signed
+curl -sI https://app.yourdomain.com | head -1
+
+# the API answers on its own host
+curl -s https://api.yourdomain.com/api/billing/plans | head -c 80
+
+# the boot log is clean — no insecure secrets, mail is configured
+docker compose logs backend --tail 40 | grep -iE "insecure|smtp|backup worker"
+```
+
+Then in a browser, signed in: open the inbox and confirm a new message appears
+**without a refresh**. That is the socket working through Caddy, and it is the
+one thing that silently fails if the origin is wrong.
+
+---
+
+## Known gap: automatic gateway provisioning
+
+`gateway-runtime.ts` provisions a subscriber's WhatsApp gateway by running
+`docker compose` as a child process. **The backend container has neither the
+Docker CLI nor a mounted Docker socket**, so that call fails as currently
+deployed. Existing gateways were configured by hand.
+
+It is not a problem until the first self-serve subscriber needs a number of
+their own, at which point it is a blocker. Two ways out:
+
+1. **Give the backend the socket.** Mount `/var/run/docker.sock` and install the
+   Docker CLI in the image. Simple, and worth understanding clearly: a container
+   with the Docker socket can start any container on the host. It is root on the
+   machine by another name.
+2. **Move provisioning out of the backend** into a small privileged agent that
+   accepts a narrow set of commands. More work, and the boundary is real.
+
+Do not mount the socket casually because option one is shorter. Decide it
+deliberately.
+
+---
+
+## Backups on a server
+
+The nightly job writes to `./.tools/backups` on the host, and that directory is
+on the same disk as everything else — which is not a backup, it is a copy.
+
+Add off-machine sync once the domain is live: `rclone`, `restic`, or the
+provider's own snapshots, on a schedule of its own. The verification step
+already proves each dump restores; getting it off the box is the part still
+missing.
