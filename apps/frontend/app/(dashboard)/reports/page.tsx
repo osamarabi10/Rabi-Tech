@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CalendarOff, Wifi, WifiOff } from 'lucide-react';
+import { CampaignRepliesPanel } from '@/components/reports/campaign-replies-panel';
 import {
   fetchCampaignsReport,
   fetchConversationsReport,
@@ -97,6 +98,8 @@ export default function ReportsPage() {
   const [drilldown, setDrilldown] = useState<{ metric: DrilldownMetric; agentId?: string } | null>(
     null,
   );
+  /** The campaign whose replies are open, if any. */
+  const [repliesFor, setRepliesFor] = useState<string | null>(null);
 
   const range = useMemo<ReportRange>(() => {
     const to = new Date();
@@ -236,12 +239,18 @@ export default function ReportsPage() {
               onDrilldown={(agentId) => setDrilldown({ metric: 'resolved', agentId })}
             />
           )}
-          {tab === 'campaigns' && <CampaignsTab rows={campaigns} loading={loading} />}
+          {tab === 'campaigns' && (
+            <CampaignsTab rows={campaigns} loading={loading} onOpenReplies={setRepliesFor} />
+          )}
           {tab === 'gateway' && (
             <GatewayTab report={gateway} sessions={liveSessions} loading={loading} />
           )}
           {tab === 'webhooks' && <WebhooksTab report={webhooks} loading={loading} />}
         </div>
+      )}
+
+      {repliesFor && (
+        <CampaignRepliesPanel campaignId={repliesFor} onClose={() => setRepliesFor(null)} />
       )}
 
       {drilldown && (
@@ -532,7 +541,16 @@ function TeamTab({
   );
 }
 
-function CampaignsTab({ rows, loading }: { rows: CampaignReportRow[] | null; loading: boolean }) {
+function CampaignsTab({
+  rows,
+  loading,
+  onOpenReplies,
+}: {
+  rows: CampaignReportRow[] | null;
+  loading: boolean;
+  /** Open the threads behind a reply count. */
+  onOpenReplies: (campaignId: string) => void;
+}) {
   const { t } = useT();
   if (!rows) return loading ? <Loading /> : <EmptyNote />;
   if (rows.length === 0) return <EmptyNote />;
@@ -580,10 +598,30 @@ function CampaignsTab({ rows, loading }: { rows: CampaignReportRow[] | null; loa
                 </td>
                 <td className="numeric px-3 py-2 text-center text-destructive">{row.failed}</td>
                 <td className="numeric px-3 py-2 text-center">
-                  {row.replied}
-                  <span className="ms-1 text-micro text-muted-foreground">
-                    {formatPct(pct(row.replied, row.recipients))}
-                  </span>
+                  {/*
+                    The count is the way into the answers. Reading them is why
+                    the broadcast was sent, and they were reachable only by
+                    remembering names and searching the inbox one at a time.
+                  */}
+                  {row.replied > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenReplies(row.id)}
+                      className="font-medium text-primary underline-offset-2 hover:underline"
+                    >
+                      {row.replied}
+                      <span className="ms-1 text-micro opacity-70">
+                        {formatPct(pct(row.replied, row.recipients))}
+                      </span>
+                    </button>
+                  ) : (
+                    <>
+                      {row.replied}
+                      <span className="ms-1 text-micro text-muted-foreground">
+                        {formatPct(pct(row.replied, row.recipients))}
+                      </span>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}

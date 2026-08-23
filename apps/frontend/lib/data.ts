@@ -1613,3 +1613,28 @@ export async function snoozeConversation(
     until: until ? until.toISOString() : null,
   });
 }
+
+/** What a broadcast came back as: who answered, and what they said first. */
+export type CampaignReplies = {
+  campaign: { id: string; title: string; sentAt: string | null };
+  /** False when the campaign never went out — different from nobody replying. */
+  sent: boolean;
+  total: number;
+  returned: number;
+  replies: Array<{
+    contactId: string;
+    name: string | null;
+    phone: string;
+    conversationId: string;
+    displayId: number;
+    status: string;
+    assigneeName: string | null;
+    body: string | null;
+    at: string | null;
+  }>;
+};
+
+export async function fetchCampaignReplies(campaignId: string): Promise<CampaignReplies> {
+  const { data } = await api.get(`/api/analytics/campaigns/${campaignId}/replies`);
+  return data;
+}

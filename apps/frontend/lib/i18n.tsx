@@ -15,6 +15,11 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Campaign replies ----
+  'ردود الحملة': { he: 'תגובות הקמפיין', en: 'Campaign replies' },
+  'تعذّر جلب الردود': { he: 'טעינת התגובות נכשלה', en: 'Could not load the replies' },
+  'هالحملة لسا ما انبعتت': { he: 'הקמפיין הזה עדיין לא נשלח', en: 'This campaign has not been sent yet' },
+  'ما في حدا رد على هالحملة لهلق': { he: 'אף אחד עדיין לא הגיב לקמפיין הזה', en: 'Nobody has replied to this campaign yet' },
   // ---- Contact groups from a selection ----
   'حفظ كمجموعة': { he: 'שמירה כקבוצה', en: 'Save as group' },
   'اسم المجموعة': { he: 'שם הקבוצה', en: 'Group name' },

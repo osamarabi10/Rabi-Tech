@@ -56,6 +56,7 @@ ones below either encode a decision or are easy to undo by accident.
 | `inbox/composer-readiness.tsx` | Whether this conversation can be replied to, stated before the agent types. Readiness is per session, never averaged across a multi-number workspace. `unknown` renders nothing — failing to identify a channel is not the same as knowing it is down. |
 | `inbox/conversation-list-states.tsx` | Why the list is empty: no channel, nothing yet, or nothing matching. The filter is checked first — server-side search replaces the loaded list, so any other order tells an agent staring at their own search term that their workspace is empty. |
 | `inbox/contact-context-tabs.tsx` | Details / Files / Activity. Automated events are hollow dots, not a colour difference. |
+| `reports/campaign-replies-panel.tsx` | The threads behind a campaign's reply count. Shows each customer's first message since the send — usually the requirement — and links into the conversation. Never-sent is distinguished from sent-and-ignored. |
 | `contacts/save-group-dialog.tsx` | Turns a hand-picked selection into a group: a tag for membership plus a segment saved over that tag. Not a fourth model — the segment is what makes the group appear in the campaign audience picker, which already reads segments. |
 | `inbox/custom-fields-section.tsx` | The tenant's own contact fields, editable in the panel. Saves per field on blur — there is no form to submit, and one distant Save button is how edits get lost. Renders nothing when no fields are configured. |
 | `inbox/contact-conversations-tab.tsx` | Every thread this contact has had, resolved ones included — they hold the answers and the inbox default filter hides them. Status colour comes from `STATUS_CONFIG`, not invented `text-status-*` classes, which Tailwind does not generate. |
@@ -136,6 +137,15 @@ npm run test:snooze
 That a customer reply cancels a snooze, run against
 `getOrCreateActiveConversation` — the function the inbound webhook actually
 calls — rather than a reimplementation of it. Restores the row it borrows.
+
+```bash
+npm run test:campaign-replies
+```
+
+That a broadcast's reply count and the list behind it are the same set, on
+fabricated rows it deletes afterwards. Both go through
+`campaignRepliedContactWhere` — a count that does not match the rows it opens
+is worse than no count.
 
 ---
 

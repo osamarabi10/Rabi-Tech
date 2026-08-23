@@ -5,6 +5,7 @@ import logger from '../../lib/logger';
 import { requirePermission } from '../../middleware/rbac.middleware';
 import {
   campaignPerformance,
+  campaignRepliedContactWhere,
   firstResponseStats,
   gatewayReport,
   hourOfDayHeatmap,
@@ -261,6 +262,108 @@ router.get('/drilldown', requirePermission('analytics:read'), async (req, res) =
       requestId: (req as any).id,
     });
     res.status(500).json({ error: 'فشل جلب التفاصيل', requestId: (req as any).id });
+  }
+});
+
+/**
+ * GET /api/analytics/campaigns/:id/replies — what the broadcast came back as.
+ *
+ * The campaign report has always shown a reply count and a percentage, and
+ * stopped there. "Three of your five VIPs answered" is the least useful half
+ * of that sentence: the reason anyone broadcasts is to hear what people say
+ * back, and the threads were reachable only by remembering names and
+ * searching the inbox one at a time.
+ *
+ * Returns the conversation plus the customer's first message since the send,
+ * because that first line is almost always the requirement — the reason they
+ * answered at all.
+ */
+router.get('/campaigns/:id/replies', requirePermission('analytics:read'), async (req, res) => {
+  try {
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, title: true, sentAt: true },
+    });
+    if (!campaign) return res.status(404).json({ error: 'الحملة غير موجودة' });
+
+    // A campaign that never went out has no replies, and saying so is
+    // different from returning an empty list as if it had.
+    if (!campaign.sentAt) {
+      return res.json({ campaign, sent: false, total: 0, replies: [] });
+    }
+
+    const organizationId = req.user!.organizationId;
+    const take = Math.min(Number(req.query.limit) || 50, 200);
+
+    const where = campaignRepliedContactWhere(campaign.id, organizationId, campaign.sentAt);
+
+    const [total, contacts] = await Promise.all([
+      prisma.contact.count({ where }),
+      prisma.contact.findMany({
+        where,
+        take,
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          conversations: {
+            where: {
+              messages: {
+                some: { direction: 'INBOUND', timestamp: { gte: campaign.sentAt } },
+              },
+            },
+            orderBy: { lastMessageAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              displayId: true,
+              status: true,
+              assignee: { select: { name: true } },
+              messages: {
+                where: { direction: 'INBOUND', timestamp: { gte: campaign.sentAt } },
+                // Ascending: the *first* thing they said after the broadcast,
+                // not the latest. The opening line is the answer; what follows
+                // is the conversation that answer started.
+                orderBy: { timestamp: 'asc' },
+                take: 1,
+                select: { body: true, timestamp: true },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const replies = contacts
+      .map((contact) => {
+        const conversation = contact.conversations[0];
+        if (!conversation) return null;
+        const message = conversation.messages[0];
+        return {
+          contactId: contact.id,
+          name: contact.name,
+          phone: contact.phone,
+          conversationId: conversation.id,
+          displayId: conversation.displayId,
+          status: conversation.status,
+          assigneeName: conversation.assignee?.name ?? null,
+          body: message?.body ?? null,
+          at: message?.timestamp ?? null,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      // Newest answer first: on a large broadcast the ones still arriving are
+      // the ones nobody has read.
+      .sort((a, b) => (b.at?.getTime() ?? 0) - (a.at?.getTime() ?? 0));
+
+    res.json({ campaign, sent: true, total, returned: replies.length, replies });
+  } catch (err) {
+    logger.error('campaign replies failed', {
+      campaignId: req.params.id,
+      error: String(err),
+      requestId: (req as any).id,
+    });
+    res.status(500).json({ error: 'فشل جلب الردود', requestId: (req as any).id });
   }
 });
 

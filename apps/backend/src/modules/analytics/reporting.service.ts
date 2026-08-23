@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../../prisma';
 
 /**
@@ -601,23 +602,7 @@ export async function campaignPerformance(
       // Only meaningful once the broadcast actually went out.
       if (!campaign.sentAt) return 0;
       return prisma.contact.count({
-        where: {
-          campaignRecipients: {
-            some: { campaignId: campaign.id, organizationId, sentAt: { not: null } },
-          },
-          conversations: {
-            some: {
-              organizationId,
-              messages: {
-                some: {
-                  organizationId,
-                  direction: 'INBOUND',
-                  timestamp: { gte: campaign.sentAt },
-                },
-              },
-            },
-          },
-        },
+        where: campaignRepliedContactWhere(campaign.id, organizationId, campaign.sentAt),
       });
     }),
   );
@@ -641,6 +626,39 @@ export async function campaignPerformance(
       replied: replies[i],
     };
   });
+}
+
+/**
+ * Contacts who answered a broadcast.
+ *
+ * "Replied" means: this contact was actually sent the campaign, and has said
+ * something inbound since it went out. Deliberately not "replied to this
+ * message" — an unofficial gateway gives no reliable reply-to, and a customer
+ * who answers a promotion by starting a fresh sentence has still answered it.
+ *
+ * Exported so the number in the report and the list behind it are built from
+ * one predicate. Two copies of this shape would disagree the first time either
+ * was touched, and a count that does not match the rows it opens is worse than
+ * no count at all.
+ */
+export function campaignRepliedContactWhere(
+  campaignId: string,
+  organizationId: string,
+  sentAt: Date,
+): Prisma.ContactWhereInput {
+  return {
+    campaignRecipients: {
+      some: { campaignId, organizationId, sentAt: { not: null } },
+    },
+    conversations: {
+      some: {
+        organizationId,
+        messages: {
+          some: { organizationId, direction: 'INBOUND', timestamp: { gte: sentAt } },
+        },
+      },
+    },
+  };
 }
 
 export type GatewayReport = {
