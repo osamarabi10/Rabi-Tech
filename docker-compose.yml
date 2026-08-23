@@ -44,6 +44,10 @@ services:
     restart: always
     ports:
       - "4000:4000"
+    volumes:
+      # Backups land on the host, not inside the container. A backup that lives
+      # in the thing it is backing up is not a backup.
+      - ./.tools/backups:/app/backups
     depends_on:
       - postgres
       - redis
@@ -65,6 +69,15 @@ services:
       # then delete this line. The backend logs a loud error on every boot until
       # you do. See docs/SECURITY-ROTATION.md
       - ALLOW_INSECURE_SECRETS=${ALLOW_INSECURE_SECRETS:-0}
+      # SMTP. Absent means mail is logged, not sent — the boot log says which.
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - MAIL_FROM=${MAIL_FROM:-}
+      # Backups: how many automated dumps to keep. Never prunes manual ones.
+      - BACKUP_KEEP=${BACKUP_KEEP:-14}
       # How the gateway container reaches this backend to deliver webhooks.
       # Must be a dotted host (the gateway's URL validator rejects single-label
       # names like "backend") — hence the backend.local network alias below.

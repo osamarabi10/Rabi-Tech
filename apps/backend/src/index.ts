@@ -19,6 +19,7 @@ import contactRoutes      from './modules/contacts/contacts.routes';
 import segmentRoutes      from './modules/segments/segments.routes';
 import { enforceAccess } from './middleware/access-gate.middleware';
 import { startMailOutboxWorker } from './workers/mail-outbox.worker';
+import { startBackupWorker } from './workers/backup.worker';
 import inboxViewRoutes   from './modules/inbox-views/inbox-views.routes';
 import lifecycleRoutes from './modules/lifecycle/lifecycle.routes';
 import workflowRoutes     from './modules/workflows/workflows.routes';
@@ -534,6 +535,12 @@ httpServer.listen(Number(PORT), HOST, () => {
     logger.info('Mail outbox worker disabled (DISABLE_MAIL_OUTBOX_WORKER=1)');
   } else {
     startMailOutboxWorker();
+  }
+
+  if (process.env.DISABLE_BACKUP_WORKER === '1') {
+    logger.info('Backup worker disabled (DISABLE_BACKUP_WORKER=1)');
+  } else {
+    startBackupWorker();
   }
 
   if (process.env.DISABLE_WORKFLOW_WORKER === '1') {

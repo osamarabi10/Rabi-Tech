@@ -1,5 +1,6 @@
 import logger from '../lib/logger';
-import { getMailProvider } from '../modules/mail/mail.provider';
+import { getMailProvider, setMailProvider } from '../modules/mail/mail.provider';
+import { smtpProviderFromEnv } from '../modules/mail/smtp.provider';
 import { flushOutbox } from '../modules/mail/mail.service';
 
 /**
@@ -30,6 +31,23 @@ let running = false;
 
 export function startMailOutboxWorker(): void {
   if (timer) return;
+
+  /*
+   * Chosen once, at boot, from the environment.
+   *
+   * Absent or half-configured SMTP leaves the log provider in place rather
+   * than installing one that throws on every send — which would fill the
+   * outbox with permanent failures and bury the real ones.
+   */
+  const smtp = smtpProviderFromEnv();
+  if (smtp) {
+    setMailProvider(smtp);
+    // Verified rather than assumed: without this, the first evidence of a
+    // wrong password is a customer who never got their suspension warning.
+    smtp.verify().then((ok) => {
+      if (ok) logger.info('SMTP verified — mail is being delivered');
+    });
+  }
 
   const provider = getMailProvider();
   if (!provider.delivers) {

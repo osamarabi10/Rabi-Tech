@@ -9,6 +9,7 @@
     "test:tenancy": "node scripts/tenancy-bleed-harness.js",
     "test:finance": "npm run build && node scripts/verify-finance.js",
     "test:inbox-views": "npm run build && node scripts/inbox-views-check.js",
+    "backup:now": "npm run build && node scripts/run-backup.js",
     "test:snooze": "npm run build && node scripts/verify-snooze-wake.js",
     "test:campaign-replies": "npm run build && node scripts/verify-campaign-replies.js",
     "test:dunning": "npm run build && node scripts/verify-dunning.js",
@@ -22,6 +23,7 @@
   },
   "dependencies": {
     "@prisma/client": "^5.10.0",
+    "@types/nodemailer": "^8.0.1",
     "axios": "^1.6.0",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.1.0",
@@ -31,6 +33,7 @@
     "helmet": "^7.1.0",
     "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^9.0.5",
     "socket.io": "^4.6.0",
     "winston": "^3.11.0",
     "zod": "^3.22.0"
