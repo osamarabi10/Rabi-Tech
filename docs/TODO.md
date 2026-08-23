@@ -750,10 +750,19 @@ Gate stays 57/57.
   `text-right` / `before:right-0`, which had put the active-row marker on the
   far edge of the row in English.
 
-  Found here: `components/inbox/conversation-list.tsx` is **dead code** — the
+  Found here: `components/inbox/conversation-list.tsx` was **dead code** — the
   list that renders is inline in `app/(dashboard)/inbox/page.tsx`. The density
-  work went into the dead file first and had to be redone. Delete it.
-- [ ] **4. Named empty states** per situation, "all caught up" deliberately quiet
+  work went into the dead file first and had to be redone.
+  — **deleted 2026-08-23.** It survived the original note and caught a second
+  victim on the way out: the U7 language pass edited it too. Nothing imported
+  it, so both edits rendered nowhere.
+- [x] **4. Named empty states** per situation, "all caught up" deliberately quiet
+  — **done 2026-08-22 (U5.2).** `components/inbox/conversation-list-states.tsx`
+  separates three causes that shared one sentence: no channel connected, a
+  connected workspace with nothing in it yet, and a filter matching nothing.
+  Each carries its own next action. The filter is tested first, because
+  server-side search replaces the loaded list and any other order tells an
+  agent staring at their own search term that their workspace is empty.
 
 ## M6 — Inbox structure · ~1 week
 
@@ -761,7 +770,16 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
 
 - [ ] **1. Inbox-selector column**: system inboxes (All / Mine / Unassigned /
   Mentions / Snoozed) with live counts
-- [ ] **2. Lifecycle stages** as a configurable pipeline, surfaced as inbox
+  — **All / Mine / Unassigned done 2026-08-22 (U1)**, plus lifecycle stages and
+  team queues, all with counts derived from the conversations actually loaded.
+  `components/inbox/inbox-selector.tsx` on wide screens,
+  `components/inbox/inbox-scope-menu.tsx` below `lg` where the column is
+  hidden — same scopes, same counting code, so the two cannot disagree.
+
+  **Remaining: Mentions and Snoozed.** Mentions needs the inbox described in
+  item 6. Snoozed needs a data model first — nothing in the schema expresses
+  "hide this until Tuesday", so there is no filter to surface.
+- [x] **2. Lifecycle stages** as a configurable pipeline, surfaced as inbox
   filters with counts
   — **pipeline done 2026-08-22; the inbox filters are NOT built.**
   `LifecycleStage` is a per-organization, ordered, colour-coded model with
@@ -776,10 +794,20 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   carrying its name; the API reports how many, and the selector keeps an unknown
   value as an explicit "deleted stage" option. A plain `<select>` shows the first
   option instead and silently reassigns the contact the moment anyone touches it.
-  **Remaining: stage filters with counts in the inbox.**
+  — **inbox filters done 2026-08-22 (U1).** Stages appear as their own group in
+  the selector with live counts, and the group is omitted entirely when a
+  tenant has configured no stages: an empty "Lifecycle" heading over nothing
+  is a dead section, and this product's whole vocabulary is subscriber-defined.
 - [ ] **3. Custom inboxes** — saved views, the filter grammar's fourth consumer
 - [ ] **4. Contact panel tabs** — Details / Conversations / Files / Activity
   (horizontal at the bottom; short labels beat icons for infrequent actions)
+  — **Details / Files / Activity done 2026-08-22 (U2).**
+  `components/inbox/contact-context-tabs.tsx`. Activity merges `AuditLog` rows
+  — their first ever consumer — with automated messages, and renders automated
+  events as hollow dots so the distinction is not carried by colour alone.
+  Details gained consent provenance in U2.4.
+
+  **Remaining: the Conversations tab** — this contact's other threads.
 - [ ] **5. Session-health bar** on each conversation row — our analogue of their
   service-window bar
 - [ ] **6. @mentions** + a Mentions inbox
