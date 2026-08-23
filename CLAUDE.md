@@ -12,6 +12,8 @@ The authoritative RabiTech target architecture, implementation checkpoint, relea
 
 [docs/RABITECH-MASTER-PLAN.md](docs/RABITECH-MASTER-PLAN.md) is the self-contained execution plan: verified current state, Respond.io parity target (logic + UI), and every phase brief P1-A through P7 with definitions of done. Hand this file to an agent to execute a phase.
 
+**[docs/PHASES-TO-LAUNCH.md](docs/PHASES-TO-LAUNCH.md) is the launch plan** — what stands between here and a first paying customer, phased, with the owner-only items marked. Start there when the question is "what now".
+
 **[docs/TODO.md](docs/TODO.md) is the working checklist** — every remaining phase as tick-boxes with a verify line each; work it top to bottom and mirror ticks into the spec.
 
 **[docs/PROJECT-SPEC.md](docs/PROJECT-SPEC.md) is the master specification** — verified current state, surface map, Respond.io parity scorecard, dead-flow register, full phase ledger (done-with-evidence + remaining-with-DoD), and the owner-only blockers. **Start here.**
