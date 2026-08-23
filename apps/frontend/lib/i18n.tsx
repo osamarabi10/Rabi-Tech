@@ -15,6 +15,9 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Empty reporting period ----
+  'ما في نشاط بآخر': { he: 'אין פעילות ב-', en: 'No activity in the last' },
+  'وسّع المدة': { he: 'הרחבת התקופה', en: 'Widen the period' },
   // ---- Snooze (M6.1) ----
   'مؤجّلة': { he: 'נדחות', en: 'Snoozed' },
   'تأجيل': { he: 'דחייה', en: 'Snooze' },

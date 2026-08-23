@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Wifi, WifiOff } from 'lucide-react';
+import { CalendarOff, Wifi, WifiOff } from 'lucide-react';
 import {
   fetchCampaignsReport,
   fetchConversationsReport,
@@ -216,6 +216,14 @@ export default function ReportsPage() {
               report={overview}
               loading={loading}
               onDrilldown={(metric) => setDrilldown({ metric })}
+              days={filters.days}
+              // Next range up, or null at the widest. Derived from the same
+              // list the filter bar offers so the two cannot drift apart.
+              onWiden={
+                filters.days < 90
+                  ? () => setFilters((prev) => ({ ...prev, days: prev.days < 30 ? 30 : 90 }))
+                  : null
+              }
             />
           )}
           {tab === 'conversations' && <ConversationsTab report={conversations} loading={loading} />}
@@ -257,10 +265,16 @@ function OverviewTab({
   report,
   loading,
   onDrilldown,
+  days,
+  onWiden,
 }: {
   report: OverviewReport | null;
   loading: boolean;
   onDrilldown: (metric: DrilldownMetric) => void;
+  /** The window currently selected, so an empty one can name itself. */
+  days: number;
+  /** Widen to the next range up. Absent once already at the widest. */
+  onWiden: (() => void) | null;
 }) {
   const { t } = useT();
   if (!report) return loading ? <Loading /> : <EmptyNote />;
@@ -289,8 +303,43 @@ function OverviewTab({
     },
   ];
 
+  /*
+   * Nothing happened in this window.
+   *
+   * The page rendered em-dashes and zeros and left the reader to work out
+   * whether the product was broken, the filter was wrong, or the business was
+   * quiet. Those are three different problems and only one of them is theirs
+   * to fix.
+   *
+   * Judged on the series rather than the headline medians: a median is
+   * legitimately null when nothing was answered, but a series of all-zero
+   * buckets means no traffic at all.
+   */
+  const emptyPeriod =
+    report.series.length === 0 ||
+    report.series.every((point) => point.inbound === 0 && point.outbound === 0 && point.resolved === 0);
+
   return (
     <>
+      {emptyPeriod && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-caption text-muted-foreground">
+          <CalendarOff className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>
+            {t('ما في نشاط بآخر')} {days} {t('يوم')}
+          </span>
+          {/* The likeliest fix, offered rather than described. */}
+          {onWiden && (
+            <button
+              type="button"
+              onClick={onWiden}
+              className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+            >
+              {t('وسّع المدة')}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* The three the page leads with: how fast we answer, how fast we finish,
           and how much came through. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

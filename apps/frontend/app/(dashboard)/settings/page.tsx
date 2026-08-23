@@ -139,7 +139,6 @@ export default function SettingsPage() {
   const [oohTemplates, setOohTemplates] = useState<Template[]>([]);
   const [welcomeTemplates, setWelcomeTemplates] = useState<Template[]>([]);
   const [savingWh, setSavingWh] = useState(false);
-  const [groupSearch, setGroupSearch] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [keywordCategories, setKeywordCategories] = useState<KeywordCategory[]>([]);
