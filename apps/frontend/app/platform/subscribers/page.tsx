@@ -4,10 +4,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, LogOut, MessageCircle, MoreHorizontal, Pause, Play,
-  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock,
+  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock, Clock,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api, { setViewAsOrg } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -39,7 +40,14 @@ type Subscriber = {
   suspendReason: string | null;
   planOverride: string | null;
   overrideExpiresAt: string | null;
-  subscriptions: Array<{ planCode: string; status: string; provider: string; currentPeriodEnd: string | null }>;
+  subscriptions: Array<{
+    planCode: string;
+    status: string;
+    provider: string;
+    currentPeriodEnd: string | null;
+    /** Set only while TRIALING. The console counts down to it. */
+    trialEndsAt: string | null;
+  }>;
   createdAt: string;
   _count: { users: number; whatsappSessions: number };
   channels: Array<{
@@ -62,6 +70,39 @@ type RollupUsage = {
 const EMPTY_FORM = {
   name: '', slug: '', adminName: '', adminEmail: '', adminPassword: '',
 };
+
+/** The deadline of a live trial, or null when this subscriber has none. */
+function trialDeadline(subscriber: Subscriber): number | null {
+  const raw = subscriber.subscriptions[0]?.trialEndsAt;
+  if (!raw) return null;
+  const parsed = new Date(raw).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function trialExpired(subscriber: Subscriber): boolean {
+  const deadline = trialDeadline(subscriber);
+  return deadline !== null && deadline <= Date.now();
+}
+
+/**
+ * How long is left, in the console's own words.
+ *
+ * Coarse on purpose: an owner scanning a table wants to know who is about to
+ * fall off, not that a workspace has 2h 41m. Minutes appear only inside the
+ * last hour, where the difference is the difference between calling someone
+ * today and calling them tomorrow.
+ */
+function trialLabel(subscriber: Subscriber): string | null {
+  const deadline = trialDeadline(subscriber);
+  if (deadline === null) return null;
+  const ms = deadline - Date.now();
+  if (ms <= 0) return 'trial expired';
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `trial: ${minutes}m left`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `trial: ${hours}h ${minutes % 60}m left`;
+  return `trial: ${Math.floor(hours / 24)}d left`;
+}
 
 export default function SubscribersPage() {
   const router = useRouter();
@@ -167,6 +208,26 @@ export default function SubscribersPage() {
     }
   };
 
+  /**
+   * Give a trial more time.
+   *
+   * Extends from now, not from the old deadline — adding hours to a date that
+   * passed last night would grant an extension that is also already over, and
+   * the owner would be left clicking a button that visibly does nothing.
+   */
+  const extendTrial = async (subscriber: Subscriber, hours: number) => {
+    setActionId(subscriber.id);
+    try {
+      await api.post(`/api/platform/subscribers/${subscriber.id}/billing/extend-trial`, { hours });
+      toast.success(`Trial extended by ${hours}h`);
+      await load();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Could not extend the trial');
+    } finally {
+      setActionId(null);
+    }
+  };
+
   const activatePlan = async (subscriber: Subscriber, planCode: 'GROWTH' | 'BUSINESS' | 'ENTERPRISE') => {
     setActionId(subscriber.id);
     try {
@@ -262,6 +323,22 @@ export default function SubscribersPage() {
                     {subscriber.subscriptions[0]?.status || 'none'}{subscriber.emailVerifiedAt ? '' : ' · email pending'}
                   </p>
                   {/*
+                    Where a trial stands. Rendered from the deadline rather than
+                    from a stored 'expired' flag, because nothing writes one —
+                    expiry is decided when someone asks, so this reads the same
+                    source the paywall does and cannot disagree with it.
+                  */}
+                  {trialLabel(subscriber) && (
+                    <p
+                      className={cn(
+                        'mt-1 truncate text-caption',
+                        trialExpired(subscriber) ? 'text-danger' : 'text-warning',
+                      )}
+                    >
+                      {trialLabel(subscriber)}
+                    </p>
+                  )}
+                  {/*
                     Counting down to cut-off. The one thing on this row an
                     owner has to act on before a date rather than after it, so
                     it sits with the billing state and not in a dialog.
@@ -356,6 +433,20 @@ export default function SubscribersPage() {
                       <RotateCw /> Restart gateway
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
+                    {/* Only for subscribers who actually have a trial to extend. */}
+                    {subscriber.subscriptions[0]?.trialEndsAt && (
+                      <>
+                        <DropdownMenuItem onSelect={() => extendTrial(subscriber, 3)}>
+                          <Clock /> Extend trial 3h
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => extendTrial(subscriber, 24)}>
+                          <Clock /> Extend trial 24h
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => extendTrial(subscriber, 24 * 7)}>
+                          <Clock /> Extend trial 7 days
+                        </DropdownMenuItem>
+                      </>
+                    )}
                     <DropdownMenuItem onSelect={() => activatePlan(subscriber, 'GROWTH')}>
                       <CreditCard /> Activate Growth
                     </DropdownMenuItem>

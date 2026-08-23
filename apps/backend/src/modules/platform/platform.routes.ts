@@ -98,6 +98,9 @@ router.get('/subscribers', async (_req, res) => {
             provider: true,
             status: true,
             currentPeriodEnd: true,
+            // The console shows time left, so it needs the deadline itself —
+            // a duration computed here would be stale before it rendered.
+            trialEndsAt: true,
             activatedAt: true,
             canceledAt: true,
           },
@@ -437,6 +440,66 @@ router.post('/subscribers/:id/billing/activate', requirePlatformOwner, async (re
     res.status(202).json({ organizationId: req.params.id, subscription });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || 'Failed to activate subscription' });
+  }
+});
+
+/**
+ * Give a trial more time, for a pilot or a sales conversation.
+ *
+ * Extends from *now* rather than from the old deadline. Adding hours to a
+ * deadline that passed last night would grant a subscriber who is currently
+ * locked out an extension that is also already over, and the owner would be
+ * left clicking a button that visibly does nothing.
+ *
+ * Nothing else has to be undone: expiry is decided at read time, so moving the
+ * date is the whole operation — no status to un-flip, no gateway to resume.
+ */
+router.post('/subscribers/:id/billing/extend-trial', requirePlatformOwner, async (req, res) => {
+  try {
+    const hours = Number(req.body.hours);
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 365) {
+      return res.status(400).json({ error: 'Extension must be between 0 and 8760 hours' });
+    }
+
+    const organization = await prisma.organization.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, name: true },
+    });
+    if (!organization) return res.status(404).json({ error: 'Subscriber not found' });
+
+    const subscription = await prisma.subscription.findFirst({
+      where: { organizationId: req.params.id, status: 'TRIALING' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, trialEndsAt: true },
+    });
+    if (!subscription) {
+      // Not an error worth a 500: a converted or cancelled subscriber simply
+      // has no trial to extend, and saying so is more use than 'failed'.
+      return res.status(409).json({ error: 'This subscriber is not on a trial' });
+    }
+
+    const trialEndsAt = new Date(Date.now() + hours * 3600_000);
+    // In one transaction so an extension can never exist without the record of
+    // who granted it — the same guarantee the commercial overrides above rely
+    // on, and for the same reason: this is a decision someone has to answer for.
+    await prisma.$transaction(async (tx) => {
+      await tx.subscription.update({ where: { id: subscription.id }, data: { trialEndsAt } });
+      await tx.platformAuditLog.create({
+        data: {
+          reason: String(req.body.reason || 'trial extended'),
+          action: 'platform.trial.extended',
+          actorIdentityId: req.platformUser!.id,
+          actorEmail: req.platformUser!.email,
+          targetOrgId: organization.id,
+          targetOrgName: organization.name,
+          beforeState: { trialEndsAt: subscription.trialEndsAt } as never,
+          afterState: { trialEndsAt, hours } as never,
+        },
+      });
+    });
+    res.json({ organizationId: req.params.id, trialEndsAt: trialEndsAt.toISOString() });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to extend the trial' });
   }
 });
 

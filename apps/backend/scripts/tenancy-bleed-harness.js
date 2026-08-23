@@ -1614,6 +1614,87 @@ async function databaseAudits() {
       assert.equal(PLAN_ENTITLEMENTS[subscription.planCode].autoProvisionGateway, true);
       assert.ok(channel, 'the workspace has a gateway channel row');
     });
+    await check('billing: extending a trial moves the deadline forward from now', async () => {
+      // Owner-only, so this needs a PLATFORM token. Minted against this
+      // harness's own throwaway secret, against an identity it creates itself —
+      // no real credential is read or written anywhere.
+      const ownerIdentity = await raw.identity.create({
+        data: {
+          email: `owner-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const ownerToken = jwt.sign(
+        { scope: 'PLATFORM', id: ownerIdentity.id, email: ownerIdentity.email, platformRole: 'OWNER' },
+        jwtSecret,
+        { expiresIn: '10m' },
+      );
+      const asOwner = (path, body) =>
+        fetch(`${baseUrl}${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+          body: JSON.stringify(body),
+        });
+
+      const subscription = await raw.subscription.create({
+        data: {
+          organizationId: orgA.organizationId,
+          planCode: 'GROWTH',
+          provider: 'manual',
+          status: 'TRIALING',
+          // Already over, which is the case that matters: extending by three
+          // hours from *this* would land three hours in the past and the owner
+          // would be clicking a button that visibly does nothing.
+          trialEndsAt: new Date(Date.now() - 5 * 3600_000),
+        },
+      });
+
+      const response = await asOwner(
+        `/api/platform/subscribers/${orgA.organizationId}/billing/extend-trial`,
+        { hours: 3, reason: 'bleed-probe' },
+      );
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.ok(new Date(payload.trialEndsAt).getTime() > Date.now(), 'the new deadline must be in the future');
+
+      // Written down in the same transaction as the change itself.
+      const audited = await raw.platformAuditLog.count({
+        where: { action: 'platform.trial.extended', targetOrgId: orgA.organizationId },
+      });
+      assert.equal(audited, 1);
+
+      // A converted subscriber has no trial to extend, and says so.
+      await raw.subscription.update({ where: { id: subscription.id }, data: { status: 'ACTIVE' } });
+      const converted = await asOwner(
+        `/api/platform/subscribers/${orgA.organizationId}/billing/extend-trial`,
+        { hours: 3 },
+      );
+      assert.equal(converted.status, 409);
+
+      const rejected = await asOwner(
+        `/api/platform/subscribers/${orgA.organizationId}/billing/extend-trial`,
+        { hours: -1 },
+      );
+      assert.equal(rejected.status, 400);
+
+      await raw.platformAuditLog.deleteMany({ where: { targetOrgId: orgA.organizationId } });
+      await raw.subscription.delete({ where: { id: subscription.id } });
+      await raw.identity.delete({ where: { id: ownerIdentity.id } });
+    });
+    await check('billing: a tenant admin cannot extend their own trial', async () => {
+      // The whole point of an owner-only route. A subscriber who could grant
+      // themselves more time does not have a trial, they have a free product.
+      const response = await fetch(
+        `${baseUrl}/api/platform/subscribers/${orgA.organizationId}/billing/extend-trial`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ hours: 999 }),
+        },
+      );
+      assert.ok([401, 403].includes(response.status), `expected a refusal, got ${response.status}`);
+    });
     await check('billing: invalid webhook signatures are rejected by the active provider', async () => {
       const response = await fetch(`${baseUrl}/api/billing/webhook`, {
         method: 'POST',
