@@ -1,41 +1,146 @@
-import Link from 'next/link';
-import { CheckCircle2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+'use client';
 
-const plans = [
-  { code: 'FREE', name: 'Free', price: '$0', mac: '100 MAC', cta: 'Start free', note: 'Dashboard access after email verification. WhatsApp gateway is not auto-provisioned on Free.' },
-  { code: 'GROWTH', name: 'Growth', price: '$49', mac: '2,500 MAC', cta: 'Request activation', note: 'Manual activation by the RabiTech owner after verification and payment arrangement.' },
-  { code: 'BUSINESS', name: 'Business', price: '$199', mac: '10,000 MAC', cta: 'Request activation', note: 'Includes custom domain and white-label controls.' },
-  { code: 'ENTERPRISE', name: 'Enterprise', price: 'Custom', mac: 'Custom MAC', cta: 'Talk to us', note: 'Manual contract and limits for larger deployments.' },
-];
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { Check, Loader2 } from 'lucide-react';
+import { PublicShell } from '@/components/public/public-shell';
+import { Button } from '@/components/ui/button';
+import api from '@/lib/api';
+import { useT } from '@/lib/i18n';
+
+/**
+ * The plans, read from the server that enforces them.
+ *
+ * This page used to hold its own hardcoded copy of the catalogue — four cards
+ * with prices and limits typed by hand. It had already drifted: it advertised
+ * "2,500 MAC" for Growth while the entitlement table was the thing actually
+ * deciding what a subscriber got. A price list that disagrees with the system
+ * charging the customer is the worst possible page to keep by hand.
+ */
+
+type Plan = {
+  code: string;
+  name: string;
+  monthlyPriceCents: number;
+  currency?: string;
+  monthlyActiveContactsLimit: number | null;
+  monthlyOutboundMessagesLimit: number | null;
+  monthlyCampaignSendsLimit: number | null;
+  usersLimit: number | null;
+  autoProvisionGateway?: boolean;
+  customDomain?: boolean;
+  whiteLabel?: boolean;
+};
+
+/**
+ * A price, or the fact that there isn't a published one.
+ *
+ * Zero means two different things in this catalogue. FREE is genuinely free;
+ * ENTERPRISE is zero because its price is negotiated, and rendering that as
+ * "0" tells a customer the most expensive plan costs nothing. The plan code
+ * is what separates them, because the number cannot.
+ */
+function priceLabel(plan: Plan, t: (key: string) => string): string {
+  if (plan.monthlyPriceCents > 0) {
+    return `${(plan.monthlyPriceCents / 100).toLocaleString('en-US')} ${plan.currency ?? 'USD'}`;
+  }
+  return plan.code === 'FREE' ? t('مجاني') : t('حسب الاتفاق');
+}
+
+/** `null` means no ceiling, which is a promise and not a missing value. */
+function limit(value: number | null, t: (k: string) => string): string {
+  return value === null ? t('بلا حد') : value.toLocaleString('en-US');
+}
 
 export default function PricingPage() {
+  const { t } = useT();
+  const [plans, setPlans] = useState<Plan[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    api
+      .get('/api/billing/plans')
+      .then((response) => setPlans(response.data))
+      .catch(() => setFailed(true));
+  }, []);
+
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <PublicShell>
       <section className="mx-auto max-w-6xl px-6 py-14">
-        <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold text-primary">RabiTech plans</p>
-            <h1 className="mt-2 text-3xl font-bold">Choose a starting point</h1>
+        <h1 className="text-3xl font-bold">{t('اختار الباقة اللي بتناسبك')}</h1>
+        <p className="mt-3 max-w-2xl text-caption leading-6 text-muted-foreground">
+          {t('كل الباقات بتشمل صندوق الوارد المشترك والردود التلقائية والتقارير. الفرق بالحدود الشهرية وعدد المستخدمين.')}
+        </p>
+
+        {failed && (
+          <p className="mt-8 text-caption text-destructive">{t('تعذّر تحميل الباقات')}</p>
+        )}
+
+        {!plans && !failed && (
+          <div className="mt-8 flex items-center gap-2 text-caption text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t('جارٍ التحميل...')}
           </div>
-          <Button asChild variant="outline"><Link href="/login">Sign in</Link></Button>
-        </div>
-        <div className="grid gap-4 md:grid-cols-4">
-          {plans.map((plan) => (
-            <div key={plan.code} className="rounded-md border border-border bg-card p-5">
-              <h2 className="text-lg font-bold">{plan.name}</h2>
-              <p className="mt-3 text-3xl font-bold">{plan.price}</p>
-              <p className="mt-1 text-sm text-muted-foreground">per month</p>
-              <div className="mt-5 flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-primary" />{plan.mac}</div>
-              <p className="mt-4 min-h-20 text-sm leading-6 text-muted-foreground">{plan.note}</p>
-              <Button asChild className="mt-5 w-full">
-                <Link href={`/signup?plan=${plan.code}`}>{plan.cta}</Link>
-              </Button>
-            </div>
-          ))}
-        </div>
+        )}
+
+        {plans && (
+          <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {plans.map((plan) => (
+              <div
+                key={plan.code}
+                className="flex flex-col rounded-lg border border-border bg-card p-5"
+              >
+                <h2 className="text-lg font-bold">{plan.name}</h2>
+                <p className="mt-3 text-3xl font-bold">
+                  <span className="numeric" dir="ltr">{priceLabel(plan, t)}</span>
+                </p>
+                {/* Only a real monthly price is "per month". */}
+                {plan.monthlyPriceCents > 0 && (
+                  <p className="mt-1 text-caption text-muted-foreground">{t('شهرياً')}</p>
+                )}
+
+                <ul className="mt-5 space-y-2 text-caption">
+                  <Row label={t('جهة اتصال نشطة')} value={limit(plan.monthlyActiveContactsLimit, t)} />
+                  <Row label={t('رسالة صادرة')} value={limit(plan.monthlyOutboundMessagesLimit, t)} />
+                  <Row label={t('رسالة حملات')} value={limit(plan.monthlyCampaignSendsLimit, t)} />
+                  <Row label={t('مستخدم')} value={limit(plan.usersLimit, t)} />
+                  {plan.customDomain && <Row label={t('نطاق مخصص')} value="✓" />}
+                  {plan.whiteLabel && <Row label={t('علامة بيضاء')} value="✓" />}
+                </ul>
+
+                {/*
+                  Said on the card rather than discovered at the QR screen: a
+                  plan that does not provision a gateway is a dashboard, and the
+                  customer should know which one they are buying.
+                */}
+                <p className="mt-4 min-h-10 text-micro leading-5 text-muted-foreground">
+                  {plan.autoProvisionGateway
+                    ? t('بيتفعّل رقم واتساب تلقائياً بعد الاشتراك.')
+                    : t('لوحة التحكم بس — ربط رقم واتساب بيحتاج ترقية أو تفعيل يدوي.')}
+                </p>
+
+                <Button asChild className="mt-4 w-full">
+                  <Link href={`/signup?plan=${plan.code}`}>{t('ابدأ بهالباقة')}</Link>
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
-    </main>
+    </PublicShell>
   );
 }
 
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <li className="flex items-center justify-between gap-2">
+      <span className="flex items-center gap-1.5 text-muted-foreground">
+        <Check className="h-3 w-3 shrink-0 text-primary" aria-hidden />
+        {label}
+      </span>
+      <span className="numeric shrink-0 font-mono tabular-nums" dir="ltr">
+        {value}
+      </span>
+    </li>
+  );
+}

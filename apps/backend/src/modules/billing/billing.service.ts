@@ -66,10 +66,43 @@ export async function ensurePlans(): Promise<void> {
   });
 }
 
+/**
+ * The published catalogue: price and name from the database, limits from the
+ * entitlement table that actually enforces them.
+ *
+ * Returning only the Plan rows left the public pricing page with no limits to
+ * show, so it kept a hardcoded copy — which had already drifted from what the
+ * server grants. A price list that disagrees with the system charging the
+ * customer is the worst page in the product to maintain by hand.
+ *
+ * A null limit is passed through as null rather than the billion
+ * applyPlanLimits() stores: "no limit" is a promise, and 1,000,000,000 is an
+ * implementation detail that reads like a bizarre quota.
+ */
 export async function listPlans() {
-  return runAsPlatform('billing-list-plans', async () =>
-    prisma.plan.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' } }),
-  );
+  return runAsPlatform('billing-list-plans', async () => {
+    const plans = await prisma.plan.findMany({
+      where: { isActive: true },
+      orderBy: { sortOrder: 'asc' },
+    });
+
+    return plans.map((plan) => {
+      const entitlements = PLAN_ENTITLEMENTS[normalizePlanCode(plan.code)];
+      return {
+        code: plan.code,
+        name: plan.name,
+        monthlyPriceCents: plan.monthlyPriceCents,
+        currency: plan.currency,
+        monthlyActiveContactsLimit: entitlements.monthlyActiveContactsLimit,
+        monthlyOutboundMessagesLimit: entitlements.monthlyOutboundMessagesLimit,
+        monthlyCampaignSendsLimit: entitlements.monthlyCampaignSendsLimit,
+        usersLimit: entitlements.usersLimit,
+        autoProvisionGateway: entitlements.autoProvisionGateway,
+        customDomain: entitlements.customDomain,
+        whiteLabel: entitlements.whiteLabel,
+      };
+    });
+  });
 }
 
 async function applyPlanLimits(organizationId: string, planCode: PlanCode): Promise<void> {
