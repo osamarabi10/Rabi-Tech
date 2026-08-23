@@ -1682,6 +1682,89 @@ async function databaseAudits() {
       await raw.subscription.delete({ where: { id: subscription.id } });
       await raw.identity.delete({ where: { id: ownerIdentity.id } });
     });
+    await check('billing: MRR counts money paid, not money hoped for', async () => {
+      // The bug this exists to prevent: MRR used to include TRIALING. That
+      // cost nothing while trials ran on the free plan at zero, and became a
+      // lie the moment they moved to a real paid plan — every open trial
+      // would have added its full list price to reported revenue.
+      const ownerIdentity = await raw.identity.create({
+        data: {
+          email: `owner-mrr-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const ownerToken = jwt.sign(
+        { scope: 'PLATFORM', id: ownerIdentity.id, email: ownerIdentity.email, platformRole: 'OWNER' },
+        jwtSecret,
+        { expiresIn: '10m' },
+      );
+      const asOwner = (path, init) =>
+        fetch(`${baseUrl}${path}`, {
+          ...init,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}`, ...(init?.headers || {}) },
+        });
+
+      const before = await (await asOwner('/api/platform/billing/summary')).json();
+
+      const trial = await raw.subscription.create({
+        data: {
+          organizationId: orgA.organizationId,
+          planCode: 'BUSINESS',
+          provider: 'manual',
+          status: 'TRIALING',
+          trialEndsAt: new Date(Date.now() + 3600_000),
+        },
+      });
+
+      const after = await (await asOwner('/api/platform/billing/summary')).json();
+      assert.equal(after.mrrCents, before.mrrCents, 'a trial must not move revenue');
+      assert.equal(after.trials.open, before.trials.open + 1, 'but it must be counted as a trial');
+      assert.ok(after.trials.potentialCents > before.trials.potentialCents,
+        'and its value must show up as potential, kept separate from revenue');
+
+      // Converting is what moves the number.
+      await raw.subscription.update({ where: { id: trial.id }, data: { status: 'ACTIVE' } });
+      const converted = await (await asOwner('/api/platform/billing/summary')).json();
+      assert.ok(converted.mrrCents > before.mrrCents, 'converting must move revenue');
+
+      await raw.subscription.delete({ where: { id: trial.id } });
+      await raw.identity.delete({ where: { id: ownerIdentity.id } });
+    });
+    await check('billing: the trial offer is settable, and refuses a plan with no gateway', async () => {
+      const ownerIdentity = await raw.identity.create({
+        data: {
+          email: `owner-trial-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const ownerToken = jwt.sign(
+        { scope: 'PLATFORM', id: ownerIdentity.id, email: ownerIdentity.email, platformRole: 'OWNER' },
+        jwtSecret,
+        { expiresIn: '10m' },
+      );
+      const patch = (body) =>
+        fetch(`${baseUrl}/api/platform/trial/settings`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+          body: JSON.stringify(body),
+        });
+
+      const saved = await (await patch({ hours: 48 })).json();
+      assert.equal(saved.hours, 48);
+
+      // A trial on FREE grants no WhatsApp connection, which is the one thing
+      // the trial exists to demonstrate. Refused rather than honoured.
+      const refused = await patch({ planCode: 'FREE' });
+      assert.equal(refused.status, 400);
+
+      // Back to the shipped default so this check leaves nothing behind.
+      const restored = await (await patch({ hours: 3 })).json();
+      assert.equal(restored.hours, 3);
+
+      await raw.identity.delete({ where: { id: ownerIdentity.id } });
+    });
     await check('billing: a tenant admin cannot extend their own trial', async () => {
       // The whole point of an owner-only route. A subscriber who could grant
       // themselves more time does not have a trial, they have a free product.

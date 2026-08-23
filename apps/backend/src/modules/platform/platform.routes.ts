@@ -31,6 +31,7 @@ import {
   runDunning,
   setDunningGraceDays,
 } from '../billing/dunning.service';
+import { getTrialHours, setTrialHours, getTrialPlanCode, setTrialPlanCode } from '../billing/trial.service';
 
 const router = Router();
 
@@ -129,18 +130,44 @@ router.get('/subscribers', async (_req, res) => {
 
 router.get('/billing/summary', async (_req, res) => {
   try {
-    const activeSubscriptions = await prisma.subscription.findMany({
-      where: { status: { in: ['ACTIVE', 'TRIALING'] } },
-      select: { planCode: true },
-    });
-    const mrrCents = activeSubscriptions.reduce((sum, subscription) => {
+    /*
+     * MRR counts ACTIVE only.
+     *
+     * It used to include TRIALING, which cost nothing while trials ran on the
+     * free plan at zero. They now run on a real paid plan, so every trial
+     * would have added its full list price to reported revenue — money nobody
+     * has paid and most of whom never will. Trials are counted separately,
+     * because how many are open is a useful number and adding it to revenue
+     * is a lie.
+     */
+    const [paid, trialing] = await Promise.all([
+      prisma.subscription.findMany({ where: { status: 'ACTIVE' }, select: { planCode: true } }),
+      prisma.subscription.findMany({
+        where: { status: 'TRIALING' },
+        select: { planCode: true, trialEndsAt: true },
+      }),
+    ]);
+
+    const mrrCents = paid.reduce((sum, subscription) => {
       const code = normalizePlanCode(subscription.planCode);
       return sum + PLAN_ENTITLEMENTS[code].monthlyPriceCents;
     }, 0);
+
+    const now = Date.now();
     res.json({
       mrrCents,
-      activeSubscriptions: activeSubscriptions.length,
-      byTier: activeSubscriptions.reduce<Record<string, number>>((acc, subscription) => {
+      activeSubscriptions: paid.length,
+      trials: {
+        open: trialing.filter((t) => t.trialEndsAt && t.trialEndsAt.getTime() > now).length,
+        expired: trialing.filter((t) => t.trialEndsAt && t.trialEndsAt.getTime() <= now).length,
+        // What this would be worth if every open trial converted. Kept
+        // clearly separate from mrrCents so the two can never be added by
+        // accident.
+        potentialCents: trialing
+          .filter((t) => t.trialEndsAt && t.trialEndsAt.getTime() > now)
+          .reduce((sum, t) => sum + PLAN_ENTITLEMENTS[normalizePlanCode(t.planCode)].monthlyPriceCents, 0),
+      },
+      byTier: paid.reduce<Record<string, number>>((acc, subscription) => {
         acc[subscription.planCode] = (acc[subscription.planCode] || 0) + 1;
         return acc;
       }, {}),
@@ -697,6 +724,31 @@ router.post('/subscribers/:id/gateway/restart', requirePlatformOwner, async (req
 // ── Dunning ────────────────────────────────────────────────────────────────
 
 /** The grace period, in days, between an invoice going overdue and cut-off. */
+/**
+ * How long every *new* signup gets.
+ *
+ * Separate from extending one subscriber's trial, which is a sales decision
+ * about one workspace. This is the product's offer, and it was configurable
+ * in the database and nowhere else.
+ */
+router.get('/trial/settings', requirePlatformOwner, async (_req, res) => {
+  res.json({ hours: await getTrialHours(), planCode: await getTrialPlanCode() });
+});
+
+router.patch('/trial/settings', requirePlatformOwner, async (req, res) => {
+  try {
+    const actor = req.platformUser!.email;
+    const hours = req.body.hours === undefined ? undefined : Number(req.body.hours);
+    if (hours !== undefined) await setTrialHours(hours, actor);
+    if (req.body.planCode !== undefined) await setTrialPlanCode(String(req.body.planCode), actor);
+    // Changing the offer affects nobody mid-trial: the deadline is stamped
+    // once at signup, so this cannot retroactively expire anyone.
+    res.json({ hours: await getTrialHours(), planCode: await getTrialPlanCode() });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || 'Failed to update trial settings' });
+  }
+});
+
 router.get('/dunning/settings', requirePlatformOwner, async (_req, res) => {
   res.json({ graceDays: await getDunningGraceDays() });
 });
