@@ -28,12 +28,25 @@ Backend — Express + Prisma + Socket.io
               ▼
 PostgreSQL (source of truth) · Redis (queues)
               ▲
-Frontend — Next.js, RTL Arabic UI
+Frontend — Next.js, RTL Arabic UI (Arabic, Hebrew, English)
   • tenant dashboard: five destinations (Inbox, Contacts, Broadcasts,
     Reports, Settings) — Respond.io's information architecture
-  • platform console: subscriber list, provisioning, billing, and a
-    read-only "view as subscriber" mode for support, fully audited
+  • platform console at /platform: what needs a person today, staff and
+    their scoped access, trial and dunning settings, subscribers, and a
+    "view as subscriber" mode for support, fully audited
 ```
+
+Three things run on their own, with no human in the loop:
+
+| | What it does | Fails how |
+|---|---|---|
+| **Access gate** | Refuses every workspace route for an expired trial or a suspended subscriber, keeping billing reachable so they can fix it | **Open**, loudly logged — a database hiccup must not lock out every paying customer at once |
+| **Dunning** | Warn → deadline → suspend → restore on payment | Its own try/catch, so a provider outage cannot stop the deadline clock |
+| **Backups** | Nightly `pg_dump`, then **restored into a scratch database and row-counted** before it is called a backup | Alerts *and* emails the owner; a failed dump is renamed so it cannot be mistaken for a good one |
+
+Expiry is decided **when someone asks**, never by a job that flips a flag.
+A sweeper that dies leaves tenants holding access they lost; read-time expiry
+cannot fail, and extending a trial becomes one field with nothing to reconcile.
 
 **Multi-tenancy is not a feature bolted on — it's the foundation.** Two
 organizations on the platform can never see or affect each other's data,
@@ -98,13 +111,56 @@ subscriber's customer-facing messages.
 
 **A new subscriber signs up:**
 
-1. They pick a plan, create an account, and verify their email.
-2. Once payment is confirmed (automatically, once a payment provider is
-   connected — see `docs/BILLING-PROVIDER-GUIDE.md`), their plan activates
-   and their WhatsApp gateway begins provisioning automatically — no manual
-   step from the platform owner.
-3. They scan a QR code to link their WhatsApp number and start receiving
-   messages into their new workspace.
+1. They create an account and verify their email. No card, no payment.
+2. They get a **3-hour trial of the full product** — not a reduced tier. The
+   trial runs on a real paid plan, because the free tier grants no WhatsApp
+   connection and a trial that cannot connect a number demonstrates nothing.
+   The deadline is stamped once, at signup.
+3. Their gateway provisions automatically and they scan a QR code to link
+   their WhatsApp number — the thing the trial exists to show.
+4. A countdown banner shows what is left, counted against the *server's*
+   clock so a device with the wrong time cannot mislead them.
+5. When the trial ends, the API refuses every workspace route with a
+   machine-readable code and the app redirects to pricing. Billing, identity
+   and branding stay reachable — a paywall that blocks the route to the
+   payment page has locked the customer out of paying you.
+
+Trial length and which plan it runs on are settings in the owner console, not
+constants — see `/platform/settings`.
+
+**A payment fails, and the subscriber gets it back:**
+
+1. An invoice passes its due date. The next dunning pass gives the subscriber
+   a *deadline* rather than cutting them off, records it, and emails the
+   workspace admins once — deduplicated by a database constraint, so a pass
+   that runs twice cannot warn the same customer twice.
+2. Meanwhile the product keeps working, and a persistent in-app banner names
+   the date. This is the state that matters: everything responds, and on
+   Thursday it stops. The email was sent; whether it was read is not
+   something this product assumes.
+3. If the deadline passes unpaid, the workspace is suspended — locked out at
+   the API, gateway stopped — and told so by email.
+4. **Payment restores access automatically.** No support ticket, no manual
+   step. The gateway resumes, and a recovery email says so. Nothing was
+   deleted; messages that arrived while paused are waiting in the inbox.
+
+---
+
+## Support staff, without database access
+
+Platform staff are created and scoped from `/platform/staff`. An advisor gets
+a list of permissions rather than a role — support work is not a ladder, and
+one advisor may need to extend trials while never touching a discount.
+
+Three boundaries the code enforces, each covered by the isolation gate:
+
+- **Staff management is never grantable.** An advisor who could grant
+  permissions could grant themselves permissions, and every other scope
+  becomes decoration.
+- **Permissions are read per request**, never trusted from the token, so
+  revoking one takes effect immediately rather than whenever a seven-day
+  token expires.
+- **Disabling bites at once**, in the token check and not only at login.
 
 ---
 
@@ -141,15 +197,21 @@ typechecking, the tenancy isolation gate) and
 [`docs/WHATSAPP-GATEWAY-RUNBOOK.md`](docs/WHATSAPP-GATEWAY-RUNBOOK.md) for
 diagnosing WhatsApp connection issues specifically.
 
-### Default logins (seeded demo data — change before production)
+### Seeded logins
 
-| Role | Email | Password |
-|---|---|---|
-| Subscriber admin | `admin@rabitech.co.il` | `admin123` |
-| Platform owner | `owner@rabitech.co.il` | `owner12345` (or `PLATFORM_OWNER_PASSWORD` if set) |
+The seed creates a subscriber admin and a platform owner. **Their passwords are
+not published here** — this repository is public, and a default credential
+printed on a public page is a credential, not a placeholder.
 
-Set `PLATFORM_OWNER_EMAIL` and `PLATFORM_OWNER_PASSWORD` in `.env` before
-seeding anywhere beyond local development.
+Set these in `.env` **before seeding**, and the seed will use them:
+
+```bash
+PLATFORM_OWNER_EMAIL=you@yourdomain.com
+PLATFORM_OWNER_PASSWORD=          # long, and not reused anywhere
+```
+
+If you seeded before setting them, the seed fell back to a well-known default.
+Change it now — see [`docs/SECURITY-ROTATION.md`](docs/SECURITY-ROTATION.md).
 
 ---
 
