@@ -15,6 +15,25 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- M6.3 saved views (2) ----
+  'من العرض': { he: 'מהתצוגה', en: 'From the view' },
+  // ---- M6.3 saved views ----
+  'العروض المحفوظة': { he: 'תצוגות שמורות', en: 'Saved views' },
+  'خيارات العرض': { he: 'אפשרויות התצוגה', en: 'View options' },
+  'عدّل': { he: 'עריכה', en: 'Edit' },
+  'احذف': { he: 'מחיקה', en: 'Delete' },
+  'احفظ هالعرض': { he: 'שמירת התצוגה', en: 'Save this view' },
+  'لازم اسم للعرض': { he: 'צריך שם לתצוגה', en: 'The view needs a name' },
+  'تعذّر حفظ العرض': { he: 'לא הצלחנו לשמור את התצוגה', en: 'Couldn\'t save the view' },
+  'عدّل العرض': { he: 'עריכת התצוגה', en: 'Edit view' },
+  'بيحفظ الفلاتر اللي مفعّلة هلق.': { he: 'שומר את הסינונים שפעילים עכשיו.', en: 'Saves the filters you have on right now.' },
+  'مثلاً: مبيعات ما ردّينا عليها': { he: 'לדוגמה: מכירות שלא ענינו להן', en: 'For example: sales we haven\'t answered' },
+  'بينحفظ': { he: 'נשמר', en: 'Gets saved' },
+  'ما بينحفظ:': { he: 'לא נשמר:', en: 'Not saved:' },
+  'شاركه مع الفريق': { he: 'שיתוף עם הצוות', en: 'Share with the team' },
+  'رح يشوفوه كل أعضاء المساحة بصندوق الوارد عندهم.': { he: 'כל חברי המרחב יראו אותה בתיבה שלהם.', en: 'Everyone in the workspace will see it in their own inbox.' },
+  'فريق': { he: 'צוות', en: 'Team' },
+  'تصنيف': { he: 'תווית', en: 'Label' },
   // ---- Pricing page — honest rewrite ----
   'اختار الباقة اللي بتناسب شغلك': { he: 'בחרו את החבילה שמתאימה לעבודה שלכם', en: 'Pick the plan that fits how you work' },
   'كل الباقات فيها نفس المنصة: صندوق الوارد المشترك، الردود التلقائية، الأتمتة، والتقارير. الفرق بالحدود الشهرية وعدد المستخدمين — مش بالمزايا.': { he: 'בכל החבילות אותה מערכת: התיבה המשותפת, המענים האוטומטיים, האוטומציה והדוחות. ההבדל הוא במכסות החודשיות ובמספר המשתמשים — לא בפיצ׳רים.', en: 'Every plan has the same platform: the shared inbox, automatic replies, automation and reports. What differs is the monthly limits and the number of users — not the features.' },

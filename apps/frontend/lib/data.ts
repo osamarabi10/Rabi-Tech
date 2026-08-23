@@ -1101,6 +1101,79 @@ export async function deleteSegment(id: string): Promise<void> {
 }
 
 /**
+ * A saved view — a named conversation filter pinned to the inbox.
+ *
+ * Not a segment. Segments filter *contacts* through a nested DSL and feed
+ * campaign audiences; a view filters *threads* through the flat grammar below
+ * and feeds column 1. One grammar over both would mean every rule carrying
+ * "does this apply to people, threads, or both".
+ */
+export type InboxViewFilter = {
+  /** Any-of. Absent means every status. */
+  status?: Array<'OPEN' | 'PENDING' | 'RESOLVED' | 'AWAITING_CLIENT'>;
+  /**
+   * `'me'` is resolved against the viewer, not frozen when the view was saved,
+   * so one shared "my open threads" means the right thing to each member.
+   */
+  assignee?: 'me' | 'unassigned' | { userIds: string[] };
+  teamIds?: string[];
+  /** The number a thread arrived on, not the gateway that served it. */
+  sessionNames?: string[];
+  labels?: string[];
+  lifecycleStages?: string[];
+  /** Nobody has replied yet. */
+  unansweredOnly?: boolean;
+  /** Snoozed threads stay out of every view unless one asks for them. */
+  includeSnoozed?: boolean;
+};
+
+export type InboxView = {
+  id: string;
+  name: string;
+  filter: InboxViewFilter;
+  sortOrder: number;
+  /** Shared with the workspace. Derived from ownership, never stored. */
+  shared: boolean;
+  ownerId: string | null;
+  /**
+   * Sent back on edit as a precondition. A mismatch is a 409 rather than an
+   * overwrite, so two supervisors editing one shared view cannot silently
+   * discard each other's work.
+   */
+  updatedAt: string;
+};
+
+export async function fetchInboxViews(): Promise<InboxView[]> {
+  const { data } = await api.get('/api/inbox-views');
+  return data as InboxView[];
+}
+
+export async function createInboxView(input: {
+  name: string;
+  filter: InboxViewFilter;
+  shared?: boolean;
+}): Promise<InboxView> {
+  const { data } = await api.post('/api/inbox-views', input);
+  return data as InboxView;
+}
+
+/**
+ * Always send `updatedAt` — it is what turns a concurrent edit into a 409
+ * instead of silent data loss. Omitting it tells the server to skip the check.
+ */
+export async function updateInboxView(
+  id: string,
+  input: { name?: string; filter?: InboxViewFilter; shared?: boolean; sortOrder?: number; updatedAt: string },
+): Promise<InboxView> {
+  const { data } = await api.patch(`/api/inbox-views/${id}`, input);
+  return data as InboxView;
+}
+
+export async function deleteInboxView(id: string): Promise<void> {
+  await api.delete(`/api/inbox-views/${id}`);
+}
+
+/**
  * Contacts matching a segment — CRM semantics, so opted-out contacts are
  * included. The campaign composer deliberately uses its own audience endpoint,
  * which excludes them, so the same segment shows a smaller number there.

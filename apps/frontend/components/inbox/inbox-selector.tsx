@@ -2,17 +2,44 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AtSign, ChevronDown, Clock, Inbox, UserCheck, UserX, Wifi, WifiOff } from 'lucide-react';
+import {
+  AtSign,
+  Bookmark,
+  BookmarkPlus,
+  ChevronDown,
+  Clock,
+  Inbox,
+  MoreHorizontal,
+  Trash2,
+  UserCheck,
+  UserX,
+  Users,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import {
   isSnoozed,
   fetchLifecycleStages,
   fetchSessions,
   fetchTeams,
+  createInboxView,
+  deleteInboxView,
+  updateInboxView,
   type Conv,
+  type InboxView,
   type LifecycleStage,
   type Session,
   type Team,
 } from '@/lib/data';
+import { matchesViewFilter } from '@/lib/inbox-view-match';
+import { captureView, type ConvStatusFilter } from '@/lib/inbox-view-capture';
+import { SaveViewDialog } from '@/components/inbox/save-view-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { gatewayCopy, gatewayState } from '@/lib/gateway-state';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -41,7 +68,9 @@ import { cn } from '@/lib/utils';
 export type InboxScope =
   | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' | 'mentions' | 'snoozed' }
   | { kind: 'lifecycle'; value: string }
-  | { kind: 'team'; value: string };
+  | { kind: 'team'; value: string }
+  /** A saved view. `value` is its id. */
+  | { kind: 'view'; value: string };
 
 export const DEFAULT_SCOPE: InboxScope = { kind: 'system', value: 'all' };
 
@@ -66,6 +95,16 @@ export type ScopeContext = {
    * conversation in it.
    */
   mentioned: Set<string>;
+  /**
+   * The saved views this user can see — their own, plus the shared ones.
+   *
+   * Carried here rather than looked up by the predicate, because a scope of
+   * kind 'view' holds only an id and the filter behind it lives elsewhere.
+   * A view missing from this list matches nothing: while they load, an empty
+   * view is honest and every conversation under someone's saved heading is
+   * not.
+   */
+  views: InboxView[];
 };
 
 /**
@@ -85,11 +124,25 @@ export function scopeMatches(
   scope: InboxScope,
   ctx: ScopeContext,
 ): boolean {
-  // Snoozed threads belong to exactly one view. Checked before anything else
+  // Snoozed threads belong to exactly one scope. Checked before anything else
   // so the counts here and the list beside them cannot disagree — the first
   // version excluded them in the page's filter only, and every row in this
   // column then counted one conversation more than the list contained.
-  if (scope.value === 'snoozed') return isSnoozed(conv);
+  //
+  // `kind` is part of the test, not just `value`: lifecycle stages are named
+  // by the tenant, and a stage called "snoozed" would otherwise take over
+  // this branch and show snoozed threads under a stage heading.
+  if (scope.kind === 'system' && scope.value === 'snoozed') return isSnoozed(conv);
+
+  // Views decide their own relationship with snoozing, so they are answered
+  // before the blanket exclusion below rather than after it.
+  if (scope.kind === 'view') {
+    const view = ctx.views.find((candidate) => candidate.id === scope.value);
+    if (!view) return false;
+    if (isSnoozed(conv) && !view.filter.includeSnoozed) return false;
+    return matchesViewFilter(conv, view.filter, ctx.currentUserId);
+  }
+
   if (isSnoozed(conv)) return false;
 
   if (scope.kind === 'lifecycle') return conv.lifecycleStage === scope.value;
@@ -170,6 +223,7 @@ function ScopeRow({
   onSelect,
   icon,
   swatch,
+  action,
 }: {
   label: string;
   count: number;
@@ -177,18 +231,28 @@ function ScopeRow({
   onSelect: () => void;
   icon?: React.ReactNode;
   swatch?: string | null;
+  /**
+   * A control that belongs to the row rather than to selecting it — the
+   * saved-view menu. A sibling of the button, never a child: a menu trigger
+   * nested inside a button is invalid markup, and the browser resolves it by
+   * firing both.
+   */
+  action?: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-current={active ? 'true' : undefined}
+    <div
       className={cn(
-        'group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start transition-colors motion-micro',
+        'group flex w-full items-center rounded-md transition-colors motion-micro',
         active
           ? 'bg-primary/10 text-primary'
           : 'text-muted-foreground hover:bg-accent hover:text-foreground',
       )}
+    >
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? 'true' : undefined}
+      className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-start"
     >
       {swatch !== undefined && swatch !== null && (
         <span
@@ -210,6 +274,8 @@ function ScopeRow({
         {count}
       </span>
     </button>
+      {action && <span className="shrink-0 pe-1">{action}</span>}
+    </div>
   );
 }
 
@@ -247,6 +313,10 @@ export function InboxSelector({
   onScopeChange,
   currentUserId,
   mentioned,
+  views,
+  convFilter,
+  labelFilter,
+  onViewsChanged,
   className,
 }: {
   convs: Conv[];
@@ -255,6 +325,18 @@ export function InboxSelector({
   currentUserId: string | undefined;
   /** Conversations this user was @mentioned in, for the Mentions row. */
   mentioned: Set<string>;
+  /** Saved views this user can see: their own, plus the shared ones. */
+  views: InboxView[];
+  /** The status pill above the list, so a saved view captures it too. */
+  convFilter: ConvStatusFilter;
+  /** The label chip above the list, same reason. */
+  labelFilter: string | null;
+  /**
+   * Applied after a change this pane made. The socket also broadcasts it, but
+   * the author should not have to wait for a round trip to see their own
+   * edit — and their own private view is only ever sent to them.
+   */
+  onViewsChanged: (next: InboxView[]) => void;
   className?: string;
 }) {
   const { t } = useT();
@@ -283,7 +365,35 @@ export function InboxSelector({
     };
   }, []);
 
-  const ctx: ScopeContext = { currentUserId, mentioned };
+  /**
+   * Whether this user may put a view in front of the whole workspace.
+   *
+   * Read from the server rather than inferred from a role string here. It
+   * gates only what the dialog offers; the server enforces the same rule
+   * regardless of what this renders, which is why showing the restriction
+   * instead of hiding it is safe.
+   */
+  const [canShare, setCanShare] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    import('@/lib/api')
+      .then(({ default: api }) => api.get('/api/auth/me'))
+      .then((res) => {
+        if (cancelled) return;
+        const granted = res.data?.permissions;
+        setCanShare(Array.isArray(granted) && granted.includes('inbox-view:manage-shared'));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const [saveOpen, setSaveOpen] = useState(false);
+  /** The view being renamed, or null when the dialog is creating one. */
+  const [editing, setEditing] = useState<InboxView | null>(null);
+
+  const ctx: ScopeContext = { currentUserId, mentioned, views };
 
   /**
    * Everything a row needs, derived from the one scope it represents.
@@ -300,6 +410,51 @@ export function InboxSelector({
   });
 
   const snoozedCount = countForScope(convs, { kind: 'system', value: 'snoozed' }, ctx);
+
+  const capture = captureView(
+    scope,
+    convFilter,
+    labelFilter,
+    t,
+    (id) => teams.find((team) => team.id === id)?.name ?? id,
+    (id) => views.find((view) => view.id === id),
+  );
+
+  const replace = (next: InboxView) =>
+    onViewsChanged(
+      [...views.filter((view) => view.id !== next.id), next].sort(
+        (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
+      ),
+    );
+
+  const submitDialog = async (name: string, shared: boolean) => {
+    if (editing) {
+      // updatedAt is what turns a concurrent edit into a 409 rather than one
+      // supervisor silently overwriting another's rename.
+      const updated = await updateInboxView(editing.id, {
+        name,
+        shared,
+        updatedAt: editing.updatedAt,
+      });
+      replace(updated);
+      return;
+    }
+    const created = await createInboxView({ name, filter: capture.filter, shared });
+    onViewsChanged(
+      [...views, created].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
+    );
+    onScopeChange({ kind: 'view', value: created.id });
+  };
+
+  const removeView = async (view: InboxView) => {
+    await deleteInboxView(view.id);
+    onViewsChanged(views.filter((candidate) => candidate.id !== view.id));
+    // The open scope just stopped existing.
+    if (scope.kind === 'view' && scope.value === view.id) onScopeChange(DEFAULT_SCOPE);
+  };
+
+  /** Own views are always editable; a shared one needs the permission. */
+  const mayEdit = (view: InboxView) => (view.shared ? canShare : view.ownerId === currentUserId);
 
   const connected = sessions?.filter((s) => s.connected).length ?? 0;
   const total = sessions?.length ?? 0;
@@ -373,6 +528,7 @@ export function InboxSelector({
           </Group>
         )}
 
+
         {teams.length > 0 && (
           <Group title={t('صناديق الفرق')}>
             {teams.map((team) => (
@@ -385,6 +541,89 @@ export function InboxSelector({
             ))}
           </Group>
         )}
+
+        {/*
+          Saved views, on the same primitives as every other group so a view
+          behaves exactly like a built-in scope. Shown only when one exists:
+          same rule as Mentions and Snoozed — an agent with no views does not
+          need a permanent empty heading explaining that.
+        */}
+        {views.length > 0 && (
+          <Group title={t('العروض المحفوظة')}>
+            {views.map((view) => (
+              <ScopeRow
+                key={view.id}
+                label={view.name}
+                icon={
+                  view.shared ? (
+                    <Users className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <Bookmark className="h-3.5 w-3.5 shrink-0" />
+                  )
+                }
+                {...row({ kind: 'view', value: view.id })}
+                action={
+                  /*
+                    Only for views this user may change. Shown rather than
+                    hidden would mean a menu whose every item errors — the
+                    restriction is already visible in the dialog that offers
+                    sharing, and a dead menu on someone else's shared view
+                    teaches nothing.
+                  */
+                  mayEdit(view) ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={t('خيارات العرض')}
+                          className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                        >
+                          <MoreHorizontal className="h-3.5 w-3.5" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            setEditing(view);
+                            setSaveOpen(true);
+                          }}
+                        >
+                          {t('عدّل')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="text-danger"
+                          onSelect={() => {
+                            void removeView(view);
+                          }}
+                        >
+                          <Trash2 className="me-1.5 h-3.5 w-3.5" />
+                          {t('احذف')}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : undefined
+                }
+              />
+            ))}
+          </Group>
+        )}
+
+        {/*
+          The only way to create one, so it is always present — a control that
+          appears once you already have the thing it creates is a control
+          nobody finds.
+        */}
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(null);
+            setSaveOpen(true);
+          }}
+          className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-caption text-muted-foreground transition-colors motion-micro hover:bg-accent hover:text-foreground"
+        >
+          <BookmarkPlus className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{t('احفظ هالعرض')}</span>
+        </button>
       </div>
 
       {/*
@@ -392,6 +631,18 @@ export function InboxSelector({
         unofficial gateway nothing else warns you: Meta would flag a degrading
         number, here a dead session is silent until a send fails.
       */}
+      <SaveViewDialog
+        open={saveOpen}
+        onOpenChange={setSaveOpen}
+        mode={editing ? 'edit' : 'create'}
+        initialName={editing?.name ?? ''}
+        initialShared={editing?.shared ?? false}
+        describes={capture.describes}
+        omits={capture.omits}
+        canShare={canShare}
+        onSubmit={submitDialog}
+      />
+
       <div className="shrink-0 border-t border-border p-2">
         <div
           className={cn(

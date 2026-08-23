@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Check, ChevronDown, Filter, WifiOff } from 'lucide-react';
-import { isSnoozed, type Conv, type Session } from '@/lib/data';
+import { isSnoozed, type Conv, type InboxView, type Session } from '@/lib/data';
 import { gatewayCopy, gatewayState } from '@/lib/gateway-state';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -41,6 +41,7 @@ export function InboxScopeMenu({
   onScopeChange,
   currentUserId,
   mentioned,
+  views,
   className,
 }: {
   convs: Conv[];
@@ -49,6 +50,8 @@ export function InboxScopeMenu({
   currentUserId: string | undefined;
   /** Conversations this user was @mentioned in. Same set the pane uses. */
   mentioned: Set<string>;
+  /** Saved views. Same list the pane renders, from the same fetch. */
+  views: InboxView[];
   className?: string;
 }) {
   const { t } = useT();
@@ -74,7 +77,7 @@ export function InboxScopeMenu({
     };
   }, [open]);
 
-  const ctx: ScopeContext = { currentUserId, mentioned };
+  const ctx: ScopeContext = { currentUserId, mentioned, views };
 
   // The same function the pane calls, not the same *logic* re-expressed.
   // Wide and narrow cannot disagree about a number if they ask one question.
@@ -126,6 +129,19 @@ export function InboxScopeMenu({
           swatch: team.color ?? null,
           count: countWhere(candidate),
         };
+      }),
+    });
+  }
+
+  // Saved views, from the same list and the same counting function the pane
+  // uses. Wide and narrow cannot disagree about a view's contents if neither
+  // is expressing the rule in its own words.
+  if (views.length > 0) {
+    groups.push({
+      title: t('العروض المحفوظة'),
+      options: views.map((view) => {
+        const candidate: InboxScope = { kind: 'view', value: view.id };
+        return { scope: candidate, label: view.name, count: countWhere(candidate) };
       }),
     });
   }

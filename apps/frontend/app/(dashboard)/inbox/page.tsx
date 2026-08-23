@@ -47,12 +47,14 @@ import {
   fetchTemplates,
   saveTemplate,
   fetchInboxConfig,
+  fetchInboxViews,
   sendReply as apiSendReply,
   startConversation,
   updateConversation,
   updateConversationLabels,
   fetchTemplatesByShortCode,
   type Conv,
+  type InboxView,
   type Msg,
   type Agent,
   type Template,
@@ -325,6 +327,15 @@ export default function InboxPage() {
    * second poller would be a second thing to get wrong.
    */
   const [mentionedConvs, setMentionedConvs] = useState<Set<string>>(new Set());
+  /**
+   * Saved views this user can see: their own, plus every shared one.
+   *
+   * Starts empty rather than null. A scope of kind 'view' matches nothing
+   * while the list is empty, so the moment before these arrive shows an empty
+   * view instead of every conversation in the workspace under someone's saved
+   * heading.
+   */
+  const [inboxViews, setInboxViews] = useState<InboxView[]>([]);
 
   const refreshMentions = useCallback(() => {
     fetchMentionedConversations()
@@ -507,6 +518,11 @@ export default function InboxPage() {
     fetchInboxConfig().then((cfg) => {
       setInboxSessions(cfg.sessions);
     });
+    // Saved views fail quietly to an empty list. Losing them costs an agent
+    // their shortcuts; a thrown error here would cost them the whole inbox.
+    fetchInboxViews()
+      .then(setInboxViews)
+      .catch(() => setInboxViews([]));
   }, []);
 
   useEffect(() => {
@@ -612,6 +628,37 @@ export default function InboxPage() {
 
     socket.on('message_ack', onMsgAck);
 
+    /*
+     * Saved views change under people. A supervisor renaming a shared view
+     * must not leave four agents clicking a heading that no longer says what
+     * it does, and a deleted one must not sit there 404ing.
+     *
+     * The payload carries the whole view, so this applies the change rather
+     * than re-fetching: a refetch on every keystroke of a rename would be a
+     * request per character for every member of the workspace.
+     */
+    const onViewChanged = (p: {
+      action: 'created' | 'updated' | 'deleted';
+      viewId: string;
+      view?: InboxView;
+    }) => {
+      setInboxViews((prev) => {
+        const without = prev.filter((v) => v.id !== p.viewId);
+        if (p.action === 'deleted' || !p.view) return without;
+        return [...without, p.view].sort(
+          (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
+        );
+      });
+      // The open scope just stopped existing. Falling back rather than
+      // leaving the list empty under a heading that is gone.
+      if (p.action === 'deleted') {
+        setScope((current) =>
+          current.kind === 'view' && current.value === p.viewId ? DEFAULT_SCOPE : current,
+        );
+      }
+    };
+    socket.on('inbox_view_changed', onViewChanged);
+
     // Sockets already deliver new_message, new_conversation, conversation_resolved
     // and unread_update. The old 8s poll re-fetched the whole conversation list and
     // the open thread on top of that — pure duplicate load that also made the list
@@ -625,6 +672,7 @@ export default function InboxPage() {
       socket.off('new_conversation'); socket.off('conversation_resolved');
       socket.off('unread_update');
       socket.off('message_ack', onMsgAck);
+      socket.off('inbox_view_changed', onViewChanged);
       if (poll) clearInterval(poll);
     };
   }, [selId, loadConvs, notify]);
@@ -894,8 +942,8 @@ export default function InboxPage() {
    * downstream that depends on it.
    */
   const scopeCtx: ScopeContext = useMemo(
-    () => ({ currentUserId: currentUser?.id, mentioned: mentionedConvs }),
-    [currentUser?.id, mentionedConvs],
+    () => ({ currentUserId: currentUser?.id, mentioned: mentionedConvs, views: inboxViews }),
+    [currentUser?.id, mentionedConvs, inboxViews],
   );
 
   // ── Filtered list ───────────────────────────────────────────────────────────
@@ -975,6 +1023,10 @@ export default function InboxPage() {
         onScopeChange={setScope}
         currentUserId={currentUser?.id}
         mentioned={mentionedConvs}
+        views={inboxViews}
+        convFilter={convFilter}
+        labelFilter={labelFilter}
+        onViewsChanged={setInboxViews}
         className={cn('hidden lg:flex', selId && 'max-lg:hidden')}
       />
 
@@ -1104,6 +1156,7 @@ export default function InboxPage() {
             onScopeChange={setScope}
             currentUserId={currentUser?.id}
             mentioned={mentionedConvs}
+            views={inboxViews}
             className="lg:hidden"
           />
           {(
