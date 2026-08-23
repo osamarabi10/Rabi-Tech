@@ -41,6 +41,20 @@ export type Conv = {
   /** Hidden from the queue while this is in the future. Null when awake. */
   snoozedUntil?: string | null;
   snoozedByName?: string | null;
+  /**
+   * When an agent first replied to this customer, or null if nobody has.
+   *
+   * Null is the useful half: it is what an unanswered view is built on, and
+   * why this had to reach the client before such a view could exist. A filter
+   * for a field the client never received would match every conversation and
+   * look like it was working.
+   *
+   * The backend stamps it on the first human, customer-facing reply only.
+   * Auto-replies and internal notes leave it null on purpose — an auto-reply
+   * would mark every thread answered within seconds of arriving, which is the
+   * opposite of what anyone opening that view wants to see.
+   */
+  firstResponseAt: string | null;
   sessionPhone: string | null;
   labels: string[];
 };
@@ -329,6 +343,7 @@ export async function startConversation(input: {
     sessionName: data.session?.sessionName ?? null,
     snoozedUntil: data.snoozedUntil ?? null,
     snoozedByName: data.snoozedByName ?? null,
+    firstResponseAt: data.firstResponseAt ?? null,
     sessionPhone: data.session?.phoneNumber ?? null,
     labels: data.labels ?? [],
   };
@@ -365,6 +380,7 @@ export async function fetchConversations(
     sessionName: c.session?.sessionName ?? null,
     snoozedUntil: c.snoozedUntil ?? null,
     snoozedByName: c.snoozedByName ?? null,
+    firstResponseAt: c.firstResponseAt ?? null,
     sessionPhone: c.session?.phoneNumber ?? null,
     labels: c.labels ?? [],
   }));
