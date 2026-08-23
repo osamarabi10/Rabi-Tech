@@ -266,14 +266,60 @@ context menu, not in settings — a view is an inbox thing.
 
 ## 8. Definition of done
 
-- [ ] `scopeMatches` refactored to a context object (trap 2.1), separate commit
-- [ ] `Conv.firstResponseAt` added and mapped (trap 2.3)
-- [ ] Hand-written additive migration; `npx prisma migrate deploy`
-- [ ] Tenancy gate green with two new checks (cross-org owner FK; no cross-org read)
-- [ ] Filter validation rejecting unknown keys, with the key named
-- [ ] `409` proven on a stale `updatedAt`
-- [ ] Private view never emitted org-wide, proven
-- [ ] Counts in pane and mobile menu agree with the list they open
-- [ ] `check:i18n` and `check:mojibake` green
-- [ ] Verified live: create, rename, share, reorder, delete, and a second
-      session seeing a shared change arrive
+- [x] `scopeMatches` refactored to a context object (trap 2.1), separate commit
+      — `495de698`. Adding `views` to the context then broke exactly the three
+      call sites that needed to know, and the compiler named all three.
+- [x] `Conv.firstResponseAt` added and mapped (trap 2.3) — `a2011d6b`. No
+      migration needed: the column, its index and the write path all already
+      existed, and zero conversations qualified for a stamp without having one.
+      Typed `string | null` rather than optional, so null keeps meaning
+      "nobody has replied" rather than "not loaded".
+- [x] Hand-written additive migration; `npx prisma migrate deploy` — `bc57d132`,
+      `20260903090000_inbox_views`.
+- [x] Tenancy gate green with two new checks — 69/69, both confirmed running
+      rather than silently skipped. Cross-org owner refused by Postgres, with
+      the row count after the attempt verified to be zero.
+- [x] Filter validation rejecting unknown keys, with the key named — the message
+      names the value instead where that is more useful («CLOSED» tells an author
+      more than «status» when the key itself was fine).
+- [x] `409` proven on a stale `updatedAt` — against the running server: a current
+      precondition succeeds and moves it, the same stale copy is then refused,
+      and the view still holds the first edit's value.
+- [x] Private view never emitted org-wide — proven two ways, neither of which is
+      a second logged-in user (see the note below). Structurally, the tenancy
+      gate audits every emit site in the codebase for an organization-prefixed
+      room. Over HTTP, a view owned by another user is absent from the list and
+      404s on edit and delete, for an ADMIN too.
+- [x] Counts in pane and mobile menu agree with the list they open — verified
+      live: badge 3, list 3. Both read the same `countForScope`.
+- [x] `check:i18n` and `check:mojibake` green — 19 new keys across three
+      languages.
+- [x] Verified live: create, rename, share, reorder, delete.
+- [ ] **A second session seeing a shared change arrive — NOT verified.**
+      Creating a test user hits the workspace seat limit, and borrowing an
+      existing login would mean touching a credential. The socket handler,
+      the room choice and the client-side apply are all in place and the
+      single-session half was verified; what is untested is one browser
+      receiving another user’s shared change. Worth doing once a second seat
+      exists.
+
+### Built beyond the spec
+
+- **Reordering.** `sortOrder` was in the model and the API with nothing writing
+  to it. Move up / move down in the row menu, rewriting only the two rows that
+  swap. Equal `sortOrder` values are the normal state — nothing renumbers on
+  delete — so ties fall back to list positions, since swapping two equal
+  numbers is a no-op that looks like a broken button.
+- **A capture summary.** The save dialog lists what it is about to store, and
+  names the two things it *cannot*: mentions live on notifications and search
+  is server-side text matching, so neither is a property of a thread. Saving a
+  view that quietly means something narrower than what was on screen is the
+  failure that matters — the author would trust it and miss conversations.
+
+### Fixed in passing
+
+- The snoozed branch of `scopeMatches` tested `scope.value` without `kind`, so a
+  tenant naming a lifecycle stage "snoozed" would have had that stage show
+  snoozed threads. Stage names are tenant-chosen.
+- The mobile menu listed saved views before teams while the pane listed them
+  after. Both now read Inboxes, Lifecycle, Teams, Saved views.

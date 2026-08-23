@@ -830,7 +830,41 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   the selector with live counts, and the group is omitted entirely when a
   tenant has configured no stages: an empty "Lifecycle" heading over nothing
   is a dead section, and this product's whole vocabulary is subscriber-defined.
-- [ ] **3. Custom inboxes** — saved views, the filter grammar's fourth consumer
+- [x] **3. Custom inboxes** — saved views, the filter grammar's fourth consumer
+  — **done 2026-08-23 (M6.3).** `InboxView`, `/api/inbox-views`, and a fourth
+  group in both the pane and the mobile menu. Spec:
+  [M6-CUSTOM-INBOXES-SPEC.md](M6-CUSTOM-INBOXES-SPEC.md).
+
+  Ownership *is* the sharing model — `ownerId` null means shared — so there is
+  no `shared` boolean to fall out of step with it, and deleting a user takes
+  their private views while leaving the shared ones standing. The owner FK is
+  composite on `[ownerId, organizationId]`, proven to refuse a cross-org owner.
+  Gate is 69/69 with two new checks; the second covers what the first cannot,
+  since a shared view has no owner and `organizationId` is the only thing
+  scoping that row.
+
+  Filters are evaluated **in the browser**, deliberately: every count in the
+  pane is computed from loaded conversations because the list endpoint has no
+  pagination, so a server-evaluated view would show a count that disagrees with
+  the list it opens. That is the constraint the grammar was designed around,
+  and why `sla_status` and `channel_id` are not in it — see the spec’s §0.
+  When the list is paginated, views move server-side **with** the other scopes.
+
+  Concurrent edits are a 409 against an `updatedAt` precondition rather than
+  last-write-wins over a JSON blob. Unknown filter keys are rejected and named
+  rather than ignored: silently dropping a key leaves an author with a view
+  that does not filter the way they believe it does. `npm run test:inbox-views`
+  covers the grammar, 16/16, with no server or token needed.
+
+  Verified live end to end — create from a live filter, select, rename, share,
+  reorder, delete — with the pane count matching the list it opened.
+
+  **Not done, and deliberately:** delivery of a shared view to a *second*
+  logged-in user was not exercised. Creating a test user hits the workspace
+  seat limit and borrowing an existing login would mean touching a credential.
+  The routing is covered instead by the tenancy gate, which statically audits
+  every emit site for an organization-prefixed room, and by an HTTP check that
+  another user's private view is absent from the list and 404s on edit.
 - [x] **4. Contact panel tabs** — Details / Conversations / Files / Activity
   (horizontal at the bottom; short labels beat icons for infrequent actions)
   — **Details / Files / Activity done 2026-08-22 (U2).**
@@ -896,6 +930,26 @@ thread reports a response time of seconds) and `resolvedAt` (stamped at the
 transition, cleared on reopen), plus the `AnalyticsHourly` rollup. Historic
 `resolvedAt` is backfilled from `updatedAt` and is therefore approximate; every
 resolution from 2026-08-21 on is stamped at the transition itself.
+
+- [ ] **Open defect: the `firstResponseAt` backfill over-counts.** Found
+  2026-08-23 while verifying the column for M6.3. The live stamper
+  (`analytics/response-time.ts`) requires the thread to already hold an inbound
+  message — an agent-initiated conversation has nothing to respond *to*, and
+  counting it reports a near-zero response on a thread no customer ever waited
+  in. **The backfill in `20260826090000_analytics_reporting` omits that
+  condition**, so every outbound-only thread that predates the migration is
+  stamped as answered.
+
+  Confirmed against the live database: of 4 stamped conversations, 2 have no
+  inbound message at all. Nothing produced since the migration is affected —
+  zero conversations qualify for a stamp without having one — so this is
+  historic rows only, and it skews first-response-time reporting downward by
+  including threads that were never a response.
+
+  Fix is a corrective additive migration clearing the stamp where no inbound
+  message exists. Left for a decision rather than applied in passing: it
+  changes published historic numbers, which is the owner’s call, not a
+  side effect of unrelated work.
 
 - [x] **1. Overview** — headline tiles with sparklines and period deltas
   — **done 2026-08-21.** `GET /api/analytics/overview`. Verified live: seeded 10
