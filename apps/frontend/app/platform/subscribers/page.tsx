@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, LogOut, MessageCircle, MoreHorizontal, Pause, Play,
-  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet,
+  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api, { setViewAsOrg } from '@/lib/api';
@@ -34,6 +34,9 @@ type Subscriber = {
   tier: string;
   emailVerifiedAt: string | null;
   downgradeGraceEndsAt: string | null;
+  /** Service stops then unless the balance clears. Null when not in dunning. */
+  suspendAt: string | null;
+  suspendReason: string | null;
   planOverride: string | null;
   overrideExpiresAt: string | null;
   subscriptions: Array<{ planCode: string; status: string; provider: string; currentPeriodEnd: string | null }>;
@@ -258,6 +261,24 @@ export default function SubscribersPage() {
                   <p className="mt-1 truncate text-caption text-muted-foreground">
                     {subscriber.subscriptions[0]?.status || 'none'}{subscriber.emailVerifiedAt ? '' : ' · email pending'}
                   </p>
+                  {/*
+                    Counting down to cut-off. The one thing on this row an
+                    owner has to act on before a date rather than after it, so
+                    it sits with the billing state and not in a dialog.
+                  */}
+                  {subscriber.suspendAt && (
+                    <p
+                      className="mt-1 flex items-center gap-1 text-caption text-destructive"
+                      title={subscriber.suspendReason ?? undefined}
+                    >
+                      <AlarmClock className="h-3 w-3 shrink-0" aria-hidden />
+                      <span className="truncate">
+                        {new Date(subscriber.suspendAt) <= new Date()
+                          ? 'overdue — cut-off due'
+                          : `cut-off ${subscriber.suspendAt.slice(0, 10)}`}
+                      </span>
+                    </p>
+                  )}
                 </div>
                 <span className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5" />{subscriber._count.users}</span>
                 <span className="flex items-center gap-1.5"><MessageCircle className="h-3.5 w-3.5" />{subscriber._count.whatsappSessions}</span>

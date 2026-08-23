@@ -205,3 +205,19 @@ export async function recordPayment(input: {
     return { receipt, invoice: updated };
   });
 }
+
+/**
+ * Whether this organization still owes anything past its due date.
+ *
+ * Used the moment a payment lands, so a subscriber who settles up is out of
+ * dunning immediately rather than up to half an hour later. Waiting for the
+ * next scheduled pass would mean a customer who has just paid watching a
+ * suspension countdown they no longer deserve.
+ */
+export async function hasOverdueBalance(organizationId: string, now = new Date()): Promise<boolean> {
+  const overdue = await prisma.invoice.findMany({
+    where: { organizationId, status: { not: 'PAID' }, dueAt: { not: null, lt: now } },
+    select: { amountDueCents: true, amountPaidCents: true },
+  });
+  return overdue.some((invoice) => invoice.amountDueCents - invoice.amountPaidCents > 0);
+}

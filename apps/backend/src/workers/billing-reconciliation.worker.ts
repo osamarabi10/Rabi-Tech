@@ -2,6 +2,7 @@ import { Queue, Worker } from 'bullmq';
 import logger from '../lib/logger';
 import { gatewayQueueConnection } from './gateway-provisioning.queue';
 import { reconcileBilling } from '../modules/billing/billing.service';
+import { runDunning } from '../modules/billing/dunning.service';
 
 export const billingReconciliationQueue = new Queue('billing-reconciliation', {
   connection: gatewayQueueConnection,
@@ -33,7 +34,29 @@ export function startBillingReconciliationWorker(): Worker {
     async () => {
       const result = await reconcileBilling();
       logger.info('Billing reconciliation complete', result);
-      return result;
+
+      /*
+       * Dunning rides the same half-hourly pass.
+       *
+       * A second scheduler would be a second thing to notice had stopped,
+       * and the two are the same job in different words: reconcile what the
+       * provider says, then act on what the ledger says.
+       *
+       * Its failure is caught separately. A provider outage must not stop
+       * the deadline clock, and an error in the deadline clock must not make
+       * reconciliation look broken.
+       */
+      let dunning = null;
+      try {
+        dunning = await runDunning();
+        if (dunning.warned || dunning.suspended || dunning.cleared) {
+          logger.info('Dunning pass acted', dunning);
+        }
+      } catch (error) {
+        logger.error('Dunning pass failed', { error: String(error) });
+      }
+
+      return { ...result, dunning };
     },
     { connection: gatewayQueueConnection, concurrency: 1 },
   );

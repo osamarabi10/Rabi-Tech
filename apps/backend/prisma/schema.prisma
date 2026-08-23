@@ -17,6 +17,12 @@ model Organization {
   paymentProvider      String    @default("manual")
   paymentCustomerRef   String?
   emailVerifiedAt      DateTime?
+  /// Service stops at this moment unless the balance is cleared first.
+  ///
+  /// The promise made to a subscriber who is late: you keep working until
+  /// then. Null for everyone not in dunning, which is nearly everyone.
+  suspendAt            DateTime?
+  suspendReason        String?
   downgradeGraceEndsAt DateTime?
   downgradeGraceReason String?
 
@@ -363,6 +369,18 @@ model UsageEvent {
 }
 
 // Daily values are replaceable rollups. active_contacts is a month-to-date distinct snapshot.
+/// Platform-wide settings the owner controls, as key/value.
+///
+/// Columns would mean a migration every time the platform gains a knob, and a
+/// one-row table is the same thing wearing a hat.
+model PlatformSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @default(now()) @updatedAt
+  /// Identity.id of the owner who last changed it.
+  updatedBy String?
+}
+
 model PlatformDailyMetric {
   organizationId String
   date           DateTime    @db.Date

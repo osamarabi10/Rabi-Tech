@@ -10,6 +10,7 @@
     "test:finance": "npm run build && node scripts/verify-finance.js",
     "test:snooze": "npm run build && node scripts/verify-snooze-wake.js",
     "test:campaign-replies": "npm run build && node scripts/verify-campaign-replies.js",
+    "test:dunning": "npm run build && node scripts/verify-dunning.js",
     "usage:backfill": "ts-node scripts/backfill-usage-rollups.ts",
     "gateway:worker": "ts-node src/workers/gateway-provisioning.worker.ts",
     "db:migrate": "prisma migrate dev",

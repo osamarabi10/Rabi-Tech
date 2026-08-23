@@ -25,6 +25,12 @@ import {
   recordPayment,
 } from './finance.service';
 import { renderFinanceCsv, renderFinanceDocument } from './finance.document';
+import { hasOverdueBalance } from './finance.service';
+import {
+  getDunningGraceDays,
+  runDunning,
+  setDunningGraceDays,
+} from '../billing/dunning.service';
 
 const router = Router();
 
@@ -49,6 +55,10 @@ router.get('/subscribers', async (_req, res) => {
         emailVerifiedAt: true,
         downgradeGraceEndsAt: true,
         downgradeGraceReason: true,
+        // Dunning state on the row: a subscriber counting down to cut-off is
+        // the thing an owner most needs to see without opening anything.
+        suspendAt: true,
+        suspendReason: true,
         // Surfaced on the row so an overridden subscriber is visible in the
         // list, not only after opening a dialog.
         planOverride: true,
@@ -621,6 +631,53 @@ router.post('/subscribers/:id/gateway/restart', requirePlatformOwner, async (req
 });
 
 
+// ── Dunning ────────────────────────────────────────────────────────────────
+
+/** The grace period, in days, between an invoice going overdue and cut-off. */
+router.get('/dunning/settings', requirePlatformOwner, async (_req, res) => {
+  res.json({ graceDays: await getDunningGraceDays() });
+});
+
+router.patch('/dunning/settings', requirePlatformOwner, async (req, res) => {
+  try {
+    const graceDays = await setDunningGraceDays(Number(req.body?.graceDays), req.platformUser!.id);
+    await auditPlatformScope('dunning grace period set to ' + graceDays + ' days', {
+      action: 'platform.dunning.settings',
+      actorIdentityId: req.platformUser!.id,
+      actorEmail: req.platformUser!.email,
+      afterState: { graceDays },
+      ipAddress: req.ip,
+    });
+    res.json({ graceDays });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * Run the pass now.
+ *
+ * It runs itself every half hour; this is for an owner who has just changed
+ * the grace period or settled something and wants the state to catch up
+ * while they are looking at it.
+ */
+router.post('/dunning/run', requirePlatformOwner, async (req, res) => {
+  try {
+    const result = await runDunning();
+    await auditPlatformScope('dunning pass run manually', {
+      action: 'platform.dunning.run',
+      actorIdentityId: req.platformUser!.id,
+      actorEmail: req.platformUser!.email,
+      afterState: result,
+      ipAddress: req.ip,
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error('Manual dunning run failed', { error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── Finance ────────────────────────────────────────────────────────────────
 //
 // Every route below is owner-only and writes a PlatformAuditLog row. Money
@@ -754,6 +811,44 @@ router.post('/subscribers/:id/invoices/:invoiceId/payments', requirePlatformOwne
       paidAt,
       issuedByEmail: req.platformUser!.email,
     });
+
+    /*
+     * Out of dunning the moment the balance clears.
+     *
+     * The scheduled pass would get there within half an hour; a customer who
+     * has just paid should not spend that half hour watching a suspension
+     * countdown they no longer deserve.
+     */
+    if (!(await hasOverdueBalance(subscriber.id))) {
+      const before = await prisma.organization.findUnique({
+        where: { id: subscriber.id },
+        select: { status: true, suspendAt: true },
+      });
+
+      if (before?.suspendAt) {
+        await prisma.organization.update({
+          where: { id: subscriber.id },
+          data: {
+            suspendAt: null,
+            suspendReason: null,
+            // Restore only what dunning stopped: a deadline that had already
+            // passed. An owner's manual suspension is their decision and
+            // paying an invoice does not reverse it.
+            ...(before.status === 'SUSPENDED' && before.suspendAt <= new Date()
+              ? { status: 'ACTIVE' as const }
+              : {}),
+          },
+        });
+
+        if (before.status === 'SUSPENDED' && before.suspendAt <= new Date()) {
+          await prisma.subscription.updateMany({
+            where: { organizationId: subscriber.id, status: 'PAST_DUE' },
+            data: { status: 'ACTIVE' },
+          });
+          await queueGatewayAction(subscriber.id, 'resume');
+        }
+      }
+    }
 
     await auditPlatformScope(
       'payment ' + formatMoney(amountCents, receipt.currency) + ' recorded, receipt ' + receipt.reference,
