@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Check, Loader2 } from 'lucide-react';
+import { Check, Loader2, QrCode } from 'lucide-react';
 import { PublicShell } from '@/components/public/public-shell';
 import { Button } from '@/components/ui/button';
 import api from '@/lib/api';
@@ -12,10 +12,10 @@ import { useT } from '@/lib/i18n';
  * The plans, read from the server that enforces them.
  *
  * This page used to hold its own hardcoded copy of the catalogue — four cards
- * with prices and limits typed by hand. It had already drifted: it advertised
- * "2,500 MAC" for Growth while the entitlement table was the thing actually
- * deciding what a subscriber got. A price list that disagrees with the system
- * charging the customer is the worst possible page to keep by hand.
+ * with prices and limits typed by hand — and it had already drifted from the
+ * entitlement table deciding what a subscriber actually gets. A price list that
+ * disagrees with the system charging the customer is the worst page in the
+ * product to maintain by hand.
  */
 
 type Plan = {
@@ -52,6 +52,13 @@ function limit(value: number | null, t: (k: string) => string): string {
   return value === null ? t('بلا حد') : value.toLocaleString('en-US');
 }
 
+/** Enterprise is negotiated, so "start with this plan" is a cheque signup cannot cash. */
+function ctaFor(plan: Plan, t: (key: string) => string): string {
+  if (plan.code === 'FREE') return t('ابدأ مجاناً');
+  if (plan.monthlyPriceCents === 0) return t('احكي معنا');
+  return t('ابدأ بهالباقة');
+}
+
 export default function PricingPage() {
   const { t } = useT();
   const [plans, setPlans] = useState<Plan[] | null>(null);
@@ -67,10 +74,25 @@ export default function PricingPage() {
   return (
     <PublicShell>
       <section className="mx-auto max-w-6xl px-6 py-14">
-        <h1 className="text-3xl font-bold">{t('اختار الباقة اللي بتناسبك')}</h1>
+        <h1 className="text-3xl font-bold">{t('اختار الباقة اللي بتناسب شغلك')}</h1>
         <p className="mt-3 max-w-2xl text-caption leading-6 text-muted-foreground">
-          {t('كل الباقات بتشمل صندوق الوارد المشترك والردود التلقائية والتقارير. الفرق بالحدود الشهرية وعدد المستخدمين.')}
+          {t('كل الباقات فيها نفس المنصة: صندوق الوارد المشترك، الردود التلقائية، الأتمتة، والتقارير. الفرق بالحدود الشهرية وعدد المستخدمين — مش بالمزايا.')}
         </p>
+
+        {/*
+          The pricing model, stated before the numbers.
+          Bound to the QR connection every time it appears — the claim is about
+          the connection that exists, not a promise about every future one.
+        */}
+        <div className="mt-6 max-w-2xl rounded-lg border border-border bg-muted/40 p-4">
+          <p className="flex items-start gap-2 font-semibold">
+            <QrCode className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
+            {t('مع الربط بمسح QR: سعر شهري ثابت، وبدون أي رسوم على كل رسالة.')}
+          </p>
+          <p className="mt-1.5 ps-6 text-caption leading-6 text-muted-foreground">
+            {t('بتدفع الباقة وبس. اللي جوّا حدودك بتبعته بدون عدّاد شغّال عليك.')}
+          </p>
+        </div>
 
         {failed && (
           <p className="mt-8 text-caption text-destructive">{t('تعذّر تحميل الباقات')}</p>
@@ -99,33 +121,67 @@ export default function PricingPage() {
                   <p className="mt-1 text-caption text-muted-foreground">{t('شهرياً')}</p>
                 )}
 
-                <ul className="mt-5 space-y-2 text-caption">
-                  <Row label={t('جهة اتصال نشطة')} value={limit(plan.monthlyActiveContactsLimit, t)} />
-                  <Row label={t('رسالة صادرة')} value={limit(plan.monthlyOutboundMessagesLimit, t)} />
-                  <Row label={t('رسالة حملات')} value={limit(plan.monthlyCampaignSendsLimit, t)} />
-                  <Row label={t('مستخدم')} value={limit(plan.usersLimit, t)} />
-                  {plan.customDomain && <Row label={t('نطاق مخصص')} value="✓" />}
-                  {plan.whiteLabel && <Row label={t('علامة بيضاء')} value="✓" />}
-                </ul>
-
                 {/*
-                  Said on the card rather than discovered at the QR screen: a
-                  plan that does not provision a gateway is a dashboard, and the
-                  customer should know which one they are buying.
+                  Promoted out of the footnote it used to live in. Whether a plan
+                  connects a WhatsApp number is the single most important fact on
+                  the card, and it was set in 10px underneath everything else —
+                  where a customer finds it after paying, at the QR screen.
                 */}
-                <p className="mt-4 min-h-10 text-micro leading-5 text-muted-foreground">
+                <p className="mt-4 border-t border-border pt-4 text-caption leading-6">
                   {plan.autoProvisionGateway
-                    ? t('بيتفعّل رقم واتساب تلقائياً بعد الاشتراك.')
-                    : t('لوحة التحكم بس — ربط رقم واتساب بيحتاج ترقية أو تفعيل يدوي.')}
+                    ? t('بتربط رقم واتساب بمسح QR، وبتبدأ بنفس اليوم')
+                    : t('لوحة التحكم بس — ما فيه ربط رقم واتساب')}
                 </p>
 
-                <Button asChild className="mt-4 w-full">
-                  <Link href={`/signup?plan=${plan.code}`}>{t('ابدأ بهالباقة')}</Link>
+                <ul className="mt-4 space-y-2 text-caption">
+                  <Row label={t('جهة اتصال نشطة بالشهر')} value={limit(plan.monthlyActiveContactsLimit, t)} />
+                  <Row label={t('رسالة صادرة بالشهر')} value={limit(plan.monthlyOutboundMessagesLimit, t)} />
+                  {/*
+                    A quota of zero reads as a broken number. Saying broadcasts
+                    are not part of this plan reads as a decision.
+                  */}
+                  {plan.monthlyCampaignSendsLimit === 0 ? (
+                    <li className="text-muted-foreground">{t('الحملات مش مشمولة بالمجاني')}</li>
+                  ) : (
+                    <Row label={t('رسالة حملات بالشهر')} value={limit(plan.monthlyCampaignSendsLimit, t)} />
+                  )}
+                  <Row label={t('مستخدم')} value={limit(plan.usersLimit, t)} />
+                  {plan.customDomain && <Row label={t('نطاقك الخاص')} value="✓" />}
+                  {plan.whiteLabel && <Row label={t('علامتك بدون ذكرنا')} value="✓" />}
+                </ul>
+
+                <Button asChild className="mt-5 w-full">
+                  <Link href={`/signup?plan=${plan.code}`}>{ctaFor(plan, t)}</Link>
                 </Button>
               </div>
             ))}
           </div>
         )}
+
+        {/*
+          MAC is the number that decides which plan someone needs, and the page
+          never defined it. Wording checked against the code: distinct contacts
+          with at least one message in either direction that month — not stored
+          contacts, not conversations, not messages.
+        */}
+        <div className="mt-10 max-w-2xl rounded-lg border border-border p-5">
+          <h2 className="font-semibold">{t('شو يعني «جهة اتصال نشطة»؟')}</h2>
+          <p className="mt-2 text-caption leading-6 text-muted-foreground">
+            {t('أي عميل تبادلت معه رسالة — منك أو منه — خلال الشهر. بيتحسب مرة وحدة مهما كان عدد الرسائل.')}
+          </p>
+          <p className="mt-1.5 text-caption leading-6 text-muted-foreground">
+            {t('عدد جهات الاتصال المخزّنة عندك ما بيتحسب: خزّن قد ما بدك. والعدّاد بيرجع من الصفر كل شهر.')}
+          </p>
+        </div>
+
+        <div className="mt-10 flex flex-wrap items-center gap-4">
+          <p className="text-caption text-muted-foreground">
+            {t('مش متأكد أي باقة؟ ابدأ بالمجاني وارفع لما تحتاج.')}
+          </p>
+          <Button asChild>
+            <Link href="/signup?plan=FREE">{t('ابدأ مجاناً')}</Link>
+          </Button>
+        </div>
       </section>
     </PublicShell>
   );

@@ -15,6 +15,25 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Pricing page — honest rewrite ----
+  'اختار الباقة اللي بتناسب شغلك': { he: 'בחרו את החבילה שמתאימה לעבודה שלכם', en: 'Pick the plan that fits how you work' },
+  'كل الباقات فيها نفس المنصة: صندوق الوارد المشترك، الردود التلقائية، الأتمتة، والتقارير. الفرق بالحدود الشهرية وعدد المستخدمين — مش بالمزايا.': { he: 'בכל החבילות אותה מערכת: התיבה המשותפת, המענים האוטומטיים, האוטומציה והדוחות. ההבדל הוא במכסות החודשיות ובמספר המשתמשים — לא בפיצ׳רים.', en: 'Every plan has the same platform: the shared inbox, automatic replies, automation and reports. What differs is the monthly limits and the number of users — not the features.' },
+  'مع الربط بمسح QR: سعر شهري ثابت، وبدون أي رسوم على كل رسالة.': { he: 'עם החיבור בסריקת QR: מחיר חודשי קבוע, בלי תשלום לכל הודעה.', en: 'With the QR connection: a flat monthly price, with no per-message fees.' },
+  'بتدفع الباقة وبس. اللي جوّا حدودك بتبعته بدون عدّاد شغّال عليك.': { he: 'משלמים על החבילה וזהו. מה שבתוך המכסה שלכם — שולחים, בלי מונה שרץ.', en: 'You pay for the plan, and that\'s it. Anything inside your limits goes out without a meter running.' },
+  'بتربط رقم واتساب بمسح QR، وبتبدأ بنفس اليوم': { he: 'מחברים מספר וואטסאפ בסריקת QR ומתחילים באותו יום', en: 'Connect a WhatsApp number by QR and start the same day' },
+  'لوحة التحكم بس — ما فيه ربط رقم واتساب': { he: 'לוח הבקרה בלבד — בלי חיבור מספר וואטסאפ', en: 'Dashboard only — no WhatsApp number connected' },
+  'جهة اتصال نشطة بالشهر': { he: 'אנשי קשר פעילים בחודש', en: 'active contacts per month' },
+  'رسالة صادرة بالشهر': { he: 'הודעות יוצאות בחודש', en: 'outbound messages per month' },
+  'رسالة حملات بالشهر': { he: 'הודעות קמפיינים בחודש', en: 'campaign messages per month' },
+  'الحملات مش مشمولة بالمجاني': { he: 'קמפיינים לא כלולים בחינם', en: 'Broadcasts aren\'t included on Free' },
+  'نطاقك الخاص': { he: 'דומיין משלכם', en: 'Your own domain' },
+  'علامتك بدون ذكرنا': { he: 'המותג שלכם בלי אזכור שלנו', en: 'Your brand, no mention of us' },
+  'ابدأ مجاناً': { he: 'התחילו בחינם', en: 'Start free' },
+  'احكي معنا': { he: 'דברו איתנו', en: 'Talk to us' },
+  'شو يعني «جهة اتصال نشطة»؟': { he: 'מה זה "איש קשר פעיל"?', en: 'What counts as an "active contact"?' },
+  'أي عميل تبادلت معه رسالة — منك أو منه — خلال الشهر. بيتحسب مرة وحدة مهما كان عدد الرسائل.': { he: 'כל לקוח שהתכתבתם איתו — מכם או ממנו — במהלך החודש. נספר פעם אחת, לא משנה כמה הודעות.', en: 'Any customer you exchanged a message with — in either direction — during the month. Counted once, however many messages there were.' },
+  'عدد جهات الاتصال المخزّنة عندك ما بيتحسب: خزّن قد ما بدك. والعدّاد بيرجع من الصفر كل شهر.': { he: 'מספר אנשי הקשר השמורים אצלכם לא נספר: שמרו כמה שתרצו. והמונה מתאפס בכל חודש.', en: 'How many contacts you have stored doesn\'t count: store as many as you like. The counter resets every month.' },
+  'مش متأكد أي باقة؟ ابدأ بالمجاني وارفع لما تحتاج.': { he: 'לא בטוחים איזו חבילה? התחילו בחינם ושדרגו כשתצטרכו.', en: 'Not sure which plan? Start free and move up when you need to.' },
   // ---- Landing page — shipped-features-only rewrite ----
   'عميلك بيبعت على رقم شركتك — والرسالة بتوصل لفريقك بصندوق مشترك: بتتوزّع لحالها، بترد تلقائياً لما تحتاج، وبتتقاس بالتقارير. بالعربي والعبري والإنجليزي، وبواجهة مبنية من اليمين لليسار من الأساس.': { he: 'הלקוח שולח למספר של העסק — וההודעה מגיעה לצוות בתיבה משותפת: מתחלקת מעצמה, נענית אוטומטית כשצריך, ונמדדת בדוחות. בערבית, בעברית ובאנגלית, בממשק שנבנה מימין לשמאל מהיסוד.', en: 'Your customer messages your business number — and it lands in your team\'s shared inbox: routed automatically, answered automatically where it should be, and measured in reports. In Arabic, Hebrew and English, in an interface built right-to-left from the ground up.' },
   'رقمك الحالي، بمسح رمز واحد': { he: 'המספר הקיים שלכם, בסריקה אחת', en: 'Your existing number, one scan' },
