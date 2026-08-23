@@ -45,19 +45,45 @@ export type InboxScope =
 
 export const DEFAULT_SCOPE: InboxScope = { kind: 'system', value: 'all' };
 
-export function scopeMatches(
-  conv: Conv,
-  scope: InboxScope,
-  currentUserId: string | undefined,
+/**
+ * Everything a scope needs that cannot be read off a conversation.
+ *
+ * An object rather than more positional parameters. This signature had
+ * already reached four, and saved views would have made five — the point at
+ * which a caller silently passes the wrong argument in the right position and
+ * nothing complains. Adding a field here breaks the callers that need to know
+ * and leaves the rest alone.
+ */
+export type ScopeContext = {
+  /** The signed-in user, for the `mine` scope. */
+  currentUserId: string | undefined;
   /**
    * Conversations this user was named in.
    *
-   * Passed in rather than read from the conversation, because a mention
-   * lives on a notification and not on the thread. An undefined set means
-   * not loaded yet, which matches nothing — briefly showing an empty
-   * Mentions view is better than briefly showing every conversation in it.
+   * A mention lives on a notification, not on the thread, so it cannot be
+   * read from `conv`. An empty set means not loaded yet and matches nothing:
+   * briefly showing an empty Mentions view beats briefly showing every
+   * conversation in it.
    */
-  mentioned?: Set<string>,
+  mentioned: Set<string>;
+};
+
+/**
+ * Conversations that belong in an inbox at all.
+ *
+ * WhatsApp status broadcasts arrive as messages from `status@broadcast` and
+ * are not conversations with anybody. Excluded once, here, rather than in
+ * every caller's filter chain — which is where it lived, and where one caller
+ * forgetting it would have shown a phantom row.
+ */
+export function isRealConversation(conv: Conv): boolean {
+  return !conv.phone.includes('status@broadcast');
+}
+
+export function scopeMatches(
+  conv: Conv,
+  scope: InboxScope,
+  ctx: ScopeContext,
 ): boolean {
   // Snoozed threads belong to exactly one view. Checked before anything else
   // so the counts here and the list beside them cannot disagree — the first
@@ -68,10 +94,28 @@ export function scopeMatches(
 
   if (scope.kind === 'lifecycle') return conv.lifecycleStage === scope.value;
   if (scope.kind === 'team') return conv.teamId === scope.value;
-  if (scope.value === 'mine') return conv.assigneeId === currentUserId;
+  if (scope.value === 'mine') return conv.assigneeId === ctx.currentUserId;
   if (scope.value === 'unassigned') return !conv.assigneeId;
-  if (scope.value === 'mentions') return mentioned?.has(conv.id) ?? false;
+  if (scope.value === 'mentions') return ctx.mentioned.has(conv.id);
   return true;
+}
+
+/**
+ * How many conversations a scope holds.
+ *
+ * The count beside a row and the rows in the list are the same question, so
+ * they run the same predicate. The pane used to answer it with seven
+ * hand-written predicates — one per row — each duplicating a branch of
+ * scopeMatches and each free to drift from it. Both times the counts have
+ * disagreed with the list, that is where it came from.
+ */
+export function countForScope(
+  convs: Conv[],
+  scope: InboxScope,
+  ctx: ScopeContext,
+): number {
+  return convs.filter((conv) => isRealConversation(conv) && scopeMatches(conv, scope, ctx))
+    .length;
 }
 
 /**
@@ -239,26 +283,23 @@ export function InboxSelector({
     };
   }, []);
 
-  /**
-   * Counts for every row except Snoozed.
-   *
-   * Snoozed threads are excluded here rather than in each predicate, because
-   * the alternative is remembering it at nine call sites. The first version
-   * excluded them in the conversation list only and every number in this
-   * column was then one higher than the list beside it — the exact failure
-   * the note at the top of this file warns about, arrived by a different
-   * route.
-   */
-  const countWhere = (predicate: (conv: Conv) => boolean) =>
-    convs
-      .filter((conv) => !conv.phone.includes('status@broadcast'))
-      .filter((conv) => !isSnoozed(conv))
-      .filter(predicate).length;
+  const ctx: ScopeContext = { currentUserId, mentioned };
 
-  /** The one row that counts the threads everything else hides. */
-  const snoozedCount = convs.filter(
-    (conv) => !conv.phone.includes('status@broadcast') && isSnoozed(conv),
-  ).length;
+  /**
+   * Everything a row needs, derived from the one scope it represents.
+   *
+   * Its count, whether it is active, and what selecting it does were three
+   * separate expressions repeating the same scope literal three times. One
+   * of them drifting from the other two is a row that highlights the wrong
+   * entry, or counts a different thing from what it opens.
+   */
+  const row = (target: InboxScope) => ({
+    count: countForScope(convs, target, ctx),
+    active: sameScope(scope, target),
+    onSelect: () => onScopeChange(target),
+  });
+
+  const snoozedCount = countForScope(convs, { kind: 'system', value: 'snoozed' }, ctx);
 
   const connected = sessions?.filter((s) => s.connected).length ?? 0;
   const total = sessions?.length ?? 0;
@@ -277,24 +318,18 @@ export function InboxSelector({
         <Group title={t('صناديق الوارد')}>
           <ScopeRow
             label={t('كل المحادثات')}
-            count={countWhere(() => true)}
-            active={sameScope(scope, { kind: 'system', value: 'all' })}
-            onSelect={() => onScopeChange({ kind: 'system', value: 'all' })}
             icon={<Inbox className="h-3.5 w-3.5 shrink-0" />}
+            {...row({ kind: 'system', value: 'all' })}
           />
           <ScopeRow
             label={t('مُسندة لي')}
-            count={countWhere((c) => c.assigneeId === currentUserId)}
-            active={sameScope(scope, { kind: 'system', value: 'mine' })}
-            onSelect={() => onScopeChange({ kind: 'system', value: 'mine' })}
             icon={<UserCheck className="h-3.5 w-3.5 shrink-0" />}
+            {...row({ kind: 'system', value: 'mine' })}
           />
           <ScopeRow
             label={t('غير مسندة')}
-            count={countWhere((c) => !c.assigneeId)}
-            active={sameScope(scope, { kind: 'system', value: 'unassigned' })}
-            onSelect={() => onScopeChange({ kind: 'system', value: 'unassigned' })}
             icon={<UserX className="h-3.5 w-3.5 shrink-0" />}
+            {...row({ kind: 'system', value: 'unassigned' })}
           />
           {/*
             Mentions. Shown only once there is at least one — an agent nobody
@@ -307,19 +342,15 @@ export function InboxSelector({
           {snoozedCount > 0 && (
             <ScopeRow
               label={t('مؤجّلة')}
-              count={snoozedCount}
-              active={sameScope(scope, { kind: 'system', value: 'snoozed' })}
-              onSelect={() => onScopeChange({ kind: 'system', value: 'snoozed' })}
               icon={<Clock className="h-3.5 w-3.5 shrink-0" />}
+              {...row({ kind: 'system', value: 'snoozed' })}
             />
           )}
           {mentioned.size > 0 && (
             <ScopeRow
               label={t('ذُكرت فيها')}
-              count={countWhere((c) => mentioned.has(c.id))}
-              active={sameScope(scope, { kind: 'system', value: 'mentions' })}
-              onSelect={() => onScopeChange({ kind: 'system', value: 'mentions' })}
               icon={<AtSign className="h-3.5 w-3.5 shrink-0" />}
+              {...row({ kind: 'system', value: 'mentions' })}
             />
           )}
         </Group>
@@ -336,9 +367,7 @@ export function InboxSelector({
                 key={stage.id}
                 label={stage.name}
                 swatch={stage.color}
-                count={countWhere((c) => c.lifecycleStage === stage.name)}
-                active={sameScope(scope, { kind: 'lifecycle', value: stage.name })}
-                onSelect={() => onScopeChange({ kind: 'lifecycle', value: stage.name })}
+                {...row({ kind: 'lifecycle', value: stage.name })}
               />
             ))}
           </Group>
@@ -351,9 +380,7 @@ export function InboxSelector({
                 key={team.id}
                 label={team.name}
                 swatch={team.color ?? null}
-                count={countWhere((c) => c.teamId === team.id)}
-                active={sameScope(scope, { kind: 'team', value: team.id })}
-                onSelect={() => onScopeChange({ kind: 'team', value: team.id })}
+                {...row({ kind: 'team', value: team.id })}
               />
             ))}
           </Group>

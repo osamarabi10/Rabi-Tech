@@ -9,9 +9,10 @@ import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
   DEFAULT_SCOPE,
-  scopeMatches,
+  countForScope,
   useInboxTaxonomy,
   type InboxScope,
+  type ScopeContext,
 } from '@/components/inbox/inbox-selector';
 
 /**
@@ -73,12 +74,11 @@ export function InboxScopeMenu({
     };
   }, [open]);
 
-  // Counted the same way the pane counts, from the conversations actually
-  // loaded, so the two can never disagree about the same number.
-  const countWhere = (candidate: InboxScope) =>
-    convs
-      .filter((conv) => !conv.phone.includes('status@broadcast'))
-      .filter((conv) => scopeMatches(conv, candidate, currentUserId, mentioned)).length;
+  const ctx: ScopeContext = { currentUserId, mentioned };
+
+  // The same function the pane calls, not the same *logic* re-expressed.
+  // Wide and narrow cannot disagree about a number if they ask one question.
+  const countWhere = (candidate: InboxScope) => countForScope(convs, candidate, ctx);
 
   const groups: Array<{ title: string; options: Option[] }> = [
     {

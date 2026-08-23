@@ -75,8 +75,10 @@ import { LifecycleChip, useLifecycleStages } from '@/components/inbox/lifecycle-
 import {
   DEFAULT_SCOPE,
   InboxSelector,
+  isRealConversation,
   scopeMatches,
   type InboxScope,
+  type ScopeContext,
 } from '@/components/inbox/inbox-selector';
 import { GatewayNotice, InboxScopeMenu } from '@/components/inbox/inbox-scope-menu';
 import {
@@ -884,13 +886,26 @@ export default function InboxPage() {
   };
 
 
+  /**
+   * The scope context, built once per render.
+   *
+   * Rebuilding it inside the filter would allocate a set wrapper per
+   * conversation; memoising it also keeps the identity stable for anything
+   * downstream that depends on it.
+   */
+  const scopeCtx: ScopeContext = useMemo(
+    () => ({ currentUserId: currentUser?.id, mentioned: mentionedConvs }),
+    [currentUser?.id, mentionedConvs],
+  );
+
   // ── Filtered list ───────────────────────────────────────────────────────────
   const filtered = convs
     .filter((c) => !c.phone.includes('status@broadcast') && !c.name.includes('status@broadcast'))
-    // Snoozed threads leave every view but their own. That rule lives in
-    // scopeMatches, so the counts in the selector and this list are derived
-    // from the same code rather than from two copies of the same intent.
-    .filter((c) => scopeMatches(c, scope, currentUser?.id, mentionedConvs))
+    // Snoozed threads leave every view but their own, status broadcasts are
+    // not conversations, and mentions live on notifications. All three rules
+    // live in scopeMatches, so this list and the counts beside it are derived
+    // from one function rather than from two copies of the same intent.
+    .filter((c) => isRealConversation(c) && scopeMatches(c, scope, scopeCtx))
     .filter((c) => {
       if (convFilter === 'open') return c.status === 'OPEN';
       if (convFilter === 'pending') return c.status === 'PENDING';
