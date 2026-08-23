@@ -24,6 +24,7 @@ import {
   RotateCw,
   AlertCircle,
   WifiOff,
+  ImageOff,
   AlarmClock,
   AlarmClockOff,
 } from 'lucide-react';
@@ -131,6 +132,16 @@ const MEDIA_LABELS: Record<string, string> = {
 function MessageMedia({ mediaUrl, mediaType }: { mediaUrl?: string | null; mediaType?: string | null }) {
   const { t } = useT();
   const type = (mediaType || '').toLowerCase();
+  /**
+   * Whether the image refused to load.
+   *
+   * It used to be hidden — `style.display = 'none'` in the error handler —
+   * which turned every failure into an empty bubble. Images had in fact been
+   * 401ing for a long time, and because the tag erased itself the symptom was
+   * "images do not appear" rather than "images are broken": no icon, no gap,
+   * nothing to report. A failure nobody can see is a failure nobody fixes.
+   */
+  const [failed, setFailed] = useState(false);
   if (!mediaUrl) {
     if (!mediaType) return null;
     return (
@@ -141,8 +152,31 @@ function MessageMedia({ mediaUrl, mediaType }: { mediaUrl?: string | null; media
     );
   }
   const src = mediaUrl.startsWith('/') ? `${getBackendBaseUrl()}${mediaUrl}` : mediaUrl;
-  if (type === 'image' || type === 'sticker')
-    return <img src={src} alt="" className="mb-1 max-h-64 max-w-full rounded-lg object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />;
+  if (type === 'image' || type === 'sticker') {
+    if (failed) {
+      return (
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mb-1 flex items-center gap-2 rounded-lg border border-border bg-muted px-3 py-2 text-micro text-muted-foreground transition-colors hover:bg-accent"
+        >
+          <ImageOff className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          {/* Openable anyway: the agent may have a session the tag did not,
+              and "try it yourself" beats a dead end. */}
+          {t('تعذّر تحميل الصورة — افتحها بتبويب جديد')}
+        </a>
+      );
+    }
+    return (
+      <img
+        src={src}
+        alt=""
+        className="mb-1 max-h-64 max-w-full rounded-lg object-contain"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
   if (type === 'video') return <video src={src} controls className="mb-1 max-h-64 max-w-full rounded-lg" />;
   if (type === 'audio' || type === 'ptt') return <audio src={src} controls className="mb-1 w-full" />;
   return (

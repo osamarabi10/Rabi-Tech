@@ -20,6 +20,7 @@ import { sendCsatPrompt } from '../../utils/client-feedback';
 import { notifyAssigned, notifyMentioned, notifyResolved } from '../../utils/notification-service';
 import { isQuotaExceededError, quotaErrorResponse } from '../usage/entitlements';
 import { describeSendFailure } from '../../utils/send-failure';
+import { signMediaUrl } from '../../utils/media-url';
 import { requireTeamId } from '../../utils/teams';
 
 const router = Router();
@@ -310,6 +311,13 @@ router.get('/:id/messages', async (req, res) => {
     // Reverse to chronological order for the client
     messages.reverse();
 
+    // Signed here rather than stored: the signature expires, and one kept in
+    // the database would be permanently valid to anyone who copied it.
+    const signed = messages.map((message) => ({
+      ...message,
+      mediaUrl: signMediaUrl(message.mediaUrl, req.user!.organizationId),
+    }));
+
     // Mark inbound as read (only on first page — no `before` cursor)
     if (!before) {
       await prisma.message.updateMany({
@@ -319,7 +327,7 @@ router.get('/:id/messages', async (req, res) => {
     }
 
     res.json({
-      messages,
+      messages: signed,
       hasMore: messages.length === limit,
       oldestId: messages[0]?.id ?? null,
     });

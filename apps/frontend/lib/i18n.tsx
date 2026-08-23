@@ -15,6 +15,7 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  'تعذّر تحميل الصورة — افتحها بتبويب جديد': { he: 'טעינת התמונה נכשלה — פתחו אותה בלשונית חדשה', en: 'Could not load the image — open it in a new tab' },
   'حسب الاتفاق': { he: 'לפי הסכם', en: 'Custom pricing' },
   // ---- Pricing and signup ----
   'اختار الباقة اللي بتناسبك': { he: 'בחרו את החבילה שמתאימה לכם', en: 'Choose the plan that suits you' },

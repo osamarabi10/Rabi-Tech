@@ -209,7 +209,7 @@ app.get('/media-proxy', async (req, res) => {
 
   // If using signed token, verify the URL matches the token
   if (signedUrl) {
-    if (signedUrl !== url) {
+    if (signedUrl.url !== url) {
       return res.status(401).json({ error: 'Token/URL mismatch' });
     }
   }
@@ -223,9 +223,18 @@ app.get('/media-proxy', async (req, res) => {
   }
 
   try {
-    if (!req.user?.organizationId) return res.status(401).json({ error: 'Organization token required' });
+    /*
+     * The organization comes from whichever proof of identity was given.
+     *
+     * Demanding `req.user` here made the signed path unreachable: it is set
+     * by bearer auth, which a signed request deliberately skips. A correctly
+     * signed token was answered with "Organization token required", so the
+     * whole mechanism was dead code.
+     */
+    const organizationId = signedUrl?.organizationId ?? req.user?.organizationId;
+    if (!organizationId) return res.status(401).json({ error: 'Organization token required' });
     const { OpenWAService } = require('./modules/whatsapp/openwa.service');
-    const upstream = await runAsOrganization(req.user.organizationId, () =>
+    const upstream = await runAsOrganization(organizationId, () =>
       OpenWAService.getMediaUrl(url),
     );
     const buf = upstream.buffer;
@@ -265,21 +274,44 @@ app.get('/media-proxy/message', async (req, res) => {
 
   try {
     const { OpenWAService } = require('./modules/whatsapp/openwa.service');
-    if (!req.user?.organizationId) return res.status(401).json({ error: 'Organization token required' });
-    const buffer = await runAsOrganization(req.user.organizationId, async () => {
+    // Signed or bearer — either proves which organization is asking. See the
+    // note on the other proxy for why requiring `req.user` broke this.
+    const organizationId = signedMedia?.organizationId ?? req.user?.organizationId;
+    if (!organizationId) return res.status(401).json({ error: 'Organization token required' });
+    const buffer = await runAsOrganization(organizationId, async () => {
+      // Still checked: a token proves who is asking, and this proves the
+      // message is theirs. A signature over someone else's message id must
+      // not become a way to read it.
       const ownedMessage = await require('./prisma').prisma.message.findUnique({
         where: {
           organizationId_waMessageId: {
-            organizationId: req.user!.organizationId,
+            organizationId,
             waMessageId: msgId,
           },
         },
         select: { id: true },
       });
-      if (!ownedMessage) return null;
-      return OpenWAService.getMessageMedia(session, msgId);
+      if (!ownedMessage) return 'not-yours' as const;
+      const media = await OpenWAService.getMessageMedia(session, msgId);
+      return media || ('no-media' as const);
     });
-    if (!buffer) return res.status(404).json({ error: 'Media not found' });
+
+    /*
+     * Two different failures, told apart.
+     *
+     * Both used to be 404 "Media not found": a message belonging to another
+     * organization, and the gateway having nothing to give because the session
+     * is offline. The first is a permission answer and the second is an
+     * outage, and an agent sent to look for a deleted image when their channel
+     * is simply down is being sent the wrong way.
+     */
+    if (buffer === 'not-yours') return res.status(404).json({ error: 'Media not found' });
+    if (buffer === 'no-media') {
+      return res.status(502).json({
+        error: 'تعذّر جلب الصورة من القناة — تأكد إنها متصلة',
+        code: 'channel-unavailable',
+      });
+    }
     const contentType = detectMimeType(buffer, type);
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=86400');
