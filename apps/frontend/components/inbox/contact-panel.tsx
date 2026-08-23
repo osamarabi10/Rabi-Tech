@@ -18,6 +18,7 @@ import { avatarColor } from '@/lib/constants';
 import { useT } from '@/lib/i18n';
 import { ConsentProvenanceLine } from '@/components/inbox/consent-provenance';
 import { ContactConversationsTab } from '@/components/inbox/contact-conversations-tab';
+import { CustomFieldsSection } from '@/components/inbox/custom-fields-section';
 import { LifecycleSelect, useLifecycleStages } from './lifecycle-select';
 import {
   ActivityTab,
@@ -301,6 +302,9 @@ export function ContactPanel({
           </div>
         )}
       </div>
+
+      {/* Tenant-defined fields. Renders nothing when none are configured. */}
+      <CustomFieldsSection contactId={conversation.contactId} />
 
       {/* Assignment */}
       <div className="border-b border-border p-4">

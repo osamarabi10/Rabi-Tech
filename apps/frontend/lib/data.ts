@@ -1569,3 +1569,19 @@ export async function fetchContactConversations(
   const { data } = await api.get(`/api/contacts/${contactId}/conversations`);
   return data;
 }
+
+/**
+ * One contact's custom field values, keyed by field slug.
+ *
+ * Read from the contact record rather than carried on every conversation: a
+ * list of hundreds of rows has no business hauling every custom field so that
+ * one open panel can read one of them.
+ */
+export async function fetchContactCustomFields(
+  contactId: string,
+): Promise<Record<string, string | null>> {
+  const { data } = await api.get(`/api/contacts/${contactId}`);
+  return Object.fromEntries(
+    (data.customFieldValues || []).map((row: any) => [row.fieldDefinition.slug, row.value]),
+  );
+}

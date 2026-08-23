@@ -484,7 +484,39 @@ router.put('/:id/custom-fields/:slug', async (req, res) => {
       where: { organizationId_slug: { organizationId: req.user!.organizationId, slug: req.params.slug } },
     });
     if (!definition) return res.status(404).json({ error: 'Custom field not found' });
+
     const value = cleanString(req.body?.value, 2000);
+
+    /*
+     * Validate against the definition.
+     *
+     * The field's own `dataType` and `allowedValues` were enforced nowhere: a
+     * number field took "soon", a list field took anything at all, and the
+     * contact filter DSL then queried a column whose contents did not match
+     * the type it was declared as. Nothing surfaced it because until now
+     * nothing wrote to these except an import.
+     *
+     * An empty value always passes. Clearing a field is not the same as
+     * setting it to something invalid, and refusing to clear one would leave
+     * a mistyped value permanently stuck.
+     */
+    if (value) {
+      if (definition.dataType === 'number' && !Number.isFinite(Number(value))) {
+        return res.status(400).json({ error: `${definition.name} لازم يكون رقم` });
+      }
+      if (definition.dataType === 'date' && Number.isNaN(Date.parse(value))) {
+        return res.status(400).json({ error: `${definition.name} لازم يكون تاريخ صالح` });
+      }
+      if (
+        definition.dataType === 'list' &&
+        definition.allowedValues.length > 0 &&
+        !definition.allowedValues.includes(value)
+      ) {
+        return res.status(400).json({
+          error: `${definition.name}: ${definition.allowedValues.join(' / ')}`,
+        });
+      }
+    }
     const row = await prisma.customFieldValue.upsert({
       where: {
         organizationId_contactId_fieldDefinitionId: {

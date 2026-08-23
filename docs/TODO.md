@@ -424,7 +424,24 @@ place deliberately. See the gateway runbook.
   token bucket — BullMQ group limiting is Pro-only, so not a one-liner
 - [ ] **H3. Reports onto `PlatformDailyMetric` rollups** (scale, not
   correctness)
-- [ ] **H4. Custom-field editing** in the inbox contact panel
+- [x] **H4. Custom-field editing** in the inbox contact panel
+  — **done 2026-08-23.** A subscriber could define custom fields in settings
+  and then fill them from exactly one place: a CSV import. The panel an agent
+  is looking at while the customer tells them the thing worth recording could
+  not write to them.
+
+  Saved per field on blur, not behind a distant Save button — there is no form
+  to submit here, and a section of inputs with one far-away button is how edits
+  get lost when the agent clicks away to answer the message. List fields render
+  as a select of their allowed values; numbers and dates get the matching input
+  type and .
+
+  Closed a hole while wiring it: the write route accepted any string for any
+  field. A number field took "soon" and a list field took anything, and the
+  contact filter DSL then queried a column whose contents did not match its
+  declared type. Validated now, with the error naming the field and what it
+  expected. Clearing a value always passes — refusing that would leave a
+  mistyped value permanently stuck.
 - [x] **H5. @mentions in internal notes** (+ notification fan-out)
   — **done 2026-08-22.** Same work as M6.6 above; this entry predated it.
 - [ ] **H6. Backup job**: nightly `pg_dump` to `.tools/backups` + retention

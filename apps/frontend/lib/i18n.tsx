@@ -15,6 +15,8 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Custom fields in the panel (H4) ----
+  'حقول مخصصة': { he: 'שדות מותאמים', en: 'Custom fields' },
   // ---- Contact conversations tab (M6.4) ----
   'ما في محادثات ثانية لهالجهة': { he: 'אין שיחות נוספות לאיש הקשר הזה', en: 'No other conversations for this contact' },
   'المعروضة الآن': { he: 'המוצגת כעת', en: 'Showing now' },
