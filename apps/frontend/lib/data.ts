@@ -1534,3 +1534,18 @@ export async function fetchConsentProvenance(contactId: string): Promise<Consent
   const { data } = await api.get(`/api/contacts/${contactId}/consent`);
   return data;
 }
+
+/**
+ * Conversations where the signed-in user was @mentioned.
+ *
+ * Ids rather than notifications: the inbox filters its own list by these, and
+ * a second list of the same threads rendered differently would be a second
+ * thing to keep in sync.
+ */
+export async function fetchMentionedConversations(): Promise<{
+  conversationIds: string[];
+  unreadConversationIds: string[];
+}> {
+  const { data } = await api.get('/api/notifications/mentions');
+  return data;
+}

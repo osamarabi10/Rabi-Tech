@@ -39,12 +39,15 @@ export function InboxScopeMenu({
   scope,
   onScopeChange,
   currentUserId,
+  mentioned,
   className,
 }: {
   convs: Conv[];
   scope: InboxScope;
   onScopeChange: (next: InboxScope) => void;
   currentUserId: string | undefined;
+  /** Conversations this user was @mentioned in. Same set the pane uses. */
+  mentioned: Set<string>;
   className?: string;
 }) {
   const { t } = useT();
@@ -75,7 +78,7 @@ export function InboxScopeMenu({
   const countWhere = (candidate: InboxScope) =>
     convs
       .filter((conv) => !conv.phone.includes('status@broadcast'))
-      .filter((conv) => scopeMatches(conv, candidate, currentUserId)).length;
+      .filter((conv) => scopeMatches(conv, candidate, currentUserId, mentioned)).length;
 
   const groups: Array<{ title: string; options: Option[] }> = [
     {
@@ -85,6 +88,10 @@ export function InboxScopeMenu({
           { scope: DEFAULT_SCOPE, label: t('كل المحادثات') },
           { scope: { kind: 'system', value: 'mine' } as InboxScope, label: t('مُسندة لي') },
           { scope: { kind: 'system', value: 'unassigned' } as InboxScope, label: t('غير مسندة') },
+          // Same rule as the pane: offered only once there is one to look at.
+          ...(mentioned.size > 0
+            ? [{ scope: { kind: 'system', value: 'mentions' } as InboxScope, label: t('ذُكرت فيها') }]
+            : []),
         ] as Array<{ scope: InboxScope; label: string }>
       ).map((option) => ({ ...option, count: countWhere(option.scope) })),
     },

@@ -776,9 +776,11 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   `components/inbox/inbox-scope-menu.tsx` below `lg` where the column is
   hidden — same scopes, same counting code, so the two cannot disagree.
 
-  **Remaining: Mentions and Snoozed.** Mentions needs the inbox described in
-  item 6. Snoozed needs a data model first — nothing in the schema expresses
-  "hide this until Tuesday", so there is no filter to surface.
+  **Mentions added 2026-08-23** — see item 6.
+
+  **Remaining: Snoozed.** It needs a data model first: nothing in the schema
+  expresses "hide this until Tuesday", so there is no filter to surface and
+  no honest count to put beside it.
 - [x] **2. Lifecycle stages** as a configurable pipeline, surfaced as inbox
   filters with counts
   — **pipeline done 2026-08-22; the inbox filters are NOT built.**
@@ -810,7 +812,7 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   **Remaining: the Conversations tab** — this contact's other threads.
 - [ ] **5. Session-health bar** on each conversation row — our analogue of their
   service-window bar
-- [ ] **6. @mentions** + a Mentions inbox
+- [x] **6. @mentions** + a Mentions inbox
   — **mentions done 2026-08-22; the Mentions inbox is NOT built.**
   `@mention` popover in the composer mirroring the `:shortCode` pattern (same
   keyboard navigation), firing `NotificationType.MENTION` — an enum value that
@@ -821,7 +823,22 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   "@ahmad" in prose addresses nobody. Only teammates still named in the final
   text are notified, and only on internal notes — a customer-facing reply
   carrying ids would let a WhatsApp message ping agents the customer never saw
-  named. **Remaining: the Mentions inbox itself.**
+  named.
+
+  — **Mentions inbox done 2026-08-23.** A scope in the selector beside Mine
+  and Unassigned, on both the wide pane and the compact menu below `lg`,
+  counted by the same code so the two cannot disagree.
+
+  Built entirely on data that already existed: `MENTION` notifications have
+  carried a conversation id since mentions were written, and nothing ever
+  read them back — being named produced a bell notification and no way to
+  find the thread again once it scrolled past.
+
+  Read state is reported by the endpoint but not filtered on. An agent who
+  has *read* a mention has not necessarily dealt with it, and a queue that
+  empties itself the moment you glance at it is not a queue. The row appears
+  only when there is at least one: an agent nobody has ever named does not
+  need a permanent zero telling them so.
 
 ## M7 — Reports consolidation · ~1 week
 
@@ -888,7 +905,21 @@ a rollup of their own.
 
 - [ ] **1. Granular restrictions** over roles: restrict data export, contact
   deletion, workspace settings, integration settings
-- [ ] **2. Role-aware navigation** — agents see three destinations, not five
+- [x] **2. Role-aware navigation** — agents see three destinations, not five
+  — **done 2026-08-23.** Four, not three, once measured against the real
+  matrix rather than estimated: inbox, contacts, automations and settings.
+  `campaign:read` and `analytics:read` are ADMIN / SUPERVISOR / FINANCE, so
+  Broadcasts and Reports were destinations an agent could see and not open.
+
+  `permissionsForRole()` derives the caller's set from the same
+  `ROLE_PERMISSIONS` the middleware enforces and `/auth/me` returns it; the
+  sidebar filters on that. A mirrored matrix on the frontend would drift the
+  first time a role gains an operation here and the other file is forgotten,
+  and it would drift toward offering pages the server refuses.
+
+  Hiding, not explaining — the opposite of the rule for controls inside a
+  page. A blank space where a button was is ambiguous; an absent menu entry
+  is not, and a menu is a list of places you can go.
 - [x] **3. CSV import** — built (M8). Header auto-mapping, validation preview,
   duplicate-in-file detection, optional tag, and the **mandatory opt-in
   declaration** writing `consentSource: 'import'`.

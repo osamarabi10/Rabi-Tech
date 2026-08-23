@@ -49,6 +49,7 @@ import {
   type InboxConfig,
   isClientRating,
   fetchSessions,
+  fetchMentionedConversations,
   retryMessage,
   contactDisplayName,
   UNKNOWN_CONTACT,
@@ -268,6 +269,28 @@ export default function InboxPage() {
       cancelled = true;
     };
   }, []);
+
+  /**
+   * Conversations this user was @mentioned in.
+   *
+   * Refreshed alongside the conversation list rather than on its own timer:
+   * a mention arrives with a message, so the two are already in step, and a
+   * second poller would be a second thing to get wrong.
+   */
+  const [mentionedConvs, setMentionedConvs] = useState<Set<string>>(new Set());
+
+  const refreshMentions = useCallback(() => {
+    fetchMentionedConversations()
+      .then((result) => setMentionedConvs(new Set(result.conversationIds)))
+      .catch(() => {
+        // Left as it was. Emptying the set would make the Mentions row
+        // disappear mid-session over one failed request.
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshMentions();
+  }, [refreshMentions]);
 
   /** Which number a new conversation should go out from, by its team. */
   const [newTeamId, setNewTeamId] = useState<string>('');
@@ -790,7 +813,7 @@ export default function InboxPage() {
   // ── Filtered list ───────────────────────────────────────────────────────────
   const filtered = convs
     .filter((c) => !c.phone.includes('status@broadcast') && !c.name.includes('status@broadcast'))
-    .filter((c) => scopeMatches(c, scope, currentUser?.id))
+    .filter((c) => scopeMatches(c, scope, currentUser?.id, mentionedConvs))
     .filter((c) => {
       if (convFilter === 'open') return c.status === 'OPEN';
       if (convFilter === 'pending') return c.status === 'PENDING';
@@ -844,6 +867,7 @@ export default function InboxPage() {
         scope={scope}
         onScopeChange={setScope}
         currentUserId={currentUser?.id}
+        mentioned={mentionedConvs}
         className={cn('hidden lg:flex', selId && 'max-lg:hidden')}
       />
 
@@ -972,6 +996,7 @@ export default function InboxPage() {
             scope={scope}
             onScopeChange={setScope}
             currentUserId={currentUser?.id}
+            mentioned={mentionedConvs}
             className="lg:hidden"
           />
           {(

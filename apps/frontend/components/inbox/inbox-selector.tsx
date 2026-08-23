@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ChevronDown, Inbox, UserCheck, UserX, Wifi, WifiOff } from 'lucide-react';
+import { AtSign, ChevronDown, Inbox, UserCheck, UserX, Wifi, WifiOff } from 'lucide-react';
 import {
   fetchLifecycleStages,
   fetchSessions,
@@ -38,7 +38,7 @@ import { cn } from '@/lib/utils';
  */
 
 export type InboxScope =
-  | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' }
+  | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' | 'mentions' }
   | { kind: 'lifecycle'; value: string }
   | { kind: 'team'; value: string };
 
@@ -48,11 +48,21 @@ export function scopeMatches(
   conv: Conv,
   scope: InboxScope,
   currentUserId: string | undefined,
+  /**
+   * Conversations this user was named in.
+   *
+   * Passed in rather than read from the conversation, because a mention
+   * lives on a notification and not on the thread. An undefined set means
+   * not loaded yet, which matches nothing — briefly showing an empty
+   * Mentions view is better than briefly showing every conversation in it.
+   */
+  mentioned?: Set<string>,
 ): boolean {
   if (scope.kind === 'lifecycle') return conv.lifecycleStage === scope.value;
   if (scope.kind === 'team') return conv.teamId === scope.value;
   if (scope.value === 'mine') return conv.assigneeId === currentUserId;
   if (scope.value === 'unassigned') return !conv.assigneeId;
+  if (scope.value === 'mentions') return mentioned?.has(conv.id) ?? false;
   return true;
 }
 
@@ -184,12 +194,15 @@ export function InboxSelector({
   scope,
   onScopeChange,
   currentUserId,
+  mentioned,
   className,
 }: {
   convs: Conv[];
   scope: InboxScope;
   onScopeChange: (next: InboxScope) => void;
   currentUserId: string | undefined;
+  /** Conversations this user was @mentioned in, for the Mentions row. */
+  mentioned: Set<string>;
   className?: string;
 }) {
   const { t } = useT();
@@ -257,6 +270,19 @@ export function InboxSelector({
             onSelect={() => onScopeChange({ kind: 'system', value: 'unassigned' })}
             icon={<UserX className="h-3.5 w-3.5 shrink-0" />}
           />
+          {/*
+            Mentions. Shown only once there is at least one — an agent nobody
+            has ever named does not need a permanent zero telling them so.
+          */}
+          {mentioned.size > 0 && (
+            <ScopeRow
+              label={t('ذُكرت فيها')}
+              count={countWhere((c) => mentioned.has(c.id))}
+              active={sameScope(scope, { kind: 'system', value: 'mentions' })}
+              onSelect={() => onScopeChange({ kind: 'system', value: 'mentions' })}
+              icon={<AtSign className="h-3.5 w-3.5 shrink-0" />}
+            />
+          )}
         </Group>
 
         {/*

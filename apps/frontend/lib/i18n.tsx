@@ -15,6 +15,8 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Mentions inbox (M6.6) ----
+  'ذُكرت فيها': { he: 'אוזכרתם בהן', en: 'Mentions' },
   // ---- Consent provenance (U2.4) ----
   'من رسالة العميل': { he: 'מהודעת הלקוח', en: 'From the customer' },
   'من الموظف': { he: 'מהנציג', en: 'By an agent' },
