@@ -20,6 +20,8 @@ The authoritative RabiTech target architecture, implementation checkpoint, relea
 
 **[docs/UI-SURFACE-MAP.md](docs/UI-SURFACE-MAP.md) — read before editing any UI.** Route and component map, and the places where the obvious edit is the wrong one. [docs/UI-PHASES.md](docs/UI-PHASES.md) records what the U1–U8 UI phases changed; [docs/API-CONTRACTS-U2-U6.md](docs/API-CONTRACTS-U2-U6.md) documents the endpoints they added.
 
+[docs/AMARSAIL-DESIGN-SYSTEM.md](docs/AMARSAIL-DESIGN-SYSTEM.md) is the design system for Amarsail, which evolves this console: colour tokens with separate fill/text values, the IBM Plex trilingual stack, the role type scale, screen architecture for the four-pane inbox and the OpenWA session lifecycle, and component specs. Its rules are the shipped ones — read it before designing a new surface.
+
 **[docs/WHATSAPP-GATEWAY-RUNBOOK.md](docs/WHATSAPP-GATEWAY-RUNBOOK.md) — read first when "WhatsApp isn't working".** Inbound-broken and outbound-broken are separate faults with separate causes; it covers both, plus which operations discard WhatsApp credentials.
 
 [docs/BILLING-PROVIDER-GUIDE.md](docs/BILLING-PROVIDER-GUIDE.md) — everything needed to switch on online payments later. Activation is already automatic; only checkout is stubbed.
