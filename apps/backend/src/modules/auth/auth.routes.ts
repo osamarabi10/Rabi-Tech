@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../../prisma';
 import { verifyToken } from './auth.middleware';
+import { permissionsForRole } from '../../middleware/rbac.middleware';
 import { getIO } from '../../socket';
 import { socketRoom } from '../../socket/rooms';
 import { notifyAssigned } from '../../utils/notification-service';
@@ -158,6 +159,7 @@ router.get('/me', verifyToken, async (req, res) => {
         name: req.platformUser.email,
         email: req.platformUser.email,
         role: 'VIEWER',
+        permissions: permissionsForRole('VIEWER'),
         platformRole: req.platformUser.platformRole,
         scope: 'PLATFORM',
         viewingOrganizationId: req.user!.organizationId,
@@ -183,7 +185,11 @@ router.get('/me', verifyToken, async (req, res) => {
         organizationId: true,
       },
     });
-    res.json(user);
+
+    // Sent alongside the role rather than instead of it: the client shows the
+    // role and decides from the permissions, and those are two different
+    // questions.
+    res.json(user && { ...user, permissions: permissionsForRole(user.role) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch user' });
   }

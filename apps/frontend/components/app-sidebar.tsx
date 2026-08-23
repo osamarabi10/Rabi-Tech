@@ -64,11 +64,15 @@ import {
  * nothing is worse than one that is not there.
  */
 const NAV_ITEMS = [
-  { href: '/inbox', icon: MessageSquare, label: 'المحادثات' },
-  { href: '/contacts', icon: Users, label: 'جهات الاتصال' },
-  { href: '/campaigns', icon: Megaphone, label: 'البث' },
-  { href: '/automations', icon: Workflow, label: 'الأتمتة' },
-  { href: '/reports', icon: LayoutDashboard, label: 'التقارير' },
+  { href: '/inbox', icon: MessageSquare, label: 'المحادثات', requires: 'conversation:read' },
+  { href: '/contacts', icon: Users, label: 'جهات الاتصال', requires: 'contact:read' },
+  { href: '/campaigns', icon: Megaphone, label: 'البث', requires: 'campaign:read' },
+  { href: '/automations', icon: Workflow, label: 'الأتمتة', requires: 'workflow:view' },
+  { href: '/reports', icon: LayoutDashboard, label: 'التقارير', requires: 'analytics:read' },
+  // No permission gate. Settings is the one destination every role has some
+  // business in — an agent reads the templates and the auto-replies there —
+  // and the page already hides the admin-only sections from its own
+  // sub-navigation.
   { href: '/settings', icon: Settings, label: 'الإعدادات' },
 ];
 
@@ -105,6 +109,17 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
 
   const isPlatformOwner = user.platformRole === 'OWNER' || user.scope === 'PLATFORM';
   const [viewAs, setViewAs] = useState<{ id: string; name: string } | null>(null);
+
+  /**
+   * What this user is allowed to do, as the server computes it.
+   *
+   * `null` until the answer arrives, and every destination is shown while it
+   * is null. Hiding first and revealing later would flash a shrunken menu at
+   * an admin on every page load, and the cost of the other order is that an
+   * agent may briefly see a link they cannot use — which the server refuses
+   * anyway.
+   */
+  const [permissions, setPermissions] = useState<string[] | null>(null);
   useEffect(() => {
     setViewAs(getViewAsOrg());
   }, [pathname]);
@@ -115,19 +130,38 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
     router.push('/platform/subscribers');
   };
 
+  /**
+   * Destinations this user can actually reach.
+   *
+   * An agent was shown Broadcasts and Reports and got a refusal from both.
+   * That is different from a control inside a page that vanishes for someone
+   * without permission — there, the blank space is indistinguishable from an
+   * empty card, so the restriction is stated instead. A navigation entry has
+   * no such ambiguity: a menu is a list of places you can go, and one that
+   * leads nowhere is a worse answer than its absence.
+   */
+  const permitted = (items: typeof NAV_ITEMS) =>
+    permissions === null
+      ? items
+      : items.filter((item) => !item.requires || permissions.includes(item.requires));
+
   // A platform owner only has tenant pages to visit while viewing a subscriber;
   // without one every tenant endpoint refuses them, so the links would be dead.
   const navItems = isPlatformOwner
     ? viewAs
       ? [...NAV_ITEMS, PLATFORM_ITEM]
       : [PLATFORM_ITEM]
-    : NAV_ITEMS;
+    : permitted(NAV_ITEMS);
+
 
   useEffect(() => {
     import('@/lib/api').then(({ default: api }) =>
       api
         .get('/api/auth/me')
-        .then((r) => setIsAway(!!r.data.isAway))
+        .then((r) => {
+          setIsAway(!!r.data.isAway);
+          setPermissions(Array.isArray(r.data.permissions) ? r.data.permissions : null);
+        })
         .catch(() => {}),
     );
   }, []);

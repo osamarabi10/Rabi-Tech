@@ -62,6 +62,29 @@ const ROLE_PERMISSIONS: Record<string, Set<Role>> = {
  * Middleware to check if user has permission for an operation.
  * Usage: `app.post('/endpoint', requirePermission('conversation:resolve'), handler)`
  */
+/**
+ * Every operation a role is allowed, derived from the matrix above.
+ *
+ * For the client, which needs to know what to *offer* — a navigation entry
+ * to a page the caller can never load is a dead end, and asking the user to
+ * discover that by clicking it is poor manners.
+ *
+ * Derived rather than duplicated. A second copy of this matrix on the
+ * frontend would drift the first time somebody grants a role one more
+ * operation here and forgets the other file, and the failure would be silent
+ * in the direction that matters: a page offered to someone the server then
+ * refuses.
+ *
+ * This is a display aid and nothing more. Every route still calls
+ * requirePermission; hiding a link has never been access control.
+ */
+export function permissionsForRole(role: string): string[] {
+  return Object.entries(ROLE_PERMISSIONS)
+    .filter(([, roles]) => roles.has(role as Role))
+    .map(([operation]) => operation)
+    .sort();
+}
+
 export function requirePermission(operation: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     const user = req.user;
