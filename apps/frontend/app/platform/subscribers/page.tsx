@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, LogOut, MessageCircle, MoreHorizontal, Pause, Play,
-  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock, Clock,
+  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock, Clock, Plug,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api, { setViewAsOrg } from '@/lib/api';
@@ -122,6 +122,10 @@ export default function SubscribersPage() {
    * the row and the ledger harder to read than either is alone.
    */
   const [financeTarget, setFinanceTarget] = useState<Subscriber | null>(null);
+  const [channelTarget, setChannelTarget] = useState<Subscriber | null>(null);
+  const [channelBaseUrl, setChannelBaseUrl] = useState('');
+  const [channelApiKey, setChannelApiKey] = useState('');
+  const [rotateWebhook, setRotateWebhook] = useState(false);
   const { health, refresh: refreshHealth } = useGatewayHealth();
   const [form, setForm] = useState(EMPTY_FORM);
 
@@ -223,6 +227,34 @@ export default function SubscribersPage() {
       await load();
     } catch (error: any) {
       toast.error(error?.response?.data?.error || 'Could not extend the trial');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  /**
+   * Point a hand-configured subscriber at a different OpenWA deployment.
+   *
+   * The API key is write-only everywhere: it is stored encrypted and never
+   * returned, so this field starts empty and an empty save is refused rather
+   * than silently blanking a working credential.
+   */
+  const saveChannel = async () => {
+    if (!channelTarget) return;
+    setActionId(channelTarget.id);
+    try {
+      await api.patch(`/api/platform/subscribers/${channelTarget.id}/openwa-channel`, {
+        baseUrl: channelBaseUrl.trim(),
+        apiKey: channelApiKey.trim(),
+        rotateWebhookToken: rotateWebhook,
+      });
+      toast.success('Channel updated');
+      setChannelTarget(null);
+      setChannelApiKey('');
+      setRotateWebhook(false);
+      await load();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Could not update the channel');
     } finally {
       setActionId(null);
     }
@@ -415,23 +447,43 @@ export default function SubscribersPage() {
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button size="icon" variant="ghost" disabled={actionId === subscriber.id || !channel?.managedByProvisioner} title="Gateway actions">
+                    {/*
+                      Enabled regardless of the gateway. This trigger used to
+                      require a provisioner-managed channel, which disabled the
+                      whole menu — including extending a trial and activating a
+                      plan — for every subscriber on a hand-configured gateway.
+                      Billing actions have nothing to do with who provisioned
+                      the channel. The gateway *items* still carry that
+                      condition, individually, below.
+                    */}
+                    <Button size="icon" variant="ghost" disabled={actionId === subscriber.id} title="Actions">
                       <MoreHorizontal className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem disabled={channel?.provisioningState !== 'FAILED'} onSelect={() => gatewayAction(subscriber, 'retry')}>
+                    <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState !== 'FAILED'} onSelect={() => gatewayAction(subscriber, 'retry')}>
                       <RefreshCw /> Retry provisioning
                     </DropdownMenuItem>
-                    <DropdownMenuItem disabled={channel?.provisioningState === 'SUSPENDED'} onSelect={() => gatewayAction(subscriber, 'suspend')}>
+                    <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState === 'SUSPENDED'} onSelect={() => gatewayAction(subscriber, 'suspend')}>
                       <Pause /> Force suspend
                     </DropdownMenuItem>
-                    <DropdownMenuItem disabled={channel?.provisioningState !== 'SUSPENDED'} onSelect={() => gatewayAction(subscriber, 'resume')}>
+                    <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState !== 'SUSPENDED'} onSelect={() => gatewayAction(subscriber, 'resume')}>
                       <Play /> Resume
                     </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => gatewayAction(subscriber, 'restart')}>
+                    <DropdownMenuItem disabled={!channel?.managedByProvisioner} onSelect={() => gatewayAction(subscriber, 'restart')}>
                       <RotateCw /> Restart gateway
                     </DropdownMenuItem>
+                    {/*
+                      The inverse condition: a managed gateway is changed
+                      through provisioning actions and the endpoint refuses it
+                      with a 409, so offering this there would be a control
+                      that always errors.
+                    */}
+                    {channel && !channel.managedByProvisioner && (
+                      <DropdownMenuItem onSelect={() => setChannelTarget(subscriber)}>
+                        <Plug /> Edit OpenWA channel
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuSeparator />
                     {/* Only for subscribers who actually have a trial to extend. */}
                     {subscriber.subscriptions[0]?.trialEndsAt && (
@@ -482,6 +534,74 @@ export default function SubscribersPage() {
             </DialogTitle>
           </DialogHeader>
           {financeTarget && <FinanceDocumentTable subscriberId={financeTarget.id} />}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!channelTarget}
+        onOpenChange={(next) => {
+          if (!next) { setChannelTarget(null); setChannelApiKey(''); setRotateWebhook(false); }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>OpenWA channel — {channelTarget?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="ch-url">Base URL</Label>
+              <Input
+                id="ch-url"
+                className="mt-1"
+                dir="ltr"
+                value={channelBaseUrl}
+                onChange={(e) => setChannelBaseUrl(e.target.value)}
+                placeholder="http://openwa:2785"
+              />
+            </div>
+            <div>
+              <Label htmlFor="ch-key">API key</Label>
+              <Input
+                id="ch-key"
+                className="mt-1"
+                dir="ltr"
+                type="password"
+                value={channelApiKey}
+                onChange={(e) => setChannelApiKey(e.target.value)}
+              />
+              {/*
+                Said rather than left to be discovered: the stored key is
+                encrypted and never sent back, so this box is empty even though
+                a key exists.
+              */}
+              <p className="mt-1 text-caption text-muted-foreground">
+                Stored encrypted and never returned, so this starts empty. Both fields are required.
+              </p>
+            </div>
+            <label className="flex items-start gap-2 text-caption">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-primary"
+                checked={rotateWebhook}
+                onChange={(e) => setRotateWebhook(e.target.checked)}
+              />
+              <span>
+                Rotate the webhook token
+                <span className="mt-0.5 block text-muted-foreground">
+                  Inbound messages stop until the new token is configured on the gateway.
+                </span>
+              </span>
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChannelTarget(null)}>Cancel</Button>
+            <Button
+              onClick={saveChannel}
+              disabled={!channelBaseUrl.trim() || !channelApiKey.trim() || actionId !== null}
+            >
+              Save
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

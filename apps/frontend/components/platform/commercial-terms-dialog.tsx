@@ -97,10 +97,32 @@ export function CommercialTermsDialog({
   const [reason, setReason] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
 
+  /**
+   * Who changed these terms before, and what they said the reason was.
+   *
+   * The audit rows were already written on every save — the transaction that
+   * changes an override writes the record in the same breath, so one cannot
+   * exist without the other. Nothing ever read them back. An audit trail
+   * nobody can open is a compliance gesture, not an audit trail.
+   */
+  const [history, setHistory] = useState<Array<{
+    id: string;
+    timestamp: string;
+    actorEmail: string | null;
+    reason: string | null;
+    afterState: unknown;
+  }>>([]);
+
   const load = useCallback(async () => {
     if (!subscriberId) return;
     setLoading(true);
     try {
+      // Failing to load history must not cost the owner the editor itself, so
+      // it is fetched beside the terms rather than in the same await.
+      api
+        .get(`/api/platform/subscribers/${subscriberId}/commercials/history`)
+        .then((response) => setHistory(Array.isArray(response.data) ? response.data : []))
+        .catch(() => setHistory([]));
       const { data } = await api.get(`/api/platform/subscribers/${subscriberId}/commercials`);
       setOrg(data.organization);
       setEffective(data.effective);
@@ -291,6 +313,36 @@ export function CommercialTermsDialog({
                 Last changed {new Date(org.overrideSetAt).toLocaleString('en-GB')}
                 {org.overrideSetByEmail ? ` by ${org.overrideSetByEmail}` : ''}
               </p>
+            )}
+
+            {/*
+              Only when there is a history. A permanent empty 'History' heading
+              on every subscriber who has never had an override is a section
+              that teaches nothing.
+            */}
+            {history.length > 0 && (
+              <div className="border-t border-border pt-3">
+                <p className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+                  History
+                </p>
+                <ul className="mt-2 space-y-2">
+                  {history.map((entry) => (
+                    <li key={entry.id} className="text-caption">
+                      <span className="text-muted-foreground" dir="ltr">
+                        {new Date(entry.timestamp).toLocaleString('en-GB')}
+                      </span>
+                      {entry.actorEmail && (
+                        <span className="text-muted-foreground"> · {entry.actorEmail}</span>
+                      )}
+                      {/*
+                        The reason is the point of the record. Without it the row
+                        says a number changed and not why anyone allowed it.
+                      */}
+                      {entry.reason && <p className="mt-0.5">{entry.reason}</p>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         )}
