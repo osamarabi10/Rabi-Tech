@@ -1,8 +1,10 @@
+import axios from 'axios';
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { OpenWAService } from '../whatsapp/openwa.service';
 import { isConnectedStatus } from '../provisioning/gateway-provider';
+import { decryptCredential } from '../../lib/credential-crypto';
 
 /**
  * Gateway health monitoring (H1).
@@ -225,6 +227,41 @@ async function resolveAlerts(organizationId: string): Promise<number> {
     return count;
 }
 
+/**
+ * A channel that answers a probe is not in a failed state.
+ *
+ * `provisioningState` was only ever set back to ACTIVE by provisioning
+ * itself or by an owner editing the channel by hand. So a gateway that failed
+ * once and then started working kept saying FAILED for ever — the console
+ * showed a red row, a failure reason from weeks ago, and a "retry
+ * provisioning" button, for a subscriber whose WhatsApp was fine.
+ *
+ * Found on a live subscriber whose stored credentials answered `/api/sessions`
+ * with a 200 while the console reported "OpenWA did not become ready: 401"
+ * from an attempt against a container that no longer exists.
+ *
+ * Deliberately narrow: only FAILED is cleared. PENDING, PROVISIONING,
+ * AWAITING_QR and SUSPENDED all mean something a successful probe does not
+ * contradict — a suspended channel that still answers is still suspended.
+ */
+async function clearStaleFailure(organizationId: string): Promise<boolean> {
+  const updated = await prisma.organizationChannel.updateMany({
+    where: { organizationId, kind: 'OPENWA', provisioningState: 'FAILED' },
+    data: {
+      provisioningState: 'ACTIVE',
+      failureReason: null,
+      failureStep: null,
+    },
+  });
+
+  if (updated.count > 0) {
+    logger.info('Cleared a stale gateway failure after a successful probe', {
+      organizationId,
+    });
+  }
+  return updated.count > 0;
+}
+
 async function runProbe(candidate: Candidate, probe: HealthProbe): Promise<HealthResult> {
   const startedAt = Date.now();
   const base = { organizationId: candidate.organizationId, probe };
@@ -264,6 +301,9 @@ async function runProbe(candidate: Candidate, probe: HealthProbe): Promise<Healt
     await runAsOrganization(candidate.organizationId, () =>
       record(candidate.organizationId, probe, true, latencyMs));
     await resolveAlerts(candidate.organizationId);
+    // The alert is resolved above; this clears the row that was still
+    // asserting the fault the alert was about.
+    await clearStaleFailure(candidate.organizationId);
     return { ...base, outcome: 'ok', latencyMs };
   } catch (error) {
     const latencyMs = Date.now() - startedAt;
@@ -309,6 +349,67 @@ export async function probeOrganization(
   });
 }
 
+/**
+ * Clear provisioning failures that are no longer true.
+ *
+ * Separate from the session probes above, because it answers a different
+ * question. Those ask "is this subscriber's WhatsApp number connected"; this
+ * asks "is their gateway reachable at all" — and only the second one decides
+ * whether a *provisioning* failure still stands.
+ *
+ * That distinction is what left a real subscriber stuck. Their channel said
+ * FAILED with a 401 from an attempt against a container that no longer
+ * exists, while the credentials in that same row answered `/api/sessions`
+ * with a 200. It could never self-heal: the session probe skips any
+ * organization with no active session, their number was disconnected, so
+ * nothing ever re-examined the claim. The console showed a red row and a
+ * failure reason from weeks earlier for a gateway that was fine.
+ *
+ * Only FAILED is touched. PENDING, PROVISIONING and AWAITING_QR are states a
+ * reachable gateway does not contradict — a channel waiting for a QR is still
+ * waiting for one — and SUSPENDED is a decision, not a fault.
+ */
+export async function reconcileProvisioningFailures(): Promise<{
+  checked: number;
+  cleared: number;
+}> {
+  return runAsPlatform('gateway-health:reconcile-failures', async () => {
+    const failed = await prisma.organizationChannel.findMany({
+      where: { kind: 'OPENWA', provisioningState: 'FAILED' },
+      select: { id: true, organizationId: true, baseUrl: true, apiKeyEnc: true },
+    });
+
+    let cleared = 0;
+    for (const channel of failed) {
+      if (!channel.baseUrl) continue;
+      try {
+        // One attempt, short timeout. This runs on a schedule; a provider
+        // that needs sixty seconds of retries to answer is not healthy, and
+        // waiting that long per subscriber would stall the whole pass.
+        await axios.get(`${channel.baseUrl}/api/sessions`, {
+          headers: { 'X-API-Key': decryptCredential(channel.apiKeyEnc) },
+          timeout: 8_000,
+        });
+      } catch {
+        // Still unreachable. The failure stands, and stays on the row.
+        continue;
+      }
+
+      await prisma.organizationChannel.update({
+        where: { id: channel.id },
+        data: { provisioningState: 'ACTIVE', failureReason: null, failureStep: null },
+      });
+      await resolveAlerts(channel.organizationId);
+      cleared += 1;
+      logger.info('Cleared a stale gateway provisioning failure', {
+        organizationId: channel.organizationId,
+      });
+    }
+
+    return { checked: failed.length, cleared };
+  });
+}
+
 /** Probe every eligible organization. Called by the repeatable job. */
 export async function runHealthChecks(
   probe: HealthProbe,
@@ -332,6 +433,12 @@ export async function runHealthChecks(
       if (result.outcome === 'failed') failed += 1;
       if (result.outcome === 'skipped') skipped += 1;
     }
+
+    // A gateway that has come back deserves its row corrected in the same
+    // pass that would have alerted about it.
+    await reconcileProvisioningFailures().catch((error) =>
+      logger.error('Failed to reconcile provisioning failures', { error: String(error) }),
+    );
 
     return { checked: candidates.length, failed, skipped };
   });
