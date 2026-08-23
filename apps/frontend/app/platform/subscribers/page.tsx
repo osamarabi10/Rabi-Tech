@@ -4,9 +4,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, LogOut, MessageCircle, MoreHorizontal, Pause, Play,
-  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock, Clock, Plug,
+  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock, Clock, Plug, ArrowLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import Link from 'next/link';
 import api, { setViewAsOrg } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -331,7 +332,16 @@ export default function SubscribersPage() {
       </header>
 
       <section className="mx-auto max-w-7xl px-5 py-6">
-        <h1 className="mb-4 text-lg font-bold">Subscribers</h1>
+        {/* A console you can only leave with the browser back button is one
+            page wearing a trench coat. */}
+        <Link
+          href="/platform"
+          className="inline-flex items-center gap-1.5 text-caption text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5 rtl:rotate-180" />
+          Platform control
+        </Link>
+        <h1 className="mb-4 mt-2 text-lg font-bold">Subscribers</h1>
         <GatewayAlerts health={health} />
         <div className="overflow-x-auto rounded-md border border-border">
           <div className="grid min-w-[1472px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_130px_140px_130px_minmax(190px,1.3fr)_92px_70px] gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold text-muted-foreground">

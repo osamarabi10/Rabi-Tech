@@ -27,7 +27,7 @@ export default function LoginPage() {
     const token = localStorage.getItem('rabitech_token');
     if (token && token !== 'demo') {
       const user = JSON.parse(localStorage.getItem('rabitech_user') || '{}');
-      router.replace(user.scope === 'PLATFORM' ? '/platform/subscribers' : '/inbox');
+      router.replace(user.scope === 'PLATFORM' ? '/platform' : '/inbox');
       return;
     }
     if (token === 'demo') {
@@ -43,7 +43,7 @@ export default function LoginPage() {
       const { data } = await api.post('/api/auth/login', { email, password });
       localStorage.setItem('rabitech_token', data.token);
       localStorage.setItem('rabitech_user', JSON.stringify(data.user));
-      router.push(data.scope === 'PLATFORM' ? '/platform/subscribers' : '/inbox');
+      router.push(data.scope === 'PLATFORM' ? '/platform' : '/inbox');
     } catch {
       toast.error(t('البريد الإلكتروني أو كلمة المرور غير صحيحة — أو الخادم غير متصل'));
     } finally {

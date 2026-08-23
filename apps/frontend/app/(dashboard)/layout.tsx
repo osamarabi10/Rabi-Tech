@@ -37,7 +37,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         // — they just have no tenant to show. Send them to the console instead of
         // destroying a valid session.
         if (err?.response?.status === 403) {
-          router.replace('/platform/subscribers');
+          router.replace('/platform');
           return;
         }
         localStorage.removeItem('rabitech_token');
