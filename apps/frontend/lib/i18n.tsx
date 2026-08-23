@@ -15,6 +15,9 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- M6.3 saved views (3) ----
+  'حرّكه فوق': { he: 'העברה למעלה', en: 'Move up' },
+  'حرّكه تحت': { he: 'העברה למטה', en: 'Move down' },
   // ---- M6.3 saved views (2) ----
   'من العرض': { he: 'מהתצוגה', en: 'From the view' },
   // ---- M6.3 saved views ----

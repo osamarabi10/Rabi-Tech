@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
+  ArrowDown,
+  ArrowUp,
   AtSign,
   Bookmark,
   BookmarkPlus,
@@ -453,6 +455,42 @@ export function InboxSelector({
     if (scope.kind === 'view' && scope.value === view.id) onScopeChange(DEFAULT_SCOPE);
   };
 
+  /**
+   * Move a view one place up or down.
+   *
+   * Rewrites `sortOrder` for the two rows that swap rather than for the whole
+   * list: two requests instead of N, and the rest of the list keeps whatever
+   * spacing it had. Both are sent before the state is replaced so a failure on
+   * the second cannot leave the pane showing an order the server rejected.
+   */
+  const moveView = async (view: InboxView, direction: -1 | 1) => {
+    const index = views.findIndex((candidate) => candidate.id === view.id);
+    const swapWith = views[index + direction];
+    if (!swapWith) return;
+
+    // Equal sortOrder values are possible — everything defaults to 0 until
+    // something moves — and swapping them would be a no-op that looks broken.
+    // Falling back to the positions themselves gives the two rows distinct
+    // numbers in one step.
+    const [a, b] =
+      view.sortOrder === swapWith.sortOrder
+        ? [index + direction, index]
+        : [swapWith.sortOrder, view.sortOrder];
+
+    const moved = await updateInboxView(view.id, { sortOrder: a, updatedAt: view.updatedAt });
+    const displaced = await updateInboxView(swapWith.id, {
+      sortOrder: b,
+      updatedAt: swapWith.updatedAt,
+    });
+    onViewsChanged(
+      views
+        .map((candidate) =>
+          candidate.id === moved.id ? moved : candidate.id === displaced.id ? displaced : candidate,
+        )
+        .sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name)),
+    );
+  };
+
   /** Own views are always editable; a shared one needs the permission. */
   const mayEdit = (view: InboxView) => (view.shared ? canShare : view.ownerId === currentUserId);
 
@@ -590,6 +628,31 @@ export function InboxSelector({
                         >
                           {t('عدّل')}
                         </DropdownMenuItem>
+                        {/*
+                          Only offered where there is somewhere to go. A
+                          permanently disabled "move up" on the first row is a
+                          control that never does anything.
+                        */}
+                        {views[0]?.id !== view.id && (
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              void moveView(view, -1);
+                            }}
+                          >
+                            <ArrowUp className="me-1.5 h-3.5 w-3.5" />
+                            {t('حرّكه فوق')}
+                          </DropdownMenuItem>
+                        )}
+                        {views[views.length - 1]?.id !== view.id && (
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              void moveView(view, 1);
+                            }}
+                          >
+                            <ArrowDown className="me-1.5 h-3.5 w-3.5" />
+                            {t('حرّكه تحت')}
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                           className="text-danger"
                           onSelect={() => {
