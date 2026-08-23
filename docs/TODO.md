@@ -785,7 +785,7 @@ Gate stays 57/57.
 
 Marasil §29.1: 56 / 240 / 320 / flex / 340.
 
-- [ ] **1. Inbox-selector column**: system inboxes (All / Mine / Unassigned /
+- [x] **1. Inbox-selector column**: system inboxes (All / Mine / Unassigned /
   Mentions / Snoozed) with live counts
   — **All / Mine / Unassigned done 2026-08-22 (U1)**, plus lifecycle stages and
   team queues, all with counts derived from the conversations actually loaded.
@@ -795,9 +795,22 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
 
   **Mentions added 2026-08-23** — see item 6.
 
-  **Remaining: Snoozed.** It needs a data model first: nothing in the schema
-  expresses "hide this until Tuesday", so there is no filter to surface and
-  no honest count to put beside it.
+  **Snoozed added 2026-08-23.** `Conversation.snoozedUntil` — a timestamp,
+  not a flag plus a job. A thread is snoozed while it is in the future and
+  simply is not once it passes, so nothing has to run for a conversation to
+  come back: no worker to fall over, and no window where the row says one
+  thing and the truth is another.
+
+  **Product decision taken: a customer reply cancels the snooze.** Snoozing
+  says "nothing is expected here until Tuesday", and a message from the
+  customer is exactly what makes that untrue. Honouring the snooze regardless
+  is defensible for an internal task tracker and wrong for a product whose
+  entire purpose is that customer messages get answered.
+
+  Durations rather than a date picker — "in 3 hours", "tomorrow", "in 3
+  days", "next week". Asking an agent for a minute is asking a question they
+  do not have an answer to. Snoozing clears the open thread, because the view
+  it was selected from no longer contains it.
 - [x] **2. Lifecycle stages** as a configurable pipeline, surfaced as inbox
   filters with counts
   — **pipeline done 2026-08-22; the inbox filters are NOT built.**

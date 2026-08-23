@@ -128,6 +128,14 @@ The platform finance ledger against the real database — builds first, because
 it exercises the compiled output the server actually runs, and deletes
 everything it creates on the way out.
 
+```bash
+npm run test:snooze
+```
+
+That a customer reply cancels a snooze, run against
+`getOrCreateActiveConversation` — the function the inbound webhook actually
+calls — rather than a reimplementation of it. Restores the row it borrows.
+
 ---
 
 ## Conventions that are load-bearing

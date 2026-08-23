@@ -15,6 +15,19 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Snooze (M6.1) ----
+  'مؤجّلة': { he: 'נדחות', en: 'Snoozed' },
+  'تأجيل': { he: 'דחייה', en: 'Snooze' },
+  'إلغاء التأجيل': { he: 'ביטול הדחייה', en: 'Un-snooze' },
+  'بعد 3 ساعات': { he: 'בעוד 3 שעות', en: 'In 3 hours' },
+  'بكرا': { he: 'מחר', en: 'Tomorrow' },
+  'بعد 3 أيام': { he: 'בעוד 3 ימים', en: 'In 3 days' },
+  'الأسبوع الجاي': { he: 'בשבוע הבא', en: 'Next week' },
+  'تم تأجيل المحادثة': { he: 'השיחה נדחתה', en: 'Conversation snoozed' },
+  'رجعت المحادثة للطابور': { he: 'השיחה חזרה לתור', en: 'Conversation is back in the queue' },
+  'فشل تأجيل المحادثة': { he: 'דחיית השיחה נכשלה', en: 'Could not snooze the conversation' },
+  'وقت غير صالح': { he: 'זמן לא תקין', en: 'Invalid time' },
+  'وقت التأجيل لازم يكون بالمستقبل': { he: 'זמן הדחייה חייב להיות בעתיד', en: 'The snooze time must be in the future' },
   // ---- Custom fields in the panel (H4) ----
   'حقول مخصصة': { he: 'שדות מותאמים', en: 'Custom fields' },
   // ---- Contact conversations tab (M6.4) ----

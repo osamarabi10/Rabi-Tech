@@ -770,6 +770,18 @@ model Conversation {
   /// describes the current resolution rather than the last edit of any kind.
   resolvedAt        DateTime?
   isArchived        Boolean            @default(false)
+  /// Snoozed while this is in the future, and simply not once it passes.
+  ///
+  /// A timestamp rather than a flag plus a job: nothing has to run for a
+  /// conversation to come back, so there is no worker to fall over and no
+  /// window where the row says one thing and the truth is another.
+  ///
+  /// Cleared when the customer replies. A thread the customer has just
+  /// written to is the last thing this product should be hiding.
+  snoozedUntil      DateTime?
+  /// Who snoozed it. Denormalised so the activity entry stays readable after
+  /// the user is deleted.
+  snoozedByName     String?
   labels            String[]           @default([])
   pendingMenuChoice String?
   createdAt         DateTime           @default(now())

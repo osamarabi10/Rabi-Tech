@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Check, ChevronDown, Filter, WifiOff } from 'lucide-react';
-import { type Conv, type Session } from '@/lib/data';
+import { isSnoozed, type Conv, type Session } from '@/lib/data';
 import { gatewayCopy, gatewayState } from '@/lib/gateway-state';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -88,6 +88,9 @@ export function InboxScopeMenu({
           { scope: DEFAULT_SCOPE, label: t('كل المحادثات') },
           { scope: { kind: 'system', value: 'mine' } as InboxScope, label: t('مُسندة لي') },
           { scope: { kind: 'system', value: 'unassigned' } as InboxScope, label: t('غير مسندة') },
+          ...(convs.some((conv) => isSnoozed(conv))
+            ? [{ scope: { kind: 'system', value: 'snoozed' } as InboxScope, label: t('مؤجّلة') }]
+            : []),
           // Same rule as the pane: offered only once there is one to look at.
           ...(mentioned.size > 0
             ? [{ scope: { kind: 'system', value: 'mentions' } as InboxScope, label: t('ذُكرت فيها') }]

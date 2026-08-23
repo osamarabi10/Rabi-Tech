@@ -100,7 +100,12 @@ export async function auditConversation(
     // A resend of a message that failed. Worth its own entry: it is the one
     // conversation action that can put the same text in front of a customer
     // twice, so "who pressed retry, and when" has to be answerable.
-    | 'message-retried',
+    | 'message-retried'
+    // Snoozing hides a thread from the queue. Worth a trail: "nobody has
+    // looked at this" and "somebody decided it waits until Tuesday" look the
+    // same from outside.
+    | 'snoozed'
+    | 'unsnoozed',
   ipAddress?: string,
   userAgent?: string
 ) {

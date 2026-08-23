@@ -38,6 +38,9 @@ export type Conv = {
    * whether that specific session is connected.
    */
   sessionName: string | null;
+  /** Hidden from the queue while this is in the future. Null when awake. */
+  snoozedUntil?: string | null;
+  snoozedByName?: string | null;
   sessionPhone: string | null;
   labels: string[];
 };
@@ -324,6 +327,8 @@ export async function startConversation(input: {
     marketingConsent: data.contact?.marketingConsent ?? 'UNKNOWN',
     lifecycleStage: data.contact?.lifecycleStage ?? null,
     sessionName: data.session?.sessionName ?? null,
+    snoozedUntil: data.snoozedUntil ?? null,
+    snoozedByName: data.snoozedByName ?? null,
     sessionPhone: data.session?.phoneNumber ?? null,
     labels: data.labels ?? [],
   };
@@ -358,6 +363,8 @@ export async function fetchConversations(
     marketingConsent: c.contact?.marketingConsent ?? 'UNKNOWN',
     lifecycleStage: c.contact?.lifecycleStage ?? null,
     sessionName: c.session?.sessionName ?? null,
+    snoozedUntil: c.snoozedUntil ?? null,
+    snoozedByName: c.snoozedByName ?? null,
     sessionPhone: c.session?.phoneNumber ?? null,
     labels: c.labels ?? [],
   }));
@@ -1584,4 +1591,25 @@ export async function fetchContactCustomFields(
   return Object.fromEntries(
     (data.customFieldValues || []).map((row: any) => [row.fieldDefinition.slug, row.value]),
   );
+}
+
+/**
+ * Is this thread asleep right now?
+ *
+ * One function so the list filter, the scope count and the header badge
+ * cannot disagree. Snooze is a timestamp, not a flag — the moment it passes
+ * the conversation is simply awake again, with nothing needing to run.
+ */
+export function isSnoozed(conv: Conv, now: number = Date.now()): boolean {
+  return !!conv.snoozedUntil && new Date(conv.snoozedUntil).getTime() > now;
+}
+
+/** Snooze until a moment, or `null` to wake it now. */
+export async function snoozeConversation(
+  conversationId: string,
+  until: Date | null,
+): Promise<void> {
+  await api.patch(`/api/conversations/${conversationId}/snooze`, {
+    until: until ? until.toISOString() : null,
+  });
 }

@@ -24,8 +24,16 @@ import {
   RotateCw,
   AlertCircle,
   WifiOff,
+  AlarmClock,
+  AlarmClockOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Composer } from '@/components/inbox/composer';
 import { ContactPanel } from '@/components/inbox/contact-panel';
 import { avatarColor, STATUS_CONFIG } from '@/lib/constants';
@@ -51,6 +59,8 @@ import {
   isClientRating,
   fetchSessions,
   fetchMentionedConversations,
+  isSnoozed,
+  snoozeConversation,
   retryMessage,
   contactDisplayName,
   UNKNOWN_CONTACT,
@@ -789,6 +799,35 @@ export default function InboxPage() {
     } catch { toast.error(t('فشل تحديث التصنيفات')); }
   };
 
+  /**
+   * Snooze the open thread, or wake it.
+   *
+   * Durations rather than a date picker: "later today" and "tomorrow" are
+   * what an agent actually means, and asking them to pick a minute is asking
+   * a question they do not have an answer to.
+   */
+  const handleSnooze = async (hours: number | null) => {
+    if (!selId) return;
+    const until = hours === null ? null : new Date(Date.now() + hours * 3600_000);
+    try {
+      await snoozeConversation(selId, until);
+      setConvs((prev) =>
+        prev.map((c) =>
+          c.id === selId
+            ? { ...c, snoozedUntil: until ? until.toISOString() : null }
+            : c,
+        ),
+      );
+      toast.success(until ? t('تم تأجيل المحادثة') : t('رجعت المحادثة للطابور'));
+      // Snoozing removes it from the view it was selected in, so keeping it
+      // open would leave the thread pane showing a conversation the list no
+      // longer contains.
+      if (until) setSelId(null);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? t('فشل تأجيل المحادثة'));
+    }
+  };
+
   const handleStartChat = async () => {
     if (!newPhone.trim()) { toast.error(t('أدخل رقم الهاتف')); return; }
     setStartingChat(true);
@@ -814,6 +853,9 @@ export default function InboxPage() {
   // ── Filtered list ───────────────────────────────────────────────────────────
   const filtered = convs
     .filter((c) => !c.phone.includes('status@broadcast') && !c.name.includes('status@broadcast'))
+    // Snoozed threads leave every view but their own. That rule lives in
+    // scopeMatches, so the counts in the selector and this list are derived
+    // from the same code rather than from two copies of the same intent.
     .filter((c) => scopeMatches(c, scope, currentUser?.id, mentionedConvs))
     .filter((c) => {
       if (convFilter === 'open') return c.status === 'OPEN';
@@ -1428,6 +1470,41 @@ export default function InboxPage() {
                     onClick={() => { updateConversation(sel.id, { status: 'OPEN' }).then(() => { setConvs((p) => p.map((c) => c.id === sel.id ? { ...c, status: 'OPEN' } : c)); }); }}>
                     {t('إعادة فتح')}
                   </Button>
+                )}
+                {/*
+                  Snooze. Durations, not a date picker — "in three hours" and
+                  "tomorrow" are what an agent means, and asking them to choose
+                  a minute is asking a question they have no answer to.
+                */}
+                {isSnoozed(sel) ? (
+                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-primary border-primary/20 hover:bg-primary/10"
+                    onClick={() => handleSnooze(null)}>
+                    <AlarmClockOff className="h-3 w-3" />
+                    {t('إلغاء التأجيل')}
+                  </Button>
+                ) : sel.status !== 'RESOLVED' && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-7 gap-1 text-xs">
+                        <AlarmClock className="h-3 w-3" />
+                        {t('تأجيل')}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => handleSnooze(3)}>
+                        {t('بعد 3 ساعات')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => handleSnooze(24)}>
+                        {t('بكرا')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => handleSnooze(72)}>
+                        {t('بعد 3 أيام')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => handleSnooze(168)}>
+                        {t('الأسبوع الجاي')}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
                 {sel.status !== 'RESOLVED' && sel.status !== 'AWAITING_CLIENT' && (
                   <Button variant="outline" size="sm" className="h-7 gap-1 text-xs"

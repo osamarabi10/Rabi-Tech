@@ -497,6 +497,60 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
   }
 });
 
+/**
+ * PATCH /api/conversations/:id/snooze — hide a thread until a moment.
+ *
+ * The alternative an agent had was to leave it open, where it sits in the
+ * queue looking like work nobody has started, or resolve it — which tells the
+ * customer it is finished and sends them a rating request. Neither is "deal
+ * with this on Tuesday".
+ *
+ * `until: null` wakes it immediately. A time in the past is refused rather
+ * than silently treated as one or the other: it is always a mistake, and
+ * guessing which mistake helps nobody.
+ */
+router.patch('/:id/snooze', requirePermission('conversation:resolve'), async (req, res) => {
+  try {
+    const raw = req.body?.until;
+    const until = raw ? new Date(raw) : null;
+
+    if (raw && Number.isNaN(until!.getTime())) {
+      return res.status(400).json({ error: 'وقت غير صالح' });
+    }
+    if (until && until.getTime() <= Date.now()) {
+      return res.status(400).json({ error: 'وقت التأجيل لازم يكون بالمستقبل' });
+    }
+
+    const before = await prisma.conversation.findUnique({ where: { id: req.params.id } });
+    if (!before) return res.status(404).json({ error: 'محادثة غير موجودة' });
+
+    const conversation = await prisma.conversation.update({
+      where: { id: req.params.id },
+      data: {
+        snoozedUntil: until,
+        snoozedByName: until ? req.user!.name : null,
+      },
+    });
+
+    await auditConversation(
+      req.user!.id,
+      conversation.id,
+      until ? 'snoozed' : 'unsnoozed',
+      req.ip,
+      req.get('user-agent'),
+    );
+
+    getIO()
+      .to(socketRoom.conversation(req.user!.organizationId, conversation.id))
+      .emit(SocketEvents.CONVERSATION_UPDATED, { conversationId: conversation.id });
+
+    res.json(conversation);
+  } catch (err) {
+    logger.error('Snooze failed', { conversationId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'فشل تأجيل المحادثة', requestId: (req as any).id });
+  }
+});
+
 // PATCH /api/conversations/:id — status (resolve/pending/reopen) or assignee
 // Agents can change status; only supervisors+ can reassign.
 router.patch('/:id', requirePermission('conversation:resolve'), async (req, res) => {

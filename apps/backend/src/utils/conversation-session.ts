@@ -116,7 +116,15 @@ export async function getOrCreateActiveConversation(
     if (existing.status === 'RESOLVED') {
       const reopened = await prisma.conversation.update({
         where: { id: existing.id },
-        data: { status: 'OPEN', resolvedAt: null, lastMessageAt: new Date(), ...(teamId ? { teamId } : {}) },
+        // Snooze cleared along with the resolution: see below.
+        data: {
+          status: 'OPEN',
+          resolvedAt: null,
+          snoozedUntil: null,
+          snoozedByName: null,
+          lastMessageAt: new Date(),
+          ...(teamId ? { teamId } : {}),
+        },
       });
       return {
         conversation: reopened,
@@ -124,6 +132,26 @@ export async function getOrCreateActiveConversation(
         reopenedFromResolved: true,
       };
     }
+
+    /*
+     * A customer reply cancels a snooze.
+     *
+     * Snoozing says "nothing is expected here until Tuesday". A message from
+     * the customer is precisely the thing that makes that untrue, and a
+     * product whose entire purpose is that customer messages get answered
+     * must not hide the one thread where they just wrote.
+     *
+     * The alternative — honouring the snooze until it expires — is defensible
+     * for an internal task tracker and wrong here.
+     */
+    if (existing.snoozedUntil) {
+      const woken = await prisma.conversation.update({
+        where: { id: existing.id },
+        data: { snoozedUntil: null, snoozedByName: null },
+      });
+      return { conversation: woken, isNewSession: false, reopenedFromResolved: false };
+    }
+
     return { conversation: existing, isNewSession: false, reopenedFromResolved: false };
   }
 

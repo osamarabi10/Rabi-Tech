@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AtSign, ChevronDown, Inbox, UserCheck, UserX, Wifi, WifiOff } from 'lucide-react';
+import { AtSign, ChevronDown, Clock, Inbox, UserCheck, UserX, Wifi, WifiOff } from 'lucide-react';
 import {
+  isSnoozed,
   fetchLifecycleStages,
   fetchSessions,
   fetchTeams,
@@ -38,7 +39,7 @@ import { cn } from '@/lib/utils';
  */
 
 export type InboxScope =
-  | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' | 'mentions' }
+  | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' | 'mentions' | 'snoozed' }
   | { kind: 'lifecycle'; value: string }
   | { kind: 'team'; value: string };
 
@@ -58,6 +59,13 @@ export function scopeMatches(
    */
   mentioned?: Set<string>,
 ): boolean {
+  // Snoozed threads belong to exactly one view. Checked before anything else
+  // so the counts here and the list beside them cannot disagree — the first
+  // version excluded them in the page's filter only, and every row in this
+  // column then counted one conversation more than the list contained.
+  if (scope.value === 'snoozed') return isSnoozed(conv);
+  if (isSnoozed(conv)) return false;
+
   if (scope.kind === 'lifecycle') return conv.lifecycleStage === scope.value;
   if (scope.kind === 'team') return conv.teamId === scope.value;
   if (scope.value === 'mine') return conv.assigneeId === currentUserId;
@@ -231,8 +239,26 @@ export function InboxSelector({
     };
   }, []);
 
+  /**
+   * Counts for every row except Snoozed.
+   *
+   * Snoozed threads are excluded here rather than in each predicate, because
+   * the alternative is remembering it at nine call sites. The first version
+   * excluded them in the conversation list only and every number in this
+   * column was then one higher than the list beside it — the exact failure
+   * the note at the top of this file warns about, arrived by a different
+   * route.
+   */
   const countWhere = (predicate: (conv: Conv) => boolean) =>
-    convs.filter((conv) => !conv.phone.includes('status@broadcast')).filter(predicate).length;
+    convs
+      .filter((conv) => !conv.phone.includes('status@broadcast'))
+      .filter((conv) => !isSnoozed(conv))
+      .filter(predicate).length;
+
+  /** The one row that counts the threads everything else hides. */
+  const snoozedCount = convs.filter(
+    (conv) => !conv.phone.includes('status@broadcast') && isSnoozed(conv),
+  ).length;
 
   const connected = sessions?.filter((s) => s.connected).length ?? 0;
   const total = sessions?.length ?? 0;
@@ -274,6 +300,19 @@ export function InboxSelector({
             Mentions. Shown only once there is at least one — an agent nobody
             has ever named does not need a permanent zero telling them so.
           */}
+          {/*
+            Snoozed. Like Mentions, offered only when there is something in
+            it — a permanent zero is a row that never earns its line.
+          */}
+          {snoozedCount > 0 && (
+            <ScopeRow
+              label={t('مؤجّلة')}
+              count={snoozedCount}
+              active={sameScope(scope, { kind: 'system', value: 'snoozed' })}
+              onSelect={() => onScopeChange({ kind: 'system', value: 'snoozed' })}
+              icon={<Clock className="h-3.5 w-3.5 shrink-0" />}
+            />
+          )}
           {mentioned.size > 0 && (
             <ScopeRow
               label={t('ذُكرت فيها')}

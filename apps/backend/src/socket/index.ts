@@ -118,6 +118,8 @@ export const SocketEvents = {
   NEW_MESSAGE:           'new_message',
   NEW_CONVERSATION:      'new_conversation',
   CONVERSATION_RESOLVED: 'conversation_resolved',
+  /// A thread changed in a way the list must re-read — snoozed, woken.
+  CONVERSATION_UPDATED:  'conversation_updated',
   UNREAD_UPDATE:         'unread_update',
   TICKET_UPDATED:        'ticket_updated',
   CAMPAIGN_PROGRESS:     'campaign_progress',
