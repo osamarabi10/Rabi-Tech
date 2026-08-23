@@ -117,18 +117,30 @@ keep working — without anyone touching the database.
 
 ---
 
-## F3 — Close the open defects · ~half a day · **can start now**
+## F3 — Close the open defects · ✅ done 2026-08-23
 
 Two things found while building other things. Both are recorded in
 [TODO.md](TODO.md); neither is hypothetical.
 
-- [ ] **F3.1 `firstResponseAt` backfill over-counts.** The M7 migration stamped
+- [x] **F3.1 `firstResponseAt` backfill over-counts.** Fixed, and it was
+      worse than this note said: 3 of 4 rows, not 2, and skewed both ways.
+      One row reported 14.9 minutes where the truth was 2305.5, because the
+      stamped "response" predated the customer's first message by 8.6
+      hours. Migration `20260905090000_first_response_correction`.
+      Original note: The M7 migration stamped
       threads that never had an inbound message, so conversations nobody ever
       wrote to count as "answered". 2 of the 4 stamped rows in this database are
       wrong. Nothing produced since is affected. **The fix rewrites published
       historic response-time numbers, so it is an owner decision, not a
       side effect of unrelated work.**
-- [ ] **F3.2 A shared saved view reaching a second logged-in user** was never
+- [x] **F3.2 A shared saved view reaching a second logged-in user** — done,
+      20/20. The blocker dissolved on its own: trials now run on Growth,
+      which allows five seats, so a second real user can exist. Verified
+      both halves that could not be tested before — a private view does
+      **not** reach the other user over HTTP or socket, and a shared one
+      arrives over the socket without a reload, as do its rename and its
+      deletion.
+      Original note:
       verified — creating a test user hits the 1-seat limit on the Free plan.
       Worth doing once a second seat exists.
 

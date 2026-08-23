@@ -931,7 +931,33 @@ transition, cleared on reopen), plus the `AnalyticsHourly` rollup. Historic
 `resolvedAt` is backfilled from `updatedAt` and is therefore approximate; every
 resolution from 2026-08-21 on is stamped at the transition itself.
 
-- [ ] **Open defect: the `firstResponseAt` backfill over-counts.** Found
+- [x] **Fixed 2026-08-23: the `firstResponseAt` backfill was wrong in two ways.**
+  Corrected by migration `20260905090000_first_response_correction`.
+
+  **The original note below understated it.** It said 2 of 4 rows were wrong
+  and that the skew was downward. Both were wrong. Three of the four were
+  wrong, and the skew ran in both directions: one thread reported a
+  0.2-minute response and another 850.8, neither having answered anybody.
+
+  The third row was the one worth finding. Conversation 1002 had inbound
+  messages, so it passed the "no inbound" test — but the backfill had
+  stamped an agent message sent **8.6 hours before the customer first
+  wrote**. It reported a 14.9-minute first response where the truth was
+  2305.5 minutes: wrong by a factor of 155, and wrong in the flattering
+  direction.
+
+  So the migration does two things rather than one: clears the stamp where
+  no inbound exists, and re-stamps where the response predates the question
+  — to the first human, customer-facing outbound that came after it, which
+  is the row the live stamper would have caught. Clearing only the obvious
+  ones would have left the metric quietly wrong and looking fixed.
+
+  Verified after applying: 0 rows stamped without an inbound, 0 stamped
+  before the first inbound, and 0 that qualify for a stamp and lack one.
+
+  <details><summary>The original note, kept for the record</summary>
+
+  **Open defect: the `firstResponseAt` backfill over-counts.** Found
   2026-08-23 while verifying the column for M6.3. The live stamper
   (`analytics/response-time.ts`) requires the thread to already hold an inbound
   message — an agent-initiated conversation has nothing to respond *to*, and
@@ -950,6 +976,8 @@ resolution from 2026-08-21 on is stamped at the transition itself.
   message exists. Left for a decision rather than applied in passing: it
   changes published historic numbers, which is the owner’s call, not a
   side effect of unrelated work.
+
+  </details>
 
 - [x] **1. Overview** — headline tiles with sparklines and period deltas
   — **done 2026-08-21.** `GET /api/analytics/overview`. Verified live: seeded 10

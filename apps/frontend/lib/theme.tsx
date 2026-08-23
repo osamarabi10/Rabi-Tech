@@ -21,6 +21,21 @@ export type Theme = 'light' | 'dark' | 'system';
 export const THEME_STORAGE_KEY = 'rabitech_theme';
 
 /**
+ * What a first-time visitor gets.
+ *
+ * Light, not `system`. Following the OS sounds neutral and is not: a
+ * WhatsApp workspace is a working tool used beside other working tools, and
+ * the product should look the same to a team whose laptops are configured
+ * differently — one agent describing a screen to another should be describing
+ * the same screen.
+ *
+ * This changes only the *absence* of a choice. Anyone who explicitly selected
+ * `system` keeps following their OS, and anyone on dark stays on dark; their
+ * stored value is untouched and still means what it meant.
+ */
+export const DEFAULT_THEME: Theme = 'light';
+
+/**
  * Runs before paint, inlined into <head>.
  *
  * Deliberately dependency-free and defensive: it executes before anything else
@@ -29,8 +44,10 @@ export const THEME_STORAGE_KEY = 'rabitech_theme';
 export const THEME_INIT_SCRIPT = `
 (function(){try{
   var stored = localStorage.getItem('${THEME_STORAGE_KEY}');
+  /* No stored choice means light, not "follow the OS". Only somebody who
+     picked "system" gets the OS. */
   var dark = stored === 'dark' ||
-    ((!stored || stored === 'system') &&
+    (stored === 'system' &&
       window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.classList[dark ? 'add' : 'remove']('dark');
   document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
@@ -66,11 +83,11 @@ function apply(theme: Theme): 'light' | 'dark' {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('system');
+  const [theme, setThemeState] = useState<Theme>(DEFAULT_THEME);
   const [resolved, setResolved] = useState<'light' | 'dark'>('light');
 
   useEffect(() => {
-    const stored = (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) || 'system';
+    const stored = (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) || DEFAULT_THEME;
     setThemeState(stored);
     setResolved(apply(stored));
   }, []);
