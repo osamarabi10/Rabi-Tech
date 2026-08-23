@@ -818,8 +818,14 @@ Marasil §29.1: 56 / 240 / 320 / flex / 340.
   Resolved threads are included deliberately — they hold the answers, and the
   inbox default filter hides them, which is exactly why they were unreachable
   from anywhere else.
-- [ ] **5. Session-health bar** on each conversation row — our analogue of their
+- [x] **5. Session-health bar** on each conversation row — our analogue of their
   service-window bar
+  — **done 2026-08-23**, as a mark on affected rows rather than a bar on every
+  one. Shown only when the workspace has more than one number and some but not
+  all of them are down: if every channel is offline the rail already says so
+  across the whole list, and repeating it per row is noise. What it catches is
+  the case the rail cannot express — two numbers, one dead, and no way to tell
+  which conversations just went quiet.
 - [x] **6. @mentions** + a Mentions inbox
   — **mentions done 2026-08-22; the Mentions inbox is NOT built.**
   `@mention` popover in the composer mirroring the `:shortCode` pattern (same

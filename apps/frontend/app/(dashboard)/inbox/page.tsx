@@ -23,6 +23,7 @@ import {
   MessageSquare,
   RotateCw,
   AlertCircle,
+  WifiOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Composer } from '@/components/inbox/composer';
@@ -826,6 +827,21 @@ export default function InboxPage() {
     .filter((c) => !labelFilter || c.labels.includes(labelFilter));
 
 
+  /**
+   * Sessions that exist but are not connected, by name.
+   *
+   * Only worth marking rows at all on a workspace with more than one number:
+   * if every channel is down the rail already says so across the whole list,
+   * and repeating it on each row is noise. What this catches is the case the
+   * rail cannot express — two numbers, one of them dead, and no way to tell
+   * which conversations just went quiet.
+   */
+  const offlineSessions = new Set(
+    (liveSessions ?? []).filter((session) => !session.connected).map((session) => session.sessionName),
+  );
+  const markOfflineRows = (liveSessions?.length ?? 0) > 1 && offlineSessions.size > 0
+    && offlineSessions.size < (liveSessions?.length ?? 0);
+
   const readiness = resolveReadiness(
     sel?.sessionName ?? null,
     sel?.sessionPhone ?? null,
@@ -1115,6 +1131,20 @@ export default function InboxPage() {
                   </div>
                   <div className="mb-1 flex items-center gap-1.5">
                     <StatusBadge label={csc.label} color={csc.color} className="px-1.5 py-0 text-micro" />
+                    {/*
+                      This thread's own channel is down. Named, not just
+                      coloured — an icon alone would be one more grey glyph in
+                      a row that already has several.
+                    */}
+                    {markOfflineRows && c.sessionName && offlineSessions.has(c.sessionName) && (
+                      <span
+                        className="flex shrink-0 items-center gap-0.5 text-micro text-destructive"
+                        title={t('لن تصل الردود حتى تعود')}
+                      >
+                        <WifiOff className="h-2.5 w-2.5" aria-hidden />
+                        {t('غير متصلة')}
+                      </span>
+                    )}
                     {c.assigneeName && (
                       <span className="flex items-center gap-0.5 text-micro text-muted-foreground">
                         <User className="h-2.5 w-2.5" />{c.assigneeName}
