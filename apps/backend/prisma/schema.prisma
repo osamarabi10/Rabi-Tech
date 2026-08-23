@@ -89,6 +89,8 @@ model Organization {
 
   lifecycleStages LifecycleStage[]
 
+  inboxViews InboxView[]
+
   @@index([overrideExpiresAt])
 }
 
@@ -152,8 +154,8 @@ model Invoice {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  subscription Subscription? @relation(fields: [subscriptionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription?    @relation(fields: [subscriptionId, organizationId], references: [id, organizationId], onDelete: Restrict)
   receipts     PaymentReceipt[]
 
   @@unique([id, organizationId])
@@ -599,6 +601,9 @@ model User {
 
   // Composite unique: one identity per org
   segments Segment[]
+
+  /// Private saved views. Shared ones have no owner and outlive the user.
+  inboxViews InboxView[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, identityId])
@@ -1241,4 +1246,32 @@ model LifecycleStage {
   @@unique([id, organizationId])
   @@unique([organizationId, name])
   @@index([organizationId, orderIndex])
+}
+
+/// A named conversation filter, private to one agent or shared workspace-wide.
+///
+/// Saved views filter *conversations*; segments filter *contacts*. They stay
+/// separate grammars on purpose — one grammar over both would mean every rule
+/// carrying "does this apply to people, threads, or both".
+model InboxView {
+  id             String   @id @default(cuid())
+  organizationId String
+  /// Null = shared with the workspace. Set = private to that user.
+  ///
+  /// A nullable owner rather than a boolean beside an owner: it cannot express
+  /// "shared but owned by someone", and the FK does the cleanup — deleting a
+  /// user takes their private views and leaves the shared ones standing.
+  ownerId        String?
+  name           String
+  /// An InboxViewFilter. Validated on write; never trusted on read.
+  filter         Json
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner        User?        @relation(fields: [ownerId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, ownerId, sortOrder])
 }

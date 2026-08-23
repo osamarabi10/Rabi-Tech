@@ -1722,6 +1722,52 @@ async function databaseAudits() {
       assert.ok(seenByA.length > 0);
       assert.ok(seenByA.every((row) => row.organizationId === orgA.organizationId));
     });
+    await check('inbox views: composite FK rejects a cross-org owner', async () => {
+      // A saved view owned by a user in another organization would be a view
+      // neither workspace can account for: invisible to the org that owns the
+      // row, and surviving in the org whose user was deleted. The pair has to
+      // match a single User, so the database refuses it rather than trusting
+      // whichever route wrote it.
+      await assert.rejects(() =>
+        raw.inboxView.create({
+          data: {
+            organizationId: orgA.organizationId,
+            ownerId: orgB.userId,
+            name: 'cross-org owner',
+            filter: {},
+          },
+        }),
+      );
+    });
+    await check('inbox views: never cross organizations on read', async () => {
+      // Shared views carry no owner, so nothing about the row itself scopes it
+      // to a workspace except organizationId. A leak here would put one
+      // subscriber's saved filters — and their names — in another's inbox.
+      const write = (org, ownerId) =>
+        runAsOrganization(org.organizationId, () =>
+          scoped.inboxView.create({
+            data: {
+              organizationId: org.organizationId,
+              ownerId,
+              name: 'bleed-probe',
+              filter: { status: ['OPEN'] },
+            },
+          }),
+        );
+
+      // One private and one shared in each org: the shared row is the one with
+      // no owner to scope it.
+      await write(orgA, orgA.userId);
+      await write(orgA, null);
+      await write(orgB, orgB.userId);
+      await write(orgB, null);
+
+      const seen = await runAsOrganization(orgA.organizationId, () =>
+        scoped.inboxView.findMany({ select: { organizationId: true } }),
+      );
+      assert.ok(seen.length > 0);
+      assert.ok(seen.every((row) => row.organizationId === orgA.organizationId));
+    });
     await check('billing: composite FK rejects cross-org receipt invoice writes', async () => {
       // A receipt is the record that money was taken. Pointing one at another
       // organization's invoice would credit that org's balance from this org's
