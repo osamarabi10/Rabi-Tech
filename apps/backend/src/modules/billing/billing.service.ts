@@ -6,6 +6,7 @@ import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { queueGatewayAction } from '../../workers/gateway-provisioning.queue';
 import logger from '../../lib/logger';
 import { getCurrentUsage, getMetricUsage } from '../usage/usage.service';
+import { ACCESS_GRANTING_SUBSCRIPTION_STATUSES, trialDeadlineFrom } from './trial.service';
 import { getPaymentProvider } from './provider-registry';
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode } from './plans';
 import { resolveEntitlements } from './entitlements.resolver';
@@ -168,6 +169,12 @@ export async function createSignup(input: {
     const verificationToken = crypto.randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
+    // Inside the platform context — this reads a platform setting, and the
+    // tenancy extension fails closed on a query with no scope. Outside the
+    // transaction, because a transaction held open across an unrelated read is
+    // a lock held for no reason.
+    const trialEndsAt = isPaidPlan(planCode) ? null : await trialDeadlineFrom(new Date());
+
     const created = await prisma.$transaction(async (tx) => {
       const organization = await tx.organization.create({
         data: {
@@ -254,8 +261,14 @@ export async function createSignup(input: {
           organizationId: organization.id,
           planCode,
           provider: provider.provider,
-          status: planCode === 'FREE' ? 'ACTIVE' : 'MANUAL_REVIEW',
-          activatedAt: planCode === 'FREE' ? new Date() : null,
+          // An unpaid plan is a trial now, not a permanent tier. The deadline
+          // is stamped once, here, so a later change to the trial length
+          // cannot retroactively expire somebody who is already inside one.
+          status: isPaidPlan(planCode) ? 'MANUAL_REVIEW' : 'TRIALING',
+          trialEndsAt: isPaidPlan(planCode) ? null : trialEndsAt,
+          // Nothing has been paid, so nothing is activated. `activatedAt` is
+          // the moment money changed hands, and a trial is not that moment.
+          activatedAt: null,
         },
       });
       await tx.emailVerificationToken.create({
@@ -306,7 +319,18 @@ export async function verifyEmail(token: string) {
     await prisma.emailVerificationToken.update({ where: { id: row.id }, data: { consumedAt: new Date() } });
     await prisma.organization.update({
       where: { id: row.organizationId },
-      data: { emailVerifiedAt: new Date(), status: row.organization.subscriptions[0]?.status === 'ACTIVE' ? 'ACTIVE' : row.organization.status },
+      data: {
+        emailVerifiedAt: new Date(),
+        // TRIALING counts as much as ACTIVE here. A trial *is* access — it is
+        // the whole product for its window — so leaving the organization
+        // PENDING after verification would strand every new signup outside the
+        // thing they just signed up for. The tenancy gate caught this.
+        status: ACCESS_GRANTING_SUBSCRIPTION_STATUSES.includes(
+          row.organization.subscriptions[0]?.status ?? '',
+        )
+          ? 'ACTIVE'
+          : row.organization.status,
+      },
     });
     await maybeProvisionGateway(row.organizationId, 'email-verified');
     return { organizationId: row.organizationId, verified: true };

@@ -17,6 +17,7 @@ import authRoutes         from './modules/auth/auth.routes';
 import conversationRoutes from './modules/conversations/conversations.routes';
 import contactRoutes      from './modules/contacts/contacts.routes';
 import segmentRoutes      from './modules/segments/segments.routes';
+import { enforceAccess } from './middleware/access-gate.middleware';
 import inboxViewRoutes   from './modules/inbox-views/inbox-views.routes';
 import lifecycleRoutes from './modules/lifecycle/lifecycle.routes';
 import workflowRoutes     from './modules/workflows/workflows.routes';
@@ -384,7 +385,11 @@ app.use('/api', (req, res, next) => {
     // Wrap all downstream handlers in organization tenant context
     // This ensures all Prisma queries are auto-scoped to this organization
     runAsOrganization(req.user.organizationId, () => {
-      next();
+      // Authenticated, and scoped to a tenant — now: is that tenant allowed
+      // to be here at all? Expired trial, or a suspension that until now was
+      // a status nothing enforced. Inside the tenant context so anything it
+      // reads is scoped like everything else.
+      enforceAccess(req, res, next);
     }).catch((err) => {
       res.status(500).json({ error: 'Failed to establish tenant context' });
     });

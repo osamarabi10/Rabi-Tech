@@ -9,6 +9,7 @@ import {
   requestGatewayForCurrentOrganization,
   verifyEmail,
 } from './billing.service';
+import { resolveTrial } from './trial.service';
 
 const router = Router();
 
@@ -21,6 +22,32 @@ function handleRouteError(res: any, error: unknown) {
   const status = typeof (error as any)?.status === 'number' ? (error as any).status : 500;
   res.status(status).json({ error: status >= 500 ? 'Billing request failed' : (error as Error).message });
 }
+
+/**
+ * The countdown, and whether the paywall is up.
+ *
+ * On the gate's allow-list, because a client that has just been refused
+ * everything else still has to be able to ask why. Returns the deadline
+ * rather than a number of minutes: a duration computed here would be stale by
+ * the time it rendered, and would drift against a clock the client is already
+ * watching. The client counts down from the timestamp.
+ */
+router.get('/trial', async (req, res) => {
+  try {
+    const organizationId = req.user?.organizationId;
+    if (!organizationId) return res.status(401).json({ error: 'Unauthorized' });
+    const trial = await resolveTrial(organizationId);
+    res.json({
+      state: trial.kind,
+      endsAt: trial.kind === 'none' ? null : trial.endsAt.toISOString(),
+      // The server's own clock, so a client whose device is set wrong counts
+      // down against ours rather than against its own.
+      serverNow: new Date().toISOString(),
+    });
+  } catch (error) {
+    handleRouteError(res, error);
+  }
+});
 
 router.get('/plans', async (_req, res) => {
   try {
