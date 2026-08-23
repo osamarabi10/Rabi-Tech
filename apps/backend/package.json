@@ -8,6 +8,7 @@
     "lint": "node scripts/lint-prisma-client.js",
     "test:tenancy": "node scripts/tenancy-bleed-harness.js",
     "test:finance": "npm run build && node scripts/verify-finance.js",
+    "test:inbox-views": "npm run build && node scripts/inbox-views-check.js",
     "test:snooze": "npm run build && node scripts/verify-snooze-wake.js",
     "test:campaign-replies": "npm run build && node scripts/verify-campaign-replies.js",
     "test:dunning": "npm run build && node scripts/verify-dunning.js",

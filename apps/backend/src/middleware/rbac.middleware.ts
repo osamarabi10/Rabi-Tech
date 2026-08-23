@@ -33,6 +33,13 @@ const ROLE_PERMISSIONS: Record<string, Set<Role>> = {
   'segment:create': new Set(['ADMIN', 'SUPERVISOR', 'AGENT']),
   'segment:rename': new Set(['ADMIN', 'SUPERVISOR']),
   'segment:delete': new Set(['ADMIN', 'SUPERVISOR']),
+  // Saved views follow the same reasoning one step further. Anyone who can
+  // read conversations may keep their own private views — they are a personal
+  // arrangement of an inbox that agent already sees. Putting a view in front
+  // of the whole workspace, or editing one that is already there, is a
+  // different act: an agent must not rename or delete a view four colleagues
+  // start their day in.
+  'inbox-view:manage-shared': new Set(['ADMIN', 'SUPERVISOR']),
   // Automations act on customers without a human in the loop, so authoring one
   // sits with admins and supervisors while everyone who can read conversations
   // can see what fired and why.
@@ -83,6 +90,22 @@ export function permissionsForRole(role: string): string[] {
     .filter(([, roles]) => roles.has(role as Role))
     .map(([operation]) => operation)
     .sort();
+}
+
+/**
+ * Whether a role holds an operation, without the middleware wrapper.
+ *
+ * A few routes decide the permission from the request body rather than the
+ * path: creating a *private* saved view is something every agent may do, and
+ * creating a *shared* one is not, on the same endpoint. Those checks still go
+ * through this table rather than comparing role strings inline — which is the
+ * thing the table exists to stop.
+ */
+export function hasPermission(role: string | undefined, operation: string): boolean {
+  // Fail closed on both halves: a request with no role, and an operation not
+  // in the table, are both "no" rather than a crash or an accidental yes.
+  if (!role) return false;
+  return ROLE_PERMISSIONS[operation]?.has(role as Role) ?? false;
 }
 
 export function requirePermission(operation: string) {

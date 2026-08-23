@@ -128,4 +128,10 @@ export const SocketEvents = {
   GROUP_MESSAGE:         'group_message',
   MESSAGE_ACK:           'message_ack',
   NOTIFICATION:          'notification',
+  /// A saved view was created, renamed, refiltered, reordered or deleted.
+  ///
+  /// Routed by who can see it: shared views to the organization room,
+  /// private views to their owner's room only. Broadcasting a private view
+  /// org-wide would leak both its name and the filter behind it.
+  INBOX_VIEW_CHANGED:    'inbox_view_changed',
 } as const;
