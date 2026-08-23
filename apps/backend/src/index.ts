@@ -18,6 +18,7 @@ import conversationRoutes from './modules/conversations/conversations.routes';
 import contactRoutes      from './modules/contacts/contacts.routes';
 import segmentRoutes      from './modules/segments/segments.routes';
 import { enforceAccess } from './middleware/access-gate.middleware';
+import { startMailOutboxWorker } from './workers/mail-outbox.worker';
 import inboxViewRoutes   from './modules/inbox-views/inbox-views.routes';
 import lifecycleRoutes from './modules/lifecycle/lifecycle.routes';
 import workflowRoutes     from './modules/workflows/workflows.routes';
@@ -527,6 +528,12 @@ httpServer.listen(Number(PORT), HOST, () => {
     logger.info('Billing reconciliation worker disabled (DISABLE_BILLING_RECONCILIATION_WORKER=1)');
   } else {
     startBillingReconciliationWorker();
+  }
+
+  if (process.env.DISABLE_MAIL_OUTBOX_WORKER === '1') {
+    logger.info('Mail outbox worker disabled (DISABLE_MAIL_OUTBOX_WORKER=1)');
+  } else {
+    startMailOutboxWorker();
   }
 
   if (process.env.DISABLE_WORKFLOW_WORKER === '1') {

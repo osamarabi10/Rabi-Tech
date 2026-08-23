@@ -91,6 +91,8 @@ model Organization {
 
   inboxViews InboxView[]
 
+  emailOutbox EmailOutbox[]
+
   @@index([overrideExpiresAt])
 }
 
@@ -240,14 +242,90 @@ model SignupThrottleEvent {
 }
 
 model Identity {
-  id           String   @id @default(cuid())
-  email        String   @unique // globally unique for login
-  passwordHash String
-  platformRole String   @default("NONE") // NONE|SUPPORT|OWNER (optional: cross-org role)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                  String    @id @default(cuid())
+  email               String    @unique // globally unique for login
+  passwordHash        String
+  platformRole        String    @default("NONE") // NONE|SUPPORT|OWNER (optional: cross-org role)
+  /// What a SUPPORT advisor may do, beyond reading.
+  ///
+  /// A list rather than more role names: support work is not a ladder. One
+  /// advisor may need to extend trials and never touch billing, another the
+  /// reverse, and every new shape of that would otherwise be a new role and a
+  /// migration. Ignored for OWNER, who holds everything by definition.
+  platformPermissions String[]  @default([])
+  /// Set when a staff account is switched off.
+  ///
+  /// Disabling is not deleting: an advisor who leaves must stop being able to
+  /// sign in while their name stays attached to everything they did. A deleted
+  /// identity would take the audit trail with it.
+  platformDisabledAt  DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  users User[]
+  users               User[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@index([platformRole])
+}
+
+/// A message this system owes somebody, and has not yet managed to send.
+///
+/// A table rather than a direct call. Every message here is sent *because of*
+/// something else succeeding — a payment failed, a trial ended, a password was
+/// reset — and calling a mail API inline would make the provider's
+/// availability a condition of that transaction committing. A mail outage
+/// would start rolling back payment state.
+model EmailOutbox {
+  id             String    @id @default(cuid())
+  /// Null for messages that belong to a person rather than a workspace:
+  /// password resets, staff invitations, platform notices.
+  organizationId String?
+  toEmail        String
+  /// Which message this is. Drives the template, and the deduplication.
+  kind           String
+  subject        String
+  body           String
+  /// PENDING | SENT | FAILED
+  status         String    @default("PENDING")
+  attempts       Int       @default(0)
+  lastError      String?
+  sentAt         DateTime?
+  /// Do not send before this. Dunning sends one warning per stage rather than
+  /// one per pass, and the retry backoff writes here too.
+  sendAfter      DateTime  @default(now())
+  /// "This exact message, once." A dunning warning carries the invoice and the
+  /// stage, so a pass that runs twice cannot warn the same customer twice.
+  /// Unique in the database, because enforcing it in application code means
+  /// two workers can both decide it has not been sent yet.
+  dedupeKey      String?   @unique
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([status, sendAfter])
+  @@index([organizationId, createdAt])
+}
+
+/// A live password reset. Only the hash is stored, for the same reason a
+/// password is: a readable table of reset tokens is a readable table of
+/// account takeovers.
+model PasswordResetToken {
+  id          String    @id @default(cuid())
+  identityId  String
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  /// Single use. Recorded rather than deleted, so a second attempt can be told
+  /// apart from a token that never existed.
+  consumedAt  DateTime?
+  /// For the notice that follows: "your password was changed from this
+  /// address". Useless for prevention, decisive for detection.
+  requestedIp String?
+  createdAt   DateTime  @default(now())
+
+  identity Identity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+
+  @@index([identityId, createdAt])
 }
 
 model OrganizationConfig {

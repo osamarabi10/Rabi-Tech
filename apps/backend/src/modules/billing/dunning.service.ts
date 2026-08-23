@@ -2,6 +2,7 @@ import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { runAsPlatform } from '../../lib/tenant-context';
 import { queueGatewayAction } from '../../workers/gateway-provisioning.queue';
+import { queueMail } from '../mail/mail.service';
 
 /**
  * What happens between "hasn't paid" and "switched off".
@@ -35,6 +36,22 @@ import { queueGatewayAction } from '../../workers/gateway-provisioning.queue';
 /** How long a subscriber keeps working after an invoice goes overdue. */
 const GRACE_DAYS_KEY = 'dunningGraceDays';
 const GRACE_DAYS_DEFAULT = 7;
+
+/**
+ * Who hears about a billing problem.
+ *
+ * The workspace admins, not "the organization" — an organization has no
+ * inbox. Falls back to nobody rather than to some default address: a warning
+ * sent to the wrong person is worse than one the outbox records as unsent,
+ * because the first looks handled.
+ */
+async function billingContacts(organizationId: string): Promise<string[]> {
+  const admins = await prisma.user.findMany({
+    where: { organizationId, role: 'ADMIN', isActive: true },
+    select: { identity: { select: { email: true } } },
+  });
+  return [...new Set(admins.map((admin) => admin.identity.email).filter(Boolean))];
+}
 
 export async function getDunningGraceDays(): Promise<number> {
   const row = await prisma.platformSetting.findUnique({ where: { key: GRACE_DAYS_KEY } });
@@ -120,12 +137,42 @@ export async function runDunning(now: Date = new Date()): Promise<DunningResult>
         },
       });
 
-      if (organization.status === 'SUSPENDED' && organization.suspendAt && organization.suspendAt <= now) {
+      const wasSuspended =
+        organization.status === 'SUSPENDED' && organization.suspendAt && organization.suspendAt <= now;
+
+      if (wasSuspended) {
         await queueGatewayAction(organization.id, 'resume');
         await prisma.subscription.updateMany({
           where: { organizationId: organization.id, status: 'PAST_DUE' },
           data: { status: 'ACTIVE' },
         });
+
+        /*
+         * The message worth sending.
+         *
+         * Access came back on its own, which is the part a customer cannot see
+         * and will otherwise phone about. Keyed on the deadline that was just
+         * cleared, so restoring twice for the same lapse says it once — while a
+         * customer who lapses again later gets told again.
+         */
+        for (const email of await billingContacts(organization.id)) {
+          await queueMail({
+            to: email,
+            organizationId: organization.id,
+            kind: 'dunning.restored',
+            dedupeKey: `dunning.restored:${organization.id}:${organization.suspendAt!.toISOString()}`,
+            subject: 'Your RabiTech workspace is back',
+            body: [
+              'Hello,',
+              '',
+              `Payment for ${organization.name} came through and your workspace is`,
+              'active again. Nothing was lost while it was paused.',
+              '',
+              'Your WhatsApp number is reconnecting now. Messages that arrived while',
+              'the workspace was paused are in the inbox waiting for a reply.',
+            ].join(String.fromCharCode(10)),
+          });
+        }
       }
 
       await prisma.platformAlert.create({
@@ -167,6 +214,37 @@ export async function runDunning(now: Date = new Date()): Promise<DunningResult>
             metadata: { suspendAt: suspendAt.toISOString(), graceDays },
           },
         });
+        /*
+         * Tell them, once.
+         *
+         * The dedupe key carries the organization and the deadline, so a pass
+         * that runs twice in a minute cannot warn the same customer twice —
+         * and a *new* deadline, which is a genuinely new situation, produces a
+         * new key and a new message.
+         */
+        const deadline = suspendAt.toISOString().slice(0, 10);
+        for (const email of await billingContacts(organization.id)) {
+          await queueMail({
+            to: email,
+            organizationId: organization.id,
+            kind: 'dunning.warning',
+            dedupeKey: `dunning.warning:${organization.id}:${deadline}`,
+            subject: `Action needed: your RabiTech service stops on ${deadline}`,
+            body: [
+              `Hello,`,
+              ``,
+              `An invoice for ${organization.name} is past its due date.`,
+              ``,
+              `If the balance is not cleared by ${deadline}, access to your workspace`,
+              `will stop. Your conversations, contacts and settings are not deleted —`,
+              `everything is exactly where you left it, and access returns the moment`,
+              `payment goes through.`,
+              ``,
+              `You can settle the balance from Billing inside your workspace.`,
+            ].join(String.fromCharCode(10)),
+          });
+        }
+
         logger.warn('Subscriber entered dunning', { organizationId: organization.id, suspendAt });
         result.warned += 1;
         continue;
@@ -192,6 +270,32 @@ export async function runDunning(now: Date = new Date()): Promise<DunningResult>
           });
         });
         await queueGatewayAction(organization.id, 'suspend');
+
+        // Queued after the transaction committed, never inside it: a message
+        // announcing a suspension that then rolled back is worse than none.
+        for (const email of await billingContacts(organization.id)) {
+          await queueMail({
+            to: email,
+            organizationId: organization.id,
+            kind: 'dunning.suspended',
+            dedupeKey: `dunning.suspended:${organization.id}:${organization.suspendAt.toISOString()}`,
+            subject: `Your RabiTech workspace has been paused`,
+            body: [
+              `Hello,`,
+              ``,
+              `Access to ${organization.name} has been paused because the balance is`,
+              `still unpaid.`,
+              ``,
+              `Nothing has been deleted. Your conversations, contacts and settings are`,
+              `intact, and access is restored automatically as soon as payment is`,
+              `received — you do not need to ask anyone.`,
+              ``,
+              `Incoming WhatsApp messages are not being answered while the workspace`,
+              `is paused.`,
+            ].join(String.fromCharCode(10)),
+          });
+        }
+
         logger.warn('Subscriber suspended by dunning', { organizationId: organization.id });
         result.suspended += 1;
       }

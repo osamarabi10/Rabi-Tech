@@ -10,6 +10,7 @@ import {
   verifyEmail,
 } from './billing.service';
 import { resolveTrial } from './trial.service';
+import { getServiceState } from './service-state.service';
 
 const router = Router();
 
@@ -22,6 +23,28 @@ function handleRouteError(res: any, error: unknown) {
   const status = typeof (error as any)?.status === 'number' ? (error as any).status : 500;
   res.status(status).json({ error: status >= 500 ? 'Billing request failed' : (error as Error).message });
 }
+
+/**
+ * Why this workspace is in trouble, if it is.
+ *
+ * On the gate's allow-list beside the trial endpoint, and for the same
+ * reason: a workspace that has just been refused everything else still has to
+ * be able to render an explanation.
+ *
+ * Returns the deadline rather than a rendered sentence, because the banner is
+ * translated into three languages and a server-composed string would be in
+ * one of them.
+ */
+router.get('/service-state', async (req, res) => {
+  try {
+    const organizationId = req.user?.organizationId;
+    if (!organizationId) return res.status(401).json({ error: 'Unauthorized' });
+    const state = await getServiceState(organizationId);
+    res.json(state);
+  } catch (error) {
+    handleRouteError(res, error);
+  }
+});
 
 /**
  * The countdown, and whether the paywall is up.

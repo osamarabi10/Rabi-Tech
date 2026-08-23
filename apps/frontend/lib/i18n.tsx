@@ -15,6 +15,13 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { he: string; en: string }>;
 
 const D: Dict = {
+  // ---- Service state banner ----
+  'مساحتك متوقفة مؤقتاً': { he: 'המרחב שלכם מושהה', en: 'Your workspace is paused' },
+  'في فاتورة متأخرة': { he: 'יש חשבונית באיחור', en: 'You have an overdue invoice' },
+  'ما في إشي انحذف. بترجع تشتغل فوراً أول ما تنحل الفاتورة.': { he: 'שום דבר לא נמחק. הגישה חוזרת מיד עם התשלום.', en: 'Nothing has been deleted. Access returns the moment payment goes through.' },
+  'الخدمة بتوقف يوم': { he: 'השירות נפסק ב־', en: 'Service stops on' },
+  'إذا ما انسدّدت.': { he: 'אם היא לא תשולם.', en: 'unless it\'s paid.' },
+  'روح للفوترة': { he: 'למעבר לחיוב', en: 'Go to billing' },
   // ---- Landing page ----
   'المنتج': { he: 'המוצר', en: 'Product' },
   'طريقة الشغل': { he: 'איך זה עובד', en: 'How it works' },

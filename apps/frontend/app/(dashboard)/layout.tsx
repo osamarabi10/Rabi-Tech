@@ -9,6 +9,7 @@ import { BrandLogo } from '@/components/brand-logo';
 import { EntitlementsProvider } from '@/lib/entitlements';
 import { DashboardFooter } from '@/components/dashboard-footer';
 import { TrialBanner } from '@/components/trial-banner';
+import { ServiceStateBanner } from '@/components/service-state-banner';
 import { useT } from '@/lib/i18n';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -77,6 +78,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           countdown that only appears on one screen is one a tenant meets by
           accident, and this one is telling them their access ends today.
         */}
+        {/*
+          Billing trouble outranks the trial countdown: a workspace with an
+          overdue invoice has a harder deadline than one with hours left, and
+          the two never apply at once anyway.
+        */}
+        <ServiceStateBanner />
         <TrialBanner />
         {children}
         <DashboardFooter />
