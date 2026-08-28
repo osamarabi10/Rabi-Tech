@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { AutoReplyKind } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
-import { requireAdmin } from '../../middleware/rbac.middleware';
+import { requireAdmin, requireSupervisor } from '../../middleware/rbac.middleware';
 import { invalidateAutoReplyCache } from '../../utils/auto-reply';
 
 const router = Router();
@@ -124,7 +124,13 @@ router.get('/', async (req, res) => {
         ...(category ? { category: category as any } : {}),
         ...(teamId ? { teamId: teamId as string } : {}),
         ...(active === 'true' ? { isActive: true } : {}),
-        ...(shortCode ? { shortCode: { startsWith: shortCode as string, mode: 'insensitive' } } : {}),
+        ...(shortCode ? {
+          category: 'QUICK_REPLY',
+          OR: [
+            { shortCode: { startsWith: String(shortCode).replace(/^\//, ''), mode: 'insensitive' } },
+            { title: { contains: String(shortCode).replace(/^\//, ''), mode: 'insensitive' } },
+          ],
+        } : {}),
       },
       include: { team: { select: { id: true, name: true, slug: true, color: true } } },
       orderBy: [{ sortOrder: 'asc' }, { title: 'asc' }],
@@ -136,7 +142,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/templates
-router.post('/', async (req, res) => {
+router.post('/', requireSupervisor, async (req, res) => {
   try {
     const organizationId = req.user!.organizationId;
     const { title, body, category, teamId, sortOrder, shortCode } = req.body;
@@ -162,7 +168,7 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH /api/templates/:id
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requireSupervisor, async (req, res) => {
   try {
     const { title, body, category, teamId, sortOrder, isActive, shortCode } = req.body;
     const template = await prisma.messageTemplate.update({
@@ -185,7 +191,7 @@ router.patch('/:id', async (req, res) => {
 });
 
 // DELETE /api/templates/:id
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireSupervisor, async (req, res) => {
   try {
     await prisma.messageTemplate.delete({ where: { id: req.params.id } });
     res.sendStatus(204);

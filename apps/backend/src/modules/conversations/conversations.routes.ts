@@ -4,10 +4,7 @@ import { verifyToken } from '../auth/auth.middleware';
 import { OpenWAService } from '../whatsapp/openwa.service';
 import { getIO, SocketEvents } from '../../socket';
 import { socketRoom } from '../../socket/rooms';
-import {
-  closeConversationWithReply,
-  getOrCreateActiveConversation,
-} from '../../utils/conversation-session';
+import { getOrCreateActiveConversation } from '../../utils/conversation-session';
 import { normalizePhoneInput } from '../../utils/phone';
 import { sendStartWelcome } from '../../utils/welcome';
 import { getSessionForTeam } from '../../utils/whatsapp-sessions';
@@ -22,9 +19,36 @@ import { isQuotaExceededError, quotaErrorResponse } from '../usage/entitlements'
 import { describeSendFailure } from '../../utils/send-failure';
 import { signMediaUrl } from '../../utils/media-url';
 import { requireTeamId } from '../../utils/teams';
+import { conversationAccessWhere, maskConversationContacts } from '../../lib/user-access';
+import { renderDynamicVariables } from '../../utils/template';
+import { gatewayReachableAssetUrl } from '../snippets/snippet-storage';
+import {
+  closeConversation,
+  ConversationLifecycleError,
+  isConversationStatus,
+  markSuccessfulHumanOutbound,
+  reopenConversation,
+  rescheduleConversationAutoClose,
+} from './conversation-lifecycle.service';
 
 const router = Router();
 router.use(verifyToken);
+
+// Apply the same visibility gate to every read and mutation carrying a
+// conversation id. Inaccessible records answer 404 so their existence is not
+// disclosed through direct API calls.
+router.param('id', async (req, res, next, id) => {
+  try {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id, ...conversationAccessWhere(req.user!) },
+      select: { id: true },
+    });
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    next();
+  } catch {
+    return res.status(404).json({ error: 'Conversation not found' });
+  }
+});
 
 // POST /api/conversations/start — open chat by phone number
 router.post('/start', requirePermission('conversation:create'), validateBody(createConversationSchema), async (req, res) => {
@@ -86,6 +110,7 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
       try {
         await OpenWAService.sendText(session.sessionName, phone, trimmedMsg);
         await prisma.message.update({ where: { id: created.id }, data: { status: 'SENT' } });
+        await markSuccessfulHumanOutbound(conversation.id, created.timestamp);
       } catch (openwaErr) {
         logger.error('OpenWA send failed (new conversation)', { error: String(openwaErr), messageId: created.id, requestId: (req as any).id });
         await prisma.message.update({ where: { id: created.id }, data: { status: 'FAILED' } });
@@ -129,7 +154,7 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
       await auditConversation(req.user!.id, conversation.id, 'opened', req.ip, req.get('user-agent'));
     }
 
-    res.json(full);
+    res.json(user.maskPhoneAndEmail ? maskConversationContacts(full) : full);
   } catch (err) {
     logger.error('start conversation failed', { error: String(err), requestId: (req as any).id, userId: req.user?.id });
     if (isQuotaExceededError(err)) return res.status(err.status).json(quotaErrorResponse(err));
@@ -153,6 +178,7 @@ router.get('/', async (req, res) => {
     const convs = await prisma.conversation.findMany({
       where: {
         isArchived: false,
+        ...conversationAccessWhere(user),
         ...(hideResolved ? { status: { not: 'RESOLVED' } } : {}),
         ...(status ? { status: status as any } : {}),
         ...teamFilter,
@@ -162,7 +188,7 @@ router.get('/', async (req, res) => {
             {
               OR: [
                 { contact: { name: { contains: search as string, mode: 'insensitive' } } },
-                { contact: { phone: { contains: search as string } } },
+                ...(!user.maskPhoneAndEmail ? [{ contact: { phone: { contains: search as string } } }] : []),
                 { messages: { some: { body: { contains: search as string, mode: 'insensitive' } } } },
               ],
             },
@@ -191,7 +217,7 @@ router.get('/', async (req, res) => {
       orderBy: { lastMessageAt: 'desc' },
     });
 
-    res.json(convs);
+    res.json(user.maskPhoneAndEmail ? maskConversationContacts(convs) : convs);
   } catch (err) {
     logger.error('conversations list failed', { error: String(err), requestId: (req as any).id, userId: req.user?.id });
     res.status(500).json({ error: 'فشل جلب المحادثات', requestId: (req as any).id });
@@ -224,7 +250,7 @@ router.get('/:id/activity', async (req, res) => {
     });
     if (!conversation) return res.status(404).json({ error: 'محادثة غير موجودة' });
 
-    const [audits, automated] = await Promise.all([
+    const [audits, automated, closures] = await Promise.all([
       prisma.auditLog.findMany({
         where: { resource: 'conversation', resourceId: req.params.id },
         select: {
@@ -243,18 +269,31 @@ router.get('/:id/activity', async (req, res) => {
         orderBy: { timestamp: 'desc' },
         take: 50,
       }),
+      prisma.conversationClosure.findMany({
+        where: { conversationId: req.params.id },
+        orderBy: { closedAt: 'desc' },
+        take: 100,
+      }),
     ]);
 
     const events = [
-      ...audits.map((row) => ({
+      ...audits
+        .filter((row) => !row.action.startsWith('conversation.closed.'))
+        .map((row) => ({
+          id: row.id,
+          kind: 'audit' as const,
+          action: row.action.replace(/^conversation\./, ''),
+          actorName: row.user?.name ?? null,
+          detail: row.description ?? null,
+          at: row.timestamp,
+        })),
+      ...closures.map((row) => ({
         id: row.id,
-        kind: 'audit' as const,
-        // 'conversation.resolved' -> 'resolved'. The resource prefix is
-        // redundant on a surface that only ever shows one conversation.
-        action: row.action.replace(/^conversation\./, ''),
-        actorName: row.user?.name ?? null,
-        detail: row.description ?? null,
-        at: row.timestamp,
+        kind: 'closure' as const,
+        action: 'closed',
+        actorName: row.closedByName,
+        detail: [row.source, row.categoryName, row.summary].filter(Boolean).join(' · ') || null,
+        at: row.closedAt,
       })),
       ...automated.map((row) => ({
         id: row.id,
@@ -340,7 +379,7 @@ router.get('/:id/messages', async (req, res) => {
 // POST /api/conversations/:id/reply (agents can send)
 router.post('/:id/reply', requirePermission('conversation:create'), async (req, res) => {
   try {
-    const { body, mediaUrl, isInternal } = req.body;
+    const { body, mediaUrl, mediaType, mediaFileName, isInternal } = req.body;
     // Ids, not parsed names: two agents can share a display name, and "@ahmad"
     // written in prose addresses nobody. The composer sends who it resolved.
     const mentionedUserIds: string[] = Array.isArray(req.body?.mentionedUserIds)
@@ -353,7 +392,17 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
 
     const conv = await prisma.conversation.findUnique({
       where: { id: req.params.id },
-      include: { contact: true, session: true },
+      include: {
+        contact: {
+          include: {
+            customFieldValues: {
+              include: { fieldDefinition: { select: { slug: true } } },
+            },
+          },
+        },
+        session: true,
+        assignee: { select: { id: true, name: true } },
+      },
     });
     if (!conv) {
       logger.warn('conversation not found', { conversationId: req.params.id, requestId: (req as any).id });
@@ -364,13 +413,27 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
     // so a transport error (timeout/reset) AFTER successful delivery returned 503 and
     // discarded the message: the customer received it, the agent saw nothing, and
     // re-sending duplicated it. Never lose a message to a provider error again.
+    const timezone = body?.includes('$system.')
+      ? (await prisma.organizationConfig.findUnique({ where: { organizationId: req.user!.organizationId }, select: { timezone: true } }))?.timezone
+      : undefined;
+    const renderedBody = renderDynamicVariables(String(body || '').trim(), {
+      contact: {
+        ...conv.contact,
+        customFields: Object.fromEntries(conv.contact.customFieldValues.map((entry) => [entry.fieldDefinition.slug, entry.value])),
+      },
+      assignee: conv.assignee,
+      timezone,
+    });
+
     const msg = await prisma.message.create({
       data: {
         organizationId: req.user!.organizationId,
         conversationId: conv.id,
         direction: 'OUTBOUND',
-        body: body?.trim(),
+        body: renderedBody || null,
         mediaUrl: isInternal ? null : mediaUrl,
+        mediaType: isInternal ? null : mediaType,
+        mediaFileName: isInternal ? null : mediaFileName,
         sentById: req.user!.id,
         status: isInternal ? 'SENT' : 'PENDING',
         isInternal: !!isInternal,
@@ -394,12 +457,19 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
     if (!isInternal) {
       try {
         if (mediaUrl) {
-          await OpenWAService.sendMedia(conv.session.sessionName, conv.contact.phone, mediaUrl, body);
+          await OpenWAService.sendMedia(
+            conv.session.sessionName,
+            conv.contact.phone,
+            gatewayReachableAssetUrl(mediaUrl),
+            renderedBody || undefined,
+            { mediaType, fileName: mediaFileName },
+          );
         } else {
-          await OpenWAService.sendText(conv.session.sessionName, conv.contact.phone, body);
+          await OpenWAService.sendText(conv.session.sessionName, conv.contact.phone, renderedBody);
         }
         await prisma.message.update({ where: { id: msg.id }, data: { status: 'SENT' } });
         msg.status = 'SENT';
+        await markSuccessfulHumanOutbound(conv.id, msg.timestamp);
       } catch (openwaErr) {
         sendError = openwaErr;
         const failure = describeSendFailure(openwaErr);
@@ -471,7 +541,13 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
     const { conversation } = message;
     try {
       if (message.mediaUrl) {
-        await OpenWAService.sendMedia(conversation.session.sessionName, conversation.contact.phone, message.mediaUrl, message.body ?? undefined);
+        await OpenWAService.sendMedia(
+          conversation.session.sessionName,
+          conversation.contact.phone,
+          gatewayReachableAssetUrl(message.mediaUrl),
+          message.body ?? undefined,
+          { mediaType: message.mediaType, fileName: message.mediaFileName },
+        );
       } else {
         await OpenWAService.sendText(conversation.session.sessionName, conversation.contact.phone, message.body ?? '');
       }
@@ -492,6 +568,7 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
       where: { id: message.id },
       data: { status: 'SENT', failureReason: null },
     });
+    await markSuccessfulHumanOutbound(conversation.id, new Date());
 
     await auditConversation(req.user!.id, conversation.id, 'message-retried', req.ip, req.get('user-agent'));
     getIO()
@@ -539,6 +616,7 @@ router.patch('/:id/snooze', requirePermission('conversation:resolve'), async (re
         snoozedByName: until ? req.user!.name : null,
       },
     });
+    await rescheduleConversationAutoClose(conversation.id, until);
 
     await auditConversation(
       req.user!.id,
@@ -563,9 +641,13 @@ router.patch('/:id/snooze', requirePermission('conversation:resolve'), async (re
 // Agents can change status; only supervisors+ can reassign.
 router.patch('/:id', requirePermission('conversation:resolve'), async (req, res) => {
   try {
-    const { status, assignedToId } = req.body;
+    const { status, assignedToId, categoryId, summary } = req.body;
     const convId = req.params.id;
     const user = req.user!;
+
+    if (status !== undefined && !isConversationStatus(status)) {
+      return res.status(400).json({ error: 'Invalid conversation status' });
+    }
 
     // Assigning TO someone requires supervisor role; unassigning (null) is allowed for anyone
     if (assignedToId !== undefined && assignedToId !== null) {
@@ -585,28 +667,56 @@ router.patch('/:id', requirePermission('conversation:resolve'), async (req, res)
       return res.status(404).json({ error: 'محادثة غير موجودة', requestId: (req as any).id });
     }
 
+    let conv;
+    let stateChanged = true;
     if (status === 'RESOLVED') {
-      await closeConversationWithReply(convId);
+      const result = await closeConversation({
+        conversationId: convId,
+        source: 'MANUAL',
+        categoryId,
+        summary,
+        actor: {
+          id: user.id,
+          name: user.name,
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent'),
+        },
+        enforceManualPolicy: true,
+        sendClosingReply: true,
+      });
+      conv = result.conversation;
+      stateChanged = result.changed;
+    } else if (status && status !== 'RESOLVED' && before.status === 'RESOLVED') {
+      const result = await reopenConversation(convId, {
+        id: user.id,
+        name: user.name,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      });
+      conv = status === 'OPEN'
+        ? result.conversation
+        : await prisma.conversation.update({
+            where: { id: convId },
+            data: { status },
+          });
+      stateChanged = result.changed;
+    } else {
+      conv = await prisma.conversation.update({
+        where: { id: convId },
+        data: {
+          ...(status && { status }),
+          ...(assignedToId !== undefined && { assignedToId: assignedToId || null }),
+        },
+      });
+      const auditAction = status === 'PENDING'
+        ? 'pending'
+        : assignedToId !== undefined
+          ? 'assigned'
+          : 'updated';
+      await auditConversation(user.id, convId, auditAction, req.ip, req.get('user-agent'));
     }
 
-    const conv = await prisma.conversation.update({
-      where: { id: convId },
-      data: {
-        ...(status && { status }),
-        ...(assignedToId !== undefined && { assignedToId: assignedToId || null }),
-        // Stamped at the transition, and cleared on reopen so the column always
-        // describes the resolution that currently stands. Reporting previously
-        // had to infer this from `updatedAt`, which relabelling a thread moved.
-        ...(status === 'RESOLVED' ? { resolvedAt: new Date() } : {}),
-        ...(status && status !== 'RESOLVED' ? { resolvedAt: null } : {}),
-      },
-    });
-
-    const auditAction = status === 'RESOLVED' ? 'resolved' : status === 'PENDING' ? 'pending' : assignedToId !== undefined ? 'assigned' : 'updated';
-    await auditConversation(user.id, convId, auditAction, req.ip, req.get('user-agent'));
-
-    if (status === 'RESOLVED') {
-      getIO().to(socketRoom.organization(req.user!.organizationId)).emit(SocketEvents.CONVERSATION_RESOLVED, { conversationId: conv.id });
+    if (status === 'RESOLVED' && stateChanged) {
       // Send CSAT prompt to customer and notify the agent
       sendCsatPrompt(convId).catch(() => {});
       notifyResolved(convId, user.name).catch(() => {});
@@ -621,6 +731,9 @@ router.patch('/:id', requirePermission('conversation:resolve'), async (req, res)
     res.json(conv);
   } catch (err) {
     logger.error('conversation update failed', { error: String(err), requestId: (req as any).id, userId: req.user?.id });
+    if (err instanceof ConversationLifecycleError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
     res.status(500).json({ error: 'فشل تحديث المحادثة', requestId: (req as any).id });
   }
 });

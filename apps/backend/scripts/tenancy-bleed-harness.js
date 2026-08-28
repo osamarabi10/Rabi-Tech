@@ -6,6 +6,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { PrismaClient } = require('@prisma/client');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const { io: createSocketClient } = require('socket.io-client');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -196,6 +197,21 @@ function staticAudits() {
     /model\s+WorkingHours\s*\{[\s\S]*?organizationId\s+String[\s\S]*?@@unique\(\[organizationId\]\)/.test(schema),
     'WorkingHours must carry organizationId with one row per organization',
   );
+
+  const { renderDynamicVariables } = require('../src/utils/template');
+  const rendered = renderDynamicVariables(
+    'Hi $contact.name / $contact.order_ref / $system.current_date / $contact.missing',
+    {
+      contact: { id: 'contact-a', name: 'Maya', customFields: { order_ref: 'A-42' } },
+      timezone: 'UTC',
+      now: new Date('2026-08-26T10:20:30.000Z'),
+    },
+  );
+  record(
+    'audit: Snippet variables resolve standard, custom, and system values without erasing unknown fields',
+    rendered === 'Hi Maya / A-42 / 2026-08-26 / $contact.missing',
+    rendered,
+  );
 }
 
 function makeTestUrl(baseUrl, schema) {
@@ -280,9 +296,15 @@ function startTestBackend(testUrl, tokenSecret) {
       DISABLE_ESCALATION_WORKER: '1',
       DISABLE_USAGE_ROLLUP_WORKER: '1',
       DISABLE_BILLING_RECONCILIATION_WORKER: '1',
+      DISABLE_WEEKLY_RECAP_WORKER: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  // The child is intentionally quiet, but a pipe still has a finite buffer.
+  // Drain both streams or a verbose provisioning pass eventually blocks the
+  // backend inside write(), and the next HTTP assertion waits forever.
+  child.stdout.resume();
+  child.stderr.resume();
   return { child, baseUrl: `http://127.0.0.1:${port}` };
 }
 
@@ -501,6 +523,13 @@ async function databaseAudits() {
   }
 
   const schemaName = `rabitech_bleed_${process.pid}_${Date.now()}`.toLowerCase();
+  const snippetHarnessRoot = path.resolve(REPO_ROOT, '.tools', 'snippet-harness');
+  const snippetUploadDir = path.resolve(snippetHarnessRoot, schemaName);
+  if (!snippetUploadDir.startsWith(`${snippetHarnessRoot}${path.sep}`)) {
+    throw new Error('Snippet harness upload path escaped its scratch directory');
+  }
+  const previousSnippetUploadDir = process.env.SNIPPET_UPLOAD_DIR;
+  process.env.SNIPPET_UPLOAD_DIR = snippetUploadDir;
   const testUrl = makeTestUrl(baseUrl, schemaName);
   const prismaCli = path.join(ROOT, 'node_modules', 'prisma', 'build', 'index.js');
   const migrated = command('database: apply migrations to disposable schema', process.execPath, [prismaCli, 'migrate', 'deploy'], {
@@ -574,9 +603,930 @@ async function databaseAudits() {
       organizationId: orgB.organizationId,
       tokenVersion: 0,
     }, jwtSecret, { expiresIn: '10m' });
+    let restrictedAgentId;
+    let restrictedAgentToken;
+    let restrictedAgentIdentityId;
+    let invitedSupervisorId;
+    let invitedSupervisorIdentityId;
+
+    await check('snippets: topics, files, and mutations remain workspace-scoped', async () => {
+      const topicResponse = await fetch(`${baseUrl}/api/snippets/topics`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Billing' }),
+      });
+      const topicText = await topicResponse.text();
+      assert.equal(topicResponse.status, 201, topicText);
+      const topic = JSON.parse(topicText);
+
+      const snippetResponse = await fetch(`${baseUrl}/api/snippets`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Invoice copy', shortCode: 'invoice',
+          body: 'Hello $contact.name, invoice $contact.invoice_id is attached.',
+          topicIds: [topic.id],
+        }),
+      });
+      const snippetText = await snippetResponse.text();
+      assert.equal(snippetResponse.status, 201, snippetText);
+      const snippet = JSON.parse(snippetText);
+      assert.deepEqual(snippet.topics.map((row) => row.id), [topic.id]);
+
+      const upload = await fetch(`${baseUrl}/api/snippets/${snippet.id}/attachments`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'text/plain',
+          'X-File-Name': encodeURIComponent('invoice-guide.txt'),
+        },
+        body: Buffer.from('workspace A only'),
+      });
+      const uploadText = await upload.text();
+      assert.equal(upload.status, 201, uploadText);
+      const attachment = JSON.parse(uploadText);
+      assert.equal(attachment.fileName, 'invoice-guide.txt');
+
+      const asset = await fetch(`${baseUrl}${attachment.url}`);
+      assert.equal(asset.status, 200);
+      assert.equal(await asset.text(), 'workspace A only');
+
+      const listB = await fetch(`${baseUrl}/api/snippets`, { headers: { Authorization: `Bearer ${tokenB}` } });
+      assert.equal(listB.status, 200);
+      const snippetsB = await listB.json();
+      assert.ok(snippetsB.length > 0);
+      assert.ok(snippetsB.every((row) => row.organizationId === orgB.organizationId));
+      assert.ok(!snippetsB.some((row) => row.id === snippet.id));
+
+      const crossUpdate = await fetch(`${baseUrl}/api/snippets/${snippet.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${tokenB}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Cross-tenant edit' }),
+      });
+      assert.equal(crossUpdate.status, 404);
+
+      const row = await raw.messageTemplate.findUnique({ where: { id: snippet.id } });
+      const topicB = await raw.snippetTopic.create({ data: { organizationId: orgB.organizationId, name: 'Billing' } });
+      await assert.rejects(
+        raw.snippetTopicAssignment.create({ data: {
+          organizationId: orgB.organizationId,
+          templateId: row.id,
+          topicId: topicB.id,
+        } }),
+        (error) => error?.code === 'P2003',
+      );
+    });
+
+    await check('contact metadata: Tags, fields, provenance, roles, and validation remain workspace-scoped', async () => {
+      const makeRoleToken = (user, identity, role) => jwt.sign({
+        scope: 'ORGANIZATION', id: user.id, email: identity.email, name: user.name,
+        role, organizationId: orgA.organizationId, tokenVersion: 0,
+      }, jwtSecret, { expiresIn: '10m' });
+      const [managerIdentity, agentIdentity] = await Promise.all([
+        raw.identity.create({ data: { email: 'metadata-manager@rabitech.test', passwordHash: 'not-used' } }),
+        raw.identity.create({ data: { email: 'metadata-agent@rabitech.test', passwordHash: 'not-used' } }),
+      ]);
+      const [manager, agent] = await Promise.all([
+        raw.user.create({ data: { organizationId: orgA.organizationId, identityId: managerIdentity.id, name: 'Metadata Manager', role: 'SUPERVISOR' } }),
+        raw.user.create({ data: { organizationId: orgA.organizationId, identityId: agentIdentity.id, name: 'Metadata Agent', role: 'AGENT' } }),
+      ]);
+      const managerToken = makeRoleToken(manager, managerIdentity, 'SUPERVISOR');
+      const agentToken = makeRoleToken(agent, agentIdentity, 'AGENT');
+
+      const createTag = await fetch(`${baseUrl}/api/contacts/tags`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Renewal', description: 'Contract follow-up', colorCode: '#0f766e', emoji: 'R' }),
+      });
+      const createTagText = await createTag.text();
+      assert.equal(createTag.status, 201, createTagText);
+      const tag = JSON.parse(createTagText);
+      assert.equal(tag.contactCount, 0);
+
+      const agentSettingsWrite = await fetch(`${baseUrl}/api/contacts/tags`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Agent settings escape' }),
+      });
+      assert.equal(agentSettingsWrite.status, 403);
+
+      const agentAssignment = await fetch(`${baseUrl}/api/contacts/${orgA.records[0].contact.id}/tags`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Agent-created' }),
+      });
+      const agentAssignmentText = await agentAssignment.text();
+      assert.equal(agentAssignment.status, 201, agentAssignmentText);
+      const agentTag = JSON.parse(agentAssignmentText);
+      assert.equal(agentTag.source, 'MANUAL');
+      assert.equal(agentTag.assignedById, agent.id);
+      assert.equal(agentTag.assignedByName, agent.name);
+
+      const assigned = await fetch(`${baseUrl}/api/contacts/${orgA.records[0].contact.id}/tags`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tagId: tag.id }),
+      });
+      const assignedText = await assigned.text();
+      assert.equal(assigned.status, 201, assignedText);
+      const assignments = await fetch(`${baseUrl}/api/contacts/${orgA.records[0].contact.id}/tags`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((response) => response.json());
+      const renewalAssignment = assignments.find((row) => row.id === tag.id);
+      assert.equal(renewalAssignment.source, 'MANUAL');
+      assert.equal(renewalAssignment.assignedById, orgA.userId);
+      assert.ok(renewalAssignment.assignedAt);
+
+      const crossContact = await fetch(`${baseUrl}/api/contacts/${orgB.records[0].contact.id}/tags`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(crossContact.status, 404);
+      const crossTagEdit = await fetch(`${baseUrl}/api/contacts/tags/${tag.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${tokenB}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Cross-tenant edit' }),
+      });
+      assert.equal(crossTagEdit.status, 404);
+
+      const wrongCount = await fetch(`${baseUrl}/api/contacts/tags/${tag.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmCount: 0 }),
+      });
+      assert.equal(wrongCount.status, 409);
+      assert.equal((await wrongCount.json()).expectedCount, 1);
+      const rightCount = await fetch(`${baseUrl}/api/contacts/tags/${tag.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmCount: 1 }),
+      });
+      assert.equal(rightCount.status, 200, await rightCount.text());
+
+      const createField = await fetch(`${baseUrl}/api/contacts/custom-fields`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Account Tier', dataType: 'list', allowedValues: ['Standard', 'Gold'] }),
+      });
+      const createFieldText = await createField.text();
+      assert.equal(createField.status, 201, createFieldText);
+      const field = JSON.parse(createFieldText);
+      assert.equal(field.slug, 'account_tier');
+      assert.equal(field.dataType, 'list');
+
+      const immutablePatch = await fetch(`${baseUrl}/api/contacts/custom-fields/${field.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Customer Tier', slug: 'changed_id', dataType: 'number', allowedValues: ['Standard', 'Gold', 'Platinum'] }),
+      });
+      const immutablePatchText = await immutablePatch.text();
+      assert.equal(immutablePatch.status, 200, immutablePatchText);
+      const immutableResult = JSON.parse(immutablePatchText);
+      assert.equal(immutableResult.slug, 'account_tier');
+      assert.equal(immutableResult.dataType, 'list');
+      assert.deepEqual(immutableResult.allowedValues, ['Standard', 'Gold', 'Platinum']);
+
+      const createDateField = await fetch(`${baseUrl}/api/contacts/custom-fields`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Renewal Date', slug: 'renewal_date', dataType: 'date' }),
+      });
+      const createDateFieldText = await createDateField.text();
+      assert.equal(createDateField.status, 201, createDateFieldText);
+      const dateField = JSON.parse(createDateFieldText);
+      const invalidDate = await fetch(`${baseUrl}/api/contacts/${orgA.records[0].contact.id}/custom-fields/renewal_date`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: '2026-02-31' }),
+      });
+      assert.equal(invalidDate.status, 400);
+      const validDate = await fetch(`${baseUrl}/api/contacts/${orgA.records[0].contact.id}/custom-fields/renewal_date`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: '2028-02-29' }),
+      });
+      assert.equal(validDate.status, 200, await validDate.text());
+
+      const invalidImport = await fetch(`${baseUrl}/api/contacts/import`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          consentAffirmed: true,
+          defaultCountryCode: '970',
+          rows: [{ phone: '599777888', name: 'Invalid Date Import', customFields: { renewal_date: '2027-13-01' } }],
+        }),
+      });
+      const invalidImportText = await invalidImport.text();
+      assert.equal(invalidImport.status, 200, invalidImportText);
+      const importSummary = JSON.parse(invalidImportText);
+      assert.equal(importSummary.failed, 1);
+      assert.equal(importSummary.created, 0);
+
+      const saveView = await fetch(`${baseUrl}/api/contacts/contact-fields/view`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: [
+          { fieldKey: `custom:${dateField.id}`, visibility: 'ALWAYS_SHOW' },
+          { fieldKey: 'firstName', visibility: 'ALWAYS_SHOW' },
+          { fieldKey: `custom:${field.id}`, visibility: 'HIDE_WHEN_EMPTY' },
+        ] }),
+      });
+      assert.equal(saveView.status, 200, await saveView.text());
+      const viewA = await fetch(`${baseUrl}/api/contacts/contact-fields`, { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.json());
+      assert.equal(viewA[0].fieldKey, `custom:${dateField.id}`);
+      const viewB = await fetch(`${baseUrl}/api/contacts/contact-fields`, { headers: { Authorization: `Bearer ${tokenB}` } }).then((response) => response.json());
+      assert.ok(!viewB.some((row) => row.id === field.id || row.id === dateField.id));
+
+      const managerDelete = await fetch(`${baseUrl}/api/contacts/custom-fields/${field.id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${managerToken}` },
+      });
+      assert.equal(managerDelete.status, 403);
+      const crossDelete = await fetch(`${baseUrl}/api/contacts/custom-fields/${field.id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${tokenB}` },
+      });
+      assert.equal(crossDelete.status, 404);
+      const ownerDelete = await fetch(`${baseUrl}/api/contacts/custom-fields/${field.id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(ownerDelete.status, 200, await ownerDelete.text());
+    });
+
+    await check('workspace settings: policy and recap recipients remain organization-scoped', async () => {
+      const beforeB = await raw.organizationConfig.findUnique({ where: { organizationId: orgB.organizationId } });
+      const update = await fetch(`${baseUrl}/api/system/workspace-settings`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Bleed Workspace Alpha',
+          timezone: 'Asia/Hebron',
+          userInactivityTimeoutMinutes: 5,
+          weeklyRecapEnabled: true,
+          weeklyRecapRecipientIds: [orgA.userId],
+        }),
+      });
+      assert.equal(update.status, 200);
+      const updated = await update.json();
+      assert.equal(updated.name, 'Bleed Workspace Alpha');
+      assert.equal(updated.timezone, 'Asia/Hebron');
+      assert.equal(updated.userInactivityTimeoutMinutes, 5);
+      assert.equal(updated.weeklyRecapEnabled, true);
+      assert.deepEqual(updated.weeklyRecapRecipientIds, [orgA.userId]);
+      assert.ok(updated.eligibleRecipients.every((user) => user.id !== orgB.userId));
+
+      const crossRecipient = await fetch(`${baseUrl}/api/system/workspace-settings`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ weeklyRecapRecipientIds: [orgB.userId] }),
+      });
+      assert.equal(crossRecipient.status, 400);
+      assert.equal(await raw.weeklyRecapRecipient.count({
+        where: { organizationId: orgA.organizationId, userId: orgB.userId },
+      }), 0);
+
+      await assert.rejects(
+        raw.weeklyRecapRecipient.create({
+          data: { organizationId: orgA.organizationId, userId: orgB.userId },
+        }),
+        (error) => error?.code === 'P2003',
+      );
+
+      const afterB = await raw.organizationConfig.findUnique({ where: { organizationId: orgB.organizationId } });
+      assert.equal(afterB.timezone, beforeB.timezone);
+      assert.equal(afterB.userInactivityTimeoutMinutes, beforeB.userInactivityTimeoutMinutes);
+      assert.equal(afterB.weeklyRecapEnabled, beforeB.weeklyRecapEnabled);
+
+      const policyAgentIdentity = await raw.identity.create({
+        data: { email: 'policy-agent@rabitech.test', passwordHash: 'not-used' },
+      });
+      const policyAgent = await raw.user.create({
+        data: {
+          organizationId: orgA.organizationId,
+          identityId: policyAgentIdentity.id,
+          name: 'Policy Agent',
+          role: 'AGENT',
+        },
+      });
+      const agentToken = jwt.sign({
+        scope: 'ORGANIZATION', id: policyAgent.id, email: policyAgentIdentity.email, name: policyAgent.name,
+        role: 'AGENT', organizationId: orgA.organizationId, tokenVersion: 0,
+      }, jwtSecret, { expiresIn: '10m' });
+      const forbidden = await fetch(`${baseUrl}/api/system/workspace-settings`, {
+        headers: { Authorization: `Bearer ${agentToken}` },
+      });
+      assert.equal(forbidden.status, 403);
+      await raw.user.delete({ where: { id: policyAgent.id } });
+      await raw.identity.delete({ where: { id: policyAgentIdentity.id } });
+    });
+
+    await check('workspace users: Manager invitations are Agent-only, tenant-scoped, and single-use', async () => {
+      await raw.organization.update({ where: { id: orgA.organizationId }, data: { tier: 'BUSINESS' } });
+      const supervisorIdentity = await raw.identity.create({
+        data: {
+          email: 'bleed-manager@rabitech.test',
+          passwordHash: await bcrypt.hash('Manager-Password-123!', 10),
+        },
+      });
+      const supervisor = await raw.user.create({
+        data: {
+          organizationId: orgA.organizationId,
+          identityId: supervisorIdentity.id,
+          name: 'Manager A',
+          role: 'SUPERVISOR',
+        },
+      });
+      invitedSupervisorId = supervisor.id;
+      invitedSupervisorIdentityId = supervisorIdentity.id;
+      const managerToken = jwt.sign({
+        scope: 'ORGANIZATION', id: supervisor.id, email: supervisorIdentity.email,
+        name: supervisor.name, role: 'SUPERVISOR', organizationId: orgA.organizationId,
+        tokenVersion: 0,
+      }, jwtSecret, { expiresIn: '10m' });
+
+      const deniedRole = await fetch(`${baseUrl}/api/system/user-invitations`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'denied-owner@rabitech.test', role: 'SUPERVISOR' }),
+      });
+      assert.equal(deniedRole.status, 403);
+
+      const invited = await fetch(`${baseUrl}/api/system/user-invitations`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Restricted Agent', email: 'restricted-agent@rabitech.test', role: 'AGENT' }),
+      });
+      assert.equal(invited.status, 201);
+      const invitation = await invited.json();
+      assert.ok(invitation.inviteUrl);
+      const inviteToken = new URL(invitation.inviteUrl).searchParams.get('token');
+      assert.ok(inviteToken);
+
+      const preview = await fetch(`${baseUrl}/api/auth/invitations/${encodeURIComponent(inviteToken)}`);
+      assert.equal(preview.status, 200);
+      assert.equal((await preview.json()).workspaceName, 'Bleed Workspace Alpha');
+
+      const accepted = await fetch(`${baseUrl}/api/auth/invitations/${encodeURIComponent(inviteToken)}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Restricted Agent', password: 'Agent-Password-123!' }),
+      });
+      assert.equal(accepted.status, 201);
+      restrictedAgentId = (await accepted.json()).user.id;
+      restrictedAgentIdentityId = (await raw.identity.findUnique({
+        where: { email: 'restricted-agent@rabitech.test' },
+        select: { id: true },
+      })).id;
+      restrictedAgentToken = jwt.sign({
+        scope: 'ORGANIZATION', id: restrictedAgentId, email: 'restricted-agent@rabitech.test',
+        name: 'Restricted Agent', role: 'AGENT', organizationId: orgA.organizationId,
+        tokenVersion: 0,
+      }, jwtSecret, { expiresIn: '10m' });
+
+      const reuse = await fetch(`${baseUrl}/api/auth/invitations/${encodeURIComponent(inviteToken)}`);
+      assert.equal(reuse.status, 404);
+
+      const listB = await fetch(`${baseUrl}/api/system/user-invitations`, {
+        headers: { Authorization: `Bearer ${tokenB}` },
+      });
+      assert.equal(listB.status, 200);
+      assert.ok(!(await listB.json()).some((row) => row.email === 'restricted-agent@rabitech.test'));
+
+      const managerCannotEdit = await fetch(`${baseUrl}/api/system/users/${restrictedAgentId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restrictWorkflows: true }),
+      });
+      assert.equal(managerCannotEdit.status, 403);
+    });
+
+    await check('workspace users: contact visibility, masking, and workflow restrictions are server-enforced', async () => {
+      assert.ok(restrictedAgentId && restrictedAgentToken);
+      await raw.contact.update({
+        where: { id: orgA.records[0].contact.id },
+        data: { assigneeId: restrictedAgentId, email: 'visible@rabitech.test' },
+      });
+      const hiddenContact = await raw.contact.create({
+        data: {
+          id: 'bleed_hidden_contact_a',
+          organizationId: orgA.organizationId,
+          phone: '+972500000099',
+          email: 'hidden@rabitech.test',
+          name: 'Hidden Contact A',
+        },
+      });
+
+      const restricted = await fetch(`${baseUrl}/api/system/users/${restrictedAgentId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          restrictContactVisibility: true,
+          contactVisibilityScope: 'SELF',
+          restrictWorkflows: true,
+          maskPhoneAndEmail: true,
+        }),
+      });
+      assert.equal(restricted.status, 200);
+
+      const contacts = await fetch(`${baseUrl}/api/contacts?paginated=1`, {
+        headers: { Authorization: `Bearer ${restrictedAgentToken}` },
+      });
+      assert.equal(contacts.status, 200);
+      const contactBody = await contacts.json();
+      assert.deepEqual(contactBody.items.map((row) => row.id), [orgA.records[0].contact.id]);
+      assert.equal(contactBody.items[0].phone, '••••••');
+      assert.equal(contactBody.items[0].email, '••••••');
+
+      const hidden = await fetch(`${baseUrl}/api/contacts/${hiddenContact.id}`, {
+        headers: { Authorization: `Bearer ${restrictedAgentToken}` },
+      });
+      assert.equal(hidden.status, 404);
+
+      const workflows = await fetch(`${baseUrl}/api/workflows/schema`, {
+        headers: { Authorization: `Bearer ${restrictedAgentToken}` },
+      });
+      assert.equal(workflows.status, 403);
+      assert.equal((await workflows.json()).code, 'USER_WORKFLOW_RESTRICTED');
+
+      const profile = await fetch(`${baseUrl}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${restrictedAgentToken}` },
+      });
+      assert.equal(profile.status, 200);
+      const me = await profile.json();
+      assert.equal(me.maskPhoneAndEmail, true);
+      assert.ok(me.permissions.every((permission) => !permission.startsWith('workflow:')));
+
+      const foreignTeam = await raw.team.create({
+        data: {
+          organizationId: orgB.organizationId,
+          name: 'Foreign Team B',
+          slug: 'foreign-team-b',
+        },
+      });
+      await assert.rejects(
+        raw.userInvitation.create({
+          data: {
+            organizationId: orgA.organizationId,
+            email: 'cross-team@rabitech.test',
+            role: 'AGENT',
+            primaryTeamId: foreignTeam.id,
+            tokenHash: 'cross-team-invitation-hash',
+            invitedByName: 'Harness',
+            expiresAt: new Date(Date.now() + 60_000),
+          },
+        }),
+        (error) => error?.code === 'P2003',
+      );
+
+      // This harness is sequential. Restore the baseline fixture so later
+      // metering and billing checks keep proving their own assumptions rather
+      // than counting users and contacts introduced above.
+      await raw.contact.update({
+        where: { id: orgA.records[0].contact.id },
+        data: { assigneeId: null, email: null },
+      });
+      await raw.contact.delete({ where: { id: hiddenContact.id } });
+      await raw.userInvitation.deleteMany({ where: { organizationId: orgA.organizationId } });
+      await raw.user.delete({ where: { id: restrictedAgentId } });
+      await raw.identity.delete({ where: { id: restrictedAgentIdentityId } });
+      await raw.user.delete({ where: { id: invitedSupervisorId } });
+      await raw.identity.delete({ where: { id: invitedSupervisorIdentityId } });
+      await raw.organization.update({ where: { id: orgA.organizationId }, data: { tier: 'FREE' } });
+    });
+
+    await check('teams: membership replacement is atomic and tenant-scoped', async () => {
+      const memberIdentity = await raw.identity.create({
+        data: { email: 'team-member-a@rabitech.test', passwordHash: 'not-used' },
+      });
+      const member = await raw.user.create({
+        data: {
+          organizationId: orgA.organizationId,
+          identityId: memberIdentity.id,
+          name: 'Team Member A',
+          role: 'AGENT',
+        },
+      });
+
+      const createdA = await fetch(`${baseUrl}/api/system/teams`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Routing A', color: '#2563EB' }),
+      });
+      const createdB = await fetch(`${baseUrl}/api/system/teams`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenB}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Routing B', color: '#059669' }),
+      });
+      assert.equal(createdA.status, 201);
+      assert.equal(createdB.status, 201);
+      const teamA = await createdA.json();
+      const teamB = await createdB.json();
+
+      const assigned = await fetch(`${baseUrl}/api/system/teams/${teamA.id}/members`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds: [member.id] }),
+      });
+      assert.equal(assigned.status, 200);
+      assert.deepEqual((await assigned.json()).memberIds, [member.id]);
+
+      const foreignUser = await fetch(`${baseUrl}/api/system/teams/${teamA.id}/members`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds: [orgB.userId] }),
+      });
+      assert.equal(foreignUser.status, 400);
+
+      const foreignTeam = await fetch(`${baseUrl}/api/system/teams/${teamB.id}/members`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds: [member.id] }),
+      });
+      assert.equal(foreignTeam.status, 404);
+
+      const listedA = await fetch(`${baseUrl}/api/system/teams`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((response) => response.json());
+      assert.deepEqual(listedA.find((team) => team.id === teamA.id).memberIds, [member.id]);
+      assert.ok(!listedA.some((team) => team.id === teamB.id));
+
+      const cleared = await fetch(`${baseUrl}/api/system/teams/${teamA.id}/members`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds: [] }),
+      });
+      assert.equal(cleared.status, 200);
+      assert.equal(await raw.userTeam.count({ where: { organizationId: orgA.organizationId, teamId: teamA.id } }), 0);
+
+      await raw.user.delete({ where: { id: member.id } });
+      await raw.identity.delete({ where: { id: memberIdentity.id } });
+      const deletedA = await fetch(`${baseUrl}/api/system/teams/${teamA.id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      });
+      const deletedB = await fetch(`${baseUrl}/api/system/teams/${teamB.id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${tokenB}` },
+      });
+      assert.equal(deletedA.status, 200);
+      assert.equal(deletedB.status, 200);
+    });
+
+    await check('auth: workspace inactivity policy expires only the idle login session', async () => {
+      const password = 'Idle-Session-Password-123!';
+      await raw.identity.update({
+        where: { id: orgA.identityId },
+        data: { passwordHash: await bcrypt.hash(password, 10) },
+      });
+      const login = await fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'bleed-a@rabitech.test', password }),
+      });
+      assert.equal(login.status, 200);
+      const loggedIn = await login.json();
+      const decoded = jwt.decode(loggedIn.token);
+      assert.ok(decoded.sessionId);
+
+      const active = await fetch(`${baseUrl}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${loggedIn.token}` },
+      });
+      assert.equal(active.status, 200);
+
+      await raw.authSession.update({
+        where: { id: decoded.sessionId },
+        data: { lastSeenAt: new Date(Date.now() - 6 * 60_000) },
+      });
+      const expired = await fetch(`${baseUrl}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${loggedIn.token}` },
+      });
+      assert.equal(expired.status, 401);
+      assert.equal((await expired.json()).code, 'SESSION_IDLE_TIMEOUT');
+      assert.ok((await raw.authSession.findUnique({ where: { id: decoded.sessionId } })).revokedAt);
+
+      const legacyStillWorks = await fetch(`${baseUrl}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(legacyStillWorks.status, 200);
+    });
+
+    await check('notifications: archive and restore remain user- and organization-scoped', async () => {
+      const [noticeA, noticeB] = await Promise.all([
+        raw.notification.create({
+          data: {
+            organizationId: orgA.organizationId,
+            userId: orgA.userId,
+            type: 'MENTION',
+            title: 'Archive probe A',
+            body: 'organization A',
+          },
+        }),
+        raw.notification.create({
+          data: {
+            organizationId: orgB.organizationId,
+            userId: orgB.userId,
+            type: 'MENTION',
+            title: 'Archive probe B',
+            body: 'organization B',
+          },
+        }),
+      ]);
+
+      const list = async (scope) => {
+        const response = await fetch(`${baseUrl}/api/notifications?scope=${scope}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        assert.equal(response.status, 200);
+        return response.json();
+      };
+
+      const beforeArchive = await list('new');
+      assert.ok(beforeArchive.notifications.some((row) => row.id === noticeA.id));
+      assert.ok(!beforeArchive.notifications.some((row) => row.id === noticeB.id));
+
+      const crossArchive = await fetch(`${baseUrl}/api/notifications/${noticeB.id}/archive`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(crossArchive.status, 404);
+
+      const archived = await fetch(`${baseUrl}/api/notifications/${noticeA.id}/archive`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(archived.status, 200);
+      assert.ok(!(await list('new')).notifications.some((row) => row.id === noticeA.id));
+      assert.ok((await list('archived')).notifications.some((row) => row.id === noticeA.id));
+
+      const restored = await fetch(`${baseUrl}/api/notifications/${noticeA.id}/unarchive`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(restored.status, 200);
+      assert.ok((await list('new')).notifications.some((row) => row.id === noticeA.id));
+    });
+
+    await check('profile: personal preferences update only the authenticated organization user', async () => {
+      const beforeB = await raw.user.findUnique({ where: { id: orgB.userId } });
+      const response = await fetch(`${baseUrl}/api/auth/me`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Profile Alpha',
+          phone: '+970 599 123456',
+          locale: 'en',
+          theme: 'dark',
+          avatarUrl: 'https://assets.example.test/avatar-a.png',
+          onboardingLifecycleComplete: true,
+        }),
+      });
+      assert.equal(response.status, 200);
+      const updated = await response.json();
+      assert.equal(updated.name, 'Profile Alpha');
+      assert.equal(updated.locale, 'en');
+      assert.equal(updated.theme, 'dark');
+      assert.equal(updated.onboardingLifecycleComplete, true);
+
+      const afterB = await raw.user.findUnique({ where: { id: orgB.userId } });
+      assert.equal(afterB.name, beforeB.name);
+      assert.equal(afterB.locale, beforeB.locale);
+      assert.equal(afterB.theme, beforeB.theme);
+      assert.equal(afterB.avatarUrl, beforeB.avatarUrl);
+      assert.equal(afterB.onboardingLifecycleComplete, beforeB.onboardingLifecycleComplete);
+
+      const invalid = await fetch(`${baseUrl}/api/auth/me`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locale: 'cross-tenant' }),
+      });
+      assert.equal(invalid.status, 400);
+    });
+
+    await check('notifications: delivery preferences update only the authenticated organization user', async () => {
+      const beforeB = await raw.user.findUnique({ where: { id: orgB.userId } });
+      const response = await fetch(`${baseUrl}/api/auth/me/notification-preferences`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notificationNewMessage: 'OFF',
+          notificationAssignment: 'IN_APP',
+          notificationMention: 'OFF',
+          notificationResolution: 'IN_APP',
+          notificationEscalation: 'OFF',
+          notificationSound: false,
+        }),
+      });
+      assert.equal(response.status, 200);
+      const updated = await response.json();
+      assert.equal(updated.notificationNewMessage, 'OFF');
+      assert.equal(updated.notificationMention, 'OFF');
+      assert.equal(updated.notificationEscalation, 'OFF');
+      assert.equal(updated.notificationSound, false);
+
+      const currentA = await fetch(`${baseUrl}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(currentA.status, 200);
+      const profileA = await currentA.json();
+      assert.equal(profileA.notificationNewMessage, 'OFF');
+      assert.equal(profileA.notificationSound, false);
+
+      const afterB = await raw.user.findUnique({ where: { id: orgB.userId } });
+      assert.equal(afterB.notificationNewMessage, beforeB.notificationNewMessage);
+      assert.equal(afterB.notificationAssignment, beforeB.notificationAssignment);
+      assert.equal(afterB.notificationMention, beforeB.notificationMention);
+      assert.equal(afterB.notificationResolution, beforeB.notificationResolution);
+      assert.equal(afterB.notificationEscalation, beforeB.notificationEscalation);
+      assert.equal(afterB.notificationSound, beforeB.notificationSound);
+
+      const invalid = await fetch(`${baseUrl}/api/auth/me/notification-preferences`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notificationSound: 'yes' }),
+      });
+      assert.equal(invalid.status, 400);
+    });
+
+    await check('auth: TOTP challenges and recovery codes are encrypted, revocable, and single-use', async () => {
+      const identityId = 'bleed_identity_2fa';
+      const userId = 'bleed_user_2fa';
+      const email = 'bleed-2fa@rabitech.test';
+      const password = 'StrongPass-2FA-123!';
+      await raw.identity.create({
+        data: { id: identityId, email, passwordHash: await bcrypt.hash(password, 10) },
+      });
+      await raw.user.create({
+        data: {
+          id: userId,
+          identityId,
+          organizationId: orgA.organizationId,
+          name: 'Two Factor Operator',
+          role: 'ADMIN',
+        },
+      });
+      const enrollmentToken = jwt.sign({
+        scope: 'ORGANIZATION',
+        id: userId,
+        email,
+        name: 'Two Factor Operator',
+        role: 'ADMIN',
+        organizationId: orgA.organizationId,
+        tokenVersion: 0,
+      }, jwtSecret, { expiresIn: '10m' });
+      const authHeaders = {
+        Authorization: `Bearer ${enrollmentToken}`,
+        'Content-Type': 'application/json',
+      };
+
+      const setupResponse = await fetch(`${baseUrl}/api/auth/me/2fa/setup`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ currentPassword: password }),
+      });
+      assert.equal(setupResponse.status, 200);
+      const setup = await setupResponse.json();
+      assert.ok(setup.secret);
+      assert.ok(setup.setupToken);
+      assert.match(setup.qrDataUrl, /^data:image\/png;base64,/);
+
+      const { generateTotp } = require('../src/modules/auth/two-factor.service');
+      const enableResponse = await fetch(`${baseUrl}/api/auth/me/2fa/enable`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ setupToken: setup.setupToken, code: generateTotp(setup.secret) }),
+      });
+      assert.equal(enableResponse.status, 200);
+      const enabled = await enableResponse.json();
+      assert.equal(enabled.recoveryCodes.length, 10);
+      assert.equal(new Set(enabled.recoveryCodes).size, 10);
+
+      const storedIdentity = await raw.identity.findUnique({ where: { id: identityId } });
+      assert.ok(storedIdentity.totpEnabledAt);
+      assert.ok(storedIdentity.totpSecretEnc);
+      assert.notEqual(storedIdentity.totpSecretEnc, setup.secret);
+      assert.equal(await raw.identityRecoveryCode.count({ where: { identityId, usedAt: null } }), 10);
+
+      const revoked = await fetch(`${baseUrl}/api/auth/me`, { headers: { Authorization: `Bearer ${enrollmentToken}` } });
+      assert.equal(revoked.status, 401);
+
+      const passwordLogin = async () => {
+        const response = await fetch(`${baseUrl}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+        assert.equal(response.status, 202);
+        const body = await response.json();
+        assert.equal(body.requiresTwoFactor, true);
+        assert.ok(body.challengeToken);
+        assert.equal(body.token, undefined);
+        return body.challengeToken;
+      };
+      const verifyLogin = (challengeToken, code) => fetch(`${baseUrl}/api/auth/2fa/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken, code }),
+      });
+
+      const totpChallenge = await passwordLogin();
+      const loginCode = generateTotp(setup.secret);
+      const totpLogin = await verifyLogin(totpChallenge, loginCode);
+      assert.equal(totpLogin.status, 200);
+      const totpSession = await totpLogin.json();
+      assert.ok(totpSession.token);
+      assert.equal((await verifyLogin(totpChallenge, loginCode)).status, 401);
+
+      const recoveryChallenge = await passwordLogin();
+      const recoveryLogin = await verifyLogin(recoveryChallenge, enabled.recoveryCodes[0]);
+      assert.equal(recoveryLogin.status, 200);
+      const recoverySession = await recoveryLogin.json();
+      assert.ok(recoverySession.token);
+      assert.equal(await raw.identityRecoveryCode.count({ where: { identityId, usedAt: null } }), 9);
+
+      const replayChallenge = await passwordLogin();
+      assert.equal((await verifyLogin(replayChallenge, enabled.recoveryCodes[0])).status, 401);
+
+      const disableResponse = await fetch(`${baseUrl}/api/auth/me/2fa`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${recoverySession.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ currentPassword: password, code: enabled.recoveryCodes[1] }),
+      });
+      assert.equal(disableResponse.status, 200);
+      const disabled = await raw.identity.findUnique({ where: { id: identityId } });
+      assert.equal(disabled.totpSecretEnc, null);
+      assert.equal(disabled.totpEnabledAt, null);
+      assert.equal(await raw.identityRecoveryCode.count({ where: { identityId } }), 0);
+
+      const plainLogin = await fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      assert.equal(plainLogin.status, 200);
+      assert.ok((await plainLogin.json()).token);
+    });
+
     const socketA = await connectSocket(baseUrl, token);
     const socketB = await connectSocket(baseUrl, tokenB);
     sockets.push(socketA, socketB);
+
+    await check('socket: removing a team member revokes live room access without disconnecting them', async () => {
+      const team = await raw.team.create({
+        data: {
+          organizationId: orgA.organizationId,
+          name: 'Live Room Team',
+          slug: 'live-room-team',
+        },
+      });
+      const identity = await raw.identity.create({
+        data: { email: 'live-room-agent@rabitech.test', passwordHash: 'not-used' },
+      });
+      const user = await raw.user.create({
+        data: {
+          organizationId: orgA.organizationId,
+          identityId: identity.id,
+          name: 'Live Room Agent',
+          role: 'AGENT',
+          primaryTeamId: team.id,
+        },
+      });
+      await raw.userTeam.create({
+        data: { organizationId: orgA.organizationId, userId: user.id, teamId: team.id },
+      });
+      await raw.conversation.update({
+        where: { id: orgA.records[0].conversation.id },
+        data: { teamId: team.id },
+      });
+
+      const staleTeamToken = jwt.sign({
+        scope: 'ORGANIZATION', id: user.id, email: identity.email, name: user.name,
+        role: 'AGENT', organizationId: orgA.organizationId, tokenVersion: 0,
+        primaryTeamId: team.id, teamIds: [team.id],
+      }, jwtSecret, { expiresIn: '10m' });
+      const agentSocket = await connectSocket(baseUrl, staleTeamToken);
+      sockets.push(agentSocket);
+
+      const removed = await fetch(`${baseUrl}/api/system/teams/${team.id}/members`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds: [] }),
+      });
+      assert.equal(removed.status, 200);
+      await sleep(100);
+      assert.equal(agentSocket.connected, true, 'membership refresh disconnected the active client');
+
+      const rejection = new Promise((resolve) => agentSocket.once('error', resolve));
+      agentSocket.emit('join_conversation', orgA.records[0].conversation.id);
+      const error = await Promise.race([rejection, sleep(1000).then(() => null)]);
+      assert.ok(error, 'a removed member retained conversation room access from a stale JWT');
+
+      agentSocket.disconnect();
+      await raw.conversation.update({
+        where: { id: orgA.records[0].conversation.id },
+        data: { teamId: null },
+      });
+      await raw.user.delete({ where: { id: user.id } });
+      await raw.identity.delete({ where: { id: identity.id } });
+      await raw.team.delete({ where: { id: team.id } });
+    });
 
     await check('branding: org-scoped settings cannot bleed across subscribers', async () => {
       await raw.organization.updateMany({
@@ -637,11 +1587,22 @@ async function databaseAudits() {
     });
 
     await check('branding: non-admin worker token receives 403 on branding writes', async () => {
+      const workerIdentity = await raw.identity.create({
+        data: { email: 'branding-worker@rabitech.test', passwordHash: 'not-used' },
+      });
+      const worker = await raw.user.create({
+        data: {
+          organizationId: orgA.organizationId,
+          identityId: workerIdentity.id,
+          name: 'Branding Worker',
+          role: 'AGENT',
+        },
+      });
       const workerToken = jwt.sign({
         scope: 'ORGANIZATION',
-        id: orgA.userId,
-        email: 'bleed-a@rabitech.test',
-        name: 'Worker A',
+        id: worker.id,
+        email: workerIdentity.email,
+        name: worker.name,
         role: 'AGENT',
         organizationId: orgA.organizationId,
         tokenVersion: 0,
@@ -652,6 +1613,8 @@ async function databaseAudits() {
         body: JSON.stringify({ productName: 'Worker Rename' }),
       });
       assert.equal(response.status, 403);
+      await raw.user.delete({ where: { id: worker.id } });
+      await raw.identity.delete({ where: { id: workerIdentity.id } });
     });
 
     await check('crm: contact refs and filter DSL stay organization-scoped', async () => {
@@ -2284,6 +3247,71 @@ async function databaseAudits() {
       await assert.rejects(() => create(orgA.organizationId, 'Shared Name'));
     });
 
+    await check('lifecycle: rename, default selection, deletion, and reassignment are atomic and tenant-scoped', async () => {
+      const headersA = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+      const headersB = { Authorization: `Bearer ${tokenB}`, 'Content-Type': 'application/json' };
+      const createStage = async (headers, name) => {
+        const response = await fetch(`${baseUrl}/api/lifecycle-stages`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ name, kind: 'ACTIVE', color: '#2563EB' }),
+        });
+        assert.equal(response.status, 201);
+        return response.json();
+      };
+
+      const sourceA = await createStage(headersA, 'HTTP Source A');
+      const replacementA = await createStage(headersA, 'HTTP Replacement A');
+      await createStage(headersB, 'HTTP Source A');
+      await raw.contact.update({
+        where: { id: orgA.records[0].contact.id },
+        data: { lifecycleStage: 'HTTP Source A' },
+      });
+      await raw.contact.update({
+        where: { id: orgB.records[0].contact.id },
+        data: { lifecycleStage: 'HTTP Source A' },
+      });
+
+      const crossTenant = await fetch(`${baseUrl}/api/lifecycle-stages/${sourceA.id}`, {
+        method: 'PATCH',
+        headers: headersB,
+        body: JSON.stringify({ description: 'must not be visible' }),
+      });
+      assert.equal(crossTenant.status, 404);
+
+      const renamed = await fetch(`${baseUrl}/api/lifecycle-stages/${sourceA.id}`, {
+        method: 'PATCH',
+        headers: headersA,
+        body: JSON.stringify({ name: 'HTTP Renamed A' }),
+      });
+      assert.equal(renamed.status, 200);
+      assert.equal((await raw.contact.findUnique({ where: { id: orgA.records[0].contact.id } })).lifecycleStage, 'HTTP Renamed A');
+      assert.equal((await raw.contact.findUnique({ where: { id: orgB.records[0].contact.id } })).lifecycleStage, 'HTTP Source A');
+
+      const firstDefault = await fetch(`${baseUrl}/api/lifecycle-stages/${sourceA.id}`, {
+        method: 'PATCH', headers: headersA, body: JSON.stringify({ isDefault: true }),
+      });
+      assert.equal(firstDefault.status, 200);
+      const nextDefault = await fetch(`${baseUrl}/api/lifecycle-stages/${replacementA.id}`, {
+        method: 'PATCH', headers: headersA, body: JSON.stringify({ isDefault: true }),
+      });
+      assert.equal(nextDefault.status, 200);
+      const defaultsA = await raw.lifecycleStage.findMany({
+        where: { organizationId: orgA.organizationId, isDefault: true },
+        select: { id: true },
+      });
+      assert.deepEqual(defaultsA, [{ id: replacementA.id }]);
+
+      const deleted = await fetch(`${baseUrl}/api/lifecycle-stages/${sourceA.id}`, {
+        method: 'DELETE',
+        headers: headersA,
+        body: JSON.stringify({ reassignToStageId: replacementA.id }),
+      });
+      assert.equal(deleted.status, 200);
+      assert.equal((await raw.contact.findUnique({ where: { id: orgA.records[0].contact.id } })).lifecycleStage, 'HTTP Replacement A');
+      assert.equal((await raw.contact.findUnique({ where: { id: orgB.records[0].contact.id } })).lifecycleStage, 'HTTP Source A');
+    });
+
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
       const hour = floorToHour(new Date());
@@ -2462,6 +3490,9 @@ async function databaseAudits() {
       record('database: drop disposable schema', false, String(error));
     });
     await admin.$disconnect().catch(() => {});
+    fs.rmSync(snippetUploadDir, { recursive: true, force: true });
+    if (previousSnippetUploadDir === undefined) delete process.env.SNIPPET_UPLOAD_DIR;
+    else process.env.SNIPPET_UPLOAD_DIR = previousSnippetUploadDir;
   }
 }
 

@@ -1,5 +1,6 @@
 /**
- * Every t() key must exist in the dictionary, in both Hebrew and English.
+ * Every t() key must exist in the dictionary in Hebrew and English. Newer
+ * English-keyed entries may also carry an explicit Arabic translation.
  *
  * The i18n helper falls back to its key when a string is missing, which keeps
  * the UI from breaking — and hides the failure. What the user sees is one
@@ -46,7 +47,7 @@ function dictionaryKeys() {
    */
   const STR = String.raw`(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")`;
   const entry = new RegExp(
-    '(' + STR + ')\\s*:\\s*\\{\\s*he:\\s*(' + STR + ')\\s*,\\s*en:\\s*(' + STR + ')\\s*,?\\s*\\}',
+    '(' + STR + ')\\s*:\\s*\\{\\s*(?:ar:\\s*' + STR + '\\s*,\\s*)?he:\\s*(' + STR + ')\\s*,\\s*en:\\s*(' + STR + ')\\s*,?\\s*\\}',
     'g',
   );
 

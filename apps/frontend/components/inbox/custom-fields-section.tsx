@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import {
@@ -11,6 +11,7 @@ import {
 } from '@/lib/data';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 
 /**
  * The tenant's own contact fields, editable where the contact is.
@@ -30,6 +31,9 @@ type Values = Record<string, string | null>;
 function inputTypeFor(dataType: CustomFieldDefinition['dataType']): string {
   if (dataType === 'number') return 'number';
   if (dataType === 'date') return 'date';
+  if (dataType === 'time') return 'time';
+  if (dataType === 'email') return 'email';
+  if (dataType === 'url') return 'url';
   return 'text';
 }
 
@@ -44,6 +48,7 @@ export function CustomFieldsSection({
   const [definitions, setDefinitions] = useState<CustomFieldDefinition[] | null>(null);
   const [values, setValues] = useState<Values>({});
   const [saving, setSaving] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,14 +115,19 @@ export function CustomFieldsSection({
   // not be told they have a custom fields section.
   if (!definitions || definitions.length === 0) return null;
 
+  const visibleDefinitions = showAll
+    ? definitions
+    : definitions.filter((definition) => definition.visibility === 'ALWAYS_SHOW' || (
+      definition.visibility === 'HIDE_WHEN_EMPTY' && !!values[definition.slug]
+    ));
+  const hiddenCount = definitions.length - visibleDefinitions.length;
+
   return (
     <div className="border-b border-border p-4">
-      <p className="mb-2 text-micro font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('حقول مخصصة')}
-      </p>
+      <div className="mb-2 flex items-center justify-between gap-2"><p className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">{t('حقول مخصصة')}</p>{(hiddenCount > 0 || showAll) && <Button variant="ghost" size="sm" className="h-7 gap-1 text-micro" onClick={() => setShowAll((value) => !value)}>{showAll ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}{showAll ? t('Hide empty fields') : `${t('Show all fields')} (${hiddenCount})`}</Button>}</div>
 
       <dl className="space-y-2 text-caption">
-        {definitions.map((definition) => {
+        {visibleDefinitions.map((definition) => {
           const value = values[definition.slug] ?? '';
           const busy = saving === definition.slug;
 
@@ -144,6 +154,17 @@ export function CustomFieldsSection({
                       </option>
                     ))}
                   </select>
+                ) : definition.dataType === 'checkbox' ? (
+                  <label className="flex min-h-7 items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-primary"
+                      checked={value === 'true'}
+                      disabled={busy}
+                      onChange={(event) => save(definition, String(event.target.checked))}
+                    />
+                    <span className="text-caption text-muted-foreground">{value === 'true' ? t('Yes') : t('No')}</span>
+                  </label>
                 ) : (
                   <input
                     // Keyed on the contact so an uncontrolled input does not

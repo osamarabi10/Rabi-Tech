@@ -17,6 +17,8 @@ import { tenantStore, getTenantId } from '../lib/tenant-context';
 const PLATFORM_MODELS = new Set([
   'Organization',
   'Identity',
+  'TwoFactorChallenge',
+  'IdentityRecoveryCode',
   'Zone',
   'Alert',
   'Migration',

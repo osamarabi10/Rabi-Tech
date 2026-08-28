@@ -18,7 +18,7 @@ export function encryptCredential(value: string): string {
 export function decryptCredential(value: string): string {
   const [version, ivValue, tagValue, encryptedValue] = value.split(':');
   if (version !== 'v1' || !ivValue || !tagValue || !encryptedValue) {
-    throw new Error('Organization channel credential is not initialized');
+    throw new Error('Encrypted credential is not initialized');
   }
   const decipher = crypto.createDecipheriv(
     'aes-256-gcm',

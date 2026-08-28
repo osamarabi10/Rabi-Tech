@@ -13,12 +13,21 @@ import type { Prisma } from '@prisma/client';
  * organizations that already existed. The two must agree, so a tenant created
  * before that migration and one created after start identical.
  */
-export const DEFAULT_LIFECYCLE_STAGES: { name: string; color: string; orderIndex: number }[] = [
-  { name: 'Lead', color: '#64748B', orderIndex: 0 },
-  { name: 'Contacted', color: '#0066FF', orderIndex: 1 },
-  { name: 'Qualified', color: '#8B5CF6', orderIndex: 2 },
-  { name: 'Customer', color: '#10B981', orderIndex: 3 },
-  { name: 'Unqualified', color: '#EF4444', orderIndex: 4 },
+export const DEFAULT_LIFECYCLE_STAGES: {
+  name: string;
+  description: string;
+  color: string;
+  emoji?: string;
+  kind: 'ACTIVE' | 'LOST';
+  isDefault?: boolean;
+  isWon?: boolean;
+  orderIndex: number;
+}[] = [
+  { name: 'Lead', description: 'A new contact entering the sales process.', color: '#64748B', kind: 'ACTIVE', isDefault: true, orderIndex: 0 },
+  { name: 'Contacted', description: 'The team has started a conversation.', color: '#0066FF', kind: 'ACTIVE', orderIndex: 1 },
+  { name: 'Qualified', description: 'The contact is a viable opportunity.', color: '#8B5CF6', kind: 'ACTIVE', orderIndex: 2 },
+  { name: 'Customer', description: 'The contact completed the desired conversion.', color: '#10B981', kind: 'ACTIVE', isWon: true, orderIndex: 3 },
+  { name: 'Unqualified', description: 'The contact does not fit the current offer.', color: '#EF4444', emoji: 'X', kind: 'LOST', orderIndex: 0 },
 ];
 
 /**

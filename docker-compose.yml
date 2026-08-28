@@ -48,6 +48,7 @@ services:
       # Backups land on the host, not inside the container. A backup that lives
       # in the thing it is backing up is not a backup.
       - ./.tools/backups:/app/backups
+      - ./.tools/uploads:/app/uploads
     depends_on:
       - postgres
       - redis
@@ -78,6 +79,7 @@ services:
       - MAIL_FROM=${MAIL_FROM:-}
       # Backups: how many automated dumps to keep. Never prunes manual ones.
       - BACKUP_KEEP=${BACKUP_KEEP:-14}
+      - SNIPPET_UPLOAD_DIR=${SNIPPET_UPLOAD_DIR:-/app/uploads/snippets}
       # How the gateway container reaches this backend to deliver webhooks.
       # Must be a dotted host (the gateway's URL validator rejects single-label
       # names like "backend") — hence the backend.local network alias below.
@@ -92,8 +94,10 @@ services:
       - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-http://localhost:8080}
       # Broadcast pacing. OpenWA drives WhatsApp Web, so blasting risks a ban.
       - CAMPAIGN_SEND_SPACING_MS=${CAMPAIGN_SEND_SPACING_MS:-1200}
-      - CAMPAIGN_RATE_MAX=${CAMPAIGN_RATE_MAX:-1}
-      - CAMPAIGN_RATE_DURATION_MS=${CAMPAIGN_RATE_DURATION_MS:-1000}
+      - CAMPAIGN_RATE_HARD_MAX=${CAMPAIGN_RATE_HARD_MAX:-}
+      - CAMPAIGN_RATE_MIN_DURATION_MS=${CAMPAIGN_RATE_MIN_DURATION_MS:-}
+      - CAMPAIGN_WORKER_CONCURRENCY=${CAMPAIGN_WORKER_CONCURRENCY:-8}
+      - INCOMING_MESSAGE_CONCURRENCY=${INCOMING_MESSAGE_CONCURRENCY:-8}
       # Gateway health probes (H1). The status poll is a free HTTP call; the
       # self-send is an INTERNAL PROBE that sends a real WhatsApp message to the
       # subscriber own number, so it runs rarely — frequent identical automated
@@ -120,6 +124,12 @@ services:
         # Set to the public https origin before building for a domain.
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
         NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-}
+        NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-owner@rabitech.co.il}
+        NEXT_PUBLIC_VIDEO_GUIDES_URL: ${NEXT_PUBLIC_VIDEO_GUIDES_URL:-}
+        NEXT_PUBLIC_DEVELOPER_DOCS_URL: ${NEXT_PUBLIC_DEVELOPER_DOCS_URL:-}
+        NEXT_PUBLIC_REFERRAL_URL: ${NEXT_PUBLIC_REFERRAL_URL:-}
+        NEXT_PUBLIC_STATUS_URL: ${NEXT_PUBLIC_STATUS_URL:-}
+        NEXT_PUBLIC_PRIVACY_URL: ${NEXT_PUBLIC_PRIVACY_URL:-}
     restart: always
     ports:
       - "8080:8080"
@@ -131,6 +141,12 @@ services:
       # build args below are what actually reach the browser.
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
       - NEXT_PUBLIC_SOCKET_URL=${NEXT_PUBLIC_SOCKET_URL:-}
+      - NEXT_PUBLIC_SUPPORT_EMAIL=${NEXT_PUBLIC_SUPPORT_EMAIL:-owner@rabitech.co.il}
+      - NEXT_PUBLIC_VIDEO_GUIDES_URL=${NEXT_PUBLIC_VIDEO_GUIDES_URL:-}
+      - NEXT_PUBLIC_DEVELOPER_DOCS_URL=${NEXT_PUBLIC_DEVELOPER_DOCS_URL:-}
+      - NEXT_PUBLIC_REFERRAL_URL=${NEXT_PUBLIC_REFERRAL_URL:-}
+      - NEXT_PUBLIC_STATUS_URL=${NEXT_PUBLIC_STATUS_URL:-}
+      - NEXT_PUBLIC_PRIVACY_URL=${NEXT_PUBLIC_PRIVACY_URL:-}
 
 volumes:
   pgdata:

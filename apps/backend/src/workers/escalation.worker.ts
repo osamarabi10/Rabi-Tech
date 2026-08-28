@@ -95,6 +95,7 @@ async function checkAndEscalate(data: {
       conversationId,
       title,
       body,
+      category: 'ESCALATION',
     }).catch(() => {});
   }
 

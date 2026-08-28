@@ -1,6 +1,7 @@
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { normalizePhone } from './phone';
+import { validateCustomFieldValue } from './custom-field-validation';
 
 /**
  * Bulk contact import.
@@ -159,9 +160,21 @@ export async function importContacts(
   // Only slugs that actually exist are written. A mapping pointing at a field
   // that was deleted mid-import must not create orphan values.
   const definitions = await prisma.customFieldDefinition.findMany({
-    select: { id: true, slug: true },
+    select: { id: true, slug: true, name: true, dataType: true, allowedValues: true },
   });
-  const definitionBySlug = new Map(definitions.map((d) => [d.slug, d.id]));
+  const definitionBySlug = new Map(definitions.map((definition) => [definition.slug, definition]));
+  const validPrepared = prepared.filter((entry) => {
+    try {
+      for (const [slug, value] of Object.entries(entry.customFields)) {
+        const definition = definitionBySlug.get(slug);
+        if (definition) entry.customFields[slug] = validateCustomFieldValue(definition, value) ?? null;
+      }
+      return true;
+    } catch (error) {
+      addError(entry.row, String((error as Error).message || error));
+      return false;
+    }
+  });
 
   let tagId: string | null = null;
   if (options.tag) {
@@ -177,8 +190,8 @@ export async function importContacts(
   }
 
   // --- Write in chunks ------------------------------------------------------
-  for (let start = 0; start < prepared.length; start += CHUNK_SIZE) {
-    const chunk = prepared.slice(start, start + CHUNK_SIZE);
+  for (let start = 0; start < validPrepared.length; start += CHUNK_SIZE) {
+    const chunk = validPrepared.slice(start, start + CHUNK_SIZE);
     try {
       await prisma.$transaction(async (tx) => {
         const existing = await tx.contact.findMany({
@@ -241,21 +254,21 @@ export async function importContacts(
 
           if (tagId) {
             await tx.contactTag.createMany({
-              data: [{ organizationId, contactId, tagId }],
+              data: [{ organizationId, contactId, tagId, source: 'IMPORT' }],
               skipDuplicates: true,
             });
           }
 
           for (const [slug, value] of Object.entries(entry.customFields)) {
-            const fieldDefinitionId = definitionBySlug.get(slug);
-            if (!fieldDefinitionId) continue;
+            const fieldDefinition = definitionBySlug.get(slug);
+            if (!fieldDefinition) continue;
             await tx.customFieldValue.upsert({
               where: {
                 organizationId_contactId_fieldDefinitionId: {
-                  organizationId, contactId, fieldDefinitionId,
+                  organizationId, contactId, fieldDefinitionId: fieldDefinition.id,
                 },
               },
-              create: { organizationId, contactId, fieldDefinitionId, value },
+              create: { organizationId, contactId, fieldDefinitionId: fieldDefinition.id, value },
               update: { value },
             });
           }

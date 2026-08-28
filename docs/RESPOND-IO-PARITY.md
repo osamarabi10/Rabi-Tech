@@ -40,7 +40,7 @@ Respond.io's nouns differ from ours. Adopting their vocabulary early costs nothi
 | **Tag** (workspace-scoped entity) | `Conversation.labels String[]` | Promote to a real model |
 | **Custom Field** | (none) | New model |
 | **Lifecycle** (`Contact.status`) | `Lead.stage` | Move onto Contact |
-| **Snippet** / canned response | `MessageTemplate.shortCode` | Already close — align naming |
+| **Snippet** / canned response | `MessageTemplate` + `SnippetTopic` + `SnippetAttachment` | Implemented as workspace-owned Snippets with `/shortcut`, topics, variables, and files |
 | **Broadcast** | `Campaign` | Rename in UI at least |
 | **Closing Note** | (none) | New: required-or-optional note on close |
 
@@ -186,12 +186,13 @@ selection and Workflow trigger conditions need, so building it once serves three
 ### 2.8 Message text supports variable interpolation
 
 ```
-'Hello {{$contact.name}}, your order #{{$contact.orderId}} is ready!'
+'Hello $contact.name, your order #$contact.order_id is ready!'
 ```
 
-`{{$contact.<field>}}` resolves against contact fields including custom fields. Our
-`MessageTemplate` has no interpolation. Note the mention syntax in §2.5 is the same family
-(`{{@user.456}}`) — implement one tokenizer, not two.
+Implemented at the final outbound send boundary for standard and custom contact
+fields, assignee fields, and system date/time in the workspace timezone. Unknown
+variables remain literal instead of silently deleting customer-facing text. The
+legacy `{{key}}` template form remains supported for existing RabiTech content.
 
 ### 2.9 The custom-channel contract — copy this exactly
 
@@ -323,7 +324,7 @@ Behaviours that matter:
   copied interaction in the category and we already have the data model for it.
 - **Channel selector defaults to last-interacted** (§2.2) and shows the resolved channel explicitly.
 - **Close requires (or offers) a closing note.**
-- **Snippet expansion** on `/` or `:` — we already do `:code` via `MessageTemplate.shortCode`.
+- **Snippet expansion** uses `/shortcut`; the former `:code` form remains as a compatibility path. Selected Snippets can include up to five files.
 - Conversation list rows: avatar, name, channel icon, last message preview, unread badge, assignee
   avatar, relative timestamp.
 - Keyboard: `Ctrl/Cmd+Enter` send, `Esc` deselect, `J`/`K` move through list.
@@ -372,7 +373,7 @@ Respond.io-shaped IA.
 | Inbox 3-pane restructure | Medium | Our inbox page is ~1,500 lines already |
 | Outbound webhooks | Medium | |
 | Custom-channel contract (§2.9) | Medium | Two endpoints; also makes us integrable *by* others |
-| Variable interpolation `{{$contact.x}}` | **Low** | One tokenizer, shared with `{{@user.x}}` |
+| Variable interpolation `$contact.x` / `$system.x` | **Complete** | Resolved server-side at send time, including custom fields |
 | Quick replies | **Low** | High value; upgrades the Arabic menu |
 | Close `category` + `summary` | **Low** | Not a lookup table — free text + category |
 | Comment @mentions | **Low** | Notification plumbing exists |

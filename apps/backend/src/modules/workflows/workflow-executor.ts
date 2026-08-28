@@ -4,9 +4,7 @@ import logger from '../../lib/logger';
 import { getTenantId } from '../../lib/tenant-context';
 import { isWithinWorkingHours } from '../../utils/working-hours';
 import { getSessionForTeam } from '../../utils/whatsapp-sessions';
-import { closeConversationWithReply } from '../../utils/conversation-session';
-import { getIO, SocketEvents } from '../../socket';
-import { socketRoom } from '../../socket/rooms';
+import { closeConversation } from '../conversations/conversation-lifecycle.service';
 import { OpenWAService } from '../whatsapp/openwa.service';
 import { assertSafeWebhookUrl, BlockedUrlError } from './outbound-url';
 import { recordDelivery, webhookIdentity } from '../webhooks/webhook-log.service';
@@ -317,7 +315,7 @@ async function runAction(
         update: {},
       });
       const { count } = await prisma.contactTag.createMany({
-        data: [{ organizationId: context.organizationId, contactId: context.contactId, tagId: tag.id }],
+        data: [{ organizationId: context.organizationId, contactId: context.contactId, tagId: tag.id, source: 'WORKFLOW' }],
         skipDuplicates: true,
       });
       // Only a real change emits. Re-tagging an already-tagged contact must not
@@ -369,22 +367,16 @@ async function runAction(
 
       // The same closing reply an agent’s resolve sends — the subscriber’s own
       // CONVERSATION_CLOSED template, not text invented here.
-      await closeConversationWithReply(context.conversationId);
-      await prisma.conversation.update({
-        where: { id: context.conversationId },
-        data: { status: 'RESOLVED', resolvedAt: new Date() },
+      await closeConversation({
+        conversationId: context.conversationId,
+        source: 'WORKFLOW',
+        categoryId: typeof action.categoryId === 'string' ? action.categoryId : null,
+        summary: typeof action.summary === 'string' ? action.summary : null,
+        sendClosingReply: true,
       });
 
       // The inbox is watching. Without this the thread sits open on every
       // agent’s screen until they reload.
-      try {
-        getIO()
-          .to(socketRoom.organization(context.organizationId))
-          .emit(SocketEvents.CONVERSATION_RESOLVED, { conversationId: context.conversationId });
-      } catch {
-        // No socket server in a worker-only process; closing still stands.
-      }
-
       // Deliberately no CSAT prompt, unlike a manual resolve. That survey asks
       // how an agent handled you; a thread closed by a rule had no handling to
       // rate, and surveying those fills the score with answers about nothing.

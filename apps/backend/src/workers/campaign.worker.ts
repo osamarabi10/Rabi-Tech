@@ -5,6 +5,13 @@ import { getIO, SocketEvents } from '../socket';
 import { socketRoom } from '../socket/rooms';
 import { runAsOrganization } from '../lib/tenant-context';
 import { isQuotaExceededError } from '../modules/usage/entitlements';
+import { resolveEntitlements } from '../modules/billing/entitlements.resolver';
+import { PLAN_ENTITLEMENTS } from '../modules/billing/plans';
+import {
+  coordinationKey,
+  waitForRedisRateLimit,
+  withFifoRedisLock,
+} from '../lib/redis-coordination';
 
 const redisUrl = new URL(process.env.REDIS_URL || 'redis://localhost:6379');
 const connection = {
@@ -13,6 +20,12 @@ const connection = {
   ...(redisUrl.password ? { password: redisUrl.password } : {}),
   maxRetriesPerRequest: null,
 };
+
+function positiveInteger(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
 
 export const campaignQueue = new Queue('campaign-send', {
   connection,
@@ -28,10 +41,22 @@ export async function processCampaignJob(data: any) {
   const { organizationId } = data;
   if (!organizationId) throw new Error('Campaign job missing organizationId');
 
-  return runAsOrganization(organizationId, async () => {
+  const gatewayKey = coordinationKey('campaign-gateway', organizationId, String(data.session || ''));
+  return withFifoRedisLock(gatewayKey, () => runAsOrganization(organizationId, async () => {
     const { campaignId, recipientId, phone, message, mediaUrl, session } = data;
 
     try {
+      const effective = await resolveEntitlements(organizationId);
+      const planRate = PLAN_ENTITLEMENTS[effective.plan];
+      const hardMax = positiveInteger(process.env.CAMPAIGN_RATE_HARD_MAX);
+      const minimumDuration = positiveInteger(process.env.CAMPAIGN_RATE_MIN_DURATION_MS);
+      await waitForRedisRateLimit(
+        gatewayKey,
+        hardMax ? Math.min(planRate.campaignRateMax, hardMax) : planRate.campaignRateMax,
+        minimumDuration
+          ? Math.max(planRate.campaignRateDurationMs, minimumDuration)
+          : planRate.campaignRateDurationMs,
+      );
       const response = mediaUrl
         ? await OpenWAService.sendMedia(
             session,
@@ -79,7 +104,7 @@ export async function processCampaignJob(data: any) {
       }
       throw err;
     }
-  });
+  }));
 }
 
 export function startCampaignWorker() {
@@ -88,15 +113,9 @@ export function startCampaignWorker() {
     async (job) => processCampaignJob(job.data),
     {
       connection,
-      // Backstop against WhatsApp throttling/bans. OpenWA drives WhatsApp Web
-      // rather than an official API, so a number that blasts is at real risk —
-      // keep this conservative and concurrency at 1 (sends must stay ordered
-      // per gateway). Enqueue-time spacing in the send route is the first line.
-      limiter: {
-        max: Number(process.env.CAMPAIGN_RATE_MAX || 1),
-        duration: Number(process.env.CAMPAIGN_RATE_DURATION_MS || 1000),
-      },
-      concurrency: 1,
+      // Work can overlap across gateways. The processor serializes and rate
+      // limits each organization/session key independently.
+      concurrency: Number(process.env.CAMPAIGN_WORKER_CONCURRENCY || 8),
     }
   );
 

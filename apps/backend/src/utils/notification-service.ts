@@ -10,8 +10,31 @@ export async function createNotification(opts: {
   conversationId?: string;
   title: string;
   body: string;
+  category?: 'ESCALATION';
 }) {
   const organizationId = getTenantId();
+  const preferences = await prisma.user.findUnique({
+    where: { id: opts.userId },
+    select: {
+      notificationNewMessage: true,
+      notificationAssignment: true,
+      notificationMention: true,
+      notificationResolution: true,
+      notificationEscalation: true,
+    },
+  });
+  if (!preferences) return null;
+  const delivery = opts.category === 'ESCALATION'
+    ? preferences.notificationEscalation
+    : opts.type === 'CONVERSATION_ASSIGNED'
+      ? preferences.notificationAssignment
+      : opts.type === 'CONVERSATION_RESOLVED'
+        ? preferences.notificationResolution
+        : opts.type === 'MENTION'
+          ? preferences.notificationMention
+          : preferences.notificationNewMessage;
+  if (delivery === 'OFF') return null;
+
   const notif = await prisma.notification.create({
     data: {
       organizationId,
@@ -25,7 +48,7 @@ export async function createNotification(opts: {
 
   // Real-time push to the agent's socket room
   const unread = await prisma.notification.count({
-    where: { userId: opts.userId, isRead: false },
+    where: { userId: opts.userId, isRead: false, archivedAt: null },
   });
 
   getIO().to(socketRoom.user(organizationId, opts.userId)).emit(

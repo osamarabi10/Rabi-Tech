@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { AtSign, Loader2, Paperclip, Send, Smile, Zap } from 'lucide-react';
-import type { Template } from '@/lib/data';
+import type { SnippetAttachment, Template } from '@/lib/data';
 import { useT } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -63,6 +63,8 @@ export interface ComposerProps {
   /** Quick-reply chips shown above the input. */
   quickTemplates?: Template[];
   onQuickTemplate?: (template: Template) => void;
+  attachments?: SnippetAttachment[];
+  onRemoveAttachment?: (attachmentId: string) => void;
   onAttach?: (file: File) => void;
   maxLength?: number;
 }
@@ -84,6 +86,8 @@ export function Composer({
   onMentionPick,
   quickTemplates = [],
   onQuickTemplate,
+  attachments = [],
+  onRemoveAttachment,
   onAttach,
   maxLength = 3000,
 }: ComposerProps) {
@@ -123,13 +127,13 @@ export function Composer({
   }, [isInternal]);
 
   const tooLong = value.length > maxLength;
-  const canSend = !disabled && !sending && value.trim().length > 0 && !tooLong;
+  const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0) && !tooLong;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Mention popover first: it only opens on internal notes, where the
     // snippet popover is the less likely of the two to be what the agent is
     // driving. Both cannot be open at once — one is triggered by `@`, the
-    // other by `:`.
+    // other by `/`.
     if (mentionMatches.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -241,12 +245,19 @@ export function Composer({
               onClick={() => onQuickTemplate?.(tpl)}
               className="max-w-[170px] truncate rounded-full border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-caption text-primary/80 transition-colors hover:bg-primary/15 hover:text-primary"
             >
-              {tpl.shortCode && <span className="ms-1 text-primary/40">:{tpl.shortCode}</span>}
+              {tpl.shortCode && <span className="ms-1 text-primary/40">/{tpl.shortCode}</span>}
               {tpl.title}
             </button>
           ))}
         </div>
       )}
+
+      {attachments.length > 0 && <div className="flex flex-wrap gap-1.5 px-3 pt-2" aria-label={t('Attached Snippet files')}>
+        {attachments.map((attachment) => <span key={attachment.id} className="inline-flex max-w-52 items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 text-caption">
+          <Paperclip className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate">{attachment.fileName}</span>
+          <button type="button" className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={`${t('Remove file')} ${attachment.fileName}`} onClick={() => onRemoveAttachment?.(attachment.id)}>×</button>
+        </span>)}
+      </div>}
 
       <div className="flex items-end gap-2 p-3">
         {/* Attachment — wired, not decorative */}
@@ -367,7 +378,7 @@ export function Composer({
                   )}
                 >
                   <Zap className="h-3 w-3 shrink-0 opacity-50" />
-                  <span className="numeric font-mono opacity-60" dir="ltr">:{tpl.shortCode}</span>
+                  <span className="numeric font-mono opacity-60" dir="ltr">/{tpl.shortCode}</span>
                   <span className="truncate">{tpl.title}</span>
                 </button>
               ))}
@@ -391,15 +402,17 @@ export function Composer({
               tooLong && 'border-destructive',
             )}
             placeholder={
-              isInternal ? t('اكتب ملاحظة داخلية...') : t('اكتب رسالة...  اكتب : للردود الجاهزة')
+              isInternal ? t('اكتب ملاحظة داخلية...') : t('اكتب رسالة...  اكتب / للردود الجاهزة')
             }
             value={value}
             disabled={disabled}
             onChange={(e) => {
               const next = e.target.value;
               onChange(next);
-              // `:code` at the start opens the snippet popover
-              if (next.startsWith(':') && next.length >= 2 && !next.includes(' ')) {
+              // `/code` is the workspace-wide Snippet command. The old
+              // `:code` form remains accepted so agents do not lose muscle
+              // memory during the migration.
+              if ((next.startsWith('/') || next.startsWith(':')) && next.length >= 2 && !next.includes(' ')) {
                 onShortCodeQuery?.(next.slice(1));
               } else {
                 onShortCodeQuery?.(null);

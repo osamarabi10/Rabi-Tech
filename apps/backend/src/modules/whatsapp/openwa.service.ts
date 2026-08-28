@@ -66,12 +66,28 @@ class OpenWAOrganizationProvider {
     });
   }
 
-  async sendMedia(session: string, to: string, url: string, caption?: string) {
+  async sendMedia(
+    session: string,
+    to: string,
+    url: string,
+    caption?: string,
+    media?: { mediaType?: string | null; fileName?: string | null },
+  ) {
     const id = await this.resolveSessionId(session);
-    return this.client.post(`/api/sessions/${id}/messages/send-image`, {
+    const kind = String(media?.mediaType || '').toLowerCase();
+    const route = kind.startsWith('video') || kind === 'video'
+      ? 'send-video'
+      : kind.startsWith('audio') || kind === 'audio' || kind === 'ptt'
+        ? 'send-audio'
+        : kind.startsWith('image') || kind === 'image' || kind === 'sticker'
+          ? 'send-image'
+          : 'send-document';
+    return this.client.post(`/api/sessions/${id}/messages/${route}`, {
       chatId: toChatId(to),
       url,
-      caption,
+      ...(route === 'send-audio' ? {} : { caption }),
+      ...(route === 'send-document' ? { filename: media?.fileName || 'attachment', mimetype: media?.mediaType || undefined } : {}),
+      ...(route === 'send-audio' ? { mimetype: media?.mediaType || undefined } : {}),
     });
   }
 
@@ -247,8 +263,11 @@ export const OpenWAService = {
     to: string,
     url: string,
     caption?: string,
-    options: OutboundUsageOptions = {},
-  ) => meteredSend(to, options, async () => (await provider()).sendMedia(session, to, url, caption)),
+    options: OutboundUsageOptions & { mediaType?: string | null; fileName?: string | null } = {},
+  ) => {
+    const { mediaType, fileName, ...usage } = options;
+    return meteredSend(to, usage, async () => (await provider()).sendMedia(session, to, url, caption, { mediaType, fileName }));
+  },
   getContact: async (...args: Parameters<OpenWAOrganizationProvider['getContact']>) =>
     (await provider()).getContact(...args),
   getMessageMedia: async (...args: Parameters<OpenWAOrganizationProvider['getMessageMedia']>) =>

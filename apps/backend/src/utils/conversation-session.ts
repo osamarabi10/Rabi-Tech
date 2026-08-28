@@ -5,6 +5,10 @@ import { resolveAutoReply } from './auto-reply';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
 import { getTenantId } from '../lib/tenant-context';
 import { nextOrgSequence } from './org-sequence';
+import {
+  cancelConversationAutoClose,
+  reopenConversation,
+} from '../modules/conversations/conversation-lifecycle.service';
 
 export type ActiveConversation = {
   conversation: Conversation;
@@ -34,6 +38,14 @@ async function mergeConversationInto(primaryId: string, dupId: string) {
     }
     await prisma.message.update({ where: { id: m.id }, data: { conversationId: primaryId } });
   }
+
+  // Closure episodes are operational history, not disposable thread metadata.
+  // Move them before deleting a duplicate conversation so reporting remains
+  // exact after cleanup.
+  await prisma.conversationClosure.updateMany({
+    where: { conversationId: dupId },
+    data: { conversationId: primaryId },
+  });
 
   await prisma.conversation.delete({ where: { id: dupId } });
 }
@@ -65,16 +77,13 @@ export async function consolidateContactThreads(contactId: string, sessionId: st
     orderBy: { timestamp: 'desc' },
   });
 
+  if (hadOpenDup && primary.status === 'RESOLVED') {
+    await reopenConversation(primary.id);
+  }
   return prisma.conversation.update({
     where: { id: primary.id },
     data: {
       ...(latest ? { lastMessageAt: latest.timestamp } : {}),
-      // Reopening clears the resolution stamp along with the status. Leaving it
-      // set would report the thread as resolved at a moment it is demonstrably
-      // still open, and inflate the resolved count for that hour.
-      ...(hadOpenDup && primary.status === 'RESOLVED'
-        ? { status: 'OPEN' as const, resolvedAt: null }
-        : {}),
     },
   });
 }
@@ -114,20 +123,18 @@ export async function getOrCreateActiveConversation(
       existing.teamId = teamId;
     }
     if (existing.status === 'RESOLVED') {
-      const reopened = await prisma.conversation.update({
-        where: { id: existing.id },
-        // Snooze cleared along with the resolution: see below.
-        data: {
-          status: 'OPEN',
-          resolvedAt: null,
-          snoozedUntil: null,
-          snoozedByName: null,
-          lastMessageAt: new Date(),
-          ...(teamId ? { teamId } : {}),
-        },
-      });
+      const reopenedResult = await reopenConversation(existing.id);
+      const reopened = teamId
+        ? await prisma.conversation.update({
+            where: { id: existing.id },
+            data: { teamId, lastMessageAt: new Date() },
+          })
+        : await prisma.conversation.update({
+            where: { id: existing.id },
+            data: { lastMessageAt: new Date() },
+          });
       return {
-        conversation: reopened,
+        conversation: reopenedResult.changed ? reopened : reopenedResult.conversation,
         isNewSession: false,
         reopenedFromResolved: true,
       };
@@ -147,15 +154,24 @@ export async function getOrCreateActiveConversation(
     if (existing.snoozedUntil) {
       const woken = await prisma.conversation.update({
         where: { id: existing.id },
-        data: { snoozedUntil: null, snoozedByName: null },
+        data: { snoozedUntil: null, snoozedByName: null, autoCloseAt: null },
       });
       return { conversation: woken, isNewSession: false, reopenedFromResolved: false };
     }
+
+    // Any customer reply cancels a pending inactivity close. A stale delayed
+    // job may still run, but its expected deadline no longer matches and it
+    // will deliberately do nothing.
+    await cancelConversationAutoClose(existing.id);
 
     return { conversation: existing, isNewSession: false, reopenedFromResolved: false };
   }
 
   const organizationId = getTenantId();
+  const autoCloseEnabled = (await prisma.organizationConfig.findUnique({
+    where: { organizationId },
+    select: { autoCloseEnabled: true },
+  }))?.autoCloseEnabled ?? false;
   const { anyPrior, conversation } = await prisma.$transaction(async (tx) => {
     const anyPrior = await tx.conversation.count({ where: { contactId, sessionId } });
     const sequence = await nextOrgSequence(tx, organizationId, 'conversationDisplayId');
@@ -166,6 +182,7 @@ export async function getOrCreateActiveConversation(
         contactId,
         sessionId,
         status: 'OPEN',
+        autoCloseEligible: autoCloseEnabled,
         lastMessageAt: new Date(),
         ...(teamId ? { teamId } : {}),
       },
@@ -219,30 +236,6 @@ export async function maybeSendKeywordAutoReply(opts: {
       body: reply,
       isAuto: true,
       autoType: 'keyword',
-    },
-  });
-}
-
-/** Sends the organization's configured closing message, if any. */
-export async function closeConversationWithReply(conversationId: string): Promise<void> {
-  const conv = await prisma.conversation.findUnique({
-    where: { id: conversationId },
-    include: { contact: true, session: true },
-  });
-  if (!conv) return;
-
-  const reply = await resolveAutoReply('CONVERSATION_CLOSED');
-  if (!reply) return;
-
-  await OpenWAService.sendText(conv.session.sessionName, conv.contact.phone, reply).catch(() => {});
-  await prisma.message.create({
-    data: {
-      organizationId: getTenantId(),
-      conversationId: conv.id,
-      direction: 'OUTBOUND',
-      body: reply,
-      isAuto: true,
-      autoType: 'resolved',
     },
   });
 }

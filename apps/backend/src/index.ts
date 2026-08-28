@@ -15,6 +15,7 @@ import { requestLoggingMiddleware } from './middleware/logging.middleware';
 // Routes
 import authRoutes         from './modules/auth/auth.routes';
 import conversationRoutes from './modules/conversations/conversations.routes';
+import conversationSettingsRoutes from './modules/conversations/conversation-settings.routes';
 import contactRoutes      from './modules/contacts/contacts.routes';
 import segmentRoutes      from './modules/segments/segments.routes';
 import { enforceAccess } from './middleware/access-gate.middleware';
@@ -26,6 +27,7 @@ import workflowRoutes     from './modules/workflows/workflows.routes';
 import campaignRoutes     from './modules/campaigns/campaigns.routes';
 import systemRoutes       from './modules/system/system.routes';
 import templateRoutes     from './modules/templates/templates.routes';
+import snippetRoutes      from './modules/snippets/snippets.routes';
 import analyticsRoutes    from './modules/analytics/analytics.routes';
 import notificationRoutes from './modules/notifications/notifications.routes';
 import webhookRouter      from './webhooks/openwa.webhook';
@@ -45,6 +47,11 @@ import { startBillingReconciliationWorker } from './workers/billing-reconciliati
 import { scheduleGatewayHealthChecks, startGatewayHealthWorker } from './workers/gateway-health.worker';
 import { scheduleAnalyticsRollup, startAnalyticsRollupWorker } from './workers/analytics-rollup.worker';
 import { startWorkflowWorker } from './workers/workflow.worker';
+import { startWeeklyRecapWorker } from './workers/weekly-recap.worker';
+import {
+  recoverConversationAutoCloseJobs,
+  startAutoCloseWorker,
+} from './workers/auto-close.worker';
 import { LIMITS } from './middleware/rate-limit.middleware';
 import { verifySecrets } from './lib/verify-secrets';
 
@@ -331,6 +338,8 @@ app.use('/', webhookRouter);
 // SECURITY: rate limits run before auth so a flood of bad credentials is rejected
 // cheaply rather than costing a bcrypt compare each time.
 app.use('/api/auth/login', LIMITS.login);
+app.use('/api/auth/2fa/login', LIMITS.twoFactorLogin);
+app.use('/api/auth/me/2fa', LIMITS.twoFactorManagement);
 app.use('/api/auth/signup', LIMITS.signup);
 app.use('/api/billing/signup', LIMITS.signup);
 app.use('/api/auth/verify-email', LIMITS.emailVerify);
@@ -349,6 +358,13 @@ app.use('/api', (req, res, next) => {
   }
 
   if (req.path === '/branding/public' || req.path.startsWith('/branding/assets/')) {
+    return next();
+  }
+
+  // OpenWA downloads workspace Snippet files server-to-server. The HMAC in
+  // the URL is the authorization; requiring a browser JWT would make every
+  // attachment fail at the gateway.
+  if (req.path.startsWith('/snippets/assets/')) {
     return next();
   }
 
@@ -401,6 +417,7 @@ app.use('/api', (req, res, next) => {
 // API Routes
 app.use('/api/auth',          authRoutes);
 app.use('/api/conversations',  conversationRoutes);
+app.use('/api/conversation-settings', conversationSettingsRoutes);
 app.use('/api/contacts',       contactRoutes);
 app.use('/api/segments',       segmentRoutes);
 app.use('/api/inbox-views',    inboxViewRoutes);
@@ -409,6 +426,7 @@ app.use('/api/workflows',      workflowRoutes);
 app.use('/api/campaigns',      campaignRoutes);
 app.use('/api/system',         systemRoutes);
 app.use('/api/templates',      templateRoutes);
+app.use('/api/snippets',       snippetRoutes);
 app.use('/api/analytics',      analyticsRoutes);
 app.use('/api/notifications',  notificationRoutes);
 app.use('/api/platform',       platformRoutes);
@@ -547,6 +565,21 @@ httpServer.listen(Number(PORT), HOST, () => {
     logger.info('Workflow worker disabled (DISABLE_WORKFLOW_WORKER=1)');
   } else {
     startWorkflowWorker();
+  }
+
+  if (process.env.DISABLE_WEEKLY_RECAP_WORKER === '1') {
+    logger.info('Weekly recap worker disabled (DISABLE_WEEKLY_RECAP_WORKER=1)');
+  } else {
+    startWeeklyRecapWorker();
+  }
+
+  if (process.env.DISABLE_AUTO_CLOSE_WORKER === '1') {
+    logger.info('Conversation auto-close worker disabled (DISABLE_AUTO_CLOSE_WORKER=1)');
+  } else {
+    startAutoCloseWorker();
+    recoverConversationAutoCloseJobs().catch((error) =>
+      logger.error('Failed to recover conversation auto-close jobs', { error: String(error) }),
+    );
   }
 
   if (process.env.DISABLE_GATEWAY_HEALTH_WORKER === '1') {

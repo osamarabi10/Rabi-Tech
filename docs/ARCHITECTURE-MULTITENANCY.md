@@ -57,7 +57,7 @@ No worker can request a QR, manage another subscriber, or create users. No platf
 - [x] Replace the process-wide OpenWA client/cache with an organization-owned provider deployment and credential lookup before adding subscriber #2 to live messaging.
 - [x] Namespace every socket room with organization ID.
 - [x] Make `WorkingHours`, keyword caches, and display sequences organization-scoped.
-- [x] Add the tenant isolation and usage harness. After P3 the gate is green at `30/30`; see `docs/TENANCY-BLEED-HARNESS.md`.
+- [x] Add the tenant isolation and usage harness. The current gate is green at `88/88`; see `docs/TENANCY-BLEED-HARNESS.md`.
 - [x] Add append-only usage events, exact monthly active contacts, idempotent daily rollups, and outbound quota enforcement; see `docs/P3-USAGE-METERING.md`.
 
 ### Current release boundary
@@ -207,7 +207,13 @@ export const tenantStore = new AsyncLocalStorage<Scope>();
 **BullMQ job.** Put `organizationId` in the job payload and wrap the whole handler body in `tenantStore.run()` — in all three workers. Two companion fixes are mandatory, not optional:
 
 - **jobId namespacing.** Implemented for inbound and escalation jobs as `${organizationId}:...`. Keep this invariant for every new queue because BullMQ deduplicates by job ID and WhatsApp IDs are not globally unique across gateways.
-- **Head-of-line blocking.** The inbound and campaign workers still use `concurrency: 1`. One tenant's campaign reply-storm can starve every other tenant's support inbox. The ordering guarantee actually wanted is *per-conversation*, not per-process: raise concurrency and take a Redis lock keyed on conversation. Queue-per-org is the alternative but needs a dynamic worker registry and does not scale past a few dozen tenants.
+- **Head-of-line blocking.** Resolved 2026-08-26. Inbound and campaign workers
+  run with configurable concurrency. A Redis FIFO lock serializes inbound work
+  by organization/session/contact and campaign work by organization/session;
+  campaign pacing is resolved from effective plan entitlements. The lock uses
+  expiring waiter heartbeats and leases so a crashed worker cannot leave a key
+  permanently blocked. `npm run test:worker-fairness` covers FIFO, exclusion,
+  cross-key concurrency and pacing.
 
 **Webhook.** Per-org unguessable token in the path — see §4.
 

@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-/** Folded into Settings tabs — Respond.io keeps admin config in one place. */
+/** Snippets are workspace settings, separate from provider message templates. */
 export default function Redirecttemplates() {
-  redirect('/settings?tab=templates');
+  redirect('/settings/snippets');
 }

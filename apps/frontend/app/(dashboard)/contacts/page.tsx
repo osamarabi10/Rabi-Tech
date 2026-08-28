@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { Search, Tag, UserRound, Columns3, Loader2, Merge, Save, BookmarkPlus, Upload, Users } from 'lucide-react';
+import { Tag, UserRound, Columns3, Edit3, Loader2, Merge, Save, BookmarkPlus, Upload, Users } from 'lucide-react';
 import { activeFilter } from '@/lib/contact-filter';
-import { avatarColor } from '@/lib/constants';
 import { ContactAvatar } from '@/components/contact-avatar';
 import {
   bulkUpdateContacts,
+  fetchContact,
   fetchContactsPage,
   fetchCrmTags,
   fetchCustomFieldDefinitions,
@@ -24,16 +25,10 @@ import {
   fetchSegments,
   type Segment,
 } from '@/lib/data';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Drawer, DrawerBody, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,6 +50,8 @@ import { SegmentChips } from '@/components/contacts/segment-chips';
 import { SaveGroupDialog } from '@/components/contacts/save-group-dialog';
 import { SaveSegmentDialog } from '@/components/contacts/save-segment-dialog';
 import { useT } from '@/lib/i18n';
+import { BulkActionBar, ListToolbar, Pager, RowOverflowMenu } from '@/components/ui/list-primitives';
+import { EmptyState, ErrorState, NoResultsState, SkeletonBlock } from '@/components/ui/operational-state';
 
 const COLUMNS = [
   { id: 'name', label: 'الاسم' },
@@ -69,6 +66,8 @@ type ColumnId = (typeof COLUMNS)[number]['id'];
 
 export default function ContactsPage() {
   const { t } = useT();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -76,6 +75,7 @@ export default function ContactsPage() {
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ContactFilterDsl>({ $and: [] });
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -85,6 +85,8 @@ export default function ContactsPage() {
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [nextCursorId, setNextCursorId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([]);
   const [visibleColumns, setVisibleColumns] = useState<Record<ColumnId, boolean>>({
     name: true,
     phone: true,
@@ -115,6 +117,7 @@ export default function ContactsPage() {
 
   const load = useCallback(async (cursor: string | null = null) => {
     setLoading(true);
+    setLoadError(false);
     try {
       const page = await fetchContactsPage({
         search,
@@ -127,12 +130,52 @@ export default function ContactsPage() {
       setCursorId(cursor);
       setNextCursorId(page.pagination.cursorId);
       setHasMore(page.pagination.hasMore);
+      // During a rolling deployment the frontend can briefly run against the
+      // previous cursor response, which did not include `total`. Keep the
+      // range useful until the backend instance catches up.
+      setTotal(Number.isFinite(page.pagination.total) ? page.pagination.total : page.items.length);
+    } catch {
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
   }, [appliedFilter, search]);
 
+  const setContactRoute = useCallback((contactId: string | null) => {
+    const next = new URLSearchParams(searchParams.toString());
+    if (contactId) next.set('contact', contactId);
+    else next.delete('contact');
+    const query = next.toString();
+    router.replace(query ? `/contacts?${query}` : '/contacts', { scroll: false });
+  }, [router, searchParams]);
+
+  const openContact = useCallback((contact: Contact) => {
+    setSelected(contact);
+    setContactRoute(contact.id);
+  }, [setContactRoute]);
+
+  const closeContact = useCallback(() => {
+    setSelected(null);
+    setContactRoute(null);
+  }, [setContactRoute]);
+
   useEffect(() => {
+    const ref = searchParams.get('contact');
+    if (!ref) {
+      setSelected(null);
+      return;
+    }
+    if (selected?.id === ref) return;
+    const loaded = contacts.find((contact) => contact.id === ref);
+    if (loaded) {
+      setSelected(loaded);
+      return;
+    }
+    fetchContact(ref).then(setSelected).catch(() => setContactRoute(null));
+  }, [contacts, searchParams, selected?.id, setContactRoute]);
+
+  useEffect(() => {
+    setCursorHistory([]);
     const timer = setTimeout(() => load(null), 250);
     return () => clearTimeout(timer);
   }, [load]);
@@ -222,17 +265,13 @@ export default function ContactsPage() {
 
       <Card className="mb-4">
         <CardContent className="space-y-4 p-4">
-          <div className="grid gap-3 lg:grid-cols-[1fr_180px]">
-            <div className="relative">
-              <Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="ps-9"
-                placeholder={t('بحث في جهات الاتصال')}
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-          </div>
+          <ListToolbar
+            className="-mx-4 -mt-4"
+            searchValue={search}
+            onSearchChange={setSearch}
+            searchLabel={t('بحث في جهات الاتصال')}
+            clearSearchLabel={t('مسح التصفية')}
+          />
           <ContactFilterBuilder
             value={filter}
             onChange={(next) => {
@@ -272,8 +311,10 @@ export default function ContactsPage() {
       </Card>
 
       {selectedIds.length > 0 && (
-        <Card className="mb-4">
-          <CardContent className="flex flex-wrap items-end gap-3 p-4">
+        <BulkActionBar
+          className="mb-4 rounded-md border border-primary/20"
+          countLabel={`${selectedIds.length} ${t('جهة اتصال')}`}
+          actions={<>
             <div className="space-y-1">
               <Label>{t('وسم جماعي')}</Label>
               <Input value={bulkTag} onChange={(event) => setBulkTag(event.target.value)} placeholder="priority-customer" />
@@ -304,8 +345,8 @@ export default function ContactsPage() {
               <Users className="h-4 w-4" />
               {t('حفظ كمجموعة')}
             </Button>
-          </CardContent>
-        </Card>
+          </>}
+        />
       )}
 
       <Card>
@@ -323,14 +364,20 @@ export default function ContactsPage() {
                 {visibleColumns.stage && <TableHead>{t('المرحلة')}</TableHead>}
                 {visibleColumns.assignee && <TableHead>{t('المسؤول')}</TableHead>}
                 {visibleColumns.tags && <TableHead>{t('الوسوم')}</TableHead>}
+                <TableHead className="w-10"><span className="sr-only">{t('الإجراءات')}</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading && (
-                <TableRow><TableCell colSpan={8} className="h-24 text-center"><Loader2 className="mx-auto h-4 w-4 animate-spin" /></TableCell></TableRow>
+              {loading && Array.from({ length: 6 }).map((_, index) => (
+                <TableRow key={`skeleton-${index}`} aria-hidden>
+                  <TableCell colSpan={8}><SkeletonBlock className="h-8 w-full" /></TableCell>
+                </TableRow>
+              ))}
+              {!loading && loadError && (
+                <TableRow><TableCell colSpan={8}><ErrorState compact title={t('تعذر تحميل جهات الاتصال')} description={t('جرّب تحديث الصفحة، وإذا استمرت المشكلة تواصل مع الدعم')} retryLabel={t('إعادة المحاولة')} onRetry={() => load(cursorId)} /></TableCell></TableRow>
               )}
-              {!loading && contacts.map((contact) => (
-                <TableRow key={contact.id} className="cursor-pointer" onClick={() => setSelected(contact)}>
+              {!loading && !loadError && contacts.map((contact) => (
+                <TableRow key={contact.id} className="cursor-pointer" onClick={() => openContact(contact)}>
                   <TableCell onClick={(event) => event.stopPropagation()}>
                     <input type="checkbox" checked={selectedIds.includes(contact.id)} onChange={() => toggleSelected(contact.id)} />
                   </TableCell>
@@ -353,27 +400,59 @@ export default function ContactsPage() {
                       </div>
                     </TableCell>
                   )}
+                  <TableCell onClick={(event) => event.stopPropagation()}>
+                    <RowOverflowMenu
+                      label={`${t('الإجراءات')}: ${contact.name}`}
+                      actions={[{ label: t('تعديل'), icon: Edit3, onSelect: () => openContact(contact) }]}
+                    />
+                  </TableCell>
                 </TableRow>
               ))}
-              {!loading && contacts.length === 0 && (
-                <TableRow><TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">{t('لا توجد جهات اتصال')}</TableCell></TableRow>
+              {!loading && !loadError && contacts.length === 0 && (
+                <TableRow><TableCell colSpan={8}>
+                  {search || appliedFilter ? (
+                    <NoResultsState compact title={t('لا توجد نتائج مطابقة')} description={t('جرّب توسيع التصفية أو البحث')} clearLabel={t('مسح التصفية')} onClear={() => { setSearch(''); setFilter({ $and: [] }); setActiveSegmentId(null); }} />
+                  ) : (
+                    <EmptyState compact icon={UserRound} title={t('لا توجد جهات اتصال')} />
+                  )}
+                </TableCell></TableRow>
               )}
             </TableBody>
           </Table>
-          <div className="flex items-center justify-between border-t border-border p-3">
-            <Button variant="outline" size="sm" disabled={!cursorId || loading} onClick={() => load(null)}>First</Button>
-            <Button variant="outline" size="sm" disabled={!hasMore || !nextCursorId || loading} onClick={() => load(nextCursorId)}>Next</Button>
-          </div>
+          <Pager
+            entityLabel={t('جهة اتصال')}
+            pageSize={25}
+            pageSizeOptions={[25]}
+            start={total === 0 ? 0 : cursorHistory.length * 25 + 1}
+            end={Math.min(total, cursorHistory.length * 25 + contacts.length)}
+            total={total}
+            previousLabel={t('السابق')}
+            nextLabel={t('التالي')}
+            hasPrevious={cursorHistory.length > 0 && !loading}
+            hasNext={hasMore && !!nextCursorId && !loading}
+            onPageSizeChange={() => undefined}
+            onPrevious={() => {
+              const previous = cursorHistory[cursorHistory.length - 1] ?? null;
+              setCursorHistory((current) => current.slice(0, -1));
+              load(previous);
+            }}
+            onNext={() => {
+              if (!nextCursorId) return;
+              setCursorHistory((current) => [...current, cursorId]);
+              load(nextCursorId);
+            }}
+          />
         </CardContent>
       </Card>
 
-      <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-sm">{t('تفاصيل جهة الاتصال')}</DialogTitle>
-          </DialogHeader>
+      <Drawer open={!!selected} onOpenChange={(open) => !open && closeContact()}>
+        <DrawerContent className="max-w-2xl" closeLabel={t('إغلاق')}>
+          <DrawerHeader>
+            <DrawerTitle className="text-sm font-semibold">{t('تفاصيل جهة الاتصال')}</DrawerTitle>
+          </DrawerHeader>
           {selected && (
-            <div className="grid max-h-[70vh] gap-3 overflow-y-auto md:grid-cols-2">
+            <DrawerBody>
+            <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-2"><Label>Name</Label><Input value={selected.name || ''} onChange={(e) => setSelected({ ...selected, name: e.target.value })} /></div>
               <div className="space-y-2"><Label>Email</Label><Input value={selected.email || ''} onChange={(e) => setSelected({ ...selected, email: e.target.value })} /></div>
               <div className="space-y-2"><Label>First name</Label><Input value={selected.firstName || ''} onChange={(e) => setSelected({ ...selected, firstName: e.target.value })} /></div>
@@ -425,9 +504,10 @@ export default function ContactsPage() {
                 </Button>
               </div>
             </div>
+            </DrawerBody>
           )}
-        </DialogContent>
-      </Dialog>
+        </DrawerContent>
+      </Drawer>
 
       <SaveGroupDialog
         open={saveGroupOpen}

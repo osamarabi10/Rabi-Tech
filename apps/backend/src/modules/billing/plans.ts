@@ -17,9 +17,12 @@ export type PlanEntitlements = {
    * enabling something they already built, which is a worse moment to be told.
    */
   workflowsLimit: number | null;
+  campaignRateMax: number;
+  campaignRateDurationMs: number;
   autoProvisionGateway: boolean;
   customDomain: boolean;
   whiteLabel: boolean;
+  maskContactDetails: boolean;
 };
 
 export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
@@ -36,9 +39,12 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     // advertised: a tier that cannot build a single workflow teaches nobody
     // what the feature is worth.
     workflowsLimit: 1,
+    campaignRateMax: 1,
+    campaignRateDurationMs: 2_000,
     autoProvisionGateway: false,
     customDomain: false,
     whiteLabel: false,
+    maskContactDetails: false,
   },
   GROWTH: {
     code: 'GROWTH',
@@ -50,9 +56,12 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customFieldsLimit: 20,
     usersLimit: 5,
     workflowsLimit: 10,
+    campaignRateMax: 1,
+    campaignRateDurationMs: 1_500,
     autoProvisionGateway: true,
     customDomain: false,
     whiteLabel: false,
+    maskContactDetails: false,
   },
   BUSINESS: {
     code: 'BUSINESS',
@@ -64,9 +73,12 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customFieldsLimit: 50,
     usersLimit: 25,
     workflowsLimit: 50,
+    campaignRateMax: 1,
+    campaignRateDurationMs: 1_000,
     autoProvisionGateway: true,
     customDomain: true,
     whiteLabel: true,
+    maskContactDetails: true,
   },
   ENTERPRISE: {
     code: 'ENTERPRISE',
@@ -78,9 +90,12 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customFieldsLimit: null,
     usersLimit: null,
     workflowsLimit: null,
+    campaignRateMax: 2,
+    campaignRateDurationMs: 1_000,
     autoProvisionGateway: true,
     customDomain: true,
     whiteLabel: true,
+    maskContactDetails: true,
   },
 };
 
@@ -93,4 +108,3 @@ export function normalizePlanCode(value: unknown): PlanCode {
 export function isPaidPlan(code: PlanCode): boolean {
   return code !== 'FREE';
 }
-

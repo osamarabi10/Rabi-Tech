@@ -13,6 +13,12 @@ export interface JwtPayload {
   role?: 'ADMIN' | 'SUPERVISOR' | 'AGENT' | 'VIEWER' | 'FINANCE';
   organizationId: string;
   tokenVersion?: number;
+  sessionId?: string;
+  restrictContactVisibility?: boolean;
+  contactVisibilityScope?: 'TEAM' | 'SELF';
+  restrictCalls?: boolean;
+  restrictWorkflows?: boolean;
+  maskPhoneAndEmail?: boolean;
 }
 
 export interface PlatformJwtPayload {
@@ -135,9 +141,59 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
     }
 
     return runAsOrganization(decoded.organizationId, async () => {
-      const user = await prisma.user.findUnique({
+      const session = decoded.sessionId
+        ? await prisma.authSession.findUnique({
+            where: { id: decoded.sessionId },
+            select: {
+              userId: true,
+              lastSeenAt: true,
+              revokedAt: true,
+              user: {
+                select: {
+                  tokenVersion: true,
+                  isActive: true,
+                  role: true,
+                  primaryTeamId: true,
+                  teams: { select: { teamId: true } },
+                  restrictContactVisibility: true,
+                  contactVisibilityScope: true,
+                  restrictCalls: true,
+                  restrictWorkflows: true,
+                  maskPhoneAndEmail: true,
+                  organization: {
+                    select: {
+                      configuration: {
+                        select: { userInactivityTimeoutMinutes: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : null;
+
+      if (decoded.sessionId && (!session || session.userId !== decoded.id || session.revokedAt)) {
+        return res.status(401).json({ error: 'Session is no longer active', code: 'SESSION_REVOKED' });
+      }
+
+      // Tokens issued before the session migration remain valid until their
+      // normal expiry. Every new login carries a sessionId and is subject to
+      // the workspace policy below, avoiding a forced logout at deployment.
+      const user = session?.user ?? await prisma.user.findUnique({
         where: { id: decoded.id },
-        select: { tokenVersion: true, isActive: true },
+        select: {
+          tokenVersion: true,
+          isActive: true,
+          role: true,
+          primaryTeamId: true,
+          teams: { select: { teamId: true } },
+          restrictContactVisibility: true,
+          contactVisibilityScope: true,
+          restrictCalls: true,
+          restrictWorkflows: true,
+          maskPhoneAndEmail: true,
+        },
       });
 
       if (!user) {
@@ -154,7 +210,40 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
         return res.status(401).json({ error: 'Token has been revoked' });
       }
 
-      req.user = decoded;
+      if (session && decoded.sessionId) {
+        const timeoutMinutes = session.user.organization.configuration?.userInactivityTimeoutMinutes ?? 20;
+        const idleForMs = Date.now() - session.lastSeenAt.getTime();
+        if (idleForMs > timeoutMinutes * 60_000) {
+          await prisma.authSession.update({
+            where: { id: decoded.sessionId },
+            data: { revokedAt: new Date() },
+          });
+          return res.status(401).json({
+            error: 'Session expired due to inactivity',
+            code: 'SESSION_IDLE_TIMEOUT',
+          });
+        }
+
+        // One write per minute at most, regardless of request volume.
+        if (idleForMs >= 60_000) {
+          await prisma.authSession.update({
+            where: { id: decoded.sessionId },
+            data: { lastSeenAt: new Date() },
+          });
+        }
+      }
+
+      req.user = {
+        ...decoded,
+        role: user.role,
+        primaryTeamId: user.primaryTeamId,
+        teamIds: user.teams.map((team) => team.teamId),
+        restrictContactVisibility: user.restrictContactVisibility,
+        contactVisibilityScope: user.contactVisibilityScope,
+        restrictCalls: user.restrictCalls,
+        restrictWorkflows: user.restrictWorkflows,
+        maskPhoneAndEmail: user.maskPhoneAndEmail,
+      };
       next();
     });
   } catch {

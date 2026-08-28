@@ -54,6 +54,9 @@ model Organization {
   conversations           Conversation[]
   campaigns               Campaign[]
   templates               MessageTemplate[]
+  snippetTopics           SnippetTopic[]
+  snippetTopicAssignments SnippetTopicAssignment[]
+  snippetAttachments      SnippetAttachment[]
   whatsappSessions        WhatsappSession[]
   csatResponses           CsatSurveyResponse[]
   auditLogs               AuditLog[]
@@ -72,6 +75,9 @@ model Organization {
   contactTags             ContactTag[]
   customFieldDefinitions  CustomFieldDefinition[]
   customFieldValues       CustomFieldValue[]
+  contactFieldPreferences ContactFieldPreference[]
+  conversationCategories  ConversationCategory[]
+  conversationClosures    ConversationClosure[]
   subscriptions           Subscription[]
   invoices                Invoice[]
   paymentReceipts         PaymentReceipt[]
@@ -81,6 +87,9 @@ model Organization {
   healthChecks            GatewayHealthCheck[]
   workflows               Workflow[]
   workflowExecutions      WorkflowExecution[]
+  authSessions            AuthSession[]
+  weeklyRecapRecipients   WeeklyRecapRecipient[]
+  userInvitations         UserInvitation[]
 
   /// The console sweeps for live and expiring overrides on every load.
   analyticsHourly AnalyticsHourly[]
@@ -259,13 +268,42 @@ model Identity {
   /// sign in while their name stays attached to everything they did. A deleted
   /// identity would take the audit trail with it.
   platformDisabledAt  DateTime?
+  totpSecretEnc       String?
+  totpEnabledAt       DateTime?
+  totpLastUsedCounter BigInt?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
   users               User[]
   passwordResetTokens PasswordResetToken[]
+  twoFactorChallenges TwoFactorChallenge[]
+  recoveryCodes       IdentityRecoveryCode[]
 
   @@index([platformRole])
+}
+
+model TwoFactorChallenge {
+  id         String    @id @default(cuid())
+  identityId String
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  identity Identity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+
+  @@index([identityId, expiresAt])
+}
+
+model IdentityRecoveryCode {
+  id         String    @id @default(cuid())
+  identityId String
+  codeHash   String    @unique
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  identity Identity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+
+  @@index([identityId, usedAt])
 }
 
 /// A message this system owes somebody, and has not yet managed to send.
@@ -329,19 +367,27 @@ model PasswordResetToken {
 }
 
 model OrganizationConfig {
-  organizationId               String   @id
-  itSessionName                String   @default("it-support")
-  marketingSessionName         String   @default("marketing")
+  organizationId               String          @id
+  itSessionName                String          @default("it-support")
+  marketingSessionName         String          @default("marketing")
   itNumber                     String?
   marketingNumber              String?
-  sharedLine                   Boolean  @default(false)
-  monthlyActiveContactsLimit   Int      @default(1000)
+  sharedLine                   Boolean         @default(false)
+  monthlyActiveContactsLimit   Int             @default(1000)
   monthlyInboundMessagesLimit  Int?
-  monthlyOutboundMessagesLimit Int      @default(10000)
-  monthlyCampaignSendsLimit    Int      @default(5000)
+  monthlyOutboundMessagesLimit Int             @default(10000)
+  monthlyCampaignSendsLimit    Int             @default(5000)
   monthlyAiTokensInLimit       BigInt?
   monthlyAiTokensOutLimit      BigInt?
-  updatedAt                    DateTime @updatedAt
+  timezone                     String          @default("Asia/Jerusalem")
+  userInactivityTimeoutMinutes Int             @default(20)
+  weeklyRecapEnabled           Boolean         @default(false)
+  autoCloseEnabled             Boolean         @default(false)
+  autoCloseDurationMinutes     Int             @default(1440)
+  autoCloseEnabledAt           DateTime?
+  manualClosingNotesEnabled    Boolean         @default(false)
+  manualClosingNoteMode        ClosingNoteMode @default(OPTIONAL)
+  updatedAt                    DateTime        @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
@@ -372,6 +418,7 @@ model Team {
   conversations Conversation[]
   sessions      WhatsappSession[]
   templates     MessageTemplate[]
+  invitations   UserInvitation[]  @relation("InvitationPrimaryTeam")
 
   @@unique([id, organizationId])
   @@unique([organizationId, slug])
@@ -581,11 +628,30 @@ enum Role {
   FINANCE // View-only analytics/reports
 }
 
+enum ContactVisibilityScope {
+  TEAM
+  SELF
+}
+
 enum ConversationStatus {
   OPEN
   PENDING
   RESOLVED
   AWAITING_CLIENT
+}
+
+enum ClosingNoteMode {
+  OPTIONAL
+  CATEGORY_REQUIRED
+  CATEGORY_AND_SUMMARY_REQUIRED
+}
+
+enum ConversationClosingSource {
+  MANUAL
+  AUTO_CLOSE
+  WORKFLOW
+  API
+  MERGE
 }
 
 enum MessageDirection {
@@ -606,6 +672,11 @@ enum NotificationType {
   CONVERSATION_ASSIGNED
   CONVERSATION_RESOLVED
   MENTION
+}
+
+enum NotificationDelivery {
+  IN_APP
+  OFF
 }
 
 enum CampaignStatus {
@@ -654,28 +725,45 @@ model User {
   organizationId String
   identityId     String
 
-  name          String
-  role          Role      @default(AGENT) // org-specific role
+  name                        String
+  role                        Role                   @default(AGENT) // org-specific role
   /// Deprecated legacy ISP routing column. Team/UserTeam is the source of truth.
-  primaryTeamId String?
-  isActive      Boolean   @default(true)
-  isAway        Boolean   @default(false)
-  awayAt        DateTime?
-  phone         String?
-  tokenVersion  Int       @default(0) // Increment to invalidate all tokens on logout-all
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  primaryTeamId               String?
+  isActive                    Boolean                @default(true)
+  isAway                      Boolean                @default(false)
+  awayAt                      DateTime?
+  phone                       String?
+  avatarUrl                   String?
+  locale                      String                 @default("ar")
+  theme                       String                 @default("system")
+  notificationNewMessage      NotificationDelivery   @default(IN_APP)
+  notificationAssignment      NotificationDelivery   @default(IN_APP)
+  notificationMention         NotificationDelivery   @default(IN_APP)
+  notificationResolution      NotificationDelivery   @default(IN_APP)
+  notificationEscalation      NotificationDelivery   @default(IN_APP)
+  notificationSound           Boolean                @default(true)
+  onboardingLifecycleComplete Boolean                @default(false)
+  tokenVersion                Int                    @default(0) // Increment to invalidate all tokens on logout-all
+  restrictContactVisibility   Boolean                @default(false)
+  contactVisibilityScope      ContactVisibilityScope @default(TEAM)
+  restrictCalls               Boolean                @default(false)
+  restrictWorkflows           Boolean                @default(false)
+  maskPhoneAndEmail           Boolean                @default(false)
+  createdAt                   DateTime               @default(now())
+  updatedAt                   DateTime               @updatedAt
 
-  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  identity              Identity             @relation(fields: [identityId], references: [id], onDelete: Cascade)
-  primaryTeam           Team?                @relation("UserPrimaryTeam", fields: [primaryTeamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  identity              Identity               @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  primaryTeam           Team?                  @relation("UserPrimaryTeam", fields: [primaryTeamId, organizationId], references: [id, organizationId], onDelete: Restrict)
   teams                 UserTeam[]
   assignedConversations Conversation[]
   sentMessages          Message[]
   auditLogs             AuditLog[]
   notifications         Notification[]
   csatResponses         CsatSurveyResponse[]
-  assignedContacts      Contact[]            @relation("ContactAssignee")
+  assignedContacts      Contact[]              @relation("ContactAssignee")
+  authSessions          AuthSession[]
+  weeklyRecapMembership WeeklyRecapRecipient[]
 
   // Composite unique: one identity per org
   segments Segment[]
@@ -687,6 +775,64 @@ model User {
   @@unique([organizationId, identityId])
   @@index([organizationId])
   @@index([organizationId, primaryTeamId])
+}
+
+/// One browser/device login. Tokens point at this row so workspace inactivity
+/// policy can be enforced without writing the User row on every request.
+model AuthSession {
+  id             String    @id
+  organizationId String
+  userId         String
+  lastSeenAt     DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+  revokedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, userId, revokedAt])
+  @@index([lastSeenAt])
+}
+
+/// Recipients are memberships, not loose email strings. The composite foreign
+/// key prevents a workspace from attaching another tenant's user to its recap.
+model WeeklyRecapRecipient {
+  organizationId String
+  userId         String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@id([organizationId, userId])
+  @@index([organizationId, createdAt])
+}
+
+/// A workspace invitation proves control of an email address before a seat is
+/// created. Only a hash is stored, so a database read cannot be turned into a
+/// usable invitation link.
+model UserInvitation {
+  id             String    @id @default(cuid())
+  organizationId String
+  email          String
+  name           String?
+  role           Role      @default(AGENT)
+  primaryTeamId  String?
+  tokenHash      String    @unique
+  invitedByName  String
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  primaryTeam  Team?        @relation("InvitationPrimaryTeam", fields: [primaryTeamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, expiresAt])
 }
 
 model WhatsappSession {
@@ -807,6 +953,13 @@ model ContactTag {
   organizationId String
   contactId      String
   tagId          String
+  /// MANUAL | IMPORT | WORKFLOW | API. Shown to operators so an automated
+  /// assignment is not mistaken for a human decision.
+  source         String   @default("MANUAL")
+  /// Denormalized because assignment history must remain readable after a
+  /// workspace user is disabled or deleted.
+  createdById    String?
+  createdByName  String?
   createdAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -825,6 +978,9 @@ model CustomFieldDefinition {
   description    String?
   dataType       String
   allowedValues  String[] @default([])
+  sortOrder      Int      @default(0)
+  /// ALWAYS_SHOW | HIDE_WHEN_EMPTY | ALWAYS_HIDE
+  visibility     String   @default("HIDE_WHEN_EMPTY")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -833,7 +989,25 @@ model CustomFieldDefinition {
 
   @@unique([id, organizationId])
   @@unique([organizationId, slug])
+  @@unique([organizationId, name])
   @@index([organizationId])
+  @@index([organizationId, sortOrder])
+}
+
+/// Workspace-wide drawer presentation for built-in Contact fields. Custom
+/// fields keep the same values on CustomFieldDefinition because they already
+/// have an owned row; standard fields need this small keyed preference table.
+model ContactFieldPreference {
+  organizationId String
+  fieldKey       String
+  sortOrder      Int
+  visibility     String   @default("HIDE_WHEN_EMPTY")
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, fieldKey])
+  @@index([organizationId, sortOrder])
 }
 
 model CustomFieldValue {
@@ -855,22 +1029,33 @@ model CustomFieldValue {
 }
 
 model Conversation {
-  id                String             @id @default(cuid())
-  organizationId    String
-  displayId         Int
-  contactId         String
-  sessionId         String
-  status            ConversationStatus @default(OPEN)
-  teamId            String?
-  assignedToId      String?
-  lastMessageAt     DateTime?
+  id                  String             @id @default(cuid())
+  organizationId      String
+  displayId           Int
+  contactId           String
+  sessionId           String
+  status              ConversationStatus @default(OPEN)
+  teamId              String?
+  assignedToId        String?
+  lastMessageAt       DateTime?
   /// First human outbound reply. Auto-replies are excluded on purpose: counting
   /// them would report a first-response time of seconds for every thread.
-  firstResponseAt   DateTime?
+  firstResponseAt     DateTime?
   /// Stamped at the RESOLVED transition and cleared on reopen, so it always
   /// describes the current resolution rather than the last edit of any kind.
-  resolvedAt        DateTime?
-  isArchived        Boolean            @default(false)
+  resolvedAt          DateTime?
+  /// Start of the currently open episode. Reopening advances this timestamp;
+  /// immutable ConversationClosure rows preserve earlier episodes.
+  openedAt            DateTime           @default(now())
+  /// Auto-close applies only to episodes opened while the workspace setting
+  /// is enabled. Existing conversations are not silently enrolled.
+  autoCloseEligible   Boolean            @default(false)
+  /// Latest successful human customer-facing send. Internal notes, Workflows,
+  /// Broadcasts, and automatic replies never start this timer.
+  lastHumanOutboundAt DateTime?
+  /// Persisted deadline makes the queue recoverable after a process restart.
+  autoCloseAt         DateTime?
+  isArchived          Boolean            @default(false)
   /// Snoozed while this is in the future, and simply not once it passes.
   ///
   /// A timestamp rather than a flag plus a job: nothing has to run for a
@@ -879,24 +1064,25 @@ model Conversation {
   ///
   /// Cleared when the customer replies. A thread the customer has just
   /// written to is the last thing this product should be hiding.
-  snoozedUntil      DateTime?
+  snoozedUntil        DateTime?
   /// Who snoozed it. Denormalised so the activity entry stays readable after
   /// the user is deleted.
-  snoozedByName     String?
-  labels            String[]           @default([])
-  pendingMenuChoice String?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  snoozedByName       String?
+  labels              String[]           @default([])
+  pendingMenuChoice   String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
-  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  contact            Contact             @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  session            WhatsappSession     @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  team               Team?               @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  assignee           User?               @relation(fields: [assignedToId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact            Contact               @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  session            WhatsappSession       @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  team               Team?                 @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  assignee           User?                 @relation(fields: [assignedToId, organizationId], references: [id, organizationId], onDelete: Restrict)
   messages           Message[]
   workflowExecutions WorkflowExecution[]
   csatResponse       CsatSurveyResponse?
   notifications      Notification[]
+  closures           ConversationClosure[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, displayId])
@@ -906,6 +1092,49 @@ model Conversation {
   @@index([organizationId, resolvedAt])
   @@index([organizationId, firstResponseAt])
   @@index([organizationId, createdAt])
+  @@index([organizationId, autoCloseAt])
+  @@index([organizationId, openedAt])
+}
+
+model ConversationCategory {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, name])
+  @@index([organizationId, createdAt])
+}
+
+/// One immutable close episode. Categories and actors are snapshotted so
+/// reports remain readable after a category is deleted or a user is renamed.
+model ConversationClosure {
+  id             String                    @id @default(cuid())
+  organizationId String
+  conversationId String
+  categoryId     String?
+  categoryName   String?
+  summary        String?
+  source         ConversationClosingSource
+  closedById     String?
+  closedByName   String?
+  openedAt       DateTime
+  closedAt       DateTime                  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, closedAt])
+  @@index([organizationId, categoryName, closedAt])
+  @@index([organizationId, source, closedAt])
+  @@index([organizationId, closedById, closedAt])
+  @@index([organizationId, conversationId, closedAt])
 }
 
 model Message {
@@ -921,6 +1150,7 @@ model Message {
   body           String?
   mediaUrl       String?
   mediaType      String?
+  mediaFileName  String?
   isAuto         Boolean          @default(false)
   autoType       String?
   isInternal     Boolean          @default(false)
@@ -977,10 +1207,12 @@ model MessageTemplate {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
-  organization        Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  team                Team?          @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  workingHoursOoh     WorkingHours[] @relation("OutOfHoursTemplate")
-  workingHoursWelcome WorkingHours[] @relation("WelcomeTemplate")
+  organization        Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team                Team?                    @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  workingHoursOoh     WorkingHours[]           @relation("OutOfHoursTemplate")
+  workingHoursWelcome WorkingHours[]           @relation("WelcomeTemplate")
+  snippetTopics       SnippetTopicAssignment[]
+  attachments         SnippetAttachment[]
 
   // Composite unique: shortCode per org
   @@unique([id, organizationId])
@@ -988,6 +1220,62 @@ model MessageTemplate {
   @@unique([organizationId, autoReplyKind])
   @@index([organizationId, category, isActive])
   @@index([organizationId, teamId, category, isActive])
+}
+
+/// A workspace-owned label used only to organize canned replies.
+///
+/// Topics are deliberately separate from Contact tags: applying a topic to a
+/// reply must never alter customer segmentation or trigger a workflow.
+model SnippetTopic {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  snippets     SnippetTopicAssignment[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, name])
+  @@index([organizationId, name])
+}
+
+model SnippetTopicAssignment {
+  organizationId String
+  templateId     String
+  topicId        String
+  createdAt      DateTime @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template     MessageTemplate @relation(fields: [templateId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  topic        SnippetTopic    @relation(fields: [topicId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@id([organizationId, templateId, topicId])
+  @@index([organizationId, topicId, templateId])
+}
+
+/// Metadata for a file stored under the workspace's private Snippet upload
+/// directory. The signed URL is derived at read time, so rotating the signing
+/// secret does not require rewriting database rows.
+model SnippetAttachment {
+  id             String   @id @default(cuid())
+  organizationId String
+  templateId     String
+  storageKey     String
+  fileName       String
+  contentType    String
+  sizeBytes      Int
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template     MessageTemplate @relation(fields: [templateId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, storageKey])
+  @@unique([organizationId, templateId, fileName])
+  @@index([organizationId, templateId, sortOrder])
 }
 
 model WorkingHours {
@@ -1101,6 +1389,7 @@ model Notification {
   title          String
   body           String
   isRead         Boolean          @default(false)
+  archivedAt     DateTime?
   createdAt      DateTime         @default(now())
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -1108,6 +1397,7 @@ model Notification {
   conversation Conversation? @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Restrict)
 
   @@index([organizationId, userId, isRead, createdAt])
+  @@index([organizationId, userId, archivedAt, createdAt])
 }
 
 /// A named, saved contact filter. `filter` stores the same DSL the M3 builder
@@ -1313,7 +1603,15 @@ model LifecycleStage {
   id             String   @id @default(cuid())
   organizationId String
   name           String
+  description    String?
   color          String?
+  emoji          String?
+  /// ACTIVE stages form the sales funnel; LOST stages record drop-off reasons.
+  kind           String   @default("ACTIVE")
+  /// Exactly one ordinary ACTIVE stage is the automatic entry point for new contacts.
+  isDefault      Boolean  @default(false)
+  /// Exactly one ACTIVE stage ends the journey as a conversion.
+  isWon          Boolean  @default(false)
   /// A lifecycle is a sequence — alphabetical would put Customer before Lead.
   orderIndex     Int      @default(0)
   createdAt      DateTime @default(now())
@@ -1323,7 +1621,7 @@ model LifecycleStage {
 
   @@unique([id, organizationId])
   @@unique([organizationId, name])
-  @@index([organizationId, orderIndex])
+  @@index([organizationId, kind, orderIndex])
 }
 
 /// A named conversation filter, private to one agent or shared workspace-wide.

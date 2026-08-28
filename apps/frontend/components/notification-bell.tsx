@@ -1,56 +1,130 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { Bell } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
+import { createPortal } from 'react-dom';
+import { Archive, ArchiveRestore, AtSign, Bell, CircleCheck, MessageCircle, UserRoundCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { fetchNotifications, markAllNotificationsRead, markNotificationRead, type AppNotification } from '@/lib/data';
+import {
+  archiveAllNotifications,
+  archiveNotification,
+  fetchNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+  restoreNotification,
+  type AppNotification,
+  type NotificationScope,
+} from '@/lib/data';
 import { getSocket } from '@/lib/socket';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { EmptyState, ErrorState, SkeletonBlock } from '@/components/ui/operational-state';
+
+const NOTIFICATION_ICONS: Record<string, ComponentType<{ className?: string }>> = {
+  NEW_MESSAGE: MessageCircle,
+  CONVERSATION_ASSIGNED: UserRoundCheck,
+  CONVERSATION_RESOLVED: CircleCheck,
+  MENTION: AtSign,
+};
+
+const SCOPES: Array<{ value: NotificationScope; label: string }> = [
+  { value: 'new', label: 'الجديدة' },
+  { value: 'archived', label: 'المؤرشفة' },
+  { value: 'all', label: 'الكل' },
+];
+
+function playNotificationSound() {
+  try {
+    const user = JSON.parse(localStorage.getItem('rabitech_user') || '{}');
+    if (user.notificationSound === false) return;
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 660;
+    gain.gain.setValueAtTime(0.04, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.12);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.12);
+    oscillator.addEventListener('ended', () => context.close());
+  } catch {
+    // Browsers can reject audio before the first user interaction. The visual
+    // notification still arrives, so sound failure is intentionally non-fatal.
+  }
+}
 
 export function NotificationBell() {
   const { t } = useT();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unread, setUnread] = useState(0);
+  const [scope, setScope] = useState<NotificationScope>('new');
   const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const router = useRouter();
 
-  const load = () =>
-    fetchNotifications().then(({ notifications: n, unreadCount }) => {
-      setNotifications(n);
-      setUnread(unreadCount);
-    }).catch(() => {});
-
-  useEffect(() => {
-    load();
-    // Close on outside click
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  // Real-time push
-  useEffect(() => {
-    const s = getSocket();
-    const handler = (payload: { notification: AppNotification; unreadCount: number }) => {
-      setNotifications((prev) => [payload.notification, ...prev].slice(0, 50));
-      setUnread(payload.unreadCount);
-    };
-    s.on('notification', handler);
-    return () => { s.off('notification', handler); };
-  }, []);
-
-  const handleClick = async (n: AppNotification) => {
-    if (!n.isRead) {
-      const newCount = await markNotificationRead(n.id);
-      setUnread(newCount);
-      setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, isRead: true } : x));
+  const load = useCallback(async (nextScope: NotificationScope) => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const result = await fetchNotifications(nextScope);
+      setNotifications(result.notifications);
+      setUnread(result.unreadCount);
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoading(false);
     }
-    if (n.conversationId) {
-      router.push(`/inbox?conversation=${n.conversationId}`);
+  }, []);
+
+  useEffect(() => { load('new'); }, [load]);
+
+  useEffect(() => {
+    if (open) load(scope);
+  }, [load, open, scope]);
+
+  useEffect(() => {
+    const handlePointer = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!ref.current?.contains(target) && !panelRef.current?.contains(target)) setOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, []);
+
+  useEffect(() => {
+    const socket = getSocket();
+    const handleNotification = (payload: { notification: AppNotification; unreadCount: number }) => {
+      if (scope !== 'archived') setNotifications((current) => [payload.notification, ...current].slice(0, 50));
+      setUnread(payload.unreadCount);
+      playNotificationSound();
+    };
+    socket.on('notification', handleNotification);
+    return () => { socket.off('notification', handleNotification); };
+  }, [scope]);
+
+  const handleClick = async (notification: AppNotification) => {
+    if (!notification.isRead) {
+      const newCount = await markNotificationRead(notification.id);
+      setUnread(newCount);
+      setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, isRead: true } : item));
+    }
+    if (notification.conversationId) {
+      router.push(`/inbox?conversation=${notification.conversationId}`);
       setOpen(false);
     }
   };
@@ -58,87 +132,98 @@ export function NotificationBell() {
   const handleReadAll = async () => {
     await markAllNotificationsRead();
     setUnread(0);
-    setNotifications((prev) => prev.map((x) => ({ ...x, isRead: true })));
+    setNotifications((current) => current.map((item) => ({ ...item, isRead: true })));
   };
 
-  const typeIcon: Record<string, string> = {
-    NEW_MESSAGE: '💬',
-    CONVERSATION_ASSIGNED: '👤',
-    CONVERSATION_RESOLVED: '✅',
-    MENTION: '@',
+  const handleArchiveAll = async () => {
+    await archiveAllNotifications();
+    setUnread(0);
+    setNotifications(scope === 'all' ? (current) => current.map((item) => ({ ...item, isRead: true, archivedAt: new Date().toISOString() })) : []);
+  };
+
+  const handleArchive = async (notification: AppNotification) => {
+    const newCount = await archiveNotification(notification.id);
+    setUnread(newCount);
+    if (scope === 'all') {
+      setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, isRead: true, archivedAt: new Date().toISOString() } : item));
+    } else {
+      setNotifications((current) => current.filter((item) => item.id !== notification.id));
+    }
+  };
+
+  const handleRestore = async (notification: AppNotification) => {
+    const newCount = await restoreNotification(notification.id);
+    setUnread(newCount);
+    if (scope === 'all') {
+      setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, archivedAt: null } : item));
+    } else {
+      setNotifications((current) => current.filter((item) => item.id !== notification.id));
+    }
   };
 
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen((v) => !v)}
-        // Icon-only, and now on the navigation rail, so it needs a name of
-        // its own — the surrounding label it used to sit beside is gone.
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
         aria-label={unread > 0 ? `${t('الإشعارات')} (${unread})` : t('الإشعارات')}
-        className={cn(
-          'relative flex h-8 w-8 items-center justify-center rounded-md transition-colors motion-micro',
-          // Rail colours: this sits on the dark navy surface, where
-          // `text-muted-foreground` was nearly invisible.
-          'text-nav-muted hover:bg-nav-accent/60 hover:text-nav-foreground',
-        )}
+        className="relative flex h-8 w-8 items-center justify-center rounded-md text-nav-muted transition-colors motion-micro hover:bg-nav-accent/60 hover:text-nav-foreground"
       >
-        <Bell className="h-4 w-4" />
-        {unread > 0 && (
-          <span className="absolute -top-0.5 -end-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-micro font-bold text-primary-foreground">
-            {unread > 9 ? '9+' : unread}
-          </span>
-        )}
+        <Bell className="h-4 w-4" aria-hidden />
+        {unread > 0 && <span className="absolute -top-0.5 -end-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-micro font-bold text-primary-foreground">{unread > 9 ? '9+' : unread}</span>}
       </button>
 
-      {open && (
-        <div
-          className={cn(
-            'absolute z-50 w-80 rounded-xl border border-border bg-card shadow-xl',
-            // Rises from the bell instead of dropping from it. The bell lives in
-            // the bottom cluster of a full-height rail, so `top-10` put the
-            // panel 628px down a 720px viewport — 271px of it below the fold,
-            // which is what "the bell does nothing" actually looked like.
-            'bottom-0',
-            // Beside the rail, on whichever side is inline-end. `left-0` kept
-            // it pinned to the left in Arabic, overlapping the rail itself.
-            'start-full ms-2',
-            // Never taller than the viewport it opens in.
-            'max-h-[70vh] overflow-hidden',
-          )}
+      {open && createPortal(
+        <section
+          ref={panelRef}
+          role="dialog"
+          aria-label={t('الإشعارات')}
+          className="fixed bottom-4 start-14 z-[100] flex max-h-[70vh] w-[min(22rem,calc(100vw-4rem))] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-xl"
         >
-          <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-            <span className="text-sm font-semibold">{t('الإشعارات')}</span>
-            {unread > 0 && (
-              <button onClick={handleReadAll} className="text-caption text-primary hover:underline">
-                {t('قراءة الكل')}
-              </button>
-            )}
-          </div>
+          <header className="border-b border-border px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">{t('الإشعارات')}</h2>
+              <div className="flex items-center gap-2">
+                {unread > 0 && <button type="button" onClick={handleReadAll} className="text-caption text-primary hover:underline">{t('قراءة الكل')}</button>}
+                {scope === 'new' && notifications.length > 0 && <button type="button" onClick={handleArchiveAll} className="text-caption text-primary hover:underline">{t('أرشفة الكل')}</button>}
+              </div>
+            </div>
+            <div role="tablist" aria-label={t('عرض الإشعارات')} className="mt-2 grid grid-cols-3 rounded-md bg-muted p-0.5">
+              {SCOPES.map((item) => (
+                <button key={item.value} type="button" role="tab" aria-selected={scope === item.value} onClick={() => setScope(item.value)} className={cn('rounded px-2 py-1 text-caption font-medium text-muted-foreground', scope === item.value && 'bg-card text-foreground shadow-sm')}>
+                  {t(item.label)}
+                </button>
+              ))}
+            </div>
+          </header>
 
-          <div className="max-h-[calc(70vh-3rem)] overflow-y-auto">
-            {notifications.length === 0 && (
-              <p className="py-8 text-center text-xs text-muted-foreground">{t('لا توجد إشعارات')}</p>
-            )}
-            {notifications.map((n) => (
-              <button
-                key={n.id}
-                onClick={() => handleClick(n)}
-                className={`w-full text-right px-4 py-3 flex gap-3 items-start hover:bg-secondary/50 transition-colors border-b border-border/40 last:border-0 ${!n.isRead ? 'bg-primary/5' : ''}`}
-              >
-                <span className="text-base shrink-0 mt-0.5">{typeIcon[n.type] || '🔔'}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold leading-snug">{n.title}</p>
-                  <p className="mt-0.5 text-caption text-muted-foreground">{n.body}</p>
-                  {n.conversation && (
-                    <p className="mt-0.5 text-micro text-muted-foreground opacity-60">#{n.conversation.displayId}</p>
-                  )}
-                </div>
-                {!n.isRead && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" />}
-              </button>
-            ))}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {loading && <div className="space-y-2 p-3" aria-label={t('جاري التحميل...')}>{Array.from({ length: 4 }).map((_, index) => <SkeletonBlock key={index} className="h-16" />)}</div>}
+            {!loading && loadError && <ErrorState compact title={t('تعذر تحميل الإشعارات')} retryLabel={t('إعادة المحاولة')} onRetry={() => load(scope)} />}
+            {!loading && !loadError && notifications.length === 0 && <EmptyState compact icon={Bell} title={t('لا توجد إشعارات')} />}
+            {!loading && !loadError && notifications.map((notification) => {
+              const TypeIcon = NOTIFICATION_ICONS[notification.type] || Bell;
+              return (
+                <article key={notification.id} className={cn('flex items-start gap-2 border-b border-border/60 px-3 py-2.5 last:border-0', !notification.isRead && 'bg-primary/5')}>
+                  <TypeIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <button type="button" onClick={() => handleClick(notification)} className="min-w-0 flex-1 text-start">
+                    <span className="block text-xs font-semibold leading-snug" dir="auto">{notification.title}</span>
+                    <span className="mt-0.5 block text-caption text-muted-foreground" dir="auto">{notification.body}</span>
+                    {notification.conversation && <span className="numeric mt-0.5 block text-micro text-muted-foreground" dir="ltr">#{notification.conversation.displayId}</span>}
+                  </button>
+                  <button type="button" onClick={() => notification.archivedAt ? handleRestore(notification) : handleArchive(notification)} aria-label={notification.archivedAt ? t('استعادة') : t('أرشفة')} className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
+                    {notification.archivedAt ? <ArchiveRestore className="size-3.5" aria-hidden /> : <Archive className="size-3.5" aria-hidden />}
+                  </button>
+                  {!notification.isRead && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" aria-label={t('جديد')} />}
+                </article>
+              );
+            })}
           </div>
-        </div>
-      )}
+        </section>
+      , document.body)}
     </div>
   );
 }

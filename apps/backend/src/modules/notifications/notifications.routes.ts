@@ -9,9 +9,17 @@ router.use(verifyToken);
 router.get('/', async (req, res) => {
   const userId = req.user!.id;
   const unreadOnly = req.query.unread === 'true';
+  const scope = String(req.query.scope || 'new');
+  if (!['new', 'archived', 'all'].includes(scope)) {
+    return res.status(400).json({ error: 'Invalid notification scope' });
+  }
+
+  const archiveWhere =
+    scope === 'new' ? { archivedAt: null } :
+    scope === 'archived' ? { archivedAt: { not: null } } : {};
 
   const notifications = await prisma.notification.findMany({
-    where: { userId, ...(unreadOnly ? { isRead: false } : {}) },
+    where: { userId, ...archiveWhere, ...(unreadOnly ? { isRead: false } : {}) },
     orderBy: { createdAt: 'desc' },
     take: 50,
     include: {
@@ -19,7 +27,7 @@ router.get('/', async (req, res) => {
     },
   });
 
-  const unreadCount = await prisma.notification.count({ where: { userId, isRead: false } });
+  const unreadCount = await prisma.notification.count({ where: { userId, isRead: false, archivedAt: null } });
 
   res.json({ notifications, unreadCount });
 });
@@ -41,7 +49,7 @@ router.get('/mentions', async (req, res) => {
   const userId = req.user!.id;
 
   const mentions = await prisma.notification.findMany({
-    where: { userId, type: 'MENTION', conversationId: { not: null } },
+    where: { userId, type: 'MENTION', conversationId: { not: null }, archivedAt: null },
     orderBy: { createdAt: 'desc' },
     // Generous but bounded. The inbox list it filters is itself unpaginated;
     // when that changes this becomes a server-side join instead.
@@ -77,7 +85,7 @@ router.patch('/:id/read', async (req, res) => {
     where: { id: req.params.id, userId },
     data: { isRead: true },
   });
-  const unreadCount = await prisma.notification.count({ where: { userId, isRead: false } });
+  const unreadCount = await prisma.notification.count({ where: { userId, isRead: false, archivedAt: null } });
   res.json({ unreadCount });
 });
 
@@ -89,6 +97,38 @@ router.patch('/read-all', async (req, res) => {
     data: { isRead: true },
   });
   res.json({ unreadCount: 0 });
+});
+
+// PATCH /api/notifications/archive-all — clear the active notification queue.
+router.patch('/archive-all', async (req, res) => {
+  const userId = req.user!.id;
+  await prisma.notification.updateMany({
+    where: { userId, archivedAt: null },
+    data: { archivedAt: new Date(), isRead: true },
+  });
+  res.json({ unreadCount: 0 });
+});
+
+router.patch('/:id/archive', async (req, res) => {
+  const userId = req.user!.id;
+  const result = await prisma.notification.updateMany({
+    where: { id: req.params.id, userId, archivedAt: null },
+    data: { archivedAt: new Date(), isRead: true },
+  });
+  if (result.count === 0) return res.status(404).json({ error: 'Notification not found' });
+  const unreadCount = await prisma.notification.count({ where: { userId, isRead: false, archivedAt: null } });
+  res.json({ unreadCount });
+});
+
+router.patch('/:id/unarchive', async (req, res) => {
+  const userId = req.user!.id;
+  const result = await prisma.notification.updateMany({
+    where: { id: req.params.id, userId, archivedAt: { not: null } },
+    data: { archivedAt: null },
+  });
+  if (result.count === 0) return res.status(404).json({ error: 'Notification not found' });
+  const unreadCount = await prisma.notification.count({ where: { userId, isRead: false, archivedAt: null } });
+  res.json({ unreadCount });
 });
 
 export default router;

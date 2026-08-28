@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import Link from 'next/link';
-import { ExternalLink, Tag, User, X } from 'lucide-react';
+import { ExternalLink, User, X } from 'lucide-react';
 import {
   updateContact,
   type Agent,
@@ -19,6 +19,7 @@ import { useT } from '@/lib/i18n';
 import { ConsentProvenanceLine } from '@/components/inbox/consent-provenance';
 import { ContactConversationsTab } from '@/components/inbox/contact-conversations-tab';
 import { CustomFieldsSection } from '@/components/inbox/custom-fields-section';
+import { ContactTagsSection } from '@/components/inbox/contact-tags-section';
 import { LifecycleSelect, useLifecycleStages } from './lifecycle-select';
 import {
   ActivityTab,
@@ -288,20 +289,9 @@ export function ContactPanel({
           </p>
         )}
 
-        {conversation.contactTags.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1">
-            {conversation.contactTags.map((tag) => (
-              <span
-                key={tag}
-                className="flex items-center gap-1 rounded-full border border-border bg-secondary/50 px-2 py-0.5 text-micro text-muted-foreground"
-              >
-                <Tag className="h-2.5 w-2.5" />
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
+
+      <ContactTagsSection contactId={conversation.contactId} />
 
       {/* Tenant-defined fields. Renders nothing when none are configured. */}
       <CustomFieldsSection contactId={conversation.contactId} />

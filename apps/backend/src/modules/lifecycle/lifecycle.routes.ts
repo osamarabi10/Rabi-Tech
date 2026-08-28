@@ -1,191 +1,376 @@
 import { Prisma } from '@prisma/client';
 import { Router } from 'express';
-import { prisma } from '../../prisma';
+import { auditLog } from '../../lib/audit';
 import logger from '../../lib/logger';
-import { verifyToken } from '../auth/auth.middleware';
-import { requirePermission } from '../../middleware/rbac.middleware';
 import { getTenantId } from '../../lib/tenant-context';
-
-/**
- * Lifecycle stages — the subscriber's own contact pipeline.
- *
- * Reading is open to anyone who can see a contact, because the selector in the
- * contact panel needs the list. Writing is a settings change and sits behind
- * `system:config`: reordering or renaming a stage changes what every agent
- * sees, and deleting one changes what a saved campaign filter matches.
- */
+import { requirePermission } from '../../middleware/rbac.middleware';
+import { prisma } from '../../prisma';
+import { verifyToken } from '../auth/auth.middleware';
 
 const router = Router();
 router.use(verifyToken);
 
+const MAX_STAGES = 20;
 const MAX_NAME_LENGTH = 40;
+const MAX_DESCRIPTION_LENGTH = 160;
+const HEX = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+type StageKind = 'ACTIVE' | 'LOST';
 
 const STAGE_SELECT = {
   id: true,
   name: true,
+  description: true,
   color: true,
+  emoji: true,
+  kind: true,
+  isDefault: true,
+  isWon: true,
   orderIndex: true,
 } as const;
-
-/** `#RGB` or `#RRGGBB`. Anything else is rejected rather than stored and rendered. */
-const HEX = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
 function parseName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const name = value.trim();
-  if (!name || name.length > MAX_NAME_LENGTH) return null;
-  return name;
+  return name && name.length <= MAX_NAME_LENGTH ? name : null;
+}
+
+function parseDescription(value: unknown): string | null | undefined {
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string') return undefined;
+  const description = value.trim();
+  if (!description) return null;
+  return description.length <= MAX_DESCRIPTION_LENGTH ? description : undefined;
+}
+
+function parseEmoji(value: unknown): string | null | undefined {
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string') return undefined;
+  const emoji = value.trim();
+  if (!emoji) return null;
+  return Array.from(emoji).length <= 8 ? emoji : undefined;
 }
 
 function parseColor(value: unknown): string | null | undefined {
-  if (value === null) return null;
+  if (value === null || value === '') return null;
   if (typeof value !== 'string') return undefined;
   const color = value.trim();
-  if (!color) return null;
-  return HEX.test(color) ? color : undefined;
+  return HEX.test(color) ? color.toUpperCase() : undefined;
 }
 
-/** GET /api/lifecycle-stages — the pipeline, in order. */
-router.get('/', async (req, res) => {
+function parseKind(value: unknown): StageKind | null {
+  return value === 'ACTIVE' || value === 'LOST' ? value : null;
+}
+
+function requestAudit(req: any) {
+  return { userId: req.user!.id, ipAddress: req.ip, userAgent: req.get('user-agent') };
+}
+
+function mutationError(res: any, err: unknown, fallback: string) {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+    return res.status(409).json({ error: 'A lifecycle stage with this name already exists', code: 'STAGE_NAME_EXISTS' });
+  }
+  logger.error(fallback, { error: String(err) });
+  return res.status(500).json({ error: fallback });
+}
+
+/** Pipeline stages with live assignment counts, ordered within each column. */
+router.get('/', async (_req, res) => {
   try {
-    const stages = await prisma.lifecycleStage.findMany({
-      select: STAGE_SELECT,
-      orderBy: [{ orderIndex: 'asc' }, { name: 'asc' }],
-    });
-    res.json(stages);
+    const [stages, counts] = await Promise.all([
+      prisma.lifecycleStage.findMany({
+        select: STAGE_SELECT,
+        orderBy: [{ kind: 'asc' }, { orderIndex: 'asc' }, { name: 'asc' }],
+      }),
+      prisma.contact.groupBy({
+        by: ['lifecycleStage'],
+        where: { lifecycleStage: { not: null } },
+        _count: { _all: true },
+      }),
+    ]);
+    const countByName = new Map(counts.map((row) => [row.lifecycleStage, row._count._all]));
+    res.json(stages.map((stage) => ({ ...stage, contactCount: countByName.get(stage.name) || 0 })));
   } catch (err) {
-    logger.error('lifecycle stages fetch failed', {
-      error: String(err),
-      requestId: (req as any).id,
-    });
-    res.status(500).json({ error: 'فشل جلب المراحل', requestId: (req as any).id });
+    logger.error('lifecycle stages fetch failed', { error: String(err) });
+    res.status(500).json({ error: 'Could not load lifecycle stages' });
   }
 });
 
-/** POST /api/lifecycle-stages */
+/** Add an ordinary primary or Lost stage. Default/Won changes are separate audited actions. */
 router.post('/', requirePermission('system:config'), async (req, res) => {
+  const organizationId = getTenantId();
   const name = parseName(req.body?.name);
-  if (!name) return res.status(400).json({ error: 'اسم المرحلة مطلوب' });
-
-  const color = parseColor(req.body?.color);
-  if (color === undefined && req.body?.color !== undefined) {
-    return res.status(400).json({ error: 'لون غير صالح' });
-  }
+  const kind = parseKind(req.body?.kind ?? 'ACTIVE');
+  const description = req.body?.description === undefined ? null : parseDescription(req.body.description);
+  const color = req.body?.color === undefined ? null : parseColor(req.body.color);
+  const emoji = req.body?.emoji === undefined ? null : parseEmoji(req.body.emoji);
+  if (!name) return res.status(400).json({ error: 'Stage name is required', code: 'INVALID_STAGE_NAME' });
+  if (!kind) return res.status(400).json({ error: 'Stage kind is invalid', code: 'INVALID_STAGE_KIND' });
+  if (description === undefined) return res.status(400).json({ error: 'Stage description is too long', code: 'INVALID_DESCRIPTION' });
+  if (color === undefined) return res.status(400).json({ error: 'Stage color is invalid', code: 'INVALID_COLOR' });
+  if (emoji === undefined) return res.status(400).json({ error: 'Stage emoji is too long', code: 'INVALID_EMOJI' });
 
   try {
-    // Appended to the end rather than inserted: a new stage has no defensible
-    // position inside an existing pipeline, and the settings screen can reorder.
-    const last = await prisma.lifecycleStage.findFirst({
-      select: { orderIndex: true },
-      orderBy: { orderIndex: 'desc' },
+    const total = await prisma.lifecycleStage.count();
+    if (total >= MAX_STAGES) {
+      return res.status(409).json({ error: 'A workspace can have at most 20 lifecycle stages', code: 'STAGE_LIMIT' });
+    }
+
+    const stage = await prisma.$transaction(async (tx) => {
+      const rows = await tx.lifecycleStage.findMany({
+        where: { organizationId, kind },
+        select: { id: true, orderIndex: true, isWon: true },
+        orderBy: { orderIndex: 'asc' },
+      });
+      let orderIndex = rows.length ? rows[rows.length - 1].orderIndex + 1 : 0;
+      const won = kind === 'ACTIVE' ? rows.find((row) => row.isWon) : undefined;
+      if (won) {
+        orderIndex = won.orderIndex;
+        await tx.lifecycleStage.updateMany({
+          where: { id: won.id, organizationId },
+          data: { orderIndex: won.orderIndex + 1 },
+        });
+      }
+      return tx.lifecycleStage.create({
+        data: {
+          organizationId,
+          name,
+          kind,
+          description,
+          color,
+          emoji: kind === 'LOST' ? emoji : null,
+          orderIndex,
+        },
+        select: STAGE_SELECT,
+      });
     });
 
-    const stage = await prisma.lifecycleStage.create({
-      data: {
-        // Spelled out rather than cast past the generated type: the tenancy
-        // extension injects it anyway, but the create input requires it.
-        organizationId: getTenantId(),
-        name,
-        color: color ?? null,
-        orderIndex: (last?.orderIndex ?? -1) + 1,
-      },
-      select: STAGE_SELECT,
+    await auditLog({
+      ...requestAudit(req),
+      action: 'lifecycle-stage.created',
+      resource: 'lifecycle-stage',
+      resourceId: stage.id,
+      changes: { after: stage },
     });
-    res.status(201).json(stage);
+    res.status(201).json({ ...stage, contactCount: 0 });
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      return res.status(409).json({ error: 'المرحلة موجودة مسبقاً' });
-    }
-    logger.error('lifecycle stage create failed', {
-      error: String(err),
-      requestId: (req as any).id,
-    });
-    res.status(500).json({ error: 'فشل إنشاء المرحلة', requestId: (req as any).id });
+    return mutationError(res, err, 'Could not create lifecycle stage');
   }
 });
 
-/** PATCH /api/lifecycle-stages/:id — rename, recolour, or reposition. */
+/** Rename, describe, recolor, change column, or atomically select default/Won. */
 router.patch('/:id', requirePermission('system:config'), async (req, res) => {
-  const data: Prisma.LifecycleStageUpdateInput = {};
+  const organizationId = getTenantId();
+  const current = await prisma.lifecycleStage.findFirst({ where: { id: req.params.id }, select: STAGE_SELECT });
+  if (!current) return res.status(404).json({ error: 'Lifecycle stage not found' });
 
+  const data: Prisma.LifecycleStageUncheckedUpdateManyInput = {};
   if (req.body?.name !== undefined) {
     const name = parseName(req.body.name);
-    if (!name) return res.status(400).json({ error: 'اسم المرحلة مطلوب' });
+    if (!name) return res.status(400).json({ error: 'Stage name is required', code: 'INVALID_STAGE_NAME' });
     data.name = name;
+  }
+  if (req.body?.description !== undefined) {
+    const description = parseDescription(req.body.description);
+    if (description === undefined) return res.status(400).json({ error: 'Stage description is too long', code: 'INVALID_DESCRIPTION' });
+    data.description = description;
   }
   if (req.body?.color !== undefined) {
     const color = parseColor(req.body.color);
-    if (color === undefined) return res.status(400).json({ error: 'لون غير صالح' });
+    if (color === undefined) return res.status(400).json({ error: 'Stage color is invalid', code: 'INVALID_COLOR' });
     data.color = color;
   }
-  if (req.body?.orderIndex !== undefined) {
-    const orderIndex = Number(req.body.orderIndex);
-    if (!Number.isInteger(orderIndex) || orderIndex < 0 || orderIndex > 999) {
-      return res.status(400).json({ error: 'ترتيب غير صالح' });
-    }
-    data.orderIndex = orderIndex;
+  if (req.body?.emoji !== undefined) {
+    const emoji = parseEmoji(req.body.emoji);
+    if (emoji === undefined) return res.status(400).json({ error: 'Stage emoji is too long', code: 'INVALID_EMOJI' });
+    data.emoji = emoji;
   }
 
-  if (Object.keys(data).length === 0) {
-    return res.status(400).json({ error: 'لا يوجد تغيير' });
+  let nextKind = current.kind as StageKind;
+  if (req.body?.kind !== undefined) {
+    const kind = parseKind(req.body.kind);
+    if (!kind) return res.status(400).json({ error: 'Stage kind is invalid', code: 'INVALID_STAGE_KIND' });
+    if (kind !== current.kind && (current.isDefault || current.isWon)) {
+      return res.status(409).json({ error: 'Move the default or Won marker before changing columns', code: 'PROTECTED_STAGE' });
+    }
+    nextKind = kind;
+    data.kind = kind;
+    if (kind === 'ACTIVE') data.emoji = null;
+  }
+
+  const setDefault = req.body?.isDefault === true && !current.isDefault;
+  const setWon = req.body?.isWon === true && !current.isWon;
+  if (req.body?.isDefault === false && current.isDefault) {
+    return res.status(409).json({ error: 'Select another default stage instead', code: 'DEFAULT_REQUIRED' });
+  }
+  if (req.body?.isWon === false && current.isWon) {
+    return res.status(409).json({ error: 'Select another Won stage instead', code: 'WON_REQUIRED' });
+  }
+  if (setDefault && (nextKind !== 'ACTIVE' || current.isWon || setWon)) {
+    return res.status(409).json({ error: 'The default must be an ordinary primary stage', code: 'INVALID_DEFAULT' });
+  }
+  if (setWon && (nextKind !== 'ACTIVE' || current.isDefault || setDefault)) {
+    return res.status(409).json({ error: 'The Won stage must be a non-default primary stage', code: 'INVALID_WON' });
+  }
+  if (!Object.keys(data).length && !setDefault && !setWon) {
+    return res.status(400).json({ error: 'No lifecycle stage change was provided' });
   }
 
   try {
-    // updateMany, not update: `update` throws P2025 for a row in another
-    // organization, which the extension has already scoped away — and a 500 on
-    // a cross-tenant id tells the caller the id exists. A count of 0 is a 404.
-    const result = await prisma.lifecycleStage.updateMany({
-      where: { id: req.params.id },
-      data,
-    });
-    if (result.count === 0) return res.status(404).json({ error: 'مرحلة غير موجودة' });
+    const stage = await prisma.$transaction(async (tx) => {
+      if (nextKind !== current.kind) {
+        if (current.kind === 'ACTIVE') {
+          const activeCount = await tx.lifecycleStage.count({ where: { organizationId, kind: 'ACTIVE' } });
+          if (activeCount <= 1) throw new Error('LAST_ACTIVE_STAGE');
+        }
+        const targetRows = await tx.lifecycleStage.findMany({
+          where: { organizationId, kind: nextKind },
+          select: { id: true, orderIndex: true, isWon: true },
+          orderBy: { orderIndex: 'asc' },
+        });
+        const won = nextKind === 'ACTIVE' ? targetRows.find((row) => row.isWon) : undefined;
+        data.orderIndex = targetRows.length ? targetRows[targetRows.length - 1].orderIndex + 1 : 0;
+        if (won) {
+          data.orderIndex = won.orderIndex;
+          await tx.lifecycleStage.updateMany({ where: { id: won.id, organizationId }, data: { orderIndex: won.orderIndex + 1 } });
+        }
+      }
 
-    const stage = await prisma.lifecycleStage.findFirst({
-      where: { id: req.params.id },
-      select: STAGE_SELECT,
+      if (setDefault) {
+        await tx.lifecycleStage.updateMany({ where: { organizationId, isDefault: true }, data: { isDefault: false } });
+        data.isDefault = true;
+      }
+      if (setWon) {
+        await tx.lifecycleStage.updateMany({ where: { organizationId, isWon: true }, data: { isWon: false } });
+        data.isWon = true;
+        const lastActive = await tx.lifecycleStage.findFirst({
+          where: { organizationId, kind: 'ACTIVE', id: { not: current.id } },
+          select: { orderIndex: true },
+          orderBy: { orderIndex: 'desc' },
+        });
+        data.orderIndex = (lastActive?.orderIndex ?? -1) + 1;
+      }
+
+      const nextName = typeof data.name === 'string' ? data.name : current.name;
+      if (nextName !== current.name) {
+        await tx.contact.updateMany({
+          where: { organizationId, lifecycleStage: current.name },
+          data: { lifecycleStage: nextName },
+        });
+      }
+      const updated = await tx.lifecycleStage.updateMany({
+        where: { id: current.id, organizationId },
+        data,
+      });
+      if (!updated.count) throw new Error('STAGE_NOT_FOUND');
+      return tx.lifecycleStage.findFirstOrThrow({ where: { id: current.id, organizationId }, select: STAGE_SELECT });
     });
-    res.json(stage);
+
+    await auditLog({
+      ...requestAudit(req),
+      action: setDefault ? 'lifecycle-stage.default-selected' : setWon ? 'lifecycle-stage.won-selected' : 'lifecycle-stage.updated',
+      resource: 'lifecycle-stage',
+      resourceId: current.id,
+      changes: { before: current, after: stage },
+    });
+    const contactCount = await prisma.contact.count({ where: { lifecycleStage: stage.name } });
+    res.json({ ...stage, contactCount });
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      return res.status(409).json({ error: 'المرحلة موجودة مسبقاً' });
+    if (String(err).includes('LAST_ACTIVE_STAGE')) {
+      return res.status(409).json({ error: 'At least one primary lifecycle stage is required', code: 'LAST_ACTIVE_STAGE' });
     }
-    logger.error('lifecycle stage update failed', {
-      error: String(err),
-      requestId: (req as any).id,
-    });
-    res.status(500).json({ error: 'فشل تحديث المرحلة', requestId: (req as any).id });
+    return mutationError(res, err, 'Could not update lifecycle stage');
   }
 });
 
-/**
- * DELETE /api/lifecycle-stages/:id
- *
- * Hard delete, and contacts keep the string they were stamped with. That is the
- * consequence of `Contact.lifecycleStage` being text rather than a foreign key:
- * removing a stage removes it from the *selector*, and contacts already in it
- * keep showing where they are instead of silently emptying. The response says
- * how many those are, so the caller can tell the user what they just orphaned.
- */
+/** Replace one complete column order atomically. The Won stage is always last. */
+router.put('/reorder/all', requirePermission('system:config'), async (req, res) => {
+  const kind = parseKind(req.body?.kind);
+  const stageIds: string[] = Array.isArray(req.body?.stageIds) ? req.body.stageIds.map(String) : [];
+  if (!kind || !stageIds.length || new Set(stageIds).size !== stageIds.length) {
+    return res.status(400).json({ error: 'A complete unique stage order is required', code: 'INVALID_STAGE_ORDER' });
+  }
+
+  const current = await prisma.lifecycleStage.findMany({
+    where: { kind },
+    select: { id: true, isWon: true },
+  });
+  if (current.length !== stageIds.length || current.some((stage) => !stageIds.includes(stage.id))) {
+    return res.status(409).json({ error: 'The stage list changed; reload before reordering', code: 'STALE_STAGE_ORDER' });
+  }
+  const won = current.find((stage) => stage.isWon);
+  if (won && stageIds[stageIds.length - 1] !== won.id) {
+    return res.status(409).json({ error: 'The Won stage must remain last', code: 'WON_MUST_BE_LAST' });
+  }
+
+  await prisma.$transaction(stageIds.map((id, orderIndex) => prisma.lifecycleStage.updateMany({
+    where: { id, kind },
+    data: { orderIndex },
+  })));
+  await auditLog({
+    ...requestAudit(req),
+    action: 'lifecycle-stage.reordered',
+    resource: 'lifecycle-stage-order',
+    resourceId: kind,
+    changes: { after: stageIds },
+  });
+  res.json({ kind, stageIds });
+});
+
+/** Delete after explicitly clearing or reassigning contacts that still use the stage. */
 router.delete('/:id', requirePermission('system:config'), async (req, res) => {
+  const organizationId = getTenantId();
+  const stage = await prisma.lifecycleStage.findFirst({ where: { id: req.params.id }, select: STAGE_SELECT });
+  if (!stage) return res.status(404).json({ error: 'Lifecycle stage not found' });
+  if (stage.isWon) return res.status(409).json({ error: 'The Won stage cannot be deleted', code: 'WON_STAGE_PROTECTED' });
+  if (stage.isDefault) return res.status(409).json({ error: 'Select another default stage before deleting this one', code: 'DEFAULT_STAGE_PROTECTED' });
+  if (stage.kind === 'ACTIVE') {
+    const activeCount = await prisma.lifecycleStage.count({ where: { kind: 'ACTIVE' } });
+    if (activeCount <= 1) return res.status(409).json({ error: 'At least one primary lifecycle stage is required', code: 'LAST_ACTIVE_STAGE' });
+  }
+
+  const affectedContacts = await prisma.contact.count({ where: { lifecycleStage: stage.name } });
+  const hasReassignmentChoice = Object.prototype.hasOwnProperty.call(req.body || {}, 'reassignToStageId');
+  if (affectedContacts > 0 && !hasReassignmentChoice) {
+    return res.status(409).json({
+      error: 'Choose where assigned contacts should move before deleting this stage',
+      code: 'REASSIGNMENT_REQUIRED',
+      affectedContacts,
+    });
+  }
+
+  let replacement: { id: string; name: string } | null = null;
+  if (req.body?.reassignToStageId) {
+    replacement = await prisma.lifecycleStage.findFirst({
+      where: { id: String(req.body.reassignToStageId) },
+      select: { id: true, name: true },
+    });
+    if (!replacement || replacement.id === stage.id) {
+      return res.status(400).json({ error: 'Replacement stage is invalid', code: 'INVALID_REPLACEMENT_STAGE' });
+    }
+  }
+
   try {
-    const stage = await prisma.lifecycleStage.findFirst({
-      where: { id: req.params.id },
-      select: { name: true },
+    await prisma.$transaction(async (tx) => {
+      if (affectedContacts > 0) {
+        await tx.contact.updateMany({
+          where: { organizationId, lifecycleStage: stage.name },
+          data: { lifecycleStage: replacement?.name ?? null },
+        });
+      }
+      const deleted = await tx.lifecycleStage.deleteMany({ where: { id: stage.id, organizationId } });
+      if (!deleted.count) throw new Error('STAGE_NOT_FOUND');
     });
-    if (!stage) return res.status(404).json({ error: 'مرحلة غير موجودة' });
-
-    const affectedContacts = await prisma.contact.count({
-      where: { lifecycleStage: stage.name },
+    await auditLog({
+      ...requestAudit(req),
+      action: 'lifecycle-stage.deleted',
+      resource: 'lifecycle-stage',
+      resourceId: stage.id,
+      changes: { before: stage, after: { replacementStageId: replacement?.id ?? null, affectedContacts } },
     });
-
-    await prisma.lifecycleStage.deleteMany({ where: { id: req.params.id } });
-    res.json({ deleted: true, affectedContacts });
+    res.json({ deleted: true, affectedContacts, replacementStageId: replacement?.id ?? null });
   } catch (err) {
-    logger.error('lifecycle stage delete failed', {
-      error: String(err),
-      requestId: (req as any).id,
-    });
-    res.status(500).json({ error: 'فشل حذف المرحلة', requestId: (req as any).id });
+    return mutationError(res, err, 'Could not delete lifecycle stage');
   }
 });
 

@@ -8,6 +8,7 @@
  * Exits explicitly: the backup pulls in the queue module, whose Redis handle
  * would otherwise hold the process open forever.
  */
+require('dotenv').config();
 const { runBackup } = require('../dist/modules/ops/backup.service');
 
 runBackup()

@@ -19,7 +19,7 @@ export function initSocket(httpServer: HttpServer): Server {
   });
 
   // Auth middleware
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) return next(new Error('No token'));
     try {
@@ -27,7 +27,50 @@ export function initSocket(httpServer: HttpServer): Server {
       if (decoded.scope !== 'ORGANIZATION' || !decoded.organizationId) {
         return next(new Error('Organization token required'));
       }
-      socket.data.user = decoded;
+
+      const liveUser = await runAsOrganization(decoded.organizationId, async () => {
+        if (decoded.sessionId) {
+          const session = await prisma.authSession.findUnique({
+            where: { id: decoded.sessionId },
+            select: { userId: true, revokedAt: true },
+          });
+          if (!session || session.userId !== decoded.id || session.revokedAt) return null;
+        }
+
+        return prisma.user.findUnique({
+          where: { id: decoded.id },
+          select: {
+            id: true,
+            role: true,
+            isActive: true,
+            tokenVersion: true,
+            primaryTeamId: true,
+            teams: { select: { teamId: true } },
+            restrictContactVisibility: true,
+            contactVisibilityScope: true,
+            restrictCalls: true,
+            restrictWorkflows: true,
+            maskPhoneAndEmail: true,
+          },
+        });
+      });
+
+      if (!liveUser?.isActive) return next(new Error('User is inactive'));
+      if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== liveUser.tokenVersion) {
+        return next(new Error('Token has been revoked'));
+      }
+
+      socket.data.user = {
+        ...decoded,
+        role: liveUser.role,
+        primaryTeamId: liveUser.primaryTeamId,
+        teamIds: liveUser.teams.map((team) => team.teamId),
+        restrictContactVisibility: liveUser.restrictContactVisibility,
+        contactVisibilityScope: liveUser.contactVisibilityScope,
+        restrictCalls: liveUser.restrictCalls,
+        restrictWorkflows: liveUser.restrictWorkflows,
+        maskPhoneAndEmail: liveUser.maskPhoneAndEmail,
+      };
       socket.data.organizationId = decoded.organizationId;
       next();
     } catch {
@@ -71,23 +114,35 @@ export function initSocket(httpServer: HttpServer): Server {
 
       try {
         // Look up conversation and verify user's team access
-        const conversation = await runAsOrganization(organizationId, () =>
-          prisma.conversation.findUnique({
-            where: { id: conversationId },
-            select: { id: true, teamId: true },
-          }),
+        const [conversation, liveUser] = await runAsOrganization(organizationId, () =>
+          Promise.all([
+            prisma.conversation.findUnique({
+              where: { id: conversationId },
+              select: { id: true, teamId: true },
+            }),
+            prisma.user.findUnique({
+              where: { id },
+              select: {
+                role: true,
+                isActive: true,
+                primaryTeamId: true,
+                teams: { select: { teamId: true } },
+              },
+            }),
+          ]),
         );
 
-        if (!conversation) {
+        if (!conversation || !liveUser?.isActive) {
           // Don't leak existence — just reject silently
           socket.emit('error', { message: 'Not found' });
           return;
         }
 
-        if (
-          role !== 'ADMIN' &&
-          !joinedTeamIds.has(conversation.teamId || '')
-        ) {
+        const liveTeamIds = new Set([
+          liveUser.primaryTeamId,
+          ...liveUser.teams.map((team) => team.teamId),
+        ].filter(Boolean));
+        if (liveUser.role !== 'ADMIN' && !liveTeamIds.has(conversation.teamId || '')) {
           socket.emit('error', { message: 'Access denied' });
           return;
         }

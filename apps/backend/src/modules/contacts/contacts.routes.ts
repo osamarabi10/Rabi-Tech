@@ -15,10 +15,24 @@ import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
 import { ImportError, importContacts } from './import.service';
 import logger from '../../lib/logger';
-import { requirePermission } from '../../middleware/rbac.middleware';
+import { requireAdmin, requirePermission, requireSupervisor } from '../../middleware/rbac.middleware';
+import { contactAccessWhere, maskContact } from '../../lib/user-access';
+import { auditLog } from '../../lib/audit';
+import { validateCustomFieldValue } from './custom-field-validation';
 
 /** Accepted marketing-consent values, validated before any write. */
 const CONSENT_VALUES = ['UNKNOWN', 'OPTED_IN', 'OPTED_OUT'] as const;
+const CUSTOM_FIELD_TYPES = ['text', 'list', 'checkbox', 'email', 'number', 'url', 'date', 'time'] as const;
+const FIELD_VISIBILITIES = ['ALWAYS_SHOW', 'HIDE_WHEN_EMPTY', 'ALWAYS_HIDE'] as const;
+const STANDARD_CONTACT_FIELDS = [
+  { fieldKey: 'firstName', name: 'First Name', dataType: 'text', editable: true, defaultVisibility: 'ALWAYS_SHOW' },
+  { fieldKey: 'lastName', name: 'Last Name', dataType: 'text', editable: true, defaultVisibility: 'ALWAYS_SHOW' },
+  { fieldKey: 'phone', name: 'Phone Number', dataType: 'phone', editable: true, defaultVisibility: 'ALWAYS_SHOW' },
+  { fieldKey: 'email', name: 'Email Address', dataType: 'email', editable: true, defaultVisibility: 'HIDE_WHEN_EMPTY' },
+  { fieldKey: 'countryCode', name: 'Country', dataType: 'country', editable: true, defaultVisibility: 'HIDE_WHEN_EMPTY' },
+  { fieldKey: 'language', name: 'Language', dataType: 'language', editable: true, defaultVisibility: 'HIDE_WHEN_EMPTY' },
+  { fieldKey: 'profilePic', name: 'Profile Picture', dataType: 'image', editable: false, defaultVisibility: 'HIDE_WHEN_EMPTY' },
+] as const;
 
 const router = Router();
 router.use(verifyToken);
@@ -30,13 +44,24 @@ const CONTACT_INCLUDE = {
 };
 
 function normalizeSlug(value: unknown): string {
-  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
 }
 
 function cleanString(value: unknown, max = 255): string | null | undefined {
   if (value === undefined) return undefined;
   const text = String(value || '').trim();
   return text ? text.slice(0, max) : null;
+}
+
+function cleanAllowedValues(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((row) => String(row || '').trim()).filter(Boolean))].slice(0, 50).map((row) => row.slice(0, 255));
+}
+
+function cleanColor(value: unknown): string {
+  const color = String(value || '#64748b').trim();
+  if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error('Tag color must be a six-digit hex color');
+  return color.toLowerCase();
 }
 
 function contactWhereForRef(ref: string) {
@@ -74,31 +99,41 @@ async function listContacts(req: any, paginated: boolean) {
           { name: { contains: String(search), mode: 'insensitive' as const } },
           { firstName: { contains: String(search), mode: 'insensitive' as const } },
           { lastName: { contains: String(search), mode: 'insensitive' as const } },
-          { email: { contains: String(search), mode: 'insensitive' as const } },
-          { phone: { contains: String(search) } },
+          ...(!req.user.maskPhoneAndEmail ? [
+            { email: { contains: String(search), mode: 'insensitive' as const } },
+            { phone: { contains: String(search) } },
+          ] : []),
         ],
       }
     : null;
   const where = {
     isArchived: false,
-    AND: [searchWhere, dslWhere].filter(Boolean) as Prisma.ContactWhereInput[],
+    AND: [searchWhere, dslWhere, contactAccessWhere(req.user)].filter(Boolean) as Prisma.ContactWhereInput[],
   };
 
-  const contacts = await prisma.contact.findMany({
-    where,
-    include: CONTACT_INCLUDE,
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-    take: limit + (paginated ? 1 : 0),
-  });
+  const [contacts, total] = await Promise.all([
+    prisma.contact.findMany({
+      where,
+      include: CONTACT_INCLUDE,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+      take: limit + (paginated ? 1 : 0),
+    }),
+    paginated ? prisma.contact.count({ where }) : Promise.resolve(0),
+  ]);
 
-  if (!paginated) return contacts.slice(0, limit);
-  const items = contacts.slice(0, limit);
+  if (!paginated) {
+    const items = contacts.slice(0, limit);
+    return req.user.maskPhoneAndEmail ? items.map(maskContact) : items;
+  }
+  const rawItems = contacts.slice(0, limit);
+  const items = req.user.maskPhoneAndEmail ? rawItems.map(maskContact) : rawItems;
   return {
     items,
     pagination: {
-      cursorId: contacts.length > limit ? items[items.length - 1]?.id || null : null,
+      cursorId: contacts.length > limit ? rawItems[rawItems.length - 1]?.id || null : null,
       hasMore: contacts.length > limit,
+      total,
     },
   };
 }
@@ -145,87 +180,286 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/tags', async (_req, res) => {
-  const tags = await prisma.tag.findMany({ orderBy: { name: 'asc' } });
-  res.json(tags);
+  const tags = await prisma.tag.findMany({
+    include: { _count: { select: { contacts: true } } },
+    orderBy: { name: 'asc' },
+  });
+  res.json(tags.map((tag) => ({ ...tag, contactCount: tag._count.contacts, _count: undefined })));
 });
 
-router.post('/tags', async (req, res) => {
+router.post('/tags', requireSupervisor, async (req, res) => {
   try {
     const name = cleanString(req.body?.name, 80);
     if (!name) return res.status(400).json({ error: 'Tag name is required' });
-    const tag = await prisma.tag.upsert({
-      where: { organizationId_name: { organizationId: req.user!.organizationId, name } },
-      create: {
+    const tag = await prisma.tag.create({
+      data: {
         organizationId: req.user!.organizationId,
         name,
         description: cleanString(req.body?.description, 255),
-        colorCode: cleanString(req.body?.colorCode, 32),
-        emoji: cleanString(req.body?.emoji, 16),
-      },
-      update: {
-        description: cleanString(req.body?.description, 255),
-        colorCode: cleanString(req.body?.colorCode, 32),
+        colorCode: cleanColor(req.body?.colorCode),
         emoji: cleanString(req.body?.emoji, 16),
       },
     });
-    res.status(201).json(tag);
-  } catch (err) {
-    res.status(400).json({ error: String((err as Error).message || err) });
+    await auditLog({ userId: req.user!.id, action: 'tag.created', resource: 'tag', resourceId: tag.id, changes: { after: tag }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    res.status(201).json({ ...tag, contactCount: 0 });
+  } catch (err: any) {
+    if (err?.code === 'P2002') return res.status(409).json({ error: 'A Tag with this name already exists' });
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.patch('/tags/:id', requireSupervisor, async (req, res) => {
+  try {
+    const existing = await prisma.tag.findFirst({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ error: 'Tag not found' });
+    const name = req.body?.name === undefined ? existing.name : cleanString(req.body.name, 80);
+    if (!name) return res.status(400).json({ error: 'Tag name is required' });
+    const tag = await prisma.tag.update({
+      where: { id: existing.id },
+      data: {
+        name,
+        ...(req.body?.description !== undefined ? { description: cleanString(req.body.description, 255) } : {}),
+        ...(req.body?.colorCode !== undefined ? { colorCode: cleanColor(req.body.colorCode) } : {}),
+        ...(req.body?.emoji !== undefined ? { emoji: cleanString(req.body.emoji, 16) } : {}),
+      },
+      include: { _count: { select: { contacts: true } } },
+    });
+    await auditLog({ userId: req.user!.id, action: 'tag.updated', resource: 'tag', resourceId: tag.id, changes: { before: existing, after: tag }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    res.json({ ...tag, contactCount: tag._count.contacts, _count: undefined });
+  } catch (err: any) {
+    if (err?.code === 'P2002') return res.status(409).json({ error: 'A Tag with this name already exists' });
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.delete('/tags/:id', requireSupervisor, async (req, res) => {
+  try {
+    const tag = await prisma.tag.findFirst({ where: { id: req.params.id }, include: { _count: { select: { contacts: true } } } });
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+    if (Number(req.body?.confirmCount) !== tag._count.contacts) {
+      return res.status(409).json({ error: 'Enter the assigned Contact count to confirm deletion', expectedCount: tag._count.contacts });
+    }
+    await prisma.tag.delete({ where: { id: tag.id } });
+    await auditLog({ userId: req.user!.id, action: 'tag.deleted', resource: 'tag', resourceId: tag.id, changes: { before: tag }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    res.json({ deleted: true, removedAssignments: tag._count.contacts });
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
   }
 });
 
 router.get('/custom-fields', async (_req, res) => {
-  const definitions = await prisma.customFieldDefinition.findMany({ orderBy: { name: 'asc' } });
+  const definitions = await prisma.customFieldDefinition.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
   res.json(definitions);
 });
 
-router.post('/custom-fields', async (req, res) => {
+router.post('/custom-fields', requireSupervisor, async (req, res) => {
   try {
     const name = cleanString(req.body?.name, 80);
     const slug = normalizeSlug(req.body?.slug || name);
-    const dataType = String(req.body?.dataType || '').trim();
+    const dataType = String(req.body?.dataType || '').trim().toLowerCase();
     if (!name || !slug) return res.status(400).json({ error: 'Custom field name is required' });
-    if (!['text', 'number', 'date', 'list'].includes(dataType)) {
-      return res.status(400).json({ error: 'dataType must be text, number, date, or list' });
+    if (!CUSTOM_FIELD_TYPES.includes(dataType as typeof CUSTOM_FIELD_TYPES[number])) {
+      return res.status(400).json({ error: `dataType must be one of: ${CUSTOM_FIELD_TYPES.join(', ')}` });
     }
-    const allowedValues = Array.isArray(req.body?.allowedValues)
-      ? req.body.allowedValues.map((value: unknown) => String(value).trim()).filter(Boolean)
-      : [];
-    // Feature allowances follow the effective plan too. Honouring an override
-    // for quotas but not for features is half an upgrade, which is worse than
-    // none: the customer paid for a tier they cannot fully use.
+    if (STANDARD_CONTACT_FIELDS.some((field) => field.name.toLowerCase() === name.toLowerCase())) {
+      return res.status(409).json({ error: 'Custom field names must differ from standard Contact fields' });
+    }
     const effective = await resolveEntitlements(req.user!.organizationId);
     const limit = PLAN_ENTITLEMENTS[effective.plan].customFieldsLimit;
-    if (limit !== null) {
-      const existing = await prisma.customFieldDefinition.count();
-      const sameSlug = await prisma.customFieldDefinition.findUnique({
-        where: { organizationId_slug: { organizationId: req.user!.organizationId, slug } },
-        select: { id: true },
-      });
-      if (!sameSlug && existing >= limit) {
-        return res.status(429).json({ error: `Current plan allows ${limit} custom fields` });
-      }
-    }
-    const definition = await prisma.customFieldDefinition.upsert({
-      where: { organizationId_slug: { organizationId: req.user!.organizationId, slug } },
-      create: {
+    const existing = await prisma.customFieldDefinition.count();
+    if (limit !== null && existing >= limit) return res.status(429).json({ error: `Current plan allows ${limit} custom fields` });
+    const maxOrder = await prisma.customFieldDefinition.aggregate({ _max: { sortOrder: true } });
+    const definition = await prisma.customFieldDefinition.create({
+      data: {
         organizationId: req.user!.organizationId,
         name,
         slug,
         description: cleanString(req.body?.description, 255),
         dataType,
-        allowedValues,
-      },
-      update: {
-        name,
-        description: cleanString(req.body?.description, 255),
-        dataType,
-        allowedValues,
+        allowedValues: dataType === 'list' ? cleanAllowedValues(req.body?.allowedValues) : [],
+        sortOrder: Math.max(6, maxOrder._max.sortOrder ?? 6) + 1,
+        visibility: 'HIDE_WHEN_EMPTY',
       },
     });
+    await auditLog({ userId: req.user!.id, action: 'contact-field.created', resource: 'contact-field', resourceId: definition.id, changes: { after: definition }, ipAddress: req.ip, userAgent: req.get('user-agent') });
     res.status(201).json(definition);
-  } catch (err) {
-    res.status(400).json({ error: String((err as Error).message || err) });
+  } catch (err: any) {
+    if (err?.code === 'P2002') return res.status(409).json({ error: 'A Contact field with this name or ID already exists' });
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.patch('/custom-fields/:id', requireSupervisor, async (req, res) => {
+  try {
+    const existing = await prisma.customFieldDefinition.findFirst({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ error: 'Custom field not found' });
+    const name = req.body?.name === undefined ? existing.name : cleanString(req.body.name, 80);
+    if (!name) return res.status(400).json({ error: 'Custom field name is required' });
+    if (STANDARD_CONTACT_FIELDS.some((field) => field.name.toLowerCase() === name.toLowerCase())) {
+      return res.status(409).json({ error: 'Custom field names must differ from standard Contact fields' });
+    }
+    const updated = await prisma.customFieldDefinition.update({
+      where: { id: existing.id },
+      data: {
+        name,
+        ...(req.body?.description !== undefined ? { description: cleanString(req.body.description, 255) } : {}),
+        ...(existing.dataType === 'list' && req.body?.allowedValues !== undefined ? { allowedValues: cleanAllowedValues(req.body.allowedValues) } : {}),
+      },
+    });
+    await auditLog({ userId: req.user!.id, action: 'contact-field.updated', resource: 'contact-field', resourceId: updated.id, changes: { before: existing, after: updated }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    res.json(updated);
+  } catch (err: any) {
+    if (err?.code === 'P2002') return res.status(409).json({ error: 'A Contact field with this name already exists' });
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.delete('/custom-fields/:id', requireAdmin, async (req, res) => {
+  try {
+    const existing = await prisma.customFieldDefinition.findFirst({ where: { id: req.params.id }, include: { _count: { select: { values: true } } } });
+    if (!existing) return res.status(404).json({ error: 'Custom field not found' });
+    await prisma.customFieldDefinition.delete({ where: { id: existing.id } });
+    await auditLog({ userId: req.user!.id, action: 'contact-field.deleted', resource: 'contact-field', resourceId: existing.id, changes: { before: existing }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    res.json({ deleted: true, removedValues: existing._count.values });
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.get('/contact-fields', async (_req, res) => {
+  try {
+    const [preferences, custom] = await Promise.all([
+      prisma.contactFieldPreference.findMany(),
+      prisma.customFieldDefinition.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
+    ]);
+    const preferenceByKey = new Map(preferences.map((row) => [row.fieldKey, row]));
+    const standard = STANDARD_CONTACT_FIELDS.map((field, index) => {
+      const preference = preferenceByKey.get(field.fieldKey);
+      return { ...field, kind: 'STANDARD', sortOrder: preference?.sortOrder ?? index, visibility: preference?.visibility ?? field.defaultVisibility };
+    });
+    const customRows = custom.map((field) => ({ ...field, fieldKey: `custom:${field.id}`, kind: 'CUSTOM', editable: true }));
+    res.json([...standard, ...customRows].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)));
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.put('/contact-fields/view', requireSupervisor, async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body?.fields) ? req.body.fields : [];
+    if (!rows.length || rows.length > 100) return res.status(400).json({ error: 'fields are required' });
+    const keys = rows.map((row: any) => String(row?.fieldKey || ''));
+    if (new Set(keys).size !== keys.length) return res.status(400).json({ error: 'Contact field keys must be unique' });
+    const custom = await prisma.customFieldDefinition.findMany({ select: { id: true } });
+    const standardKeys = new Set(STANDARD_CONTACT_FIELDS.map((field) => field.fieldKey));
+    const customKeys = new Set(custom.map((field) => `custom:${field.id}`));
+    for (const [index, row] of rows.entries()) {
+      if (!standardKeys.has(row.fieldKey) && !customKeys.has(row.fieldKey)) return res.status(400).json({ error: 'Unknown Contact field' });
+      if (!FIELD_VISIBILITIES.includes(row.visibility)) return res.status(400).json({ error: 'Invalid Contact field visibility' });
+      row.sortOrder = index;
+    }
+    await prisma.$transaction(async (tx) => {
+      for (const row of rows) {
+        if (standardKeys.has(row.fieldKey)) {
+          await tx.contactFieldPreference.upsert({
+            where: { organizationId_fieldKey: { organizationId: req.user!.organizationId, fieldKey: row.fieldKey } },
+            create: { organizationId: req.user!.organizationId, fieldKey: row.fieldKey, sortOrder: row.sortOrder, visibility: row.visibility },
+            update: { sortOrder: row.sortOrder, visibility: row.visibility },
+          });
+        } else {
+          await tx.customFieldDefinition.update({ where: { id: row.fieldKey.slice(7) }, data: { sortOrder: row.sortOrder, visibility: row.visibility } });
+        }
+      }
+    });
+    await auditLog({ userId: req.user!.id, action: 'contact-field.view-updated', resource: 'contact-field-view', resourceId: req.user!.organizationId, changes: { after: rows }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.get('/:id/tags', async (req, res) => {
+  try {
+    const contact = await prisma.contact.findFirst({ where: { id: req.params.id, ...contactAccessWhere(req.user!) }, select: { id: true } });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    const assignments = await prisma.contactTag.findMany({
+      where: { contactId: contact.id },
+      include: { tag: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    res.json(assignments.map((row) => ({
+      ...row.tag,
+      source: row.source,
+      assignedById: row.createdById,
+      assignedByName: row.createdByName,
+      assignedAt: row.createdAt,
+    })));
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.post('/:id/tags', requirePermission('contact:create'), async (req, res) => {
+  try {
+    const contact = await prisma.contact.findFirst({ where: { id: req.params.id, ...contactAccessWhere(req.user!) }, select: { id: true } });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    let tag = req.body?.tagId
+      ? await prisma.tag.findFirst({ where: { id: String(req.body.tagId) } })
+      : null;
+    if (!tag) {
+      const name = cleanString(req.body?.name, 80);
+      if (!name) return res.status(400).json({ error: 'Tag ID or name is required' });
+      tag = await prisma.tag.findUnique({ where: { organizationId_name: { organizationId: req.user!.organizationId, name } } });
+      if (!tag) {
+        try {
+          tag = await prisma.tag.create({ data: { organizationId: req.user!.organizationId, name, colorCode: '#64748b' } });
+        } catch (err: any) {
+          if (err?.code !== 'P2002') throw err;
+          tag = await prisma.tag.findUnique({ where: { organizationId_name: { organizationId: req.user!.organizationId, name } } });
+        }
+      }
+    }
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+    const { count } = await prisma.contactTag.createMany({
+      data: [{
+        organizationId: req.user!.organizationId,
+        contactId: contact.id,
+        tagId: tag.id,
+        source: 'MANUAL',
+        createdById: req.user!.id,
+        createdByName: req.user!.name,
+      }],
+      skipDuplicates: true,
+    });
+    if (count > 0) {
+      await dispatchWorkflowEvent({ triggerType: 'TAG_ADDED', contactId: contact.id, payload: { tag: tag.name } });
+      await auditLog({ userId: req.user!.id, action: 'contact.tag-added', resource: 'contact', resourceId: contact.id, changes: { after: { tagId: tag.id, tagName: tag.name, source: 'MANUAL' } }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    }
+    res.status(count > 0 ? 201 : 200).json({
+      ...tag,
+      source: 'MANUAL',
+      assignedById: req.user!.id,
+      assignedByName: req.user!.name,
+      assignedAt: new Date(),
+      created: count > 0,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.delete('/:id/tags/:tagId', requirePermission('contact:create'), async (req, res) => {
+  try {
+    const contact = await prisma.contact.findFirst({ where: { id: req.params.id, ...contactAccessWhere(req.user!) }, select: { id: true } });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    const tag = await prisma.tag.findFirst({ where: { id: req.params.tagId }, select: { id: true, name: true } });
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+    const { count } = await prisma.contactTag.deleteMany({ where: { contactId: contact.id, tagId: tag.id } });
+    if (!count) return res.status(404).json({ error: 'Tag assignment not found' });
+    await auditLog({ userId: req.user!.id, action: 'contact.tag-removed', resource: 'contact', resourceId: contact.id, changes: { before: { tagId: tag.id, tagName: tag.name } }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+    res.sendStatus(204);
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
   }
 });
 
@@ -257,15 +491,21 @@ router.post('/import', requirePermission('contact:create'), async (req, res) => 
   }
 });
 
-router.post('/bulk', async (req, res) => {
+router.post('/bulk', requirePermission('contact:update'), async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.contactIds) ? req.body.contactIds.map(String).filter(Boolean) : [];
     if (!ids.length) return res.status(400).json({ error: 'contactIds are required' });
+    const visible = await prisma.contact.findMany({
+      where: { id: { in: ids }, ...contactAccessWhere(req.user!) },
+      select: { id: true },
+    });
+    const visibleIds = visible.map((contact) => contact.id);
+    if (visibleIds.length !== ids.length) return res.status(404).json({ error: 'Contact not found' });
     const data: Record<string, unknown> = {};
     if (req.body?.assigneeId !== undefined) data.assigneeId = cleanString(req.body.assigneeId);
 
     if (Object.keys(data).length) {
-      await prisma.contact.updateMany({ where: { id: { in: ids } }, data });
+      await prisma.contact.updateMany({ where: { id: { in: visibleIds } }, data });
     }
 
     if (req.body?.tagName) {
@@ -275,9 +515,22 @@ router.post('/bulk', async (req, res) => {
         create: { organizationId: req.user!.organizationId, name },
         update: {},
       });
-      const contacts = await prisma.contact.findMany({ where: { id: { in: ids } }, select: { id: true } });
+      const contacts = await prisma.contact.findMany({ where: { id: { in: visibleIds } }, select: { id: true } });
+      const existingAssignments = await prisma.contactTag.findMany({
+        where: { contactId: { in: contacts.map((contact) => contact.id) }, tagId: tag.id },
+        select: { contactId: true },
+      });
+      const existingContactIds = new Set(existingAssignments.map((row) => row.contactId));
+      const newlyTagged = contacts.filter((contact) => !existingContactIds.has(contact.id));
       const { count } = await prisma.contactTag.createMany({
-        data: contacts.map((contact) => ({ organizationId: req.user!.organizationId, contactId: contact.id, tagId: tag.id })),
+        data: newlyTagged.map((contact) => ({
+          organizationId: req.user!.organizationId,
+          contactId: contact.id,
+          tagId: tag.id,
+          source: 'MANUAL',
+          createdById: req.user!.id,
+          createdByName: req.user!.name,
+        })),
         skipDuplicates: true,
       });
 
@@ -285,7 +538,7 @@ router.post('/bulk', async (req, res) => {
       // actually new — re-tagging an already-tagged contact must not wake every
       // automation in the organization.
       if (count > 0) {
-        for (const contact of contacts) {
+        for (const contact of newlyTagged) {
           await dispatchWorkflowEvent({
             triggerType: 'TAG_ADDED',
             contactId: contact.id,
@@ -311,15 +564,22 @@ router.post('/merge', async (req, res) => {
 
     const merged = await prisma.$transaction(async (tx) => {
       const [primary, secondary] = await Promise.all([
-        tx.contact.findUnique({ where: { id_organizationId: { id: primaryContactId, organizationId } } }),
-        tx.contact.findUnique({ where: { id_organizationId: { id: secondaryContactId, organizationId } } }),
+        tx.contact.findFirst({ where: { id: primaryContactId, organizationId, ...contactAccessWhere(req.user!) } }),
+        tx.contact.findFirst({ where: { id: secondaryContactId, organizationId, ...contactAccessWhere(req.user!) } }),
       ]);
       if (!primary || !secondary) throw new Error('Contact not found');
 
       await tx.conversation.updateMany({ where: { organizationId, contactId: secondary.id }, data: { contactId: primary.id } });
       const secondaryTags = await tx.contactTag.findMany({ where: { organizationId, contactId: secondary.id } });
       await tx.contactTag.createMany({
-        data: secondaryTags.map((tag) => ({ organizationId, contactId: primary.id, tagId: tag.tagId })),
+        data: secondaryTags.map((tag) => ({
+          organizationId,
+          contactId: primary.id,
+          tagId: tag.tagId,
+          source: tag.source,
+          createdById: tag.createdById,
+          createdByName: tag.createdByName,
+        })),
         skipDuplicates: true,
       });
 
@@ -347,7 +607,7 @@ router.post('/merge', async (req, res) => {
       return tx.contact.findUniqueOrThrow({ where: { id_organizationId: { id: primary.id, organizationId } }, include: CONTACT_INCLUDE });
     });
 
-    res.json(merged);
+    res.json(req.user!.maskPhoneAndEmail ? maskContact(merged) : merged);
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });
   }
@@ -355,12 +615,20 @@ router.post('/merge', async (req, res) => {
 
 router.get('/:ref', async (req, res) => {
   try {
+    if (req.user!.maskPhoneAndEmail && /^(email|phone):/.test(req.params.ref)) {
+      return res.status(404).json({ error: 'Contact not found' });
+    }
     const contact = await prisma.contact.findFirst({
-      where: { organizationId: req.user!.organizationId, isArchived: false, ...contactWhereForRef(req.params.ref) },
+      where: {
+        organizationId: req.user!.organizationId,
+        isArchived: false,
+        ...contactWhereForRef(req.params.ref),
+        ...contactAccessWhere(req.user!),
+      },
       include: CONTACT_INCLUDE,
     });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
-    res.json(contact);
+    res.json(req.user!.maskPhoneAndEmail ? maskContact(contact) : contact);
   } catch {
     res.status(404).json({ error: 'Contact not found' });
   }
@@ -368,6 +636,11 @@ router.get('/:ref', async (req, res) => {
 
 router.patch('/:id', async (req, res) => {
   try {
+    const visible = await prisma.contact.findFirst({
+      where: { id: req.params.id, ...contactAccessWhere(req.user!) },
+      select: { id: true },
+    });
+    if (!visible) return res.status(404).json({ error: 'Contact not found' });
     // Consent is deliberately not part of contactPayload's allow-list. It is not
     // a plain field: changing it must also record who/what changed it and when,
     // so it goes through setContactConsent rather than a bare column write.
@@ -390,7 +663,7 @@ router.patch('/:id', async (req, res) => {
       data: contactPayload(req.body),
       include: CONTACT_INCLUDE,
     });
-    res.json(contact);
+    res.json(req.user!.maskPhoneAndEmail ? maskContact(contact) : contact);
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });
   }
@@ -418,8 +691,8 @@ router.patch('/:id', async (req, res) => {
  */
 router.get('/:id/conversations', async (req, res) => {
   try {
-    const contact = await prisma.contact.findUnique({
-      where: { id: req.params.id },
+    const contact = await prisma.contact.findFirst({
+      where: { id: req.params.id, ...contactAccessWhere(req.user!) },
       select: { id: true },
     });
     if (!contact) return res.status(404).json({ error: 'جهة الاتصال غير موجودة' });
@@ -450,8 +723,8 @@ router.get('/:id/conversations', async (req, res) => {
 
 router.get('/:id/consent', async (req, res) => {
   try {
-    const contact = await prisma.contact.findUnique({
-      where: { id: req.params.id },
+    const contact = await prisma.contact.findFirst({
+      where: { id: req.params.id, ...contactAccessWhere(req.user!) },
       select: { marketingConsent: true, consentSource: true, consentUpdatedAt: true },
     });
     if (!contact) return res.status(404).json({ error: 'جهة الاتصال غير موجودة' });
@@ -478,54 +751,28 @@ router.get('/:id/consent', async (req, res) => {
   }
 });
 
-router.put('/:id/custom-fields/:slug', async (req, res) => {
+router.put('/:id/custom-fields/:slug', requirePermission('contact:create'), async (req, res) => {
   try {
+    const contact = await prisma.contact.findFirst({
+      where: { id: req.params.id, ...contactAccessWhere(req.user!) },
+      select: { id: true },
+    });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
     const definition = await prisma.customFieldDefinition.findUnique({
       where: { organizationId_slug: { organizationId: req.user!.organizationId, slug: req.params.slug } },
     });
     if (!definition) return res.status(404).json({ error: 'Custom field not found' });
 
-    const value = cleanString(req.body?.value, 2000);
-
-    /*
-     * Validate against the definition.
-     *
-     * The field's own `dataType` and `allowedValues` were enforced nowhere: a
-     * number field took "soon", a list field took anything at all, and the
-     * contact filter DSL then queried a column whose contents did not match
-     * the type it was declared as. Nothing surfaced it because until now
-     * nothing wrote to these except an import.
-     *
-     * An empty value always passes. Clearing a field is not the same as
-     * setting it to something invalid, and refusing to clear one would leave
-     * a mistyped value permanently stuck.
-     */
-    if (value) {
-      if (definition.dataType === 'number' && !Number.isFinite(Number(value))) {
-        return res.status(400).json({ error: `${definition.name} لازم يكون رقم` });
-      }
-      if (definition.dataType === 'date' && Number.isNaN(Date.parse(value))) {
-        return res.status(400).json({ error: `${definition.name} لازم يكون تاريخ صالح` });
-      }
-      if (
-        definition.dataType === 'list' &&
-        definition.allowedValues.length > 0 &&
-        !definition.allowedValues.includes(value)
-      ) {
-        return res.status(400).json({
-          error: `${definition.name}: ${definition.allowedValues.join(' / ')}`,
-        });
-      }
-    }
+    const value = validateCustomFieldValue(definition, cleanString(req.body?.value, 2000));
     const row = await prisma.customFieldValue.upsert({
       where: {
         organizationId_contactId_fieldDefinitionId: {
           organizationId: req.user!.organizationId,
-          contactId: req.params.id,
+          contactId: contact.id,
           fieldDefinitionId: definition.id,
         },
       },
-      create: { organizationId: req.user!.organizationId, contactId: req.params.id, fieldDefinitionId: definition.id, value },
+      create: { organizationId: req.user!.organizationId, contactId: contact.id, fieldDefinitionId: definition.id, value },
       update: { value },
       include: { fieldDefinition: true },
     });

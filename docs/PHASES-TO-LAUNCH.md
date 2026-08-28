@@ -150,11 +150,22 @@ Two things found while building other things. Both are recorded in
 
 Not blocking a first sale. Blocking a good night's sleep once there is one.
 
-- [ ] **F4.1 Nightly `pg_dump`** with retention. There is no backup today. The
-      first support conversation a subscriber loses is the last one they have
-      with us.
-- [ ] **F4.2 Per-organization campaign rate limits**, plan-aware. One tenant's
-      broadcast can currently monopolise the send queue.
+- [x] **F4.1 Nightly verified `pg_dump` with retention.** Completed before
+      2026-08-26. The BullMQ worker writes `auto-*.dump` files to the host bind,
+      restores each into a scratch database, rejects empty/invalid restores,
+      retains the configured count, and alerts the platform owner on failure.
+      Consecutive verified files exist for August 24-26.
+- [ ] **F4.1b Replicate verified dumps off-host.** The current host bind survives
+      a container replacement but not disk or VPS loss. Production needs an
+      encrypted object-store copy and a restore drill from that copy.
+- [x] **F4.2 Per-organization campaign rate limits**, plan-aware. Completed
+      2026-08-26. Incoming work now runs concurrently across organization,
+      session and contact keys while a Redis FIFO lock preserves ordering for
+      one stream. Campaign sends use the same coordination boundary per
+      organization/session, with rates resolved from the effective plan and
+      optional operator ceilings. One tenant can no longer monopolise either
+      worker. `npm run test:worker-fairness` proves same-key FIFO/no-overlap,
+      cross-key concurrency and rate delay; the tenancy gate is now 88/88.
 - [ ] **F4.3 Reports onto `PlatformDailyMetric` rollups.** Today's reports scan
       live tables; that stops being viable at volume, not at correctness.
 - [ ] **F4.4 Scan the remaining WhatsApp numbers.** 3 of 5 sessions have never

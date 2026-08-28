@@ -11,9 +11,11 @@ import { DashboardFooter } from '@/components/dashboard-footer';
 import { TrialBanner } from '@/components/trial-banner';
 import { ServiceStateBanner } from '@/components/service-state-banner';
 import { useT } from '@/lib/i18n';
+import { useTheme } from '@/lib/theme';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { t } = useT();
+  const { t, setLocale } = useT();
+  const { setTheme } = useTheme();
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
@@ -30,6 +32,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       .get('/api/auth/me')
       .then((res) => {
         localStorage.setItem('rabitech_user', JSON.stringify(res.data));
+        if (['ar', 'he', 'en'].includes(res.data.locale)) setLocale(res.data.locale);
+        if (['light', 'dark', 'system'].includes(res.data.theme)) setTheme(res.data.theme);
         setReady(true);
       })
       .catch((err) => {
@@ -44,7 +48,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         localStorage.removeItem('rabitech_user');
         router.replace('/login');
       });
-  }, [router]);
+  }, [router, setLocale, setTheme]);
 
   if (!ready) {
     return (

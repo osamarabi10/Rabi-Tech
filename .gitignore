@@ -20,6 +20,8 @@ dist/
 .next/
 out/
 build/
+playwright-report/
+test-results/
 
 # WhatsApp session state
 openwa_data/

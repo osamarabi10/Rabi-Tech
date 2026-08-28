@@ -5,8 +5,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import {
   Check,
-  HelpCircle,
   Languages,
+  ListChecks,
   LogOut,
   LayoutDashboard,
   Megaphone,
@@ -20,6 +20,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import { NotificationBell } from '@/components/notification-bell';
+import { HelpMenu } from '@/components/help-menu';
 import { useTheme, type Theme } from '@/lib/theme';
 import { BrandLogo } from '@/components/brand-logo';
 import { cn } from '@/lib/utils';
@@ -285,40 +286,31 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
 
         {/* ── Bottom cluster: notifications, help, avatar ── */}
         <div className="mb-2 flex flex-col items-center gap-1 border-t border-nav-border pt-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Link
+                href="/onboarding"
+                aria-label={t('Onboarding')}
+                aria-current={pathname === '/onboarding' ? 'page' : undefined}
+                className={cn(
+                  railButton,
+                  pathname === '/onboarding'
+                    ? 'bg-nav-accent text-primary'
+                    : 'text-nav-muted hover:bg-nav-accent/60 hover:text-nav-foreground',
+                )}
+              >
+                {pathname === '/onboarding' && <span className="absolute start-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-primary" />}
+                <ListChecks className="h-[18px] w-[18px]" aria-hidden />
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="right">{t('Onboarding')}</TooltipContent>
+          </Tooltip>
+
           <div className={railButton}>
             <NotificationBell />
           </div>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className={cn(railButton, 'text-nav-muted hover:bg-nav-accent/60 hover:text-nav-foreground')}
-                aria-label={t('مساعدة')}
-              >
-                <HelpCircle className="h-[18px] w-[18px]" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent side="right" align="end" className="w-64">
-              <DropdownMenuLabel>{t('اختصارات لوحة المفاتيح')}</DropdownMenuLabel>
-              {/* Real shortcuts the composer already implements — not a stub. */}
-              <DropdownMenuItem disabled className="justify-between opacity-100">
-                <span>{t('إرسال')}</span>
-                <span className="numeric text-micro text-muted-foreground" dir="ltr">Enter</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled className="justify-between opacity-100">
-                <span>{t('سطر جديد')}</span>
-                <span className="numeric text-micro text-muted-foreground" dir="ltr">Shift+Enter</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled className="justify-between opacity-100">
-                <span>{t('الردود الجاهزة')}</span>
-                <span className="numeric text-micro text-muted-foreground" dir="ltr">/</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled className="justify-between opacity-100">
-                <span>{t('ذكر زميل')}</span>
-                <span className="numeric text-micro text-muted-foreground" dir="ltr">@</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <HelpMenu triggerClassName={cn(railButton, 'text-nav-muted hover:bg-nav-accent/60 hover:text-nav-foreground')} />
 
           {/*
             Avatar with presence dot. Everything that used to be its own row on

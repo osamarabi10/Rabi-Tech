@@ -61,7 +61,7 @@ export type GatewayCopy = {
   tone: 'muted' | 'success' | 'warning' | 'destructive';
 };
 
-const CHANNELS_HREF = '/settings#channels';
+const CHANNELS_HREF = '/settings/general#channels';
 
 export function gatewayCopy(state: GatewayState): GatewayCopy {
   switch (state.kind) {

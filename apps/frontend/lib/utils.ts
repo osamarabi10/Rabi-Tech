@@ -40,5 +40,10 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function renderTemplate(body: string, vars: Record<string, string>) {
-  return body.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? `{{${key}}}`);
+  const legacy = body.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? `{{${key}}}`);
+  const contact: Record<string, string | undefined> = {
+    name: vars.contactName,
+    phone: vars.contactPhone,
+  };
+  return legacy.replace(/\$contact\.(name|phone)\b/g, (original, key: string) => contact[key] || original);
 }

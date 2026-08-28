@@ -19,6 +19,7 @@ import { recordMessageUsage } from '../modules/usage/usage.service';
 import { scheduleConversationEscalation } from './escalation.worker';
 import { autoAssignConversation } from '../modules/routing/assignment.service';
 import { dispatchWorkflowEvent } from './workflow.worker';
+import { coordinationKey, withFifoRedisLock } from '../lib/redis-coordination';
 
 // Redis connection config (same as campaign worker)
 const redisUrl = new URL(process.env.REDIS_URL || 'redis://localhost:6379');
@@ -366,7 +367,9 @@ export function startIncomingMessageWorker() {
     }
   }, {
     connection,
-    concurrency: 1, // Process one message at a time to preserve order
+    // Different tenants and contacts progress independently. The keyed Redis
+    // lock below keeps one contact/session stream serialized across replicas.
+    concurrency: Number(process.env.INCOMING_MESSAGE_CONCURRENCY || 8),
   });
 
   worker.on('failed', (job, err) => {
@@ -383,5 +386,18 @@ export function startIncomingMessageWorker() {
 
 export async function processIncomingMessageJob(data: any): Promise<void> {
   if (!data.organizationId) throw new Error('Incoming message job missing organizationId');
-  await runAsOrganization(data.organizationId, () => processInboundMessage(data));
+  const normalizedPhone = String(data.phone || '')
+    .replace(/@c\.us$/i, '')
+    .replace(/@s\.whatsapp\.net$/i, '')
+    .replace(/@lid$/i, '')
+    .replace(/^\+/, '');
+  const key = coordinationKey(
+    'incoming-message',
+    data.organizationId,
+    String(data.session || ''),
+    normalizedPhone,
+  );
+  await withFifoRedisLock(key, () =>
+    runAsOrganization(data.organizationId, () => processInboundMessage(data))
+  );
 }

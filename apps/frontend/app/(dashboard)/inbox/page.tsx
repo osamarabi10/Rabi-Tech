@@ -58,6 +58,7 @@ import {
   type Msg,
   type Agent,
   type Template,
+  type SnippetAttachment,
   type InboxConfig,
   isClientRating,
   fetchSessions,
@@ -68,6 +69,8 @@ import {
   contactDisplayName,
   UNKNOWN_CONTACT,
   type Session,
+  fetchConversationSettings,
+  type ConversationSettings,
 } from '@/lib/data';
 import { renderTemplate } from '@/lib/utils';
 import { getBackendBaseUrl } from '@/lib/runtime-url';
@@ -133,9 +136,18 @@ const MEDIA_LABELS: Record<string, string> = {
   audio: 'صوت', ptt: 'رسالة صوتية', document: 'ملف',
 };
 
-function MessageMedia({ mediaUrl, mediaType }: { mediaUrl?: string | null; mediaType?: string | null }) {
+function normalizeMediaType(mediaType?: string | null): string {
+  const raw = (mediaType || '').toLowerCase();
+  if (raw.startsWith('image/')) return 'image';
+  if (raw.startsWith('video/')) return 'video';
+  if (raw.startsWith('audio/')) return 'audio';
+  if (raw.includes('pdf') || raw.includes('document') || raw.includes('text') || raw.includes('zip') || raw.includes('sheet') || raw.includes('presentation')) return 'document';
+  return raw;
+}
+
+function MessageMedia({ mediaUrl, mediaType, mediaFileName }: { mediaUrl?: string | null; mediaType?: string | null; mediaFileName?: string | null }) {
   const { t } = useT();
-  const type = (mediaType || '').toLowerCase();
+  const type = normalizeMediaType(mediaType);
   /**
    * Whether the image refused to load.
    *
@@ -185,7 +197,8 @@ function MessageMedia({ mediaUrl, mediaType }: { mediaUrl?: string | null; media
   if (type === 'audio' || type === 'ptt') return <audio src={src} controls className="mb-1 w-full" />;
   return (
     <a href={src} target="_blank" rel="noopener noreferrer" className="mb-1 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-accent">
-      <span>📎</span><span>{t('ملف مرفق')}</span>
+      <Paperclip className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span className="truncate" dir="auto">{mediaFileName || t('ملف مرفق')}</span>
     </a>
   );
 }
@@ -283,10 +296,17 @@ export default function InboxPage() {
   const [firstLoad, setFirstLoad] = useState(true);
   const [techs, setTechs] = useState<Agent[]>([]);
   const [reply, setReply] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<SnippetAttachment[]>([]);
+  useEffect(() => { setPendingAttachments([]); }, [selId]);
   const [sendError, setSendError] = useState<string | null>(null);
   const replyError = reply.length > 3000 ? t('الرسالة طويلة جداً') : null;
   const [search, setSearch] = useState('');
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [closingSettings, setClosingSettings] = useState<ConversationSettings | null>(null);
+  const [closingPolicyLoading, setClosingPolicyLoading] = useState(false);
+  const [closingCategoryId, setClosingCategoryId] = useState('');
+  const [closingSummary, setClosingSummary] = useState('');
+  const [closingBusy, setClosingBusy] = useState(false);
   const [quickTemplates, setQuickTemplates] = useState<Template[]>([]);
   const [allTemplates, setAllTemplates] = useState<Template[]>([]);
   const [showTplPicker, setShowTplPicker] = useState(false);
@@ -416,6 +436,20 @@ export default function InboxPage() {
    * be wrong about the other ones.
    */
   const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showCloseConfirm) return;
+    setClosingCategoryId('');
+    setClosingSummary('');
+    setClosingPolicyLoading(true);
+    fetchConversationSettings()
+      .then(setClosingSettings)
+      .catch(() => {
+        setClosingSettings(null);
+        toast.error(t('Could not load conversation settings'));
+      })
+      .finally(() => setClosingPolicyLoading(false));
+  }, [showCloseConfirm, t]);
 
   const currentUser = (() => {
     try { return JSON.parse(localStorage.getItem('rabitech_user') || '{}'); } catch { return {}; }
@@ -791,23 +825,49 @@ export default function InboxPage() {
 
   const handleSend = async () => {
     setSendError(null);
-    if (!reply.trim()) { setSendError(t('أدخل رسالة')); return; }
+    if (!reply.trim() && pendingAttachments.length === 0) { setSendError(t('أدخل رسالة')); return; }
     if (!sel) { setSendError(t('اختر محادثة')); return; }
     if (replyError) { setSendError(replyError); return; }
     const body = reply;
     const internal = isInternalNote;
-    setReply(''); setSendError(null); setIsInternalNote(false); setShortCodeMatches([]);
-    setMentionMatches([]); setMentioned([]);
+    const sentRows: Msg[] = [];
     try {
       // Only the teammates still named in the note. Someone mentioned and
       // then deleted from the text should not be notified.
       const stillMentioned = internal
         ? mentioned.filter((user) => body.includes(`@${user.name}`)).map((user) => user.id)
         : [];
-      const sent = await apiSendReply(sel.id, body, internal, stillMentioned);
-      setMessages((p) => [...p, sent]);
-      setConvs((p) => p.map((c) => (c.id === sel.id ? { ...c, lastMsg: body, lastTime: sent.time } : c)));
+      if (pendingAttachments.length > 0) {
+        for (let index = 0; index < pendingAttachments.length; index += 1) {
+          const attachment = pendingAttachments[index];
+          sentRows.push(await apiSendReply(
+            sel.id,
+            index === 0 ? body : '',
+            false,
+            [],
+            { url: attachment.url, contentType: attachment.contentType, fileName: attachment.fileName },
+          ));
+        }
+      } else {
+        sentRows.push(await apiSendReply(sel.id, body, internal, stillMentioned));
+      }
+      const last = sentRows[sentRows.length - 1];
+      setMessages((p) => [...p, ...sentRows]);
+      setConvs((p) => p.map((c) => (c.id === sel.id ? { ...c, lastMsg: body || `[${t('ملف')}]`, lastTime: last.time } : c)));
+      setReply(''); setPendingAttachments([]); setSendError(null); setIsInternalNote(false); setShortCodeMatches([]);
+      setMentionMatches([]); setMentioned([]);
     } catch (err: unknown) {
+      if (sentRows.length > 0) {
+        const last = sentRows[sentRows.length - 1];
+        setMessages((current) => [...current, ...sentRows]);
+        setConvs((current) => current.map((conversation) => (
+          conversation.id === sel.id
+            ? { ...conversation, lastMsg: body || `[${t('ملف')}]`, lastTime: last.time }
+            : conversation
+        )));
+        setReply('');
+        setPendingAttachments((files) => files.slice(sentRows.length));
+      }
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || t('فشل إرسال الرسالة');
       setSendError(msg); toast.error(msg);
     }
@@ -815,14 +875,34 @@ export default function InboxPage() {
 
   const handleResolve = async () => {
     if (!sel) return;
-    setShowCloseConfirm(false);
+    const categoryRequired = closingSettings?.manualClosingNotesEnabled
+      && closingSettings.manualClosingNoteMode !== 'OPTIONAL';
+    const summaryRequired = closingSettings?.manualClosingNotesEnabled
+      && closingSettings.manualClosingNoteMode === 'CATEGORY_AND_SUMMARY_REQUIRED';
+    if (categoryRequired && !closingCategoryId) {
+      toast.error(t('Select a closing category'));
+      return;
+    }
+    if (summaryRequired && !closingSummary.trim()) {
+      toast.error(t('Add a closing summary'));
+      return;
+    }
+    setClosingBusy(true);
     try {
-      // Resolve + unassign in one call
-      await updateConversation(sel.id, { status: 'RESOLVED', assignedToId: null });
+      await updateConversation(sel.id, {
+        status: 'RESOLVED',
+        categoryId: closingCategoryId || null,
+        summary: closingSummary.trim() || null,
+      });
       setConvs((p) => p.filter((c) => c.id !== sel.id));
       setSelId(null); setMessages([]);
+      setShowCloseConfirm(false);
       toast.success(t('تم إغلاق المحادثة ✅'));
-    } catch { toast.error(t('فشل تحديث الحالة')); }
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || t('فشل تحديث الحالة'));
+    } finally {
+      setClosingBusy(false);
+    }
   };
 
   const handleSetPending = async () => {
@@ -872,6 +952,7 @@ export default function InboxPage() {
       agentName: currentUser?.name || '',
     });
     setReply(rendered);
+    setPendingAttachments(tpl.attachments || []);
     setShortCodeMatches([]);
   };
 
@@ -1483,7 +1564,7 @@ export default function InboxPage() {
                         ⭐ {t('تقييم العميل')}: {m.body}/5
                       </div>
                     )}
-                    <MessageMedia mediaUrl={m.mediaUrl} mediaType={m.mediaType} />
+                    <MessageMedia mediaUrl={m.mediaUrl} mediaType={m.mediaType} mediaFileName={m.mediaFileName} />
                     {/*
                       Direction comes from the message's own content, not the
                       interface language: a Hebrew customer's one English
@@ -1553,6 +1634,12 @@ export default function InboxPage() {
 
               {/* ── Action buttons ── */}
               <div className="flex flex-wrap items-center gap-1.5">
+                {sel.autoCloseAt && sel.status !== 'RESOLVED' && (
+                  <span className="flex h-7 items-center gap-1 rounded-md border border-border bg-muted/50 px-2 text-caption text-muted-foreground">
+                    <Clock className="size-3.5" aria-hidden />
+                    {t('Auto-close')}: <bdi dir="ltr">{new Date(sel.autoCloseAt).toLocaleString()}</bdi>
+                  </span>
+                )}
                 {sel.status !== 'RESOLVED' && (
                   <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-success border-success/30 hover:bg-success/15"
                     onClick={() => setShowCloseConfirm(true)}>
@@ -1644,7 +1731,10 @@ export default function InboxPage() {
               value={reply}
               onChange={(v) => { setReply(v); setSendError(null); }}
               isInternal={isInternalNote}
-              onInternalChange={setIsInternalNote}
+              onInternalChange={(internal) => {
+                setIsInternalNote(internal);
+                if (internal) setPendingAttachments([]);
+              }}
               onSend={handleSend}
               // Blocked outright while the channel is down. Letting an agent
               // write a considered reply and discover the failure on send is
@@ -1684,13 +1774,16 @@ export default function InboxPage() {
                 setMentionMatches([]);
               }}
               quickTemplates={quickTemplates}
-              onQuickTemplate={(tpl) =>
+              attachments={pendingAttachments}
+              onRemoveAttachment={(attachmentId) => setPendingAttachments((files) => files.filter((file) => file.id !== attachmentId))}
+              onQuickTemplate={(tpl) => {
                 setReply(renderTemplate(tpl.body, {
                   contactName: sel?.name || '',
                   contactPhone: sel?.phone || '',
                   agentName: currentUser?.name || '',
-                }))
-              }
+                }));
+                setPendingAttachments(tpl.attachments || []);
+              }}
             />
           </>
         )}
@@ -1784,12 +1877,52 @@ export default function InboxPage() {
               <strong className="text-foreground">{contactDisplayName(sel.name, t)}</strong>.
             </p>
           )}
+          {closingPolicyLoading && (
+            <div className="flex min-h-24 items-center justify-center" role="status" aria-label={t('Loading conversation settings')}>
+              <Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden />
+            </div>
+          )}
+          {!closingPolicyLoading && closingSettings?.manualClosingNotesEnabled && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="closing-category">
+                  {t('Closing category')}
+                  {closingSettings.manualClosingNoteMode !== 'OPTIONAL' ? ' *' : ''}
+                </Label>
+                <select
+                  id="closing-category"
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={closingCategoryId}
+                  onChange={(event) => setClosingCategoryId(event.target.value)}
+                >
+                  <option value="">{t('Select a category')}</option>
+                  {closingSettings.categories.map((category) => (
+                    <option key={category.id} value={category.id}>{category.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="closing-summary">
+                  {t('Closing summary')}
+                  {closingSettings.manualClosingNoteMode === 'CATEGORY_AND_SUMMARY_REQUIRED' ? ' *' : ''}
+                </Label>
+                <Textarea
+                  id="closing-summary"
+                  rows={4}
+                  maxLength={2_000}
+                  value={closingSummary}
+                  placeholder={t('Summarize the outcome for reporting')}
+                  onChange={(event) => setClosingSummary(event.target.value)}
+                />
+              </div>
+            </div>
+          )}
           <DialogFooter className="flex-col gap-2 sm:flex-col">
-            <Button className="w-full" onClick={handleResolve}>
+            <Button className="w-full" onClick={handleResolve} disabled={closingBusy || closingPolicyLoading || !closingSettings}>
               <CheckCircle2 className="me-1 h-3.5 w-3.5" />
-              {t('تأكيد الإغلاق')}
+              {closingBusy ? t('Closing...') : t('تأكيد الإغلاق')}
             </Button>
-            <Button className="w-full" variant="outline" onClick={() => setShowCloseConfirm(false)}>{t('إلغاء')}</Button>
+            <Button className="w-full" variant="outline" disabled={closingBusy} onClick={() => setShowCloseConfirm(false)}>{t('إلغاء')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1817,6 +1950,7 @@ export default function InboxPage() {
                         contactPhone: sel?.phone || '',
                         agentName: currentUser?.name || '',
                       }));
+                      setPendingAttachments(tpl.attachments || []);
                       setShowTplPicker(false);
                     }}>
                     <p className="text-xs font-semibold text-foreground">{tpl.title}</p>

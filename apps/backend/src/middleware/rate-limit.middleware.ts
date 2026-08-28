@@ -91,6 +91,22 @@ export const LIMITS = {
     message: 'محاولات دخول كثيرة — جرّب بعد ١٥ دقيقة',
   }),
 
+  /** A valid password challenge still has only one million TOTP possibilities. */
+  twoFactorLogin: rateLimit('two-factor-login', {
+    max: 8,
+    windowMs: 15 * 60_000,
+    keyBy: (req) => `${req.ip}:${String((req.body as any)?.challengeToken || '').slice(-32)}`,
+    message: 'محاولات تحقق كثيرة — جرّب بعد ١٥ دقيقة',
+  }),
+
+  /** Factor enrollment and removal are authenticated but remain high-risk changes. */
+  twoFactorManagement: rateLimit('two-factor-management', {
+    max: 10,
+    windowMs: 15 * 60_000,
+    keyBy: (req) => `${req.ip}:${String(req.headers.authorization || '').slice(-32)}`,
+    message: 'محاولات تحقق كثيرة — جرّب بعد ١٥ دقيقة',
+  }),
+
   /** Each signup can provision a container. Strictest limit on the platform. */
   signup: rateLimit('signup', {
     max: 3,

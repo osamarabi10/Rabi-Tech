@@ -102,7 +102,7 @@ export function ConversationListEmpty({ reason }: { reason: EmptyReason }) {
         hint={t('اربط رقم واتساب لتبدأ المحادثات بالوصول')}
         action={
           <Link
-            href="/settings#channels"
+            href="/settings/general#channels"
             className="text-caption font-medium text-primary underline-offset-2 hover:underline"
           >
             {t('ربط رقم')}

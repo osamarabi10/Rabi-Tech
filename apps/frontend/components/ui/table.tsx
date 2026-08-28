@@ -1,4 +1,5 @@
 import * as React from "react"
+import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -73,13 +74,35 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "h-10 px-2 text-start align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pe-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props}
   />
 ))
 TableHead.displayName = "TableHead"
+
+type SortDirection = "ascending" | "descending" | "none"
+
+const SortableTableHead = React.forwardRef<
+  HTMLTableCellElement,
+  Omit<React.ThHTMLAttributes<HTMLTableCellElement>, "aria-sort"> & {
+    direction: SortDirection
+    onSort: () => void
+    label: string
+  }
+>(({ className, direction, onSort, label, ...props }, ref) => {
+  const Icon = direction === "ascending" ? ArrowUp : direction === "descending" ? ArrowDown : ChevronsUpDown
+  return (
+    <TableHead ref={ref} aria-sort={direction} className={className} {...props}>
+      <button type="button" onClick={onSort} className="inline-flex min-h-8 items-center gap-1 rounded px-1 text-start hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <span>{label}</span>
+        <Icon className="size-3.5" aria-hidden />
+      </button>
+    </TableHead>
+  )
+})
+SortableTableHead.displayName = "SortableTableHead"
 
 const TableCell = React.forwardRef<
   HTMLTableCellElement,
@@ -88,7 +111,7 @@ const TableCell = React.forwardRef<
   <td
     ref={ref}
     className={cn(
-      "p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "p-2 align-middle [&:has([role=checkbox])]:pe-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props}
@@ -114,6 +137,7 @@ export {
   TableBody,
   TableFooter,
   TableHead,
+  SortableTableHead,
   TableRow,
   TableCell,
   TableCaption,

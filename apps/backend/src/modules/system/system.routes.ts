@@ -5,7 +5,7 @@ import { OpenWAPairingProvider, OpenWAService } from '../whatsapp/openwa.service
 import { getIO, SocketEvents } from '../../socket';
 import { socketRoom } from '../../socket/rooms';
 import { isWithinWorkingHours } from '../../utils/working-hours';
-import { requireAdmin, requireSupervisor } from '../../middleware/rbac.middleware';
+import { requireAdmin, requirePermission, requireSupervisor } from '../../middleware/rbac.middleware';
 import { KEYWORD_CATEGORIES, invalidateCustomKeywords } from '../../constants/keywords';
 import { getWorkingHoursConfig } from '../../utils/out-of-hours';
 import { reconcileSessionWebhook } from '../../utils/webhook-reconcile';
@@ -25,14 +25,111 @@ import {
 import { resolveTeamId } from '../../utils/teams';
 import logger from '../../lib/logger';
 import { auditLog } from '../../lib/audit';
+import { issueUserInvitation } from './user-invitations.service';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { PLAN_ENTITLEMENTS } from '../billing/plans';
 
 const router = Router();
 router.use(verifyToken);
+
+const MIN_INACTIVITY_MINUTES = 5;
+const MAX_INACTIVITY_MINUTES = 7 * 24 * 60;
+
+function isIanaTimezone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
+    return value.length > 0 && value.length <= 100;
+  } catch {
+    return false;
+  }
+}
+
+async function workspaceSettings(organizationId: string) {
+  const [organization, config, users, recipients] = await Promise.all([
+    prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { name: true },
+    }),
+    prisma.organizationConfig.findUnique({
+      where: { organizationId },
+      select: {
+        timezone: true,
+        userInactivityTimeoutMinutes: true,
+        weeklyRecapEnabled: true,
+      },
+    }),
+    prisma.user.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        avatarUrl: true,
+        role: true,
+        identity: { select: { email: true } },
+      },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    }),
+    prisma.weeklyRecapRecipient.findMany({
+      select: { userId: true },
+      orderBy: { createdAt: 'asc' },
+    }),
+  ]);
+
+  if (!organization) return null;
+  return {
+    name: organization.name,
+    timezone: config?.timezone ?? 'Asia/Jerusalem',
+    userInactivityTimeoutMinutes: config?.userInactivityTimeoutMinutes ?? 20,
+    weeklyRecapEnabled: config?.weeklyRecapEnabled ?? false,
+    weeklyRecapRecipientIds: recipients.map((recipient) => recipient.userId),
+    eligibleRecipients: users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      email: user.identity.email,
+      avatarUrl: user.avatarUrl,
+      role: user.role,
+    })),
+  };
+}
 
 async function findSessionByName(organizationId: string, sessionName: string) {
   return prisma.whatsappSession.findUnique({
     where: { organizationId_sessionName: { organizationId, sessionName } },
   });
+}
+
+async function syncUserSocketTeamRooms(organizationId: string, userId: string) {
+  const [user, teams] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        isActive: true,
+        role: true,
+        primaryTeamId: true,
+        teams: { select: { teamId: true } },
+      },
+    }),
+    prisma.team.findMany({ select: { id: true } }),
+  ]);
+  const userSockets = getIO().in(socketRoom.user(organizationId, userId));
+
+  for (const team of teams) {
+    userSockets.socketsLeave(socketRoom.team(organizationId, team.id));
+  }
+  if (!user?.isActive) {
+    userSockets.disconnectSockets(true);
+    return;
+  }
+
+  const desiredTeamIds = user.role === 'ADMIN'
+    ? teams.map((team) => team.id)
+    : Array.from(new Set([
+        user.primaryTeamId,
+        ...user.teams.map((team) => team.teamId),
+      ].filter(Boolean))) as string[];
+  for (const teamId of desiredTeamIds) {
+    userSockets.socketsJoin(socketRoom.team(organizationId, teamId));
+  }
 }
 
 // GET /api/system/teams - organization teams
@@ -42,9 +139,13 @@ router.get('/teams', async (_req, res) => {
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
       include: {
         _count: { select: { members: true, conversations: true, sessions: true } },
+        members: { select: { userId: true } },
       },
     });
-    res.json(teams);
+    res.json(teams.map(({ members, ...team }) => ({
+      ...team,
+      memberIds: members.map((member) => member.userId),
+    })));
   } catch {
     res.status(500).json({ error: 'فشل تحميل الفرق' });
   }
@@ -61,8 +162,15 @@ router.post('/teams', requireAdmin, async (req, res) => {
       .replace(/[^a-z0-9-]+/g, '-')
       .replace(/^-+|-+$/g, '');
 
-    if (!normalizedName || !normalizedSlug) {
+    if (!normalizedName || normalizedName.length > 80 || !normalizedSlug || normalizedSlug.length > 80) {
       return res.status(400).json({ error: 'اسم الفريق مطلوب' });
+    }
+
+    if (description?.trim().length > 500) {
+      return res.status(400).json({ error: 'Team description cannot exceed 500 characters' });
+    }
+    if (color !== undefined && !/^#[0-9a-f]{6}$/i.test(String(color))) {
+      return res.status(400).json({ error: 'Team color must be a six-digit hex color' });
     }
 
     const team = await prisma.$transaction(async (tx) => {
@@ -82,6 +190,16 @@ router.post('/teams', requireAdmin, async (req, res) => {
       });
     });
 
+    await auditLog({
+      userId: req.user!.id,
+      action: 'team.created',
+      resource: 'team',
+      resourceId: team.id,
+      changes: { after: team },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
     res.status(201).json(team);
   } catch (err: any) {
     if (err?.code === 'P2002') return res.status(409).json({ error: 'رابط الفريق مستخدم' });
@@ -94,8 +212,17 @@ router.patch('/teams/:id', requireAdmin, async (req, res) => {
   try {
     const { name, slug, description, color, emoji, isDefault,
             assignmentStrategy, maxConcurrentPerAgent } = req.body;
+    const current = await prisma.team.findUnique({ where: { id: req.params.id } });
+    if (!current) return res.status(404).json({ error: 'Team not found' });
+
     const data: Record<string, unknown> = {};
-    if (name !== undefined) data.name = String(name).trim();
+    if (name !== undefined) {
+      const normalizedName = String(name).trim();
+      if (!normalizedName || normalizedName.length > 80) {
+        return res.status(400).json({ error: 'Team name must be between 1 and 80 characters' });
+      }
+      data.name = normalizedName;
+    }
     if (assignmentStrategy !== undefined) {
       const allowed = ['NONE', 'ROUND_ROBIN', 'LEAST_OPEN'];
       if (!allowed.includes(String(assignmentStrategy))) {
@@ -117,16 +244,36 @@ router.patch('/teams/:id', requireAdmin, async (req, res) => {
       }
     }
     if (slug !== undefined) {
-      data.slug = String(slug)
+      const normalizedSlug = String(slug)
         .trim()
         .toLowerCase()
         .replace(/[^a-z0-9-]+/g, '-')
         .replace(/^-+|-+$/g, '');
+      if (!normalizedSlug || normalizedSlug.length > 80) {
+        return res.status(400).json({ error: 'Team slug must be between 1 and 80 characters' });
+      }
+      data.slug = normalizedSlug;
     }
-    if (description !== undefined) data.description = description?.trim() || null;
-    if (color !== undefined) data.color = color || '#6366F1';
+    if (description !== undefined) {
+      const normalizedDescription = description?.trim() || null;
+      if (normalizedDescription && normalizedDescription.length > 500) {
+        return res.status(400).json({ error: 'Team description cannot exceed 500 characters' });
+      }
+      data.description = normalizedDescription;
+    }
+    if (color !== undefined) {
+      if (!/^#[0-9a-f]{6}$/i.test(String(color))) {
+        return res.status(400).json({ error: 'Team color must be a six-digit hex color' });
+      }
+      data.color = color;
+    }
     if (emoji !== undefined) data.emoji = emoji?.trim() || null;
-    if (isDefault !== undefined) data.isDefault = Boolean(isDefault);
+    if (isDefault !== undefined) {
+      if (current.isDefault && isDefault === false) {
+        return res.status(400).json({ error: 'Choose another default team before changing this one' });
+      }
+      data.isDefault = Boolean(isDefault);
+    }
 
     const team = await prisma.$transaction(async (tx) => {
       if (data.isDefault === true) {
@@ -138,6 +285,16 @@ router.patch('/teams/:id', requireAdmin, async (req, res) => {
       return tx.team.update({ where: { id: req.params.id }, data });
     });
 
+    await auditLog({
+      userId: req.user!.id,
+      action: 'team.updated',
+      resource: 'team',
+      resourceId: team.id,
+      changes: { before: current, after: team },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
     res.json(team);
   } catch (err: any) {
     if (err?.code === 'P2025') return res.status(404).json({ error: 'الفريق غير موجود' });
@@ -146,19 +303,122 @@ router.patch('/teams/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// PUT /api/system/teams/:id/members - replace a team's membership atomically
+router.put('/teams/:id/members', requireAdmin, async (req, res) => {
+  try {
+    if (!Array.isArray(req.body?.userIds) || req.body.userIds.length > 500) {
+      return res.status(400).json({ error: 'userIds must be an array with at most 500 entries' });
+    }
+
+    const userIds = Array.from(new Set(
+      req.body.userIds.map((value: unknown) => String(value || '').trim()).filter(Boolean),
+    )) as string[];
+    const team = await prisma.team.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, name: true },
+    });
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    const users = userIds.length
+      ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true } })
+      : [];
+    if (users.length !== userIds.length) {
+      return res.status(400).json({ error: 'One or more users do not belong to this workspace' });
+    }
+
+    const previous = await prisma.userTeam.findMany({
+      where: { teamId: team.id },
+      select: { userId: true },
+    });
+    const previousIds = previous.map((membership) => membership.userId);
+    const requested = new Set(userIds);
+    const removedIds = previousIds.filter((userId) => !requested.has(userId));
+
+    await prisma.$transaction(async (tx) => {
+      if (removedIds.length) {
+        await tx.user.updateMany({
+          where: { id: { in: removedIds }, primaryTeamId: team.id },
+          data: { primaryTeamId: null },
+        });
+      }
+
+      await tx.userTeam.deleteMany({
+        where: {
+          teamId: team.id,
+          ...(userIds.length ? { userId: { notIn: userIds } } : {}),
+        },
+      });
+
+      if (userIds.length) {
+        await tx.userTeam.createMany({
+          data: userIds.map((userId) => ({
+            organizationId: req.user!.organizationId,
+            teamId: team.id,
+            userId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+    });
+
+    const changedUserIds = Array.from(new Set([
+      ...removedIds,
+      ...userIds.filter((userId) => !previousIds.includes(userId)),
+    ]));
+    await Promise.all(changedUserIds.map((userId) =>
+      syncUserSocketTeamRooms(req.user!.organizationId, userId),
+    ));
+
+    await auditLog({
+      userId: req.user!.id,
+      action: 'team.members.updated',
+      resource: 'team',
+      resourceId: team.id,
+      changes: { before: previousIds, after: userIds },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    res.json({ teamId: team.id, memberIds: userIds });
+  } catch (error) {
+    logger.error('team membership update failed', { error: String(error), teamId: req.params.id });
+    res.status(500).json({ error: 'Failed to update team members' });
+  }
+});
+
 // DELETE /api/system/teams/:id - remove unused team (admin only)
 router.delete('/teams/:id', requireAdmin, async (req, res) => {
   try {
     const team = await prisma.team.findUnique({
       where: { id: req.params.id },
-      include: { _count: { select: { members: true, conversations: true, sessions: true } } },
+      include: {
+        _count: {
+          select: {
+            members: true,
+            primaryUsers: true,
+            conversations: true,
+            sessions: true,
+            templates: true,
+            invitations: true,
+          },
+        },
+      },
     });
     if (!team) return res.status(404).json({ error: 'الفريق غير موجود' });
     if (team.isDefault) return res.status(400).json({ error: 'لا يمكن حذف الفريق الافتراضي' });
-    if (team._count.members || team._count.conversations || team._count.sessions) {
+    if (Object.values(team._count).some((count) => count > 0)) {
       return res.status(409).json({ error: 'الفريق مستخدم، انقل العناصر قبل الحذف' });
     }
     await prisma.team.delete({ where: { id: req.params.id } });
+    await auditLog({
+      userId: req.user!.id,
+      action: 'team.deleted',
+      resource: 'team',
+      resourceId: team.id,
+      changes: { before: team },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: 'فشل حذف الفريق' });
@@ -198,7 +458,7 @@ router.get('/stats', async (_req, res) => {
 router.get('/users', async (req, res) => {
   try {
     const { all } = req.query;
-    const users = await prisma.user.findMany({
+    const [users, config, effective] = await Promise.all([prisma.user.findMany({
       where: {
         ...(all !== 'true' ? { isActive: true } : {}),
       },
@@ -211,21 +471,126 @@ router.get('/users', async (req, res) => {
         teams: { include: { team: { select: { id: true, name: true, slug: true, color: true } } } },
         role: true,
         isActive: true,
+        isAway: true,
+        restrictContactVisibility: true,
+        contactVisibilityScope: true,
+        restrictCalls: true,
+        restrictWorkflows: true,
+        maskPhoneAndEmail: true,
         createdAt: true,
+        authSessions: {
+          where: { revokedAt: null },
+          select: { lastSeenAt: true },
+          orderBy: { lastSeenAt: 'desc' },
+          take: 1,
+        },
         identity: { select: { email: true } },
       },
       orderBy: { name: 'asc' },
-    });
+    }), prisma.organizationConfig.findUnique({
+      where: { organizationId: req.user!.organizationId },
+      select: { userInactivityTimeoutMinutes: true },
+    }), resolveEntitlements(req.user!.organizationId)]);
+    const onlineThreshold = Date.now() - (config?.userInactivityTimeoutMinutes ?? 20) * 60_000;
     // Map identity.email to email field to maintain same API structure
-    const mapped = users.map((u) => ({
-      ...u,
-      email: u.identity.email,
-      identity: undefined,
-    }));
-    res.json(mapped);
+    const mapped = users.map((u) => {
+      const lastSeen = u.authSessions[0]?.lastSeenAt ?? null;
+      return {
+        ...u,
+        email: u.identity.email,
+        identity: undefined,
+        authSessions: undefined,
+        lastSeen,
+        presence: !u.isActive ? 'INACTIVE' : u.isAway ? 'AWAY' : lastSeen && lastSeen.getTime() >= onlineThreshold ? 'ONLINE' : 'OFFLINE',
+      };
+    });
+    res.json({
+      users: mapped,
+      capabilities: {
+        canInvite: ['ADMIN', 'SUPERVISOR'].includes(req.user!.role || ''),
+        canManage: req.user!.role === 'ADMIN',
+        managerInviteRole: 'AGENT',
+        maskPhoneAndEmail: PLAN_ENTITLEMENTS[effective.plan].maskContactDetails,
+        callsAvailable: false,
+      },
+    });
   } catch {
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+router.get('/user-invitations', requirePermission('user:create'), async (_req, res) => {
+  const invitations = await prisma.userInvitation.findMany({
+    where: { acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      primaryTeamId: true,
+      invitedByName: true,
+      expiresAt: true,
+      createdAt: true,
+      primaryTeam: { select: { id: true, name: true, color: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(invitations);
+});
+
+router.post('/user-invitations', requirePermission('user:create'), async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const name = String(req.body?.name || '').trim();
+    const requestedRole = String(req.body?.role || 'AGENT').toUpperCase();
+    if (!email || !/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'A valid email is required' });
+    if (req.user!.role === 'SUPERVISOR' && requestedRole !== 'AGENT') {
+      return res.status(403).json({ error: 'Managers can invite Agents only' });
+    }
+    const allowedRoles = ['SUPERVISOR', 'AGENT', 'VIEWER', 'FINANCE'] as const;
+    if (!allowedRoles.includes(requestedRole as typeof allowedRoles[number])) {
+      return res.status(400).json({ error: 'Invalid invitation access level' });
+    }
+    await assertSeatAvailable();
+    const invitation = await issueUserInvitation({
+      organizationId: req.user!.organizationId,
+      email,
+      name: name || null,
+      role: requestedRole as typeof allowedRoles[number],
+      primaryTeamId: req.body?.primaryTeamId ? String(req.body.primaryTeamId) : null,
+      invitedByName: req.user!.name,
+    });
+    await auditLog({
+      action: 'USER_INVITED',
+      resource: 'user-invitation',
+      resourceId: invitation.id,
+      description: `${req.user!.name} invited ${email} as ${requestedRole}`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    res.status(201).json(invitation);
+  } catch (error) {
+    if (isSeatLimitError(error)) return res.status(error.status).json(seatLimitResponse(error));
+    const message = String((error as Error).message || error);
+    res.status(message.includes('already') ? 409 : 400).json({ error: message });
+  }
+});
+
+router.delete('/user-invitations/:id', requireAdmin, async (req, res) => {
+  const result = await prisma.userInvitation.updateMany({
+    where: { id: req.params.id, acceptedAt: null, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  if (!result.count) return res.status(404).json({ error: 'Invitation not found' });
+  await auditLog({
+    action: 'USER_INVITATION_REVOKED',
+    resource: 'user-invitation',
+    resourceId: req.params.id,
+    description: `${req.user!.name} revoked a user invitation`,
+    ipAddress: req.ip,
+    userAgent: req.headers['user-agent'],
+  });
+  return res.json({ ok: true });
 });
 
 // POST /api/system/users — create user (admin only)
@@ -318,7 +683,11 @@ router.post('/users', requireAdmin, async (req, res) => {
 // PATCH /api/system/users/:id — update user (admin only)
 router.patch('/users/:id', requireAdmin, async (req, res) => {
   try {
-    const { name, email, password, role, phone, isActive, primaryTeamId, teamIds } = req.body;
+    const {
+      name, email, password, role, phone, isActive, primaryTeamId, teamIds,
+      restrictContactVisibility, contactVisibilityScope, restrictCalls,
+      restrictWorkflows, maskPhoneAndEmail,
+    } = req.body;
     
     const userToUpdate = await prisma.user.findUnique({
       where: { id: req.params.id },
@@ -332,6 +701,19 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
     }
     if (role === 'ADMIN') {
       return res.status(400).json({ error: 'لا يمكن ترقية مستخدم عمل إلى مدير المؤسسة' });
+    }
+    if (contactVisibilityScope !== undefined && !['TEAM', 'SELF'].includes(contactVisibilityScope)) {
+      return res.status(400).json({ error: 'Contact visibility scope must be TEAM or SELF' });
+    }
+    if (maskPhoneAndEmail === true) {
+      const effective = await resolveEntitlements(req.user!.organizationId);
+      if (!PLAN_ENTITLEMENTS[effective.plan].maskContactDetails) {
+        return res.status(402).json({
+          error: 'Masking contact phone numbers and email addresses requires Business or Enterprise',
+          code: 'PLAN_UPGRADE_REQUIRED',
+          requiredPlan: 'BUSINESS',
+        });
+      }
     }
 
     // Update Identity email or password if provided
@@ -359,6 +741,11 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
       data.isActive = isActive;
       if (!isActive) data.tokenVersion = { increment: 1 };
     }
+    if (restrictContactVisibility !== undefined) data.restrictContactVisibility = restrictContactVisibility === true;
+    if (contactVisibilityScope !== undefined) data.contactVisibilityScope = contactVisibilityScope;
+    if (restrictCalls !== undefined) data.restrictCalls = restrictCalls === true;
+    if (restrictWorkflows !== undefined) data.restrictWorkflows = restrictWorkflows === true;
+    if (maskPhoneAndEmail !== undefined) data.maskPhoneAndEmail = maskPhoneAndEmail === true;
 
     const user = await prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({
@@ -373,6 +760,12 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
           teams: { include: { team: { select: { id: true, name: true, slug: true, color: true } } } },
           role: true,
           isActive: true,
+          isAway: true,
+          restrictContactVisibility: true,
+          contactVisibilityScope: true,
+          restrictCalls: true,
+          restrictWorkflows: true,
+          maskPhoneAndEmail: true,
           createdAt: true,
           identity: { select: { email: true } },
         },
@@ -395,6 +788,10 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
 
       return updated;
     });
+
+    if (role !== undefined || isActive !== undefined || primaryTeamId !== undefined || Array.isArray(teamIds)) {
+      await syncUserSocketTeamRooms(req.user!.organizationId, req.params.id);
+    }
 
     res.json({
       ...user,
@@ -421,6 +818,9 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
       where: { id: req.params.id },
       data: { isActive: false, tokenVersion: { increment: 1 } },
     });
+    getIO()
+      .in(socketRoom.user(req.user!.organizationId, req.params.id))
+      .disconnectSockets(true);
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: 'فشل تعطيل المستخدم' });
@@ -430,6 +830,111 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
 // GET /api/system/inbox-config - team-owned WhatsApp sessions
 router.get('/inbox-config', async (req, res) => {
   res.json(await inboxConfig(req.user!.organizationId));
+});
+
+router.get('/workspace-settings', requireAdmin, async (req, res) => {
+  const settings = await workspaceSettings(req.user!.organizationId);
+  if (!settings) return res.status(404).json({ error: 'Workspace not found' });
+  res.json(settings);
+});
+
+router.patch('/workspace-settings', requireAdmin, async (req, res) => {
+  const organizationId = req.user!.organizationId;
+  const supplied = ['name', 'timezone', 'userInactivityTimeoutMinutes', 'weeklyRecapEnabled', 'weeklyRecapRecipientIds']
+    .some((field) => req.body?.[field] !== undefined);
+  if (!supplied) return res.status(400).json({ error: 'No workspace settings supplied' });
+
+  const name = req.body.name === undefined ? undefined : String(req.body.name).trim();
+  if (name !== undefined && (name.length < 2 || name.length > 120)) {
+    return res.status(400).json({ error: 'Workspace name must be between 2 and 120 characters' });
+  }
+
+  const timezone = req.body.timezone === undefined ? undefined : String(req.body.timezone).trim();
+  if (timezone !== undefined && !isIanaTimezone(timezone)) {
+    return res.status(400).json({ error: 'A valid IANA timezone is required' });
+  }
+
+  const timeout = req.body.userInactivityTimeoutMinutes === undefined
+    ? undefined
+    : Number(req.body.userInactivityTimeoutMinutes);
+  if (
+    timeout !== undefined &&
+    (!Number.isInteger(timeout) || timeout < MIN_INACTIVITY_MINUTES || timeout > MAX_INACTIVITY_MINUTES)
+  ) {
+    return res.status(400).json({ error: 'Inactivity timeout must be between 5 minutes and 7 days' });
+  }
+
+  const weeklyRecapEnabled = req.body.weeklyRecapEnabled === undefined
+    ? undefined
+    : req.body.weeklyRecapEnabled;
+  if (weeklyRecapEnabled !== undefined && typeof weeklyRecapEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'weeklyRecapEnabled must be a boolean' });
+  }
+
+  let recipientIds: string[] | undefined;
+  if (req.body.weeklyRecapRecipientIds !== undefined) {
+    if (!Array.isArray(req.body.weeklyRecapRecipientIds)) {
+      return res.status(400).json({ error: 'weeklyRecapRecipientIds must be an array' });
+    }
+    const normalizedRecipientIds = [...new Set<string>(
+      (req.body.weeklyRecapRecipientIds as unknown[])
+        .map((id) => String(id).trim())
+        .filter((id): id is string => Boolean(id)),
+    )];
+    recipientIds = normalizedRecipientIds;
+    if (normalizedRecipientIds.length > 100) {
+      return res.status(400).json({ error: 'A weekly recap can have at most 100 recipients' });
+    }
+    const validUsers = await prisma.user.count({ where: { id: { in: normalizedRecipientIds }, isActive: true } });
+    if (validUsers !== normalizedRecipientIds.length) {
+      return res.status(400).json({ error: 'Every recap recipient must be an active workspace member' });
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    if (name !== undefined) {
+      await tx.organization.update({ where: { id: organizationId }, data: { name } });
+    }
+
+    if (timezone !== undefined || timeout !== undefined || weeklyRecapEnabled !== undefined) {
+      await tx.organizationConfig.upsert({
+        where: { organizationId },
+        create: {
+          organizationId,
+          ...(timezone !== undefined ? { timezone } : {}),
+          ...(timeout !== undefined ? { userInactivityTimeoutMinutes: timeout } : {}),
+          ...(weeklyRecapEnabled !== undefined ? { weeklyRecapEnabled } : {}),
+        },
+        update: {
+          ...(timezone !== undefined ? { timezone } : {}),
+          ...(timeout !== undefined ? { userInactivityTimeoutMinutes: timeout } : {}),
+          ...(weeklyRecapEnabled !== undefined ? { weeklyRecapEnabled } : {}),
+        },
+      });
+    }
+
+    if (recipientIds !== undefined) {
+      await tx.weeklyRecapRecipient.deleteMany({ where: { organizationId } });
+      if (recipientIds.length) {
+        await tx.weeklyRecapRecipient.createMany({
+          data: recipientIds.map((userId) => ({ organizationId, userId })),
+        });
+      }
+    }
+  });
+
+  invalidateOrganizationConfig();
+  await auditLog({
+    action: 'WORKSPACE_SETTINGS_UPDATED',
+    resource: 'organization',
+    resourceId: organizationId,
+    description: `Workspace settings updated by ${req.user!.email}`,
+    userId: req.user!.id,
+    ipAddress: req.ip,
+    userAgent: req.headers['user-agent'],
+  });
+
+  res.json(await workspaceSettings(organizationId));
 });
 
 router.get('/organization-config', requireAdmin, async (req, res) => {

@@ -56,7 +56,7 @@ const ROLE_PERMISSIONS: Record<string, Set<Role>> = {
   'audit-log:read': new Set(['ADMIN']),
 
   // User management
-  'user:create': new Set(['ADMIN']),
+  'user:create': new Set(['ADMIN', 'SUPERVISOR']),
   'user:update': new Set(['ADMIN']),
   'user:delete': new Set(['ADMIN']),
   'user:list': new Set(['ADMIN']),
@@ -90,6 +90,16 @@ export function permissionsForRole(role: string): string[] {
     .filter(([, roles]) => roles.has(role as Role))
     .map(([operation]) => operation)
     .sort();
+}
+
+export function permissionsForUser(
+  role: string,
+  restrictions?: { restrictWorkflows?: boolean },
+): string[] {
+  const permissions = permissionsForRole(role);
+  return restrictions?.restrictWorkflows
+    ? permissions.filter((permission) => !permission.startsWith('workflow:'))
+    : permissions;
 }
 
 /**
@@ -133,6 +143,20 @@ export function requirePermission(operation: string) {
         error: 'لا توجد صلاحية لهذه العملية',
         operation,
         requestId: (req as any).id,
+      });
+    }
+
+
+    if (operation.startsWith('workflow:') && user.restrictWorkflows) {
+      logger.warn('Permission denied by user restriction', {
+        operation,
+        userId: user.id,
+        requestId: (req as any).id,
+      });
+      return res.status(403).json({
+        error: 'Workflow access is restricted for this user',
+        code: 'USER_WORKFLOW_RESTRICTED',
+        operation,
       });
     }
 

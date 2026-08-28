@@ -55,6 +55,8 @@ export type Conv = {
    * opposite of what anyone opening that view wants to see.
    */
   firstResponseAt: string | null;
+  /** Persisted inactivity deadline; null when auto-close is not scheduled. */
+  autoCloseAt: string | null;
   sessionPhone: string | null;
   labels: string[];
 };
@@ -86,6 +88,7 @@ export type Msg = {
   autoType?: string | null;
   mediaUrl?: string | null;
   mediaType?: string | null;
+  mediaFileName?: string | null;
   sentByName?: string | null;
   status?: 'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
   /** Why the last send attempt failed. Only ever set alongside FAILED. */
@@ -100,6 +103,7 @@ export type AppNotification = {
   title: string;
   body: string;
   isRead: boolean;
+  archivedAt: string | null;
   createdAt: string;
   conversation?: { displayId: number; teamId: string | null; team?: { id: string; name: string } | null } | null;
 };
@@ -156,6 +160,14 @@ export type CrmTag = {
   description?: string | null;
   colorCode?: string | null;
   emoji?: string | null;
+  contactCount?: number;
+};
+
+export type ContactTagAssignment = CrmTag & {
+  source: 'MANUAL' | 'IMPORT' | 'WORKFLOW' | 'API' | string;
+  assignedById?: string | null;
+  assignedByName?: string | null;
+  assignedAt: string;
 };
 
 export type CustomFieldDefinition = {
@@ -163,8 +175,24 @@ export type CustomFieldDefinition = {
   name: string;
   slug: string;
   description?: string | null;
-  dataType: 'text' | 'number' | 'date' | 'list';
+  dataType: 'text' | 'list' | 'checkbox' | 'email' | 'number' | 'url' | 'date' | 'time';
   allowedValues: string[];
+  sortOrder: number;
+  visibility: 'ALWAYS_SHOW' | 'HIDE_WHEN_EMPTY' | 'ALWAYS_HIDE';
+};
+
+export type ContactFieldRow = {
+  fieldKey: string;
+  kind: 'STANDARD' | 'CUSTOM';
+  id?: string;
+  name: string;
+  slug?: string;
+  description?: string | null;
+  dataType: string;
+  allowedValues?: string[];
+  editable: boolean;
+  sortOrder: number;
+  visibility: 'ALWAYS_SHOW' | 'HIDE_WHEN_EMPTY' | 'ALWAYS_HIDE';
 };
 
 export type Stats = {
@@ -189,11 +217,45 @@ export type SystemUser = {
   role: string;
   isActive: boolean;
   isAway: boolean;
+  lastSeen?: string | null;
+  presence?: 'ONLINE' | 'AWAY' | 'OFFLINE' | 'INACTIVE';
+  restrictContactVisibility?: boolean;
+  contactVisibilityScope?: 'TEAM' | 'SELF';
+  restrictCalls?: boolean;
+  restrictWorkflows?: boolean;
+  maskPhoneAndEmail?: boolean;
   createdAt: string;
 };
+
+export type WorkspaceUserCapabilities = {
+  canInvite: boolean;
+  canManage: boolean;
+  managerInviteRole: 'AGENT';
+  maskPhoneAndEmail: boolean;
+  callsAvailable: boolean;
+};
+
+export type WorkspaceUsersResponse = {
+  users: SystemUser[];
+  capabilities: WorkspaceUserCapabilities;
+};
+
+export type UserInvitation = {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  primaryTeamId: string | null;
+  invitedByName: string;
+  expiresAt: string;
+  createdAt: string;
+  primaryTeam?: { id: string; name: string; color: string } | null;
+  inviteUrl?: string;
+};
 export type Session = {
+  id: string;
   sessionName: string;
-  label: string;
+  label: string | null;
   connected: boolean;
   /**
    * The linked number, or null when this session has never been paired.
@@ -203,6 +265,8 @@ export type Session = {
    * reconnect, which the gateway often does by itself).
    */
   phoneNumber: string | null;
+  teamId: string | null;
+  isActive: boolean;
 };
 export type InboxConfig = {
   sessions: { id: string; sessionName: string; label: string | null; phoneNumber: string | null; teamId: string | null }[];
@@ -218,6 +282,23 @@ export type Template = {
   sortOrder: number;
   isActive: boolean;
   shortCode?: string | null;
+  topics?: SnippetTopic[];
+  attachments?: SnippetAttachment[];
+};
+
+export type SnippetTopic = {
+  id: string;
+  name: string;
+  snippetCount?: number;
+};
+
+export type SnippetAttachment = {
+  id: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  sortOrder: number;
+  url: string;
 };
 
 export type AgentStat = {
@@ -344,6 +425,7 @@ export async function startConversation(input: {
     snoozedUntil: data.snoozedUntil ?? null,
     snoozedByName: data.snoozedByName ?? null,
     firstResponseAt: data.firstResponseAt ?? null,
+    autoCloseAt: data.autoCloseAt ?? null,
     sessionPhone: data.session?.phoneNumber ?? null,
     labels: data.labels ?? [],
   };
@@ -381,6 +463,7 @@ export async function fetchConversations(
     snoozedUntil: c.snoozedUntil ?? null,
     snoozedByName: c.snoozedByName ?? null,
     firstResponseAt: c.firstResponseAt ?? null,
+    autoCloseAt: c.autoCloseAt ?? null,
     sessionPhone: c.session?.phoneNumber ?? null,
     labels: c.labels ?? [],
   }));
@@ -396,6 +479,7 @@ function mapMsg(m: any): Msg {
     autoType: m.autoType ?? null,
     mediaUrl: m.mediaUrl ?? null,
     mediaType: m.mediaType ?? null,
+    mediaFileName: m.mediaFileName ?? null,
     sentByName: m.sentBy?.name ?? null,
     status: m.status ?? undefined,
     failureReason: m.failureReason ?? null,
@@ -424,8 +508,10 @@ export async function fetchOlderMessages(convId: string, beforeId: string): Prom
   };
 }
 
-export async function fetchNotifications(unreadOnly = false): Promise<{ notifications: AppNotification[]; unreadCount: number }> {
-  const { data } = await api.get('/api/notifications', { params: unreadOnly ? { unread: 'true' } : {} });
+export type NotificationScope = 'new' | 'archived' | 'all';
+
+export async function fetchNotifications(scope: NotificationScope = 'new', unreadOnly = false): Promise<{ notifications: AppNotification[]; unreadCount: number }> {
+  const { data } = await api.get('/api/notifications', { params: { scope, ...(unreadOnly ? { unread: 'true' } : {}) } });
   return data;
 }
 
@@ -436,6 +522,20 @@ export async function markNotificationRead(id: string): Promise<number> {
 
 export async function markAllNotificationsRead(): Promise<void> {
   await api.patch('/api/notifications/read-all');
+}
+
+export async function archiveNotification(id: string): Promise<number> {
+  const { data } = await api.patch(`/api/notifications/${id}/archive`);
+  return data.unreadCount;
+}
+
+export async function restoreNotification(id: string): Promise<number> {
+  const { data } = await api.patch(`/api/notifications/${id}/unarchive`);
+  return data.unreadCount;
+}
+
+export async function archiveAllNotifications(): Promise<void> {
+  await api.patch('/api/notifications/archive-all');
 }
 
 export function isClientRating(body: string): boolean {
@@ -449,11 +549,13 @@ export async function sendReply(
   isInternal = false,
   /** Resolved teammate ids, never names parsed out of the text. */
   mentionedUserIds: string[] = [],
+  media?: { url: string; contentType: string; fileName: string },
 ): Promise<Msg> {
   const { data } = await api.post(`/api/conversations/${convId}/reply`, {
     body,
     isInternal,
     mentionedUserIds,
+    ...(media ? { mediaUrl: media.url, mediaType: media.contentType, mediaFileName: media.fileName } : {}),
   });
   return {
     id: data.id,
@@ -463,6 +565,9 @@ export async function sendReply(
     auto: false,
     isInternal: data.isInternal ?? false,
     status: data.status,
+    mediaUrl: data.mediaUrl ?? null,
+    mediaType: data.mediaType ?? null,
+    mediaFileName: data.mediaFileName ?? null,
   };
 }
 
@@ -471,7 +576,7 @@ export async function updateConversationLabels(convId: string, labels: string[])
 }
 
 export async function fetchTemplatesByShortCode(prefix: string): Promise<Template[]> {
-  const { data } = await api.get('/api/templates', { params: { shortCode: prefix, active: 'true' } });
+  const { data } = await api.get('/api/snippets', { params: { q: prefix, active: 'true' } });
   return data;
 }
 
@@ -482,9 +587,73 @@ export async function fetchAgentPerformance(params?: { startDate?: string; endDa
 
 export async function updateConversation(
   convId: string,
-  patch: { status?: string; assignedToId?: string | null }
+  patch: {
+    status?: string;
+    assignedToId?: string | null;
+    categoryId?: string | null;
+    summary?: string | null;
+  }
 ): Promise<void> {
   await api.patch(`/api/conversations/${convId}`, patch);
+}
+
+export type ClosingNoteMode = 'OPTIONAL' | 'CATEGORY_REQUIRED' | 'CATEGORY_AND_SUMMARY_REQUIRED';
+
+export type ConversationCategory = {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationSettings = {
+  autoCloseEnabled: boolean;
+  autoCloseDurationMinutes: number;
+  autoCloseEnabledAt: string | null;
+  manualClosingNotesEnabled: boolean;
+  manualClosingNoteMode: ClosingNoteMode;
+  categories: ConversationCategory[];
+  limits: {
+    minAutoCloseMinutes: number;
+    maxAutoCloseMinutes: number;
+    maxCategories: number;
+  };
+};
+
+export async function fetchConversationSettings(): Promise<ConversationSettings> {
+  const { data } = await api.get('/api/conversation-settings');
+  return data;
+}
+
+export async function updateConversationSettings(
+  patch: Partial<Pick<
+    ConversationSettings,
+    'autoCloseEnabled' | 'autoCloseDurationMinutes' | 'manualClosingNotesEnabled' | 'manualClosingNoteMode'
+  >>,
+): Promise<ConversationSettings> {
+  const { data } = await api.patch('/api/conversation-settings', patch);
+  return data;
+}
+
+export async function createConversationCategory(input: {
+  name: string;
+  description?: string | null;
+}): Promise<ConversationCategory> {
+  const { data } = await api.post('/api/conversation-settings/categories', input);
+  return data;
+}
+
+export async function updateConversationCategory(
+  id: string,
+  description: string | null,
+): Promise<ConversationCategory> {
+  const { data } = await api.patch(`/api/conversation-settings/categories/${id}`, { description });
+  return data;
+}
+
+export async function deleteConversationCategory(id: string): Promise<void> {
+  await api.delete(`/api/conversation-settings/categories/${id}`);
 }
 
 // ---------- tickets ----------
@@ -583,7 +752,7 @@ export async function fetchContactsPage(params: {
   filter?: ContactFilterDsl;
   cursorId?: string | null;
   limit?: number;
-}): Promise<{ items: Contact[]; pagination: { cursorId: string | null; hasMore: boolean } }> {
+}): Promise<{ items: Contact[]; pagination: { cursorId: string | null; hasMore: boolean; total: number } }> {
   const { data } = await api.get('/api/contacts', {
     params: {
       paginated: '1',
@@ -597,6 +766,11 @@ export async function fetchContactsPage(params: {
   return { items: data.items.map(mapContact), pagination: data.pagination };
 }
 
+export async function fetchContact(ref: string): Promise<Contact> {
+  const { data } = await api.get(`/api/contacts/${encodeURIComponent(ref)}`);
+  return mapContact(data);
+}
+
 export async function updateContact(id: string, input: Partial<Contact>): Promise<Contact> {
   const { data } = await api.patch(`/api/contacts/${id}`, input);
   return mapContact(data);
@@ -608,8 +782,28 @@ export async function fetchCrmTags(): Promise<CrmTag[]> {
 }
 
 export async function saveCrmTag(input: Partial<CrmTag> & { name: string }): Promise<CrmTag> {
-  const { data } = await api.post('/api/contacts/tags', input);
+  const { data } = input.id
+    ? await api.patch(`/api/contacts/tags/${input.id}`, input)
+    : await api.post('/api/contacts/tags', input);
   return data;
+}
+
+export async function deleteCrmTag(id: string, confirmCount: number): Promise<void> {
+  await api.delete(`/api/contacts/tags/${id}`, { data: { confirmCount } });
+}
+
+export async function fetchContactTagAssignments(contactId: string): Promise<ContactTagAssignment[]> {
+  const { data } = await api.get(`/api/contacts/${contactId}/tags`);
+  return data;
+}
+
+export async function assignContactTag(contactId: string, input: { tagId?: string; name?: string }): Promise<ContactTagAssignment> {
+  const { data } = await api.post(`/api/contacts/${contactId}/tags`, input);
+  return data;
+}
+
+export async function removeContactTag(contactId: string, tagId: string): Promise<void> {
+  await api.delete(`/api/contacts/${contactId}/tags/${tagId}`);
 }
 
 export async function fetchCustomFieldDefinitions(): Promise<CustomFieldDefinition[]> {
@@ -643,7 +837,83 @@ export async function fetchAgents(): Promise<Agent[]> {
 
 export async function fetchSystemUsers(): Promise<SystemUser[]> {
   const { data } = await api.get('/api/system/users', { params: { all: 'true' } });
+  return Array.isArray(data) ? data : data.users;
+}
+
+export async function fetchWorkspaceUsers(): Promise<WorkspaceUsersResponse> {
+  const { data } = await api.get('/api/system/users', { params: { all: 'true' } });
+  if (Array.isArray(data)) {
+    return {
+      users: data,
+      capabilities: {
+        canInvite: false,
+        canManage: false,
+        managerInviteRole: 'AGENT',
+        maskPhoneAndEmail: false,
+        callsAvailable: false,
+      },
+    };
+  }
   return data;
+}
+
+export async function saveCustomField(input: Partial<CustomFieldDefinition> & { name: string }): Promise<CustomFieldDefinition> {
+  const { data } = input.id
+    ? await api.patch(`/api/contacts/custom-fields/${input.id}`, input)
+    : await api.post('/api/contacts/custom-fields', input);
+  return data;
+}
+
+export async function deleteCustomField(id: string): Promise<void> {
+  await api.delete(`/api/contacts/custom-fields/${id}`);
+}
+
+export async function fetchContactFields(): Promise<ContactFieldRow[]> {
+  const { data } = await api.get('/api/contacts/contact-fields');
+  return data;
+}
+
+export async function saveContactFieldView(fields: Pick<ContactFieldRow, 'fieldKey' | 'visibility'>[]): Promise<void> {
+  await api.put('/api/contacts/contact-fields/view', { fields });
+}
+
+export async function fetchUserInvitations(): Promise<UserInvitation[]> {
+  const { data } = await api.get('/api/system/user-invitations');
+  return data;
+}
+
+export async function inviteWorkspaceUser(input: {
+  name?: string;
+  email: string;
+  role: string;
+  primaryTeamId?: string | null;
+}): Promise<UserInvitation> {
+  const { data } = await api.post('/api/system/user-invitations', input);
+  return data;
+}
+
+export async function revokeUserInvitation(id: string): Promise<void> {
+  await api.delete(`/api/system/user-invitations/${id}`);
+}
+
+export type InvitationPreview = {
+  email: string;
+  name: string | null;
+  role: string;
+  invitedByName: string;
+  expiresAt: string;
+  workspaceName: string;
+  teamName: string | null;
+  requiresExistingPassword: boolean;
+};
+
+export async function fetchInvitationPreview(token: string): Promise<InvitationPreview> {
+  const { data } = await api.get(`/api/auth/invitations/${encodeURIComponent(token)}`);
+  return data;
+}
+
+export async function acceptWorkspaceInvitation(token: string, input: { name?: string; password: string }): Promise<void> {
+  await api.post(`/api/auth/invitations/${encodeURIComponent(token)}/accept`, input);
 }
 
 /** Seat consumption against the plan's allowance. `limit: null` = unlimited. */
@@ -672,6 +942,11 @@ export async function createSystemUser(input: {
 export async function updateSystemUser(id: string, input: {
   name?: string; email?: string; password?: string;
   primaryTeamId?: string | null; teamIds?: string[]; role?: string; phone?: string; isActive?: boolean;
+  restrictContactVisibility?: boolean;
+  contactVisibilityScope?: 'TEAM' | 'SELF';
+  restrictCalls?: boolean;
+  restrictWorkflows?: boolean;
+  maskPhoneAndEmail?: boolean;
 }): Promise<SystemUser> {
   const { data } = await api.patch(`/api/system/users/${id}`, input);
   return data;
@@ -684,10 +959,13 @@ export async function deleteSystemUser(id: string): Promise<void> {
 export async function fetchSessions(): Promise<Session[]> {
   const { data } = await api.get('/api/system/sessions');
   return data.map((s: any): Session => ({
+    id: s.id,
     sessionName: s.sessionName,
     label: s.label,
     connected: !!s.connected,
     phoneNumber: s.phoneNumber ?? null,
+    teamId: s.teamId ?? null,
+    isActive: !!s.isActive,
   }));
 }
 
@@ -730,6 +1008,10 @@ export async function fetchTemplates(params?: {
   includeInactive?: boolean;
 }): Promise<Template[]> {
   const { includeInactive, ...rest } = params || {};
+  if (rest.category === 'QUICK_REPLY') {
+    const { data } = await api.get('/api/snippets', { params: includeInactive ? {} : { active: 'true' } });
+    return data;
+  }
   const { data } = await api.get('/api/templates', {
     params: { ...rest, ...(includeInactive ? {} : { active: 'true' }) },
   });
@@ -859,6 +1141,7 @@ export type Team = {
   assignmentStrategy?: AssignmentStrategy;
   /** Max concurrent open conversations per agent. Null = unlimited. */
   maxConcurrentPerAgent?: number | null;
+  memberIds?: string[];
   _count?: {
     members: number;
     conversations: number;
@@ -888,6 +1171,66 @@ export async function updateTeam(id: string, input: Partial<Team>): Promise<Team
   return data;
 }
 
+export async function fetchSnippets(params?: { q?: string; topicId?: string; activeOnly?: boolean }): Promise<Template[]> {
+  const { data } = await api.get('/api/snippets', { params: {
+    q: params?.q || undefined,
+    topicId: params?.topicId || undefined,
+    active: params?.activeOnly ? 'true' : undefined,
+  } });
+  return data;
+}
+
+export async function fetchSnippetTopics(): Promise<SnippetTopic[]> {
+  const { data } = await api.get('/api/snippets/topics');
+  return data;
+}
+
+export async function createSnippetTopic(name: string): Promise<SnippetTopic> {
+  const { data } = await api.post('/api/snippets/topics', { name });
+  return data;
+}
+
+export async function deleteSnippetTopic(id: string): Promise<void> {
+  await api.delete(`/api/snippets/topics/${id}`);
+}
+
+export async function saveSnippet(input: {
+  id?: string;
+  title: string;
+  body: string;
+  shortCode?: string | null;
+  topicIds: string[];
+  isActive?: boolean;
+}): Promise<Template> {
+  if (input.id) {
+    const { data } = await api.patch(`/api/snippets/${input.id}`, input);
+    return data;
+  }
+  const { data } = await api.post('/api/snippets', input);
+  return data;
+}
+
+export async function deleteSnippet(id: string): Promise<void> {
+  await api.delete(`/api/snippets/${id}`);
+}
+
+export async function uploadSnippetAttachment(snippetId: string, file: File): Promise<SnippetAttachment> {
+  const { data } = await api.post(`/api/snippets/${snippetId}/attachments`, file, { headers: {
+    'Content-Type': file.type || 'application/octet-stream',
+    'X-File-Name': encodeURIComponent(file.name),
+  } });
+  return data;
+}
+
+export async function deleteSnippetAttachment(snippetId: string, attachmentId: string): Promise<void> {
+  await api.delete(`/api/snippets/${snippetId}/attachments/${attachmentId}`);
+}
+
+export async function updateTeamMembers(id: string, userIds: string[]): Promise<{ teamId: string; memberIds: string[] }> {
+  const { data } = await api.put(`/api/system/teams/${id}/members`, { userIds });
+  return data;
+}
+
 export async function deleteTeam(id: string): Promise<void> {
   await api.delete(`/api/system/teams/${id}`);
 }
@@ -910,6 +1253,106 @@ export async function deleteKeyword(id: string): Promise<void> {
 export async function setAgentAway(away: boolean): Promise<{ isAway: boolean }> {
   const { data } = await api.patch('/api/auth/me/away', { away });
   return data;
+}
+
+export type CurrentProfile = {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  avatarUrl: string | null;
+  locale: 'ar' | 'he' | 'en';
+  theme: 'light' | 'dark' | 'system';
+  notificationNewMessage: NotificationDelivery;
+  notificationAssignment: NotificationDelivery;
+  notificationMention: NotificationDelivery;
+  notificationResolution: NotificationDelivery;
+  notificationEscalation: NotificationDelivery;
+  notificationSound: boolean;
+  onboardingLifecycleComplete: boolean;
+  twoFactorEnabled: boolean;
+  isAway: boolean;
+  role: string;
+  organizationId: string;
+};
+
+export type NotificationDelivery = 'IN_APP' | 'OFF';
+export type NotificationPreferences = Pick<CurrentProfile,
+  | 'notificationNewMessage'
+  | 'notificationAssignment'
+  | 'notificationMention'
+  | 'notificationResolution'
+  | 'notificationEscalation'
+  | 'notificationSound'
+>;
+
+export async function fetchCurrentProfile(): Promise<CurrentProfile> {
+  const { data } = await api.get('/api/auth/me');
+  return data;
+}
+
+export async function updateCurrentProfile(input: Partial<Pick<CurrentProfile, 'name' | 'phone' | 'avatarUrl' | 'locale' | 'theme' | 'onboardingLifecycleComplete'>>): Promise<CurrentProfile> {
+  const { data } = await api.patch('/api/auth/me', input);
+  return data;
+}
+
+export async function changeCurrentPassword(currentPassword: string, newPassword: string): Promise<void> {
+  await api.post('/api/auth/change-password', { currentPassword, newPassword });
+}
+
+export async function updateNotificationPreferences(input: NotificationPreferences): Promise<NotificationPreferences> {
+  const { data } = await api.patch('/api/auth/me/notification-preferences', input);
+  return data;
+}
+
+export type WorkspaceRecipient = {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  role: string;
+};
+
+export type WorkspaceSettings = {
+  name: string;
+  timezone: string;
+  userInactivityTimeoutMinutes: number;
+  weeklyRecapEnabled: boolean;
+  weeklyRecapRecipientIds: string[];
+  eligibleRecipients: WorkspaceRecipient[];
+};
+
+export async function fetchWorkspaceSettings(): Promise<WorkspaceSettings> {
+  const { data } = await api.get('/api/system/workspace-settings');
+  return data as WorkspaceSettings;
+}
+
+export async function updateWorkspaceSettings(
+  input: Pick<WorkspaceSettings, 'name' | 'timezone' | 'userInactivityTimeoutMinutes' | 'weeklyRecapEnabled' | 'weeklyRecapRecipientIds'>,
+): Promise<WorkspaceSettings> {
+  const { data } = await api.patch('/api/system/workspace-settings', input);
+  return data as WorkspaceSettings;
+}
+
+export type TwoFactorSetup = {
+  secret: string;
+  setupToken: string;
+  qrDataUrl: string;
+  expiresIn: number;
+};
+
+export async function startTwoFactorSetup(currentPassword: string): Promise<TwoFactorSetup> {
+  const { data } = await api.post('/api/auth/me/2fa/setup', { currentPassword });
+  return data;
+}
+
+export async function enableTwoFactor(setupToken: string, code: string): Promise<{ enabled: true; recoveryCodes: string[]; signedOutEverywhere: true }> {
+  const { data } = await api.post('/api/auth/me/2fa/enable', { setupToken, code });
+  return data;
+}
+
+export async function disableTwoFactor(currentPassword: string, code: string): Promise<void> {
+  await api.delete('/api/auth/me/2fa', { data: { currentPassword, code } });
 }
 
 
@@ -1516,8 +1959,14 @@ export async function fetchWebhookReport(range: ReportRange): Promise<WebhookRep
 export type LifecycleStage = {
   id: string;
   name: string;
+  description: string | null;
   color: string | null;
+  emoji: string | null;
+  kind: 'ACTIVE' | 'LOST';
+  isDefault: boolean;
+  isWon: boolean;
   orderIndex: number;
+  contactCount: number;
 };
 
 export async function fetchLifecycleStages(): Promise<LifecycleStage[]> {
@@ -1527,7 +1976,10 @@ export async function fetchLifecycleStages(): Promise<LifecycleStage[]> {
 
 export async function createLifecycleStage(input: {
   name: string;
+  description?: string | null;
   color?: string | null;
+  emoji?: string | null;
+  kind: 'ACTIVE' | 'LOST';
 }): Promise<LifecycleStage> {
   const { data } = await api.post('/api/lifecycle-stages', input);
   return data;
@@ -1535,17 +1987,33 @@ export async function createLifecycleStage(input: {
 
 export async function updateLifecycleStage(
   id: string,
-  patch: { name?: string; color?: string | null; orderIndex?: number },
+  patch: {
+    name?: string;
+    description?: string | null;
+    color?: string | null;
+    emoji?: string | null;
+    kind?: 'ACTIVE' | 'LOST';
+    isDefault?: boolean;
+    isWon?: boolean;
+  },
 ): Promise<LifecycleStage> {
   const { data } = await api.patch(`/api/lifecycle-stages/${id}`, patch);
   return data;
 }
 
-/** Returns how many contacts still carry the deleted stage's name. */
+export async function reorderLifecycleStages(
+  kind: 'ACTIVE' | 'LOST',
+  stageIds: string[],
+): Promise<void> {
+  await api.put('/api/lifecycle-stages/reorder/all', { kind, stageIds });
+}
+
+/** Contacts are reassigned or explicitly cleared in the same delete transaction. */
 export async function deleteLifecycleStage(
   id: string,
-): Promise<{ deleted: boolean; affectedContacts: number }> {
-  const { data } = await api.delete(`/api/lifecycle-stages/${id}`);
+  options: { reassignToStageId: string | null },
+): Promise<{ deleted: boolean; affectedContacts: number; replacementStageId: string | null }> {
+  const { data } = await api.delete(`/api/lifecycle-stages/${id}`, { data: options });
   return data;
 }
 
@@ -1603,6 +2071,7 @@ export async function retryMessage(conversationId: string, messageId: string): P
     auto: !!data.isAuto,
     mediaUrl: data.mediaUrl ?? null,
     mediaType: data.mediaType ?? null,
+    mediaFileName: data.mediaFileName ?? null,
     status: data.status ?? undefined,
     failureReason: data.failureReason ?? null,
     isInternal: !!data.isInternal,
