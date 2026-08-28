@@ -297,6 +297,59 @@ When work resumes:
 6. After every material backend edit, run the backend build before adding more surface area.
 7. Before every database migration, run the complete isolation and browser gates, then create a restore-verified backup.
 
+Precondition, every fresh checkout. Dependencies are not committed, and without
+them `npx` reaches the network and runs whatever Prisma is newest: this checkout
+resolved Prisma `8.0.0-rc.12` against a schema declared `^5.10.0`, where
+`prisma format` does not exist and `migrate deploy` would have driven a
+three-major-version-newer CLI into the database. Run this first, and stop if the
+version check disagrees:
+
+```powershell
+cd "C:\Desktop\RabiTech V5 Unfoolded\RabiTech V5\apps\backend"; npm ci
+cd "C:\Desktop\RabiTech V5 Unfoolded\RabiTech V5\apps\frontend"; npm ci
+
+cd "C:\Desktop\RabiTech V5 Unfoolded\RabiTech V5\apps\backend"
+npx prisma --version
+# Both the prisma and @prisma/client lines must report 5.x, inside the
+# ^5.10.0 range declared in apps/backend/package.json. Any other version
+# means npx resolved a CLI from outside the project: do not run format,
+# generate, migrate, or deploy until it reports 5.x.
+```
+
+Precondition, every resume after a transfer, restore, or long pause.
+`docker compose up` starts containers from whatever images already exist; it
+never rebuilds them. On 2026-08-28 that served a backend and frontend built
+`2026-08-23` against a `2026-08-27` source tree, and the symptom looked like
+missing work: `/settings/snippets`, `/settings/tags`, `/settings/contact-fields`,
+and `/settings/conversations` all returned `404` because those routes were not
+in the running bundle, while `prisma migrate status` inside the container
+reported `Database schema is up to date!` at `53` migrations because the image
+carried `53` of the `64` present on disk. The database, the folder, and the
+branch were all correct. Rebuild before drawing any conclusion from a route
+status or a migration count:
+
+```powershell
+cd "C:\Desktop\RabiTech V5 Unfoolded\RabiTech V5"
+docker compose build backend frontend
+docker compose run --rm --no-deps backend npx prisma migrate status
+```
+
+Consequence for the next session. The current backend image was built while
+migration `64` (`20260916090000_conversation_operations`) was deliberately held
+out of `apps/backend/prisma/migrations`, so that image contains `63` migrations.
+The migration file has since been restored to disk, but the running image cannot
+see it. Resuming Conversation Operations therefore requires rebuilding the
+backend before any deploy, or Prisma will keep reporting `63`, report itself up
+to date, and silently skip migration `64`:
+
+```powershell
+docker compose build backend
+docker compose run --rm --no-deps backend npx prisma migrate status
+# Must report 64 migrations found. If it still says 63, the image is stale
+# and migrate deploy would be a no-op.
+docker compose run --rm --no-deps backend npx prisma migrate deploy
+```
+
 Core commands:
 
 ```powershell
