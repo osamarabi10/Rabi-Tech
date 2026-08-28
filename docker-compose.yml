@@ -13,20 +13,31 @@ services:
     ports:
       # Remapped off 5432: another local stack holds it. The container-internal
       # port is unchanged, so compose service URLs still read postgres:5432.
-      - "15432:5432"
+      # Loopback only: nothing off this machine has business reaching the
+      # database. Both families are bound because localhost resolves to ::1
+      # first here, and host-run Prisma and the tenancy harness dial localhost.
+      - "127.0.0.1:15432:5432"
+      - "[::1]:15432:5432"
 
   redis:
     image: redis:7-alpine
     restart: always
     ports:
-      - "6379:6379"
+      # Loopback only, both families. Redis has no password: an exposed port
+      # is the whole security boundary.
+      - "127.0.0.1:6379:6379"
+      - "[::1]:6379:6379"
 
   openwa:
     image: ghcr.io/rmyndharis/openwa:latest
     restart: always
     ports:
-      - "13000:2785"   # REST API
-      - "13001:2886"   # Web dashboard (QR scanning)
+      # Loopback only, both families. The backend reaches the gateway over the
+      # compose network (openwa:2785), never through these host ports.
+      - "127.0.0.1:13000:2785"   # REST API
+      - "[::1]:13000:2785"
+      - "127.0.0.1:13001:2886"   # Web dashboard (QR scanning)
+      - "[::1]:13001:2886"
     environment:
       - API_KEY=${OPENWA_API_KEY}
       - REDIS_HOST=redis
