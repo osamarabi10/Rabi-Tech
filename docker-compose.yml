@@ -11,7 +11,9 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      # Remapped off 5432: another local stack holds it. The container-internal
+      # port is unchanged, so compose service URLs still read postgres:5432.
+      - "15432:5432"
 
   redis:
     image: redis:7-alpine
@@ -23,8 +25,8 @@ services:
     image: ghcr.io/rmyndharis/openwa:latest
     restart: always
     ports:
-      - "3000:2785"   # REST API
-      - "3001:2886"   # Web dashboard (QR scanning)
+      - "13000:2785"   # REST API
+      - "13001:2886"   # Web dashboard (QR scanning)
     environment:
       - API_KEY=${OPENWA_API_KEY}
       - REDIS_HOST=redis
@@ -132,7 +134,9 @@ services:
         NEXT_PUBLIC_PRIVACY_URL: ${NEXT_PUBLIC_PRIVACY_URL:-}
     restart: always
     ports:
-      - "8080:8080"
+      # 8081 is deliberately skipped: Playwright starts its own Next server
+      # there with reuseExistingServer false.
+      - "18080:8080"
     depends_on:
       - backend
     environment:

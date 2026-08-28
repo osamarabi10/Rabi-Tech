@@ -21,11 +21,32 @@ Every completed UI must support:
 
 The local production-like Docker stack is running at:
 
-- Frontend: `http://localhost:8080`
+- Frontend: `http://localhost:18080`
 - Backend: `http://localhost:4000`
 - Backend health: `http://localhost:4000/health`
 - OpenWA: healthy in Docker
 - PostgreSQL and Redis: running in Docker
+
+### Host port map
+
+Host ports were remapped because another local stack on this machine holds
+`5432`, `8080`, `3000`, and `3001`. Container-internal ports are unchanged, so
+every compose service URL still reads `postgres:5432`, `openwa:2785`, and
+`backend:4000`.
+
+| Service | Host port | Container port |
+|---|---|---|
+| PostgreSQL | `15432` | `5432` |
+| Frontend | `18080` | `8080` |
+| Backend | `4000` | `4000` |
+| Redis | `6379` | `6379` |
+| OpenWA REST | `13000` | `2785` |
+| OpenWA dashboard | `13001` | `2886` |
+
+`8081` is deliberately left free: `playwright.config.ts` starts its own Next
+server there with `reuseExistingServer: false`, so binding it would break the
+browser gate. Host-run commands read `DATABASE_URL` from `.env`, which must
+point at `localhost:15432` — pointing it at `5432` reaches the other stack.
 
 Live database state:
 
