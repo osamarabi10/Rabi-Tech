@@ -1046,3 +1046,100 @@ test('disabling two-factor authentication requires password and a current factor
   await expect.poll(() => disablePayload).toEqual({ currentPassword: 'Strong-password-123!', code: 'ABCD-EFGH-0001' });
   await expect(page).toHaveURL(/\/login$/);
 });
+
+// ---------------------------------------------------------------------------
+// /settings/conversations — Conversation Operations (migration 64).
+//
+// The API is mocked, as everywhere else in this matrix, so these run without a
+// backend or a database. That is what makes them safe to run while migration 64
+// is still unapplied: the mock defines the shape the screen must render, and
+// the server-side contracts are proved separately by the isolation gate.
+// ---------------------------------------------------------------------------
+
+type ConversationSettingsPayload = Record<string, unknown>;
+
+const conversationSettingsFixture = () => ({
+  autoCloseEnabled: true,
+  autoCloseDurationMinutes: 120,
+  autoCloseEnabledAt: '2026-08-20T09:00:00.000Z',
+  manualClosingNotesEnabled: false,
+  manualClosingNoteMode: 'OPTIONAL',
+  categories: [
+    { id: 'cat-resolved', name: 'Resolved', description: 'Customer question answered' },
+    { id: 'cat-duplicate', name: 'Duplicate', description: null },
+  ],
+  limits: { minAutoCloseMinutes: 30, maxAutoCloseMinutes: 20160, maxCategories: 50 },
+});
+
+async function mockConversationSettings(
+  page: Page,
+  onPatch?: (payload: ConversationSettingsPayload) => void,
+) {
+  const current = conversationSettingsFixture();
+  await page.route('**/api/conversation-settings**', async (route) => {
+    const request = route.request();
+    const method = request.method();
+    if (method === 'GET') {
+      await route.fulfill({ json: current });
+      return;
+    }
+    if (method === 'PATCH') {
+      const payload = request.postDataJSON() as ConversationSettingsPayload;
+      onPatch?.(payload);
+      Object.assign(current, payload);
+      await route.fulfill({ json: current });
+      return;
+    }
+    await route.fulfill({ json: current });
+  });
+}
+
+for (const scenario of scenarios) {
+  test(`${scenario.name}: conversation settings remain responsive`, async ({ page }, testInfo) => {
+    await prepareSettings(page, scenario);
+    await mockConversationSettings(page);
+
+    await page.goto('/settings/conversations');
+    await expect(page).toHaveURL(/\/settings\/conversations$/);
+
+    // Direction, theme, a single current rail item, and no horizontal overflow
+    // at 375 / 768 / 1440. Two of the three languages are right-to-left.
+    await expectSettingsFrame(page, scenario);
+
+    // The two policy sections must both render, in every language.
+    await expect(page.locator('#auto-close-title')).toBeVisible();
+    await expect(page.locator('#categories-title')).toBeVisible();
+
+    // Categories arrive from the server, not from hardcoded copy.
+    await expect(page.getByText('Resolved', { exact: true })).toBeVisible();
+
+    await page.screenshot({
+      path: testInfo.outputPath(`${scenario.name}-conversations.png`),
+      fullPage: true,
+    });
+  });
+}
+
+test('closing-note policy mutation sends exactly what the operator chose', async ({ page }) => {
+  const patches: ConversationSettingsPayload[] = [];
+  const display = { locale: 'en', theme: 'light', width: 1440, height: 900 } as const;
+
+  await prepareSettings(page, display);
+  await mockConversationSettings(page, (payload) => patches.push(payload));
+
+  await page.goto('/settings/conversations');
+  await expect(page.locator('#auto-close-title')).toBeVisible();
+
+  // Turning closing notes on is the control that makes a category mandatory at
+  // close time. The server enforces the rule independently - this asserts the
+  // UI asks for the right thing, not that the rule holds.
+  const closingNotes = page.getByRole('switch', { name: 'Closing notes' });
+  await expect(closingNotes).toBeVisible();
+  await closingNotes.click();
+
+  await page.getByRole('button', { name: 'Save settings' }).click();
+
+  await expect.poll(() => patches.length).toBeGreaterThan(0);
+  const sent = patches[patches.length - 1];
+  expect(sent).toHaveProperty('manualClosingNotesEnabled', true);
+});
