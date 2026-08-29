@@ -4131,6 +4131,39 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
       resetEditionCacheForTests();
     });
+
+    await check('billing: the edition catalogue loads on a timer, with no ambient scope', async () => {
+      const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
+
+      resetEditionCacheForTests();
+
+      // Called exactly as the background timer calls it: no runAsPlatform, no
+      // request, no tenant. This is the shape that was broken for the whole
+      // life of the feature - the refresh threw TENANT_ISOLATION_VIOLATION on
+      // every tick, its own catch turned that into a log line, and getEdition
+      // fell back to the constant forever. The catalogue was owner-editable in
+      // the database and inert in the running process, and nothing failed,
+      // because the fallback returns plausible values.
+      //
+      // Every other check wrapped the call in runAsPlatform, which is why they
+      // all passed while the product did not work.
+      const loaded = await refreshEditions();
+      assert.ok(loaded >= 5, `unscoped refresh must load the catalogue, loaded ${loaded}`);
+
+      // And the loaded values must be the database's, not the constant's.
+      await raw.plan.update({ where: { code: 'BUSINESS' }, data: { monthlyPriceCents: 20900 } });
+      const reloaded = await refreshEditions();
+      assert.ok(reloaded >= 5);
+      assert.equal(
+        getEdition('BUSINESS').monthlyPriceCents,
+        20900,
+        'an unscoped refresh must read the database, not fall back to the constant',
+      );
+
+      await raw.plan.update({ where: { code: 'BUSINESS' }, data: { monthlyPriceCents: 19900 } });
+      await refreshEditions();
+      resetEditionCacheForTests();
+    });
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
       const hour = floorToHour(new Date());
