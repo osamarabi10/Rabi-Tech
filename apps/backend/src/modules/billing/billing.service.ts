@@ -48,6 +48,21 @@ async function uniqueSlug(base: string): Promise<string> {
   return `${clean}-${crypto.randomBytes(4).toString('hex')}`;
 }
 
+/**
+ * Seeds the plan catalogue on boot. **Create-only, deliberately.**
+ *
+ * This used to rewrite name, price, sortOrder and isActive on every start.
+ * That was harmless while the constant was the only source of truth — the row
+ * was a projection of it, so re-projecting cost nothing. It stops being
+ * harmless the moment an owner can edit a plan from the console: the same
+ * update branch reverts their change at the next restart, so a price set on
+ * Friday is back to the shipped default by Monday with nothing in any log to
+ * say why. The owner would be left believing the console does not work.
+ *
+ * So the constant seeds a plan that does not exist yet and never touches one
+ * that does. `PLAN_ENTITLEMENTS` stays the seed source and the boot fallback;
+ * once a row exists, the row is the truth.
+ */
 export async function ensurePlans(): Promise<void> {
   await runAsPlatform('billing-ensure-plans', async () => {
     for (const plan of Object.values(PLAN_ENTITLEMENTS)) {
@@ -60,12 +75,9 @@ export async function ensurePlans(): Promise<void> {
           monthlyPriceCents: plan.monthlyPriceCents,
           sortOrder: ['FREE', 'GROWTH', 'BUSINESS', 'ENTERPRISE'].indexOf(plan.code),
         },
-        update: {
-          name: plan.name,
-          monthlyPriceCents: plan.monthlyPriceCents,
-          sortOrder: ['FREE', 'GROWTH', 'BUSINESS', 'ENTERPRISE'].indexOf(plan.code),
-          isActive: true,
-        },
+        // Empty on purpose. An existing row is owner-editable state, not a
+        // copy of the constant to be refreshed. See the note above.
+        update: {},
       });
     }
   });
