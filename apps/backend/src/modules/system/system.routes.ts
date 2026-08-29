@@ -175,7 +175,21 @@ router.post('/teams', requireAdmin, async (req, res) => {
 
     const team = await prisma.$transaction(async (tx) => {
       if (isDefault) {
-        await tx.team.updateMany({ data: { isDefault: false } });
+        // The `where` is not optional here, whatever Prisma's types say.
+        //
+        // Without it this cleared isDefault on every team in every organization
+        // on the platform: the tenant extension only injected organizationId
+        // into an updateMany that already had a where to augment, so a call
+        // with none ran with no tenant predicate at all. One admin promoting
+        // their own default team demoted everyone else's.
+        //
+        // The extension now creates the where when it is absent, so this is
+        // belt and braces — kept explicit because a reader should be able to
+        // see the tenant boundary at the call site rather than infer it.
+        await tx.team.updateMany({
+          where: { organizationId: req.user!.organizationId },
+          data: { isDefault: false },
+        });
       }
       return tx.team.create({
         data: {

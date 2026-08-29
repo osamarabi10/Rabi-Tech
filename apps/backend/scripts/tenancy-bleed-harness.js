@@ -4292,6 +4292,52 @@ async function databaseAudits() {
       );
     });
 
+    await check('database: a where-less updateMany cannot reach another tenant', async () => {
+      // updateMany and deleteMany take an OPTIONAL where, unlike update and
+      // delete. The tenant extension used to inject organizationId only into
+      // an existing where, so a call with none ran with no tenant predicate at
+      // all - the two operations that touch the most rows were the two that
+      // could run unscoped, silently, raising nothing.
+      //
+      // Live example this is written against: creating a team with
+      // isDefault:true ran team.updateMany({ data: { isDefault: false } }) and
+      // cleared isDefault on every team in every organization on the platform.
+      const teamA = { id: 'bleed_manyops_team_a', organizationId: orgA.organizationId, name: 'Many A', slug: 'many-a', isDefault: true };
+      const teamB = { id: 'bleed_manyops_team_b', organizationId: orgB.organizationId, name: 'Many B', slug: 'many-b', isDefault: true };
+      await raw.team.create({ data: teamA });
+      await raw.team.create({ data: teamB });
+
+      try {
+        // Exactly the shape of the shipped bug: no where at all.
+        await runAsOrganization(orgA.organizationId, () =>
+          scoped.team.updateMany({ data: { isDefault: false } }));
+
+        const afterA = await raw.team.findUnique({ where: { id: teamA.id } });
+        const afterB = await raw.team.findUnique({ where: { id: teamB.id } });
+        assert.equal(afterA.isDefault, false, "the org A team should have been updated");
+        assert.equal(
+          afterB.isDefault,
+          true,
+          'a where-less updateMany in org A reached org B - the tenant predicate was not applied',
+        );
+
+        // Same again for the destructive twin, which is the one that cannot be
+        // undone if it ever escapes its tenant.
+        await runAsOrganization(orgA.organizationId, () => scoped.team.deleteMany({}));
+        assert.equal(
+          await raw.team.count({ where: { id: teamB.id } }),
+          1,
+          'a where-less deleteMany in org A destroyed org B rows',
+        );
+        assert.equal(
+          await raw.team.count({ where: { id: teamA.id } }),
+          0,
+          "org A's own deleteMany should still delete org A rows",
+        );
+      } finally {
+        await raw.team.deleteMany({ where: { id: { in: [teamA.id, teamB.id] } } });
+      }
+    });
     await check('database: cross-org nested write is rejected by a composite FK', async () => {
       await assert.rejects(() =>
         runAsOrganization(orgA.organizationId, () =>

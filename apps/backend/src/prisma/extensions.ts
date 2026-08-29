@@ -89,11 +89,34 @@ export const tenancyExtension = Prisma.defineExtension((client) => {
             }
           }
 
-          // Inject into where (findUnique/findUniqueOrThrow/update/delete/updateMany/deleteMany)
-          if (['findUnique', 'findUniqueOrThrow', 'update', 'delete', 'updateMany', 'deleteMany'].includes(operation)) {
+          // Inject into where for the operations whose `where` Prisma requires.
+          //
+          // These cannot be issued without one, so augmenting an existing where
+          // is sufficient: there is no "absent where" case that is also a valid
+          // query, and manufacturing one would turn an invalid call into a
+          // differently invalid call rather than into a safe one.
+          if (['findUnique', 'findUniqueOrThrow', 'update', 'delete'].includes(operation)) {
             if (anyArgs?.where) {
               anyArgs.where = { ...anyArgs.where, organizationId };
             }
+          }
+
+          // updateMany and deleteMany take an OPTIONAL where, and that is the
+          // entire difference.
+          //
+          // Augmenting only an existing where meant `deleteMany({})` and
+          // `updateMany({ data })` reached the database with no tenant
+          // predicate at all — not "delete mine" but "delete every
+          // organization's", silently, with no error raised and no scope
+          // violation logged. The operation that destroys the most rows was the
+          // one operation that could run unscoped.
+          //
+          // Found through system.routes.ts:178, where creating a default team
+          // cleared isDefault on every team on the platform. These belong with
+          // the read operations below — the branch that CREATES the where when
+          // it is absent rather than only augmenting one that exists.
+          if (['updateMany', 'deleteMany'].includes(operation)) {
+            anyArgs.where = { ...(anyArgs.where || {}), organizationId };
           }
 
           // Inject into the filter for read and aggregate operations.
