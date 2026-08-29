@@ -164,11 +164,13 @@ router.patch('/organizations/:organizationId', async (req, res) => {
       return res.status(400).json({ error: 'No branding fields supplied' });
     }
     const row = await runAsPlatform(`branding-platform-update:${req.params.organizationId}`, async () => {
-      const organization = await prisma.organization.findUnique({
-        where: { id: req.params.organizationId },
-        select: { tier: true },
-      });
-      assertFooterEntitlement(organization?.tier || 'FREE', normalized);
+      // The effective plan, not the raw tier. This path used to read
+      // Organization.tier directly while the tenant-facing one resolved
+      // entitlements, so an organization overridden to BUSINESS could remove its
+      // own footer while the owner editing on its behalf was refused. Same
+      // feature, two answers.
+      const effective = await resolveEntitlements(req.params.organizationId);
+      assertFooterEntitlement(effective.plan, normalized);
       const current = await prisma.organizationBranding.findUnique({
         where: { organizationId: req.params.organizationId },
       });

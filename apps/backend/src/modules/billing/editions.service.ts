@@ -37,6 +37,14 @@ import { PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, normalizePlanCode } from
 const REFRESH_INTERVAL_MS = Number(process.env.EDITION_REFRESH_MS || 30_000);
 
 let cache: Map<string, PlanEntitlements> | null = null;
+/**
+ * When each edition was last edited.
+ *
+ * Kept beside the catalogue because drift detection needs it: an
+ * OrganizationConfig written before its edition was last edited diverges for a
+ * reason that is not drift. See detectQuotaDrift in billing.service.ts.
+ */
+let editedAt: Map<string, Date> | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
 
 /** Shape a database row into the same object the constant provides. */
@@ -93,9 +101,11 @@ export async function refreshEditions(): Promise<number> {
       return cache?.size ?? 0;
     }
     const next = new Map<string, PlanEntitlements>();
+    const nextEditedAt = new Map<string, Date>();
     for (const row of rows) {
       try {
         next.set(row.code, rowToEdition(row));
+        nextEditedAt.set(row.code, row.updatedAt);
       } catch {
         // An edition the code has never heard of cannot be normalized. Skip it
         // rather than failing the whole refresh: one bad row must not take the
@@ -104,6 +114,7 @@ export async function refreshEditions(): Promise<number> {
       }
     }
     cache = next;
+    editedAt = nextEditedAt;
     return next.size;
   } catch (error) {
     logger.error('Failed to refresh edition catalogue; keeping previous values', {
@@ -143,7 +154,18 @@ export function getEditions(): PlanEntitlements[] {
   return Array.from(cache.values());
 }
 
+/**
+ * When this edition was last edited, or null if the catalogue has not loaded.
+ *
+ * Null is not "never edited" - it is "unknown" - and callers must treat it as
+ * such rather than as a timestamp at the epoch, which would suppress nothing.
+ */
+export function getEditionEditedAt(code: PlanCode): Date | null {
+  return editedAt?.get(code) ?? null;
+}
+
 /** Test seam: forget everything and fall back to the constant. */
 export function resetEditionCacheForTests(): void {
   cache = null;
+  editedAt = null;
 }

@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import { getEdition } from '../billing/editions.service';
+import { normalizePlanCode, PlanEntitlements } from '../billing/plans';
 import fs from 'fs/promises';
 import path from 'path';
 import { Organization, OrganizationBranding } from '@prisma/client';
@@ -50,15 +52,36 @@ const DEFAULT_BRANDING: PublicBranding = {
 };
 
 const HSL_PATTERN = /^\d{1,3}(?:\.\d+)?\s+\d{1,3}(?:\.\d+)?%\s+\d{1,3}(?:\.\d+)?%$/;
-const ENTITLED_FOOTER_TIERS = new Set(['BUSINESS', 'ENTERPRISE']);
-const ENTITLED_DOMAIN_TIERS = new Set(['BUSINESS', 'ENTERPRISE']);
 const REQUIRED_ATTRIBUTION = 'Powered by RabiTech';
 const ASSET_ROUTE_PREFIX = '/api/branding/assets';
 
 type BrandingWithOrg = OrganizationBranding & { organization?: Pick<Organization, 'tier'> | null };
 
+/**
+ * The edition for a tier string, falling back to the least privileged one.
+ *
+ * normalizePlanCode throws on a code it does not recognise, and a branding read
+ * must not fail with a 500 because a tier string was unexpected. FREE is the
+ * safe answer: an unknown tier grants nothing.
+ */
+function editionFor(tier: string | null | undefined): PlanEntitlements {
+  try {
+    return getEdition(normalizePlanCode(tier));
+  } catch {
+    return getEdition('FREE');
+  }
+}
+
+/**
+ * Whether this tier may replace the "Powered by RabiTech" attribution.
+ *
+ * Reads the resolved edition. This used to consult a Set of tier names local to
+ * this file - a second source of truth that could disagree with the catalogue,
+ * so the billing summary could report whiteLabel granted while branding refused
+ * it. There is one answer now, and the owner can change it without a deploy.
+ */
 export function canCustomizeFooter(tier: string | null | undefined): boolean {
-  return ENTITLED_FOOTER_TIERS.has(String(tier || 'FREE').toUpperCase());
+  return editionFor(tier).whiteLabel;
 }
 
 export function publicBranding(row?: BrandingWithOrg | null): PublicBranding {
@@ -151,12 +174,15 @@ export function normalizeBrandingInput(input: BrandingInput): BrandingInput {
 }
 
 export function assertFooterEntitlement(tier: string, input: BrandingInput): void {
-  const normalizedTier = String(tier || 'FREE').toUpperCase();
-  if (Object.prototype.hasOwnProperty.call(input, 'customFooter') && !canCustomizeFooter(tier)) {
+  const edition = editionFor(tier);
+  if (Object.prototype.hasOwnProperty.call(input, 'customFooter') && !edition.whiteLabel) {
     throw new Error('Current plan requires Powered by RabiTech attribution');
   }
-  if (input.customDomain && !ENTITLED_DOMAIN_TIERS.has(normalizedTier)) {
-    throw new Error('Custom domains require the Business plan or higher');
+  // Deliberately does not name a tier. Which editions grant custom domains is
+  // now owner-editable, so a message promising "Business or higher" would start
+  // lying the first time the catalogue is changed.
+  if (input.customDomain && !edition.customDomain) {
+    throw new Error('Custom domains are not included in the current plan');
   }
 }
 

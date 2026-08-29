@@ -3865,6 +3865,120 @@ async function databaseAudits() {
       assert.equal(enterprise.monthlyOutboundMessagesLimit, null);
       assert.equal(enterprise.usersLimit, null);
     });
+
+    await check('billing: feature grants are enforced from the catalogue, not a parallel constant', async () => {
+      const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
+      const { canCustomizeFooter, assertFooterEntitlement } = require('../src/modules/branding/branding.service');
+
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      // Baseline: the seeded catalogue says GROWTH grants neither.
+      assert.equal(getEdition('GROWTH').whiteLabel, false);
+      assert.equal(getEdition('GROWTH').customDomain, false);
+      assert.equal(canCustomizeFooter('GROWTH'), false, 'GROWTH must not customise the footer');
+      assert.throws(() => assertFooterEntitlement('GROWTH', { customFooter: 'x' }));
+      assert.throws(() => assertFooterEntitlement('GROWTH', { customDomain: 'x.example' }));
+
+      // Grant both on the edition. If branding still consulted its own tier
+      // Sets this would change nothing, which is exactly the defect being
+      // retired: a toggle that writes a field no enforcement path reads.
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: { whiteLabel: true, customDomain: true },
+      });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      assert.equal(canCustomizeFooter('GROWTH'), true, 'the catalogue must be what branding reads');
+      assert.doesNotThrow(() => assertFooterEntitlement('GROWTH', { customFooter: 'Mine' }));
+      assert.doesNotThrow(() => assertFooterEntitlement('GROWTH', { customDomain: 'x.example' }));
+
+      // maskContactDetails resolves from the same catalogue.
+      await raw.plan.update({ where: { code: 'GROWTH' }, data: { maskContactDetails: true } });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      assert.equal(getEdition('GROWTH').maskContactDetails, true);
+
+      // autoProvisionGateway is stored but deliberately NOT enforced. Asserting
+      // that keeps the claim honest: if someone later wires it, this fails and
+      // the schema comment and console copy have to be corrected with it.
+      const provisioningReads = fs
+        .readFileSync(path.join(ROOT, 'src/modules/billing/billing.service.ts'), 'utf8')
+        .split(/\r?\n/)
+        .filter((line) => line.includes('autoProvisionGateway'));
+      assert.ok(
+        provisioningReads.every((line) => line.includes('entitlements.autoProvisionGateway')),
+        'autoProvisionGateway may only be reported, never used to permit or refuse',
+      );
+
+      // Restore the seeded values so later checks see the catalogue as shipped.
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: { whiteLabel: false, customDomain: false, maskContactDetails: false },
+      });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      resetEditionCacheForTests();
+    });
+
+    await check('billing: editing an edition is a new baseline, not drift', async () => {
+      const { refreshEditions, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
+      const { getBillingSummary } = require('../src/modules/billing/billing.service');
+
+      // Put org A on GROWTH with config matching the catalogue exactly, and
+      // stamp the config in the past so an edition edit lands after it.
+      const growth = await raw.plan.findUnique({ where: { code: 'GROWTH' } });
+      await raw.organization.update({
+        where: { id: orgA.organizationId },
+        data: { tier: 'GROWTH' },
+      });
+      await raw.organizationConfig.update({
+        where: { organizationId: orgA.organizationId },
+        data: {
+          monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit,
+          monthlyOutboundMessagesLimit: growth.monthlyOutboundMessagesLimit,
+          monthlyCampaignSendsLimit: growth.monthlyCampaignSendsLimit,
+          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+      });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      const before = await runAsOrganization(orgA.organizationId, () => getBillingSummary(orgA.organizationId));
+      assert.deepEqual(before.quotaDrift, [], 'config matching the catalogue is never drift');
+
+      // The owner raises the allowance. Every organization on GROWTH now has a
+      // config that no longer matches the edition - by design, not by tampering.
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit + 500 },
+      });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      const after = await runAsOrganization(orgA.organizationId, () => getBillingSummary(orgA.organizationId));
+      assert.deepEqual(
+        after.quotaDrift,
+        [],
+        'an edition edit is a new baseline; a detector that fires on every org is one nobody reads',
+      );
+
+      // The detector must still work. Tamper with config *after* the edit, and
+      // the divergence is no longer explained by the edition.
+      await raw.organizationConfig.update({
+        where: { organizationId: orgA.organizationId },
+        data: { monthlyActiveContactsLimit: 7, updatedAt: new Date() },
+      });
+      const tampered = await runAsOrganization(orgA.organizationId, () => getBillingSummary(orgA.organizationId));
+      assert.ok(
+        tampered.quotaDrift.some((row) => row.metric === 'active_contacts'),
+        'out-of-band config changes must still be reported',
+      );
+
+      // Restore.
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit },
+      });
+      await raw.organization.update({ where: { id: orgA.organizationId }, data: { tier: 'FREE' } });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      resetEditionCacheForTests();
+    });
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
       const hour = floorToHour(new Date());
