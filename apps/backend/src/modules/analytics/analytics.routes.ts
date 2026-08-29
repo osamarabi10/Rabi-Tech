@@ -6,6 +6,7 @@ import { requirePermission } from '../../middleware/rbac.middleware';
 import {
   campaignPerformance,
   campaignRepliedContactWhere,
+  closureReport,
   firstResponseStats,
   gatewayReport,
   hourOfDayHeatmap,
@@ -122,6 +123,28 @@ router.get('/conversations', requirePermission('analytics:read'), async (req, re
     res.json({ period, firstResponse, resolution, heatmap });
   } catch (err) {
     logger.error('analytics conversations failed', {
+      error: String(err),
+      requestId: (req as any).id,
+    });
+    res.status(500).json({ error: 'فشل جلب التقرير', requestId: (req as any).id });
+  }
+});
+
+/**
+ * Closure outcomes: category, source, and summary coverage.
+ *
+ * Every breakdown sums to `total` - including the uncategorised bucket, which
+ * is reported rather than hidden so the parts always reconcile with the whole.
+ */
+router.get('/closures', requirePermission('analytics:read'), async (req, res) => {
+  const period = parsePeriod(req.query as Record<string, unknown>);
+  if (isPeriodError(period)) return res.status(400).json({ error: period.error });
+
+  try {
+    const report = await closureReport(period);
+    res.json({ period, ...report });
+  } catch (err) {
+    logger.error('analytics closures failed', {
       error: String(err),
       requestId: (req as any).id,
     });

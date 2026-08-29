@@ -3693,6 +3693,119 @@ async function databaseAudits() {
         }));
     });
 
+
+    await check('conversations: closure reporting reconciles exactly with the stored closures', async () => {
+      const { closureReport } = require('../src/modules/analytics/reporting.service');
+
+      // A deliberately awkward spread. Uncategorised closures and absent
+      // summaries are the cases a naive report drops, and dropping them is
+      // exactly how a breakdown stops summing to its own total.
+      const windowStart = new Date('2026-07-01T00:00:00.000Z');
+      const windowEnd = new Date('2026-08-01T00:00:00.000Z');
+      const at = (day) => new Date(`2026-07-${String(day).padStart(2, '0')}T12:00:00.000Z`);
+
+      const host = await newConversation(orgA, 'recon_host');
+      const seed = (suffix, categoryName, summary, source, day) =>
+        raw.conversationClosure.create({
+          data: {
+            id: `bleed_recon_${suffix}`,
+            organizationId: orgA.organizationId,
+            conversationId: host.id,
+            categoryId: null,
+            categoryName,
+            summary,
+            source,
+            openedAt: at(day),
+            closedAt: at(day),
+          },
+        });
+
+      await seed('a1', 'Resolved', 'answered', 'MANUAL', 2);
+      await seed('a2', 'Resolved', null, 'MANUAL', 3);
+      await seed('a3', 'Duplicate', 'dupe of 12', 'MANUAL', 4);
+      await seed('a4', null, null, 'AUTO_CLOSE', 5);
+      await seed('a5', null, 'closed by timer', 'AUTO_CLOSE', 6);
+      await seed('a6', 'Deleted Category', 'name survived', 'WORKFLOW', 7);
+
+      // Another organization closing in the same window must not appear.
+      const hostB = await newConversation(orgB, 'recon_host_b');
+      await raw.conversationClosure.create({
+        data: {
+          id: 'bleed_recon_b1',
+          organizationId: orgB.organizationId,
+          conversationId: hostB.id,
+          categoryName: 'Org B Category',
+          summary: 'org b summary',
+          source: 'MANUAL',
+          openedAt: at(8),
+          closedAt: at(8),
+        },
+      });
+
+      // Outside the window: proves the period is applied at the source rather
+      // than by trimming results afterwards.
+      await raw.conversationClosure.create({
+        data: {
+          id: 'bleed_recon_outside',
+          organizationId: orgA.organizationId,
+          conversationId: host.id,
+          categoryName: 'Resolved',
+          summary: 'too early',
+          source: 'MANUAL',
+          openedAt: new Date('2026-06-01T12:00:00.000Z'),
+          closedAt: new Date('2026-06-01T12:00:00.000Z'),
+        },
+      });
+
+      const report = await runAsOrganization(orgA.organizationId, () =>
+        closureReport({ from: windowStart, to: windowEnd }));
+
+      const storedTotal = await raw.conversationClosure.count({
+        where: {
+          organizationId: orgA.organizationId,
+          closedAt: { gte: windowStart, lt: windowEnd },
+        },
+      });
+
+      const sum = (rows) => rows.reduce((running, row) => running + row.count, 0);
+
+      // Reconciliation stated as equalities, not as spot checks. Each of these
+      // is the whole property, not a sample of it.
+      assert.equal(report.total, storedTotal, 'report total must equal the stored row count');
+      assert.equal(sum(report.byCategory), report.total, 'category counts must sum to total');
+      assert.equal(sum(report.bySource), report.total, 'source counts must sum to total');
+      assert.equal(
+        report.summaries.withSummary + report.summaries.withoutSummary,
+        report.total,
+        'summary coverage must sum to total',
+      );
+
+      // The uncategorised bucket is reported, not hidden. Without it the
+      // category sum above would silently fall short.
+      const uncategorised = report.byCategory.find((row) => row.key === null);
+      assert.ok(uncategorised, 'uncategorised closures must appear as their own bucket');
+      assert.equal(uncategorised.count, 2);
+
+      // A category name outlives its category row, so historic reports stay put.
+      assert.ok(
+        report.byCategory.some((row) => row.key === 'Deleted Category'),
+        'a snapshot name must still group after the category is gone',
+      );
+
+      // Isolation: org B closed inside the same window and must be absent.
+      assert.ok(
+        !report.byCategory.some((row) => row.key === 'Org B Category'),
+        'another organization closure must not enter this report',
+      );
+      assert.equal(report.total, 6, 'exactly the six org A closures inside the window');
+
+      // The same reconciliation must hold for org B, from its own side.
+      const reportB = await runAsOrganization(orgB.organizationId, () =>
+        closureReport({ from: windowStart, to: windowEnd }));
+      assert.equal(reportB.total, 1);
+      assert.equal(sum(reportB.byCategory), reportB.total);
+      assert.equal(sum(reportB.bySource), reportB.total);
+    });
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
       const hour = floorToHour(new Date());

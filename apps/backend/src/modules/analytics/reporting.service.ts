@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { ConversationClosingSource, Prisma } from '@prisma/client';
 import { prisma } from '../../prisma';
 
 /**
@@ -715,5 +715,65 @@ export async function gatewayReport(period: Period): Promise<GatewayReport> {
     })),
     outbound: { total, failed, failureRatePct: rate(failed, total) },
     automation: { total, automated, automatedRatePct: rate(automated, total) },
+  };
+}
+
+/**
+ * Conversation closure reporting.
+ *
+ * The contract is reconciliation: every breakdown must sum to `total`. A report
+ * whose parts disagree with its own whole is worse than no report, because it
+ * gets quoted.
+ *
+ * That is why the category breakdown keeps its `null` bucket instead of
+ * dropping it. Closures made without a category are real closures; filtering
+ * them out would leave a tidy-looking list whose numbers silently do not add
+ * up. `groupBy` returns null as a group, and it is surfaced as
+ * `categoryName: null` for the caller to label.
+ *
+ * `categoryName` is grouped rather than `categoryId` on purpose. The name is
+ * the snapshot taken at close time and it survives the category being deleted;
+ * the id does not, and grouping by it would make historic reports change
+ * whenever someone tidied the category list.
+ */
+export type ClosureBreakdownRow<K> = { key: K; count: number };
+
+export type ClosureReport = {
+  total: number;
+  byCategory: ClosureBreakdownRow<string | null>[];
+  bySource: ClosureBreakdownRow<ConversationClosingSource>[];
+  summaries: { withSummary: number; withoutSummary: number };
+};
+
+export async function closureReport(period: Period): Promise<ClosureReport> {
+  const where = { closedAt: within(period) };
+
+  const [total, categories, sources, withSummary] = await Promise.all([
+    prisma.conversationClosure.count({ where }),
+    prisma.conversationClosure.groupBy({
+      by: ['categoryName'],
+      where,
+      _count: { _all: true },
+    }),
+    prisma.conversationClosure.groupBy({
+      by: ['source'],
+      where,
+      _count: { _all: true },
+    }),
+    // A summary is present when it is a non-null, non-empty string. The service
+    // normalizes '' to null on write, so `not: null` is sufficient here and does
+    // not need a length check.
+    prisma.conversationClosure.count({ where: { ...where, summary: { not: null } } }),
+  ]);
+
+  return {
+    total,
+    byCategory: categories
+      .map((row) => ({ key: row.categoryName, count: row._count._all }))
+      .sort((a, b) => b.count - a.count),
+    bySource: sources
+      .map((row) => ({ key: row.source, count: row._count._all }))
+      .sort((a, b) => b.count - a.count),
+    summaries: { withSummary, withoutSummary: total - withSummary },
   };
 }

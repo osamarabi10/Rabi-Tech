@@ -210,6 +210,23 @@ Verification state at stop:
 - Conversation Settings and Inbox closing behavior are not yet in the Playwright matrix.
 - Migration `64`, backup, Docker rebuild, deployment, route checks, health checks, and documentation certification remain undone.
 
+Deferred, recorded 2026-08-29 so it is not lost: **a browser test of the Inbox
+close form**. The responsive matrix now covers `/settings/conversations` across
+all eighteen combinations, and the closing-note mutation is asserted there —
+but the Inbox close form itself is untested in the browser. It lives inline in
+`app/(dashboard)/inbox/page.tsx` with no dedicated component, and there is no
+Inbox spec in the matrix at all, so covering it means building Inbox mock
+scaffolding — conversations, messages, contacts, assignment, channel state —
+from scratch.
+
+It was deferred on a judgement, not an oversight. The closing policy is
+enforced on the server, and the isolation gate proves it cannot be bypassed
+even by calling the service directly. A browser test would show the form
+renders and submits; it could not show the rule holds. So the scaffolding buys
+presentation coverage on top of a property that is already proven, which is not
+where the next hour of test-writing pays best. Scope it separately if an Inbox
+spec gets built for other reasons.
+
 ### First work on resume
 
 1. Inspect `git status --short` and the migration `20260916090000_conversation_operations`; do not reset the dirty worktree.
