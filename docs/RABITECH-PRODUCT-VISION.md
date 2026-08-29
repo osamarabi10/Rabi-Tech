@@ -146,29 +146,39 @@ implementation should hardcode one as though it were.
 
 Unresolved. **Do not guess these into code.**
 
-### OQ-1 — What does "رقم واتساب تلقائي / automatic WhatsApp number" mean on a BYOT tier? ⚠ BLOCKING
+### OQ-1 — "رقم واتساب تلقائي / automatic WhatsApp number" — RESOLVED 2026-08-29
 
-This is the most important open question in this document, and it appears
-self-contradictory as stated.
+**It means the connection completes automatically once credentials are supplied.
+It does not mean RabiTech provides the number.** The apparent contradiction with
+bring-your-own-token was a contradiction in reading, not in the product.
 
-The Meta-only tiers are **bring-your-own-token** (§3.3): the customer supplies
-their own Meta credentials. But those tiers have also been described as offering
-an *automatic WhatsApp number*, which implies RabiTech provisions a number on the
-customer's behalf. Those two cannot both be true without a third thing existing —
-a provisioning arrangement, a reseller relationship, or a Meta Tech Provider
-setup — none of which is described anywhere.
+The customer creates their own Meta Business account, obtains their own WhatsApp
+Business number, generates a System User token, and pastes their **Phone Number
+ID**, **WABA ID** and **access token** into RabiTech. RabiTech never touches Meta
+billing; the customer pays Meta directly. What is automatic is everything after
+the paste: validating the number, validating WABA access, subscribing the app to
+the WABA so inbound messages actually route, and reading back the messaging tier
+and quality rating. No QR scan, no support ticket, no waiting.
 
-Possible readings, none confirmed:
+That contrast is with the OpenWA path, where a person scans a QR code and the
+session can drop. On Meta there is nothing to scan and nothing to re-pair — the
+number is connected the moment the credentials validate, which is what
+"automatic" was describing.
 
-1. RabiTech provisions the number under a Meta Tech Provider arrangement, and
-   "BYOT" applies only to customers who already have their own.
-2. "Automatic" describes automated *setup assistance* on top of credentials the
-   customer still supplies.
-3. It is a carry-over from the OpenWA flow, where a number is paired by QR, and
-   does not apply to Meta tiers at all.
+Consequences now settled:
 
-**Resolve before the Meta channel is built.** The answer changes the onboarding
-flow, the credential storage model, and what the tier can honestly promise.
+- **The credential vault is a vault of other businesses' secrets.** A System User
+  token can send as that business. Losing one is impersonating a company to its
+  own customers, which is a different risk class from losing RabiTech's own
+  OpenWA key.
+- **Tokens die on their own** — a password change, a permission revoke, or the
+  System User being deleted. The channel needs a degraded state and revalidation;
+  it cannot assume a credential that worked yesterday works today.
+- **RabiTech carries no Meta cost and no Meta billing relationship**, so nothing
+  in the ladder needs to model per-message Meta pricing.
+
+The original three candidate readings are superseded. The one that was correct is
+the second: automated setup on top of credentials the customer supplies.
 
 ### OQ-2 — Confirm the channel policy
 
@@ -295,9 +305,8 @@ already a `String`, so no migration is needed for the column itself.
 
 This is `F5.5 / P12` in `docs/PHASES-TO-LAUNCH.md:190`, and
 `docs/RESPOND-IO-PARITY.md:262` already specifies the shape: a new adapter behind
-the same provider interface as OpenWA, not a parallel system. **Blocked on OQ-1**
-— the credential and provisioning model cannot be designed until "automatic
-number" versus bring-your-own-token is resolved. Unblocks three editions.
+the same provider interface as OpenWA, not a parallel system. **OQ-1 is resolved** (bring-your-own-token; see §4), so the credential and
+provisioning model can now be designed. Unblocks three editions.
 
 ### 6.4 Add per-edition channel policy
 
