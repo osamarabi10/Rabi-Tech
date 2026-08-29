@@ -3359,6 +3359,340 @@ async function databaseAudits() {
       assert.equal((await raw.contact.findUnique({ where: { id: orgB.records[0].contact.id } })).lifecycleStage, 'HTTP Source A');
     });
 
+    // ----------------------------------------------------------------
+    // Conversation Operations (migration 64).
+    //
+    // These run against the disposable schema, which has all 64
+    // migrations applied. That makes this the last cheap place to find
+    // a defect in migration 64 - before it reaches live data.
+    // ----------------------------------------------------------------
+    let convOpsSeq = 0;
+    const lifecycle = () => require('../src/modules/conversations/conversation-lifecycle.service');
+    const autoCloseWorker = () => require('../src/workers/auto-close.worker');
+
+    // Dedicated fixtures: these checks must never depend on rows an
+    // earlier check already mutated.
+    const newConversation = async (org, suffix, data = {}) => {
+      convOpsSeq += 1;
+      return raw.conversation.create({
+        data: {
+          id: `bleed_convops_${suffix}`,
+          organizationId: org.organizationId,
+          displayId: 9000 + convOpsSeq,
+          contactId: org.records[0].contact.id,
+          sessionId: org.sessionId,
+          status: 'OPEN',
+          ...data,
+        },
+      });
+    };
+    const newCategory = (org, suffix, name) =>
+      raw.conversationCategory.create({
+        data: { id: `bleed_cat_${suffix}`, organizationId: org.organizationId, name },
+      });
+    const closuresFor = (conversationId) =>
+      raw.conversationClosure.findMany({ where: { conversationId }, orderBy: { closedAt: 'asc' } });
+    const setPolicy = (org, data) =>
+      raw.organizationConfig.update({ where: { organizationId: org.organizationId }, data });
+
+    await check('conversations: category management is enforced by the stored role, not the token claim', async () => {
+      const mkUser = async (suffix, role) => {
+        await raw.identity.create({
+          data: { id: `bleed_ident_${suffix}`, email: `bleed-${suffix}@rabitech.test`, passwordHash: 'not-used' },
+        });
+        const user = await raw.user.create({
+          data: {
+            id: `bleed_actor_${suffix}`,
+            organizationId: orgA.organizationId,
+            identityId: `bleed_ident_${suffix}`,
+            name: `Actor ${suffix}`,
+            role,
+          },
+        });
+        return user.id;
+      };
+      const mkToken = (userId, roleClaim) => jwt.sign({
+        scope: 'ORGANIZATION',
+        id: userId,
+        email: 'bleed-actor@rabitech.test',
+        name: 'Actor',
+        role: roleClaim,
+        organizationId: orgA.organizationId,
+        tokenVersion: 0,
+      }, jwtSecret, { expiresIn: '10m' });
+
+      const agentId = await mkUser('agent', 'AGENT');
+      const viewerId = await mkUser('viewer', 'VIEWER');
+
+      const createCategory = (tok, name) => fetch(`${baseUrl}/api/conversation-settings/categories`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      const asAdmin = await createCategory(token, 'Role Gate Allowed');
+      assert.ok(asAdmin.status < 400, `admin must be allowed, got ${asAdmin.status}`);
+
+      assert.equal((await createCategory(mkToken(agentId, 'AGENT'), 'Agent Denied')).status, 403);
+      assert.equal((await createCategory(mkToken(viewerId, 'VIEWER'), 'Viewer Denied')).status, 403);
+
+      // A forged claim must not buy authority. The role is read from the
+      // user row, so escalating it in the token changes nothing.
+      assert.equal((await createCategory(mkToken(agentId, 'ADMIN'), 'Forged Claim')).status, 403);
+    });
+
+    await check('conversations: another organization category is not found, never forbidden', async () => {
+      const { closeConversation } = lifecycle();
+      const categoryB = await newCategory(orgB, 'xorg_b', 'Org B Only');
+      const conversation = await newConversation(orgA, 'xorg');
+
+      const error = await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({
+          conversationId: conversation.id,
+          source: 'MANUAL',
+          categoryId: categoryB.id,
+        }).then(() => null, (err) => err));
+
+      assert.ok(error, 'closing with another org category must fail');
+      assert.equal(error.code, 'CLOSING_CATEGORY_NOT_FOUND');
+      // 403 would confirm the row exists. Absence and denial must be
+      // indistinguishable across a tenant boundary.
+      assert.equal(error.status, 404);
+      assert.equal((await closuresFor(conversation.id)).length, 0);
+    });
+
+    await check('conversations: closing policy cannot be bypassed by calling the service directly', async () => {
+      const { closeConversation } = lifecycle();
+      await setPolicy(orgA, {
+        manualClosingNotesEnabled: true,
+        manualClosingNoteMode: 'CATEGORY_AND_SUMMARY_REQUIRED',
+      });
+      const category = await newCategory(orgA, 'policy_a', 'Policy Category');
+
+      const noCategory = await newConversation(orgA, 'policy_nocat');
+      const missingCategory = await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({ conversationId: noCategory.id, source: 'MANUAL' })
+          .then(() => null, (err) => err));
+      assert.equal(missingCategory && missingCategory.code, 'CLOSING_CATEGORY_REQUIRED');
+
+      const noSummary = await newConversation(orgA, 'policy_nosum');
+      const missingSummary = await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({ conversationId: noSummary.id, source: 'MANUAL', categoryId: category.id })
+          .then(() => null, (err) => err));
+      assert.equal(missingSummary && missingSummary.code, 'CLOSING_SUMMARY_REQUIRED');
+
+      // Neither rejection may leave a partial episode behind.
+      assert.equal((await closuresFor(noCategory.id)).length, 0);
+      assert.equal((await closuresFor(noSummary.id)).length, 0);
+      assert.equal((await raw.conversation.findUnique({ where: { id: noCategory.id } })).status, 'OPEN');
+
+      await setPolicy(orgA, { manualClosingNotesEnabled: false, manualClosingNoteMode: 'OPTIONAL' });
+    });
+
+    await check('conversations: a closure keeps its category name after the category is deleted', async () => {
+      const { closeConversation } = lifecycle();
+      const category = await newCategory(orgA, 'doomed', 'Doomed Category');
+      const conversation = await newConversation(orgA, 'survives');
+
+      await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({
+          conversationId: conversation.id,
+          source: 'MANUAL',
+          categoryId: category.id,
+          summary: 'kept',
+        }));
+
+      await raw.conversationCategory.delete({ where: { id: category.id } });
+
+      const [closure] = await closuresFor(conversation.id);
+      assert.ok(closure, 'closure must survive its category');
+      // categoryId carries no foreign key on purpose; categoryName is the
+      // snapshot that makes historic reporting stable.
+      assert.equal(closure.categoryName, 'Doomed Category');
+      assert.equal(closure.summary, 'kept');
+    });
+
+    await check('conversations: closing twice is idempotent and appends one episode', async () => {
+      const { closeConversation } = lifecycle();
+      const conversation = await newConversation(orgA, 'idempotent');
+
+      const first = await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({ conversationId: conversation.id, source: 'MANUAL', summary: 'first' }));
+      const second = await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({ conversationId: conversation.id, source: 'MANUAL', summary: 'second' }));
+
+      assert.equal(first.changed, true);
+      assert.equal(second.changed, false, 'a second close must not change state');
+
+      const closures = await closuresFor(conversation.id);
+      assert.equal(closures.length, 1, 'duplicate close must not append a second episode');
+      assert.equal(closures[0].summary, 'first');
+    });
+
+    await check('conversations: reopening starts a new episode and preserves the earlier one', async () => {
+      const { closeConversation, reopenConversation } = lifecycle();
+      const conversation = await newConversation(orgA, 'episodes');
+
+      await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({ conversationId: conversation.id, source: 'MANUAL', summary: 'episode one' }));
+      const [firstBefore] = await closuresFor(conversation.id);
+
+      await runAsOrganization(orgA.organizationId, () => reopenConversation(conversation.id));
+      assert.equal((await raw.conversation.findUnique({ where: { id: conversation.id } })).status, 'OPEN');
+
+      await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({ conversationId: conversation.id, source: 'MANUAL', summary: 'episode two' }));
+
+      const closures = await closuresFor(conversation.id);
+      assert.equal(closures.length, 2, 'reopen then close must append a second episode');
+      assert.equal(closures[0].summary, 'episode one');
+      assert.equal(closures[1].summary, 'episode two');
+      // History is immutable: the first episode must be unchanged.
+      assert.deepEqual(closures[0], firstBefore);
+    });
+
+    await check('conversations: a manual close leaves the assignment alone', async () => {
+      const { closeConversation } = lifecycle();
+      const conversation = await newConversation(orgA, 'assigned', { assignedToId: orgA.userId });
+
+      await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({ conversationId: conversation.id, source: 'MANUAL', summary: 'still assigned' }));
+
+      const after = await raw.conversation.findUnique({ where: { id: conversation.id } });
+      assert.equal(after.status, 'RESOLVED');
+      assert.equal(after.assignedToId, orgA.userId, 'closing must not unassign');
+    });
+
+    await check('conversations: auto-close fires only for a current, due deadline', async () => {
+      const { processAutoCloseJob, recoverConversationAutoCloseJobs } = autoCloseWorker();
+      const { cancelConversationAutoClose } = lifecycle();
+      await setPolicy(orgA, { autoCloseEnabled: true });
+
+      const past = new Date(Date.now() - 60000);
+      const future = new Date(Date.now() + 3600000);
+
+      // Stale: the deadline moved on, so an older job is a no-op.
+      const stale = await newConversation(orgA, 'ac_stale', { autoCloseEligible: true, autoCloseAt: past });
+      assert.equal(
+        await processAutoCloseJob({
+          organizationId: orgA.organizationId,
+          conversationId: stale.id,
+          expectedAt: new Date(past.getTime() - 30000).toISOString(),
+        }),
+        false,
+        'a superseded deadline must not close anything',
+      );
+      assert.equal((await raw.conversation.findUnique({ where: { id: stale.id } })).status, 'OPEN');
+
+      // Not yet due.
+      const early = await newConversation(orgA, 'ac_early', { autoCloseEligible: true, autoCloseAt: future });
+      assert.equal(
+        await processAutoCloseJob({
+          organizationId: orgA.organizationId,
+          conversationId: early.id,
+          expectedAt: future.toISOString(),
+        }),
+        false,
+        'a future deadline must not close early',
+      );
+
+      // Due and current: closes, and records the source.
+      const due = await newConversation(orgA, 'ac_due', { autoCloseEligible: true, autoCloseAt: past });
+      assert.equal(
+        await processAutoCloseJob({
+          organizationId: orgA.organizationId,
+          conversationId: due.id,
+          expectedAt: past.toISOString(),
+        }),
+        true,
+      );
+      const [dueClosure] = await closuresFor(due.id);
+      assert.equal(dueClosure.source, 'AUTO_CLOSE');
+
+      // A customer reply cancels the timer.
+      const replied = await newConversation(orgA, 'ac_cancel', { autoCloseEligible: true, autoCloseAt: past });
+      await runAsOrganization(orgA.organizationId, () => cancelConversationAutoClose(replied.id));
+      assert.equal((await raw.conversation.findUnique({ where: { id: replied.id } })).autoCloseAt, null);
+      assert.equal(
+        await processAutoCloseJob({
+          organizationId: orgA.organizationId,
+          conversationId: replied.id,
+          expectedAt: past.toISOString(),
+        }),
+        false,
+        'a cancelled timer must not fire',
+      );
+
+      // Startup recovery re-arms every persisted deadline it can see.
+      const recovered = await recoverConversationAutoCloseJobs();
+      assert.ok(recovered >= 1, 'startup recovery must find persisted deadlines');
+
+      await setPolicy(orgA, { autoCloseEnabled: false });
+    });
+
+    await check('conversations: only a human customer-facing send arms the auto-close timer', async () => {
+      const { markSuccessfulHumanOutbound } = lifecycle();
+
+      await setPolicy(orgA, { autoCloseEnabled: false });
+      const disabled = await newConversation(orgA, 'sched_off', { autoCloseEligible: true });
+      assert.equal(
+        await runAsOrganization(orgA.organizationId, () => markSuccessfulHumanOutbound(disabled.id)),
+        null,
+        'no timer may be armed while auto-close is off',
+      );
+      assert.equal((await raw.conversation.findUnique({ where: { id: disabled.id } })).autoCloseAt, null);
+
+      await setPolicy(orgA, { autoCloseEnabled: true, autoCloseDurationMinutes: 60 });
+      const armed = await newConversation(orgA, 'sched_on', { autoCloseEligible: true });
+      const deadline = await runAsOrganization(orgA.organizationId, () =>
+        markSuccessfulHumanOutbound(armed.id));
+      assert.ok(deadline instanceof Date, 'a human send must arm the timer');
+
+      const row = await raw.conversation.findUnique({ where: { id: armed.id } });
+      assert.ok(row.lastHumanOutboundAt, 'the send must be recorded');
+      assert.ok(row.autoCloseAt, 'the deadline must persist');
+
+      await setPolicy(orgA, { autoCloseEnabled: false });
+    });
+
+    await check('conversations: closures and categories never cross an organization boundary', async () => {
+      const { closeConversation } = lifecycle();
+      const conversation = await newConversation(orgA, 'isolation');
+      await runAsOrganization(orgA.organizationId, () =>
+        closeConversation({ conversationId: conversation.id, source: 'MANUAL', summary: 'org a only' }));
+
+      const seenByB = await runAsOrganization(orgB.organizationId, () =>
+        scoped.conversationClosure.findMany({ select: { organizationId: true, summary: true } }));
+      assert.ok(
+        seenByB.every((row) => row.organizationId === orgB.organizationId),
+        'org b must see only its own closures',
+      );
+      assert.ok(
+        !seenByB.some((row) => row.summary === 'org a only'),
+        'an org a closure must be invisible to org b',
+      );
+
+      const categoriesForB = await runAsOrganization(orgB.organizationId, () =>
+        scoped.conversationCategory.findMany({ select: { organizationId: true } }));
+      assert.ok(
+        categoriesForB.every((row) => row.organizationId === orgB.organizationId),
+        'org b must see only its own categories',
+      );
+
+      // The database, not the application, is the boundary: a closure
+      // pointing at another organization conversation must be rejected.
+      await assert.rejects(() =>
+        raw.conversationClosure.create({
+          data: {
+            organizationId: orgB.organizationId,
+            conversationId: conversation.id,
+            source: 'MANUAL',
+            openedAt: new Date(),
+          },
+        }));
+    });
+
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
       const hour = floorToHour(new Date());
