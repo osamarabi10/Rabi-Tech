@@ -103,7 +103,13 @@ the whole point of this document:
 **Both halves are now shipped** (2026-08-29, migrations 65 and 66). The ladder
 lives in the `Plan` table, is edited from `/platform/editions`, takes effect
 without a deploy, and survives a restart — the last of those being the property
-`ensurePlans` had to stop breaking. The constant is now only a seed source and a
+`ensurePlans` had to stop breaking.
+
+> **Correction.** "Takes effect without a deploy" was not true when first
+> written. The in-process cache never loaded — the refresh ran unscoped on a
+> timer and threw every tick — so every read fell through to the constant while
+> the database held the edited value. Fixed in `bc66c468`; see the correction
+> at the top of §6b of the checkpoint for why it stayed invisible. The constant is now only a seed source and a
 boot fallback, and a harness check asserts the database matches it field by
 field.
 

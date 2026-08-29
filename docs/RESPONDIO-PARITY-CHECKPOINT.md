@@ -362,6 +362,38 @@ queue depth; data intact at **`31` / `97` / `33`**; `/platform/editions`,
 `/api/platform/editions` returns `401` anonymously — the auth gate, not a `500`;
 no unhandled exceptions and no `prisma:error` entries.
 
+> **CORRECTED 2026-08-29, later the same day.** The certification below is kept
+> as written, but one of its claims was false when written and the correction
+> matters more than the record.
+>
+> **The edition cache never loaded.** `startEditionRefresh` runs on a timer,
+> owned by no request, so it had no ambient tenant scope; the extension is
+> fail-closed on a query with *no* scope at all and checks that before the
+> `PLATFORM_MODELS` exemption. `refreshEditions` therefore threw on every tick
+> from the moment the feature shipped, and every `getEdition` fell through to
+> the `PLAN_ENTITLEMENTS` constant. The catalogue was owner-editable in the
+> database and **inert in the running process**: the console wrote a price, the
+> row held it, and nothing read it. This was live from the Phase 3 release until
+> commit `bc66c468`.
+>
+> **The restart test proved persistence, not resolution.** It confirmed the row
+> survived a restart — which was the `ensurePlans` property under test, and
+> which is genuinely true. It never confirmed that anything *read* the row. Both
+> halves were green and only one was verified.
+>
+> Three things concealed it, each a deliberate decision made for a good reason:
+> the catch that keeps the previous cache on a failed refresh turned the throw
+> into a log line; the constant fallback returned plausible values, so nothing
+> misbehaved; and every harness check wrapped the call in `runAsPlatform`,
+> testing a shape the timer never uses.
+>
+> **The lesson, stated generally: a test that passes through a fallback proves
+> the fallback, not the feature.** When a feature has a fallback path, at least
+> one test must assert the fallback is *not* what answered — here, by editing a
+> value in the database and requiring the cache to return the edited value
+> rather than merely a plausible one. A regression check doing exactly that
+> landed in `ab62cf29`.
+
 **The proof of the phase is the restart test.** A price was edited, the backend
 restarted, and the edit held:
 
