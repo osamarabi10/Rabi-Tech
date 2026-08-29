@@ -350,6 +350,74 @@ docker compose run --rm --no-deps backend npx prisma migrate status
 docker compose run --rm --no-deps backend npx prisma migrate deploy
 ```
 
+Precondition, before trusting the isolation gate. The gate has silently failed
+to complete at least four times, and nobody noticed because the failure mode
+produces no output at all. Two independent causes compound, and both must be
+checked.
+
+**The trigger is environmental.** Docker Desktop's host port proxy degrades
+across a host restart: the published port still appears in `netstat` as
+`LISTENING`, and a TCP handshake to it still succeeds, but the proxy then closes
+the connection without forwarding it. The container is healthy and the
+application is unaffected, because container-to-container traffic uses the
+compose network (`postgres:5432`) and never touches a host port. Only host-side
+tooling breaks — which is exactly where the harness and the Prisma CLI live.
+On 2026-08-29 this affected `15432`, `6379`, and `13001` while `4000`, `18080`,
+and `13000` were fine; `4000` had failed the same way earlier that morning. The
+fix is to recreate the affected containers:
+
+```powershell
+docker compose up -d --force-recreate postgres redis
+```
+
+**Verify with real protocol bytes, never a bare handshake.** This is the part
+that produced a false green twice. `net.createConnection` succeeding proves only
+that the proxy accepted the socket; it says nothing about whether anything
+reached the service. A degraded port answers the handshake and then sends
+`end` with `hadError=false`, which looks like a clean success to any check that
+does not send data. Send a real query — `prisma migrate status` from the host,
+or `PING` to Redis — and confirm the service answers. With `log_connections=on`,
+`docker compose logs postgres` is the independent witness: if Postgres logged no
+`connection received`, the connection never arrived, whatever the client thought.
+
+**The amplifier was structural, and is now fixed.** `command()` in
+`scripts/tenancy-bleed-harness.js` called `spawnSync` with no `timeout`. The
+harness is single-threaded, so one stuck child blocked the entire gate
+indefinitely with nothing on stdout. A degraded proxy left `prisma migrate
+deploy` waiting on a half-open socket and the gate sat silent for 33 minutes
+before it was killed by hand. It created nothing: an orphaned
+`rabitech_bleed_16180_*` schema found alongside it embedded a different pid and
+an older schema generation, so it was the corpse of an earlier run, not that
+one. Schema names carry the creating pid — use it before attributing a corpse to
+a run. `command()` now bounds every child
+(`HARNESS_COMMAND_TIMEOUT_MS`, default 300000) and reports the tail of its
+output, so this class of failure fails in one line instead of hanging. A release
+blocker that can hang forever without output is not a safety net.
+
+**A second, separate hang remains: the harness does not exit when it finishes.**
+After printing `91/91 checks passed` and cleaning up its own disposable schema,
+the process stays alive holding one open Redis connection to `::1:6379`, which
+keeps Node's event loop from draining. It must be killed by hand. This is almost
+certainly what happened on 2026-08-25, when two harness processes were found
+still running three days later — each holding exactly one Redis connection, each
+with roughly 20s of CPU, which is a completed run, not a stalled one. **A passing
+gate can therefore look identical to a hung one**, which is how a green result
+went unnoticed for three days. Read the printed summary line, not the fact that
+the process is still on the process list. Fixing this means closing the Redis
+handle (or calling `process.exit` on the recorded result) at the end of the run;
+until then, expect to kill the process after reading its result.
+
+Not every leftover schema is a failed run. `rabitech_diff_shadow`,
+`rabitech_p1b_shadow` and `rabitech_p1d_debug` do not match the harness's
+`rabitech_bleed_<pid>_<timestamp>` naming and come from other tooling; only
+`rabitech_bleed_*` schemas are harness corpses.
+
+Note also that the harness now loads its environment from the **repository
+root** `.env`, not `apps/backend/.env`. That second copy existed, had drifted to
+`localhost:5432` — a different Postgres entirely — and was silently winning, so
+the gate would have created its disposable schema somewhere that proves nothing
+about tenant isolation. It has been deleted; there is one `.env`, at the top.
+
 Core commands:
 
 ```powershell
