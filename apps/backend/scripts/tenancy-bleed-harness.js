@@ -3530,6 +3530,14 @@ async function databaseAudits() {
     if (rollupQueueModule) await require('../src/workers/analytics-rollup.worker').analyticsRollupQueue.close().catch(() => {});
     const healthQueueModule = require.cache[require.resolve('../src/workers/gateway-health.worker')];
     if (healthQueueModule) await require('../src/workers/gateway-health.worker').gatewayHealthQueue.close().catch(() => {});
+    // conversation-auto-close was missing from this list, which is why the
+    // harness printed its result and then sat there: auto-close.queue.ts builds
+    // its Queue at module load, so anything importing the conversation
+    // lifecycle opened a Redis connection nothing ever closed. Two runs were
+    // found alive three days later, each holding exactly this handle — they had
+    // passed, and looked identical to a hang.
+    const autoCloseQueueModule = require.cache[require.resolve('../src/workers/auto-close.queue')];
+    if (autoCloseQueueModule) await require('../src/workers/auto-close.queue').conversationAutoCloseQueue.close().catch(() => {});
     const appPrismaModule = require.cache[require.resolve('../src/prisma')];
     if (appPrismaModule) await require('../src/prisma').prisma.$disconnect().catch(() => {});
     await raw.$disconnect().catch(() => {});
