@@ -54,20 +54,19 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
    * that grants none states the boundary. Campaign sends are zero for the same
    * reason - broadcasting is a feature, not part of inbound and outbound.
    *
-   * PLACEHOLDER VALUES. Price and the two messaging allowances are owner-set by
-   * design (see RABITECH-PRODUCT-VISION.md section 2), and these are starting
-   * points chosen to be conservative, not decisions. They are editable from the
-   * console the moment this ships, which is the whole point of the phase.
+   * The entry paid tier: clearly above the Free trial's 100/100 and clearly
+   * below Growth's 2,500 at ~$49. Set by the product owner, and editable from
+   * the console the moment this ships - which is the whole point of the phase.
    */
   STANDARD: {
     code: 'STANDARD',
     name: 'Standard',
-    monthlyPriceCents: 0,
-    monthlyActiveContactsLimit: 1000,
-    monthlyOutboundMessagesLimit: 5000,
+    monthlyPriceCents: 1900,
+    monthlyActiveContactsLimit: 500,
+    monthlyOutboundMessagesLimit: 2000,
     monthlyCampaignSendsLimit: 0,
     customFieldsLimit: 0,
-    usersLimit: 3,
+    usersLimit: 2,
     workflowsLimit: 0,
     campaignRateMax: 1,
     campaignRateDurationMs: 1_500,

@@ -33,10 +33,10 @@ INSERT INTO "Plan" (
   -- Standard: messaging and nothing else. Every feature limit is zero rather
   -- than small, because a tier granting "a few" workflows invites an argument
   -- about why three is not four, while one granting none states the boundary.
-  -- Price and the two messaging allowances are PLACEHOLDERS - owner-set by
-  -- design, editable from the console the moment this ships.
-  ('plan_standard',   'STANDARD',   'Standard',   0,     'USD', true, 1,
-   1000,  5000,  0,     0,    3,    0,    1, 1500, false, false, false, false, ARRAY['OPENWA']::TEXT[], NOW()),
+  -- The entry paid tier: above the Free trial's 100/100, below Growth's 2,500
+  -- at ~$49. Owner-set values, editable from the console once this ships.
+  ('plan_standard',   'STANDARD',   'Standard',   1900,  'USD', true, 1,
+   500,   2000,  0,     0,    2,    0,    1, 1500, false, false, false, false, ARRAY['OPENWA']::TEXT[], NOW()),
   ('plan_growth',     'GROWTH',     'Growth',     4900,  'USD', true, 2,
    2500,  10000, 5000,  20,   5,    10,   1, 1500, false, false, false, true,  ARRAY['OPENWA']::TEXT[], NOW()),
   ('plan_business',   'BUSINESS',   'Business',   19900, 'USD', true, 3,
