@@ -13,7 +13,12 @@ const ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(ROOT, '..', '..');
 const results = [];
 
-require('dotenv').config({ path: path.join(ROOT, '.env') });
+// Repo root, not apps/backend. There is one .env for this project and it lives
+// at the top; a second copy under apps/backend drifted from it and pointed this
+// gate at `localhost:5432` — a different Postgres entirely, where the harness
+// would have created its disposable schema and proved nothing about isolation.
+// Two files meant two truths, and the wrong one was silently winning.
+require('dotenv').config({ path: path.join(REPO_ROOT, '.env') });
 require('ts-node/register/transpile-only');
 
 function record(name, passed, detail = '') {
@@ -31,14 +36,56 @@ async function check(name, fn) {
   }
 }
 
+/** Last `lines` lines of a child's output, so a failure is legible, not a wall. */
+function tailLines(text, lines = 20) {
+  const trimmed = String(text || '').trimEnd();
+  if (!trimmed) return '';
+  const split = trimmed.split(/\r?\n/);
+  return split.length <= lines ? trimmed : split.slice(-lines).join('\n');
+}
+
+/**
+ * A gate step that runs a child process.
+ *
+ * **The timeout is the point.** `spawnSync` without one blocks this process
+ * forever, and the harness is single-threaded, so a single stuck child hangs
+ * the whole isolation gate with nothing on stdout to say why. That is not
+ * hypothetical: on 2026-08-29 a degraded Docker host port proxy left
+ * `prisma migrate deploy` waiting on a half-open socket, and the gate sat
+ * silent for 33 minutes until it was killed by hand. Orphaned
+ * `rabitech_bleed_*`, `rabitech_diff_shadow`, `rabitech_p1b_shadow` and
+ * `rabitech_p1d_debug` schemas show it had happened at least three times
+ * before, unnoticed. A release blocker that can hang indefinitely without
+ * output is not a safety net — it is a coin flip nobody is watching.
+ *
+ * So: bound every child, and report the tail of what it said. A gate may fail.
+ * It may not hang.
+ */
+const COMMAND_TIMEOUT_MS = Number(process.env.HARNESS_COMMAND_TIMEOUT_MS || 300_000);
+
 function command(name, executable, args, options = {}) {
+  const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
   const result = spawnSync(executable, args, {
     cwd: ROOT,
     encoding: 'utf8',
     env: { ...process.env, ...options.env },
+    timeout: timeoutMs,
+    killSignal: 'SIGKILL',
   });
+
+  // spawnSync reports a timeout as an error with the child already killed.
+  if (result.error) {
+    const timedOut = result.error.code === 'ETIMEDOUT';
+    const reason = timedOut
+      ? `timed out after ${timeoutMs}ms and was killed`
+      : `could not run: ${result.error.message}`;
+    const trailing = tailLines(`${result.stdout || ''}\n${result.stderr || ''}`);
+    record(name, false, trailing ? `${reason}\n${trailing}` : reason);
+    return false;
+  }
+
   if (result.status !== 0) {
-    const output = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
+    const output = tailLines(`${result.stdout || ''}\n${result.stderr || ''}`);
     record(name, false, output || `exit ${result.status}`);
     return false;
   }
