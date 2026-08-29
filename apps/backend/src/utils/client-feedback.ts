@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { ChannelService } from '../modules/channels/channel.service';
 import { resolveAutoReply, renderAutoReply } from './auto-reply';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
 import { getTenantId } from '../lib/tenant-context';
@@ -22,7 +23,7 @@ export async function sendCsatPrompt(conversationId: string): Promise<void> {
   const prompt = await resolveAutoReply('CSAT_PROMPT');
   if (!prompt) return;
 
-  await OpenWAService.sendText(conv.session.sessionName, conv.contact.phone, prompt).catch(() => {});
+  await ChannelService.sendText(conv.session.sessionName, conv.contact.phone, prompt).catch(() => {});
   
   await prisma.message.create({
     data: {
@@ -162,7 +163,7 @@ export async function handleClientFeedback(opts: {
   // The rating is always recorded above. Acknowledging it back to the customer is
   // optional — only send if this organization configured a CSAT_THANKS reply.
   if (reply) {
-    await OpenWAService.sendText(opts.session, opts.phone, reply).catch(() => {});
+    await ChannelService.sendText(opts.session, opts.phone, reply).catch(() => {});
     const orgIdForMsg = getTenantId();
     await prisma.message.create({
       data: {

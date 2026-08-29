@@ -1,6 +1,6 @@
 import { Queue, Worker } from 'bullmq';
+import { ChannelService } from '../modules/channels/channel.service';
 import { prisma } from '../prisma';
-import { OpenWAService, responseMessageId } from '../modules/whatsapp/openwa.service';
 import { getIO, SocketEvents } from '../socket';
 import { socketRoom } from '../socket/rooms';
 import { runAsOrganization } from '../lib/tenant-context';
@@ -58,14 +58,14 @@ export async function processCampaignJob(data: any) {
           : planRate.campaignRateDurationMs,
       );
       const response = mediaUrl
-        ? await OpenWAService.sendMedia(
+        ? await ChannelService.sendMedia(
             session,
             phone,
             mediaUrl,
             message,
             { campaign: true, campaignSubjectId: recipientId },
           )
-        : await OpenWAService.sendText(
+        : await ChannelService.sendText(
             session,
             phone,
             message,
@@ -79,7 +79,10 @@ export async function processCampaignJob(data: any) {
             status: 'sent',
             sentAt: new Date(),
             // Delivery and read acks arrive later keyed by this id.
-            waMessageId: responseMessageId(response),
+            // The adapter normalises this, so the worker no longer digs through
+            // a provider-shaped response - which is what made the id
+            // OpenWA-specific in the first place.
+            waMessageId: response.providerMessageId,
           },
         });
       }

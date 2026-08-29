@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { ChannelService } from '../modules/channels/channel.service';
 import { getTenantId } from '../lib/tenant-context';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
 import { resolveAutoReply } from './auto-reply';
@@ -15,7 +16,7 @@ export async function sendConversationClosingReply(conversationId: string): Prom
   if (!reply) return;
 
   try {
-    await OpenWAService.sendText(
+    await ChannelService.sendText(
       conversation.session.sessionName,
       conversation.contact.phone,
       reply,

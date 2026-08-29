@@ -1,4 +1,5 @@
 import { Queue, Worker } from 'bullmq';
+import { ChannelService } from '../modules/channels/channel.service';
 import { prisma } from '../prisma';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
 import { getIO, SocketEvents } from '../socket';
@@ -180,7 +181,7 @@ async function processInboundMessage(data: {
   if (autoReplyEnabled && isNewSession && !fromMe) {
     const welcomeBody = await resolveAutoReply('WELCOME');
     if (welcomeBody) {
-      await OpenWAService.sendText(session, phone, welcomeBody).catch(() => {});
+      await ChannelService.sendText(session, phone, welcomeBody).catch(() => {});
       await prisma.message.create({
         data: {
           organizationId,
@@ -213,7 +214,7 @@ async function processInboundMessage(data: {
       const kind = consentResult.consent === 'OPTED_OUT' ? 'OPT_OUT_CONFIRM' : 'OPT_IN_CONFIRM';
       const confirmBody = await resolveAutoReply(kind as never).catch(() => null);
       if (confirmBody) {
-        await OpenWAService.sendText(session, phone, confirmBody).catch(() => {});
+        await ChannelService.sendText(session, phone, confirmBody).catch(() => {});
         await prisma.message.create({
           data: {
             organizationId,

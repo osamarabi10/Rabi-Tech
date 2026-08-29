@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { ChannelService } from '../modules/channels/channel.service';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
 import { resolveAutoReply } from './auto-reply';
 import { getTenantId } from '../lib/tenant-context';
@@ -24,7 +25,7 @@ export async function sendStartWelcome(opts: {
   const body = await getStartWelcomeMessage();
   if (!body) return null;
 
-  await OpenWAService.sendText(opts.sessionName, opts.phone, body);
+  await ChannelService.sendText(opts.sessionName, opts.phone, body);
   await prisma.message.create({
     data: {
       organizationId: getTenantId(),

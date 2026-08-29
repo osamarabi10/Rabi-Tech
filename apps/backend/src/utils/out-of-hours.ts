@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { ChannelService } from '../modules/channels/channel.service';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
 import { renderTemplate } from './template';
 import { isWithinWorkingHours } from './working-hours';
@@ -61,7 +62,7 @@ export async function maybeSendOutOfHoursReply(
     workDays: formatWorkDays(wh.workDays),
   });
 
-  await OpenWAService.sendText(session, phone, body).catch(() => {});
+  await ChannelService.sendText(session, phone, body).catch(() => {});
   await prisma.message.create({
     data: {
       organizationId: getTenantId(),

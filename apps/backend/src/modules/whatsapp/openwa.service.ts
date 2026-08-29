@@ -2,11 +2,6 @@ import axios, { AxiosInstance } from 'axios';
 import { decryptCredential } from '../../lib/credential-crypto';
 import { getTenantCache, getTenantId } from '../../lib/tenant-context';
 import { prisma } from '../../prisma';
-import {
-  OutboundUsageOptions,
-  prepareOutboundSend,
-  recordSuccessfulOutboundSend,
-} from '../usage/entitlements';
 
 const SESSION_CACHE_TTL_MS = 60_000;
 
@@ -236,38 +231,28 @@ export function responseMessageId(response: { data?: any }): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-async function meteredSend<T extends { data?: any }>(
-  address: string,
-  options: OutboundUsageOptions,
-  send: () => Promise<T>,
-): Promise<T> {
-  // Internal traffic skips BOTH halves: the quota check that would block it and
-  // the usage record that would bill for it. See OutboundUsageOptions.internal.
-  if (options.internal) return send();
-
-  const { contactId } = await prepareOutboundSend(address, options);
-  const response = await send();
-  await recordSuccessfulOutboundSend(contactId, responseMessageId(response), options);
-  return response;
-}
-
-export const OpenWAService = {
-  sendText: async (
-    session: string,
-    to: string,
-    message: string,
-    options: OutboundUsageOptions = {},
-  ) => meteredSend(to, options, async () => (await provider()).sendText(session, to, message)),
+/**
+ * Unmetered transport, for the channel adapter only.
+ *
+ * Quota accounting moved to ChannelService, because it is a property of the
+ * tenant's plan rather than of the transport. These functions therefore send
+ * without metering, and calling them directly from a feature would send for
+ * free - which is why the metered path is the only one exported for general
+ * use, and why OpenWAService no longer carries sendText or sendMedia.
+ */
+export const OpenWARawSend = {
+  sendText: async (session: string, to: string, message: string) =>
+    (await provider()).sendText(session, to, message),
   sendMedia: async (
     session: string,
     to: string,
     url: string,
-    caption?: string,
-    options: OutboundUsageOptions & { mediaType?: string | null; fileName?: string | null } = {},
-  ) => {
-    const { mediaType, fileName, ...usage } = options;
-    return meteredSend(to, usage, async () => (await provider()).sendMedia(session, to, url, caption, { mediaType, fileName }));
-  },
+    caption: string | undefined,
+    options: { mediaType?: string | null; fileName?: string | null },
+  ) => (await provider()).sendMedia(session, to, url, caption, options),
+};
+
+export const OpenWAService = {
   getContact: async (...args: Parameters<OpenWAOrganizationProvider['getContact']>) =>
     (await provider()).getContact(...args),
   getMessageMedia: async (...args: Parameters<OpenWAOrganizationProvider['getMessageMedia']>) =>

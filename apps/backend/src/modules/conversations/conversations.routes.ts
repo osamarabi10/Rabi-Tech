@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { ChannelService } from '../channels/channel.service';
 import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
 import { OpenWAService } from '../whatsapp/openwa.service';
@@ -108,7 +109,7 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
         },
       });
       try {
-        await OpenWAService.sendText(session.sessionName, phone, trimmedMsg);
+        await ChannelService.sendText(session.sessionName, phone, trimmedMsg);
         await prisma.message.update({ where: { id: created.id }, data: { status: 'SENT' } });
         await markSuccessfulHumanOutbound(conversation.id, created.timestamp);
       } catch (openwaErr) {
@@ -457,7 +458,7 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
     if (!isInternal) {
       try {
         if (mediaUrl) {
-          await OpenWAService.sendMedia(
+          await ChannelService.sendMedia(
             conv.session.sessionName,
             conv.contact.phone,
             gatewayReachableAssetUrl(mediaUrl),
@@ -465,7 +466,7 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
             { mediaType, fileName: mediaFileName },
           );
         } else {
-          await OpenWAService.sendText(conv.session.sessionName, conv.contact.phone, renderedBody);
+          await ChannelService.sendText(conv.session.sessionName, conv.contact.phone, renderedBody);
         }
         await prisma.message.update({ where: { id: msg.id }, data: { status: 'SENT' } });
         msg.status = 'SENT';
@@ -541,7 +542,7 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
     const { conversation } = message;
     try {
       if (message.mediaUrl) {
-        await OpenWAService.sendMedia(
+        await ChannelService.sendMedia(
           conversation.session.sessionName,
           conversation.contact.phone,
           gatewayReachableAssetUrl(message.mediaUrl),
@@ -549,7 +550,7 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
           { mediaType: message.mediaType, fileName: message.mediaFileName },
         );
       } else {
-        await OpenWAService.sendText(conversation.session.sessionName, conversation.contact.phone, message.body ?? '');
+        await ChannelService.sendText(conversation.session.sessionName, conversation.contact.phone, message.body ?? '');
       }
     } catch (retryErr) {
       const failure = describeSendFailure(retryErr);

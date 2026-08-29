@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { ChannelService } from '../channels/channel.service';
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { getTenantId } from '../../lib/tenant-context';
@@ -222,7 +223,7 @@ async function sendToContact(context: ExecutionContext, body: string): Promise<s
 
   // Rule 2. No `internal` flag — this counts against the tenant's quota and is
   // refused at the ceiling, exactly like an agent's own message.
-  await OpenWAService.sendText(session.sessionName, contact.phone, text);
+  await ChannelService.sendText(session.sessionName, contact.phone, text);
   return 'sent';
 }
 

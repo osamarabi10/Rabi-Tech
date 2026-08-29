@@ -1,4 +1,5 @@
 import { Conversation } from '@prisma/client';
+import { ChannelService } from '../modules/channels/channel.service';
 import { prisma } from '../prisma';
 import { detectPriority } from '../constants/keywords';
 import { resolveAutoReply } from './auto-reply';
@@ -227,7 +228,7 @@ export async function maybeSendKeywordAutoReply(opts: {
   const reply = await resolveAutoReply(kind);
   if (!reply) return;
 
-  await OpenWAService.sendText(session, phone, reply).catch(() => {});
+  await ChannelService.sendText(session, phone, reply).catch(() => {});
   await prisma.message.create({
     data: {
       organizationId: getTenantId(),

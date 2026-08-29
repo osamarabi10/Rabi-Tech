@@ -2,7 +2,7 @@ import axios from 'axios';
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
-import { OpenWAService } from '../whatsapp/openwa.service';
+import { OpenWARawSend, OpenWAService } from '../whatsapp/openwa.service';
 import { isConnectedStatus } from '../provisioning/gateway-provider';
 import { decryptCredential } from '../../lib/credential-crypto';
 
@@ -288,13 +288,14 @@ async function runProbe(candidate: Candidate, probe: HealthProbe): Promise<Healt
         }
         return;
       }
-      // INTERNAL PROBE. Destination is our own number, and `internal: true`
-      // keeps it off the tenant's meters entirely.
-      await OpenWAService.sendText(
+      // INTERNAL PROBE. Destination is our own number. This goes through the
+      // raw OpenWA transport rather than ChannelService: it is a probe of the
+      // gateway itself, not a message from the tenant, and the raw path does no
+      // metering at all - so it cannot bill a subscriber for our health check.
+      await OpenWARawSend.sendText(
         candidate.sessionName,
         candidate.phoneNumber!,
         PROBE_BODY,
-        { internal: true },
       );
     });
     const latencyMs = Date.now() - startedAt;
