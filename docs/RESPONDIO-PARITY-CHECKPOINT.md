@@ -50,8 +50,8 @@ point at `localhost:15432` — pointing it at `5432` reaches the other stack.
 
 Live database state:
 
-- `63` Prisma migrations are applied.
-- Latest live migration: `20260915090000_contact_metadata_settings`.
+- `64` Prisma migrations are applied.
+- Latest live migration: `20260916090000_conversation_operations` (deployed 2026-08-29 — see §6).
 - `/settings/snippets`, `/settings/tags`, and `/settings/contact-fields` return `200`.
 - Anonymous `/api/snippets`, `/api/contacts/tags`, and `/api/contacts/contact-fields` return `401`.
 - `/health` returns `healthy`; database, Redis, OpenWA, and queue depth are `ok`.
@@ -167,9 +167,66 @@ Important retained contracts:
 - Custom field IDs and types are ignored on update and protected by contract tests; clients cannot mutate them after creation.
 - Snippet management UI now uses the same Owner/Manager authority as its backend instead of incorrectly hiding controls from Managers.
 
-## 6. Current unfinished subphase: Conversation Operations
+## 6. Conversation Operations — released 2026-08-29
 
-This is the exact resume point. Execute it before deeper Contact data operations, reporting, Broadcast parity, or the Workflow canvas.
+**Migration `20260916090000_conversation_operations` is deployed.** Exactly one
+migration applied, `63` → `64`. Everything below is transcribed from command
+output, not from intent.
+
+Release gates, all executed fresh immediately before the deploy rather than
+carried over from earlier runs:
+
+- Isolation and usage harness: **`102/102`**, exit 0, no orphan process, disposable schema dropped.
+- Responsive browser matrix: **`75/75`**, exit 0, 4.5 minutes under real Chromium.
+- Prisma format (no drift), generate (`5.22.0`), backend build, constructor lint, `check:i18n`, `check:mojibake`, frontend production build: all pass.
+- Backup, restore-verified: `auto-20260829-130417.dump`, `1,092,532` bytes, restored into a scratch database and counted `31` conversations, `97` messages, `33` contacts. **Unused — no rollback was needed.**
+
+Post-deploy verification:
+
+- `prisma migrate status`: `64 migrations found`, `Database schema is up to date!`
+- Live health: database, Redis, OpenWA, and queue depth all `ok`.
+- Data intact: **`31` conversations, `97` messages, `33` contacts** — unchanged across the migration.
+- `ConversationCategory` and `ConversationClosure` present and correctly empty; the nine new columns readable across all `31` conversations.
+- `/settings/conversations` returns `200`; `/api/conversation-settings`, `/api/conversation-settings/categories`, and `/api/analytics/closures` return `401` — the auth gate is reached, not a `500`.
+- No unhandled exceptions and no `prisma:error` entries since restart.
+
+**The functional proof is the recovery query, not the route codes.** Before this
+migration every boot logged `Failed to recover conversation auto-close jobs —
+The column Conversation.autoCloseAt does not exist`. That line now appears zero
+times, and `recover-conversation-auto-close-jobs` runs with nothing following
+it. `recoverConversationAutoCloseJobs()` queries `Conversation.autoCloseAt`
+directly, so its silence is a real production read against a migration-64
+column. A `200` proves a route compiled; this proves the data path works.
+
+Standing caveat, recorded rather than glossed: **`ALLOW_INSECURE_SECRETS` is
+still `1`**, with `OPENWA_API_KEY` on a known-weak value as the outstanding
+deferred item. It was deferred because rotating it requires restarting the
+OpenWA gateway, and the live WhatsApp session is worth more than closing a
+local key whose ports are now loopback-only. This release is complete; the
+security posture is **not** clean, and nothing here should be read as saying it
+is.
+
+Precondition this release established, and the one most worth keeping.
+**Confirm the image names the pending migration before deploying.** The running
+image had been built while migration 64 was held out of the migrations
+directory, so it contained `63` and reported `Database schema is up to date!`.
+Deploying from it would have exited `0`, applied nothing, and left every
+downstream check passing against tables that did not exist — a failure
+indistinguishable from success. The check is one command, and it must name the
+migration:
+
+```powershell
+docker compose run --rm --no-deps backend npx prisma migrate status
+# Must list the migration under "have not yet been applied".
+# If it says "up to date" at the previous count, STOP: the image is stale
+# and migrate deploy is a silent no-op.
+```
+
+The record below is the pre-release state, kept as written for history.
+
+### Original resume point (historical)
+
+This was the exact resume point. Execute it before deeper Contact data operations, reporting, Broadcast parity, or the Workflow canvas.
 
 ### Goal
 
@@ -184,6 +241,12 @@ Finish the operational contract around resolving and categorizing conversations 
 - Remaining Inbox rail, keyboard navigation, and mobile context-panel parity.
 
 ### Paused source checkpoint
+
+> **Superseded 2026-08-29.** Everything from here to the end of §6 describes the
+> paused state before the release and is kept for history. It is no longer
+> true: migration 64 is applied, the worktree is clean, and the coverage listed
+> below as missing now exists. Read the release record at the top of §6 for the
+> current state.
 
 The live deployment is still migration `63`. Migration `20260916090000_conversation_operations` is a local draft and has **not** been applied.
 
