@@ -4323,26 +4323,22 @@ async function databaseAudits() {
     );
   } finally {
     sockets.forEach((socket) => socket.disconnect());
-    if (backendChild && backendChild.exitCode === null) backendChild.kill('SIGTERM');
-    const gatewayQueueModule = require.cache[require.resolve('../src/workers/gateway-provisioning.queue')];
-    if (gatewayQueueModule) await require('../src/workers/gateway-provisioning.queue').gatewayProvisioningQueue.close().catch(() => {});
-    const billingQueueModule = require.cache[require.resolve('../src/workers/billing-reconciliation.worker')];
-    if (billingQueueModule) await require('../src/workers/billing-reconciliation.worker').billingReconciliationQueue.close().catch(() => {});
-    // Any queue whose module was loaded keeps a Redis connection open, and an
-    // unclosed one makes this harness hang after reporting success rather than
-    // exit — a green run that never returns is worse than a red one.
-    const rollupQueueModule = require.cache[require.resolve('../src/workers/analytics-rollup.worker')];
-    if (rollupQueueModule) await require('../src/workers/analytics-rollup.worker').analyticsRollupQueue.close().catch(() => {});
-    const healthQueueModule = require.cache[require.resolve('../src/workers/gateway-health.worker')];
-    if (healthQueueModule) await require('../src/workers/gateway-health.worker').gatewayHealthQueue.close().catch(() => {});
-    // conversation-auto-close was missing from this list, which is why the
-    // harness printed its result and then sat there: auto-close.queue.ts builds
-    // its Queue at module load, so anything importing the conversation
-    // lifecycle opened a Redis connection nothing ever closed. Two runs were
-    // found alive three days later, each holding exactly this handle — they had
-    // passed, and looked identical to a hang.
-    const autoCloseQueueModule = require.cache[require.resolve('../src/workers/auto-close.queue')];
-    if (autoCloseQueueModule) await require('../src/workers/auto-close.queue').conversationAutoCloseQueue.close().catch(() => {});
+    if (backendChild && backendChild.exitCode === null) {
+      // Defensive cleanup, not the fix for anything. Measured on 2026-08-29:
+      // the child was never what held the loop - see closeLoadedQueues below.
+      // Kept because the parent holds both of this child's stdio pipes, so
+      // bounding the wait and destroying them is correct regardless.
+      backendChild.kill('SIGKILL');
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 3000);
+        timer.unref?.();
+        backendChild.once('exit', () => { clearTimeout(timer); resolve(); });
+      });
+      backendChild.stdout?.destroy();
+      backendChild.stderr?.destroy();
+      backendChild.unref?.();
+    }
+    await closeLoadedQueues();
     const appPrismaModule = require.cache[require.resolve('../src/prisma')];
     if (appPrismaModule) await require('../src/prisma').prisma.$disconnect().catch(() => {});
     await raw.$disconnect().catch(() => {});
@@ -4354,6 +4350,37 @@ async function databaseAudits() {
     if (previousSnippetUploadDir === undefined) delete process.env.SNIPPET_UPLOAD_DIR;
     else process.env.SNIPPET_UPLOAD_DIR = previousSnippetUploadDir;
   }
+}
+
+// Every queue module builds its Queue at module load, so merely requiring one
+// opens a Redis connection. An unclosed connection keeps Node's event loop
+// alive, and the harness then hangs after reporting instead of exiting — a
+// green run that never returns is worse than a red one.
+//
+// This is a sweep rather than a fixed list of closes because *when* a module is
+// loaded varies by path. It must be called again after every step that can load
+// more of them; closing an already-closed BullMQ queue is a no-op, so calling it
+// more than once is free.
+const QUEUE_MODULES = [
+  ['../src/workers/gateway-provisioning.queue', 'gatewayProvisioningQueue'],
+  ['../src/workers/billing-reconciliation.worker', 'billingReconciliationQueue'],
+  ['../src/workers/analytics-rollup.worker', 'analyticsRollupQueue'],
+  ['../src/workers/gateway-health.worker', 'gatewayHealthQueue'],
+  ['../src/workers/auto-close.queue', 'conversationAutoCloseQueue'],
+  ['../src/workers/incoming-message.worker', 'incomingMessageQueue'],
+  ['../src/workers/campaign.worker', 'campaignQueue'],
+  ['../src/workers/escalation.worker', 'escalationQueue'],
+  ['../src/workers/workflow.worker', 'workflowQueue'],
+];
+
+async function closeLoadedQueues() {
+  await Promise.allSettled(QUEUE_MODULES.map(async ([specifier, exportName]) => {
+    let resolved;
+    try { resolved = require.resolve(specifier); } catch { return; }
+    if (!require.cache[resolved]) return;
+    const queue = require(specifier)[exportName];
+    if (queue && typeof queue.close === 'function') await queue.close().catch(() => {});
+  }));
 }
 
 async function workerAudits() {
@@ -4392,6 +4419,14 @@ async function main() {
   staticAudits();
   await databaseAudits();
   await workerAudits();
+  // Must run after workerAudits, not only inside databaseAudits' finally.
+  // On the early-failure path databaseAudits sweeps while auto-close.queue and
+  // gateway-provisioning.queue are not yet in require.cache, so both are
+  // skipped; workerAudits then requires incoming-message.worker, which
+  // transitively loads both and opens two Redis connections after the only
+  // sweep that would have closed them. That is the whole of the "harness does
+  // not exit when it fails early" bug — measured, not inferred.
+  await closeLoadedQueues();
 
   const failed = results.filter((result) => !result.passed);
   process.stdout.write(`\n${results.length - failed.length}/${results.length} checks passed.\n`);
@@ -4402,7 +4437,25 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    // A gate may fail; it may not hang.
+    //
+    // Two separate leaks have now kept this process alive after it finished
+    // reporting: an unclosed BullMQ queue handle, and a spawned child whose
+    // stdio pipes the parent still held. Both are fixed at the root. This is
+    // the net under the third one.
+    //
+    // unref'd deliberately. If the event loop is empty the process exits on its
+    // own and this timer never fires, so nothing is truncated on the normal
+    // path. If something still holds the loop five seconds after the summary
+    // was written, that is a leak nobody anticipated - and a result nobody can
+    // read, because the process never returns, is worse than an abrupt exit
+    // carrying the correct code.
+    const drainGuard = setTimeout(() => process.exit(process.exitCode || 0), 5000);
+    drainGuard.unref?.();
+  });

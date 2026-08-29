@@ -674,9 +674,41 @@ still running three days later — each holding exactly one Redis connection, ea
 with roughly 20s of CPU, which is a completed run, not a stalled one. **A passing
 gate can therefore look identical to a hung one**, which is how a green result
 went unnoticed for three days. Read the printed summary line, not the fact that
-the process is still on the process list. Fixing this means closing the Redis
-handle (or calling `process.exit` on the recorded result) at the end of the run;
-until then, expect to kill the process after reading its result.
+the process is still on the process list. **Both routes are now closed.** The first was the Redis handle, closed at the
+end of a completed run. The second surfaced on 2026-08-29 on the *early-failure*
+path — `waitForBackend` throwing before the backend ever answers — and it is a
+timing bug in the cleanup itself, not a second kind of leak.
+
+`databaseAudits` closed each queue only `if (require.cache[...])`, i.e. only
+those already loaded when its `finally` ran. On the early-failure path
+`auto-close.queue` and `gateway-provisioning.queue` were **not yet loaded**, so
+both were skipped. `workerAudits` then ran and required
+`incoming-message.worker`, which transitively loads both — opening two Redis
+connections *after* the only sweep that would have closed them. That is why the
+failure was path-dependent: on a successful run those modules are already in
+`require.cache` when the sweep runs, so they get closed.
+
+The fix is one idempotent `closeLoadedQueues()` called again **after**
+`workerAudits`. Measured A/B against the pre-fix script, both forced to fail at
+`waitForBackend`: before, the run printed its summary and never exited (killed
+at 90s); after, it exits **38ms** after the summary line.
+
+**Two things this cost, worth remembering.** The surviving harness went on
+holding `query_engine-windows.dll.node`, and the next `npx prisma generate` in
+an unrelated task failed with `EPERM` — nothing in that error pointed back to a
+harness run an hour earlier. *A leaked gate process breaks tooling that has
+nothing to do with the gate.* And the first diagnosis of this bug was wrong: it
+blamed the spawned child missing an emulated `SIGTERM`, which was plausible,
+mechanical, and false. What settled it was dumping
+`process.getActiveResourcesInfo()` at the end of `main()` and finding two
+sockets to `::1:6379` that appeared *two seconds after* cleanup had finished.
+*Name the handle before naming the cause.*
+
+There is now also a net under whatever the third leak turns out to be: `main()`
+ends with an unref'd 5s `drainGuard` calling `process.exit(process.exitCode)`.
+Unref'd, so an empty event loop still exits naturally and nothing is truncated
+on the normal path — confirmed by that 38ms, which shows the guard is not what
+is ending the process. A gate may fail; it may not hang.
 
 Not every leftover schema is a failed run. `rabitech_diff_shadow`,
 `rabitech_p1b_shadow` and `rabitech_p1d_debug` do not match the harness's
@@ -724,6 +756,21 @@ someone ran them and read the output rather than trusting the recorded number.
 The rule this leaves behind: **a gate is green when you watched it run, not when
 a document says it was.** Before certifying any release, run all three and read
 the summary line of each.
+
+**Run the isolation gate and the browser matrix serially. Never concurrently.**
+They contend for the same machine and the loser reports a false failure. The
+harness starts a real backend and waits a bounded budget for it to answer on
+`/health`; Playwright runs Chromium workers in parallel and will happily take
+every core. When both run at once, `waitForBackend` spends its budget queued
+behind browser processes and times out — and the harness reports that as a
+failed isolation check, which reads exactly like a real tenancy bleed.
+
+This has now produced two phantom failures on this machine, both after the rule
+was already known. The second cost a full diagnostic pass on a check that was
+never broken. **A gate that fails because of contention is indistinguishable
+from a gate that fails because the code is wrong** — so the sequencing is part
+of the gate, not an optimisation. Run the harness, read its summary line, then
+run the matrix.
 
 Core commands:
 
