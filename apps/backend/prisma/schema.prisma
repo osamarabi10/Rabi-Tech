@@ -105,16 +105,61 @@ model Organization {
   @@index([overrideExpiresAt])
 }
 
+/// The edition catalogue. Until now this row was a projection of the
+/// PLAN_ENTITLEMENTS constant and carried only price and name; the limits and
+/// features that decide what a subscriber may actually do lived in code, so
+/// repricing a tier meant a deploy. These columns move that decision into the
+/// database so the platform owner can change the menu, not just grant one
+/// customer an exception.
+///
+/// Every entitlement column is nullable or defaulted, so the rows that already
+/// exist stay valid and the seed can fill them in a separate, reviewable step.
+/// A null limit means unlimited, matching the constant it replaces.
 model Plan {
-  id                String   @id @default(cuid())
-  code              String   @unique
+  id                String  @id @default(cuid())
+  code              String  @unique
   name              String
   monthlyPriceCents Int
-  currency          String   @default("USD")
-  isActive          Boolean  @default(true)
-  sortOrder         Int      @default(0)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  currency          String  @default("USD")
+  isActive          Boolean @default(true)
+  sortOrder         Int     @default(0)
+
+  /// Metered allowances. Null means unlimited.
+  monthlyActiveContactsLimit   Int?
+  monthlyOutboundMessagesLimit Int?
+  monthlyCampaignSendsLimit    Int?
+  customFieldsLimit            Int?
+  usersLimit                   Int?
+  workflowsLimit               Int?
+
+  /// Broadcast pacing. OpenWA drives WhatsApp Web, so blasting risks a ban.
+  campaignRateMax        Int?
+  campaignRateDurationMs Int?
+
+  /// Feature grants. Each must have exactly one server-side enforcement site
+  /// reading the resolved edition — a toggle that grants nothing is worse than
+  /// no toggle, because it looks like it worked.
+  customDomain       Boolean @default(false)
+  whiteLabel         Boolean @default(false)
+  maskContactDetails Boolean @default(false)
+
+  /// NOT ENFORCED. Nothing reads this to permit or refuse gateway
+  /// provisioning; it is reported in the billing summary only. It is stored so
+  /// the catalogue is complete and the console can show it greyed with a
+  /// reason, rather than offering a switch that does nothing. Do not treat it
+  /// as a grant until an enforcement site exists.
+  autoProvisionGateway Boolean @default(false)
+
+  /// Channel kinds this edition may use, matching OrganizationChannel.kind.
+  /// A list, not a single value, because an edition may offer a choice — and
+  /// because Meta must be able to join without a migration. Defaulted to
+  /// OPENWA, which is the only transport that exists today. Carried but NOT
+  /// enforced: no code permits or refuses a channel by edition yet, and the
+  /// policy itself is still an open product question.
+  allowedChannels String[] @default(["OPENWA"])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   subscriptions Subscription[]
 }
