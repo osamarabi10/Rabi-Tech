@@ -48,15 +48,19 @@ commitment** — see §3.4.
 
 | Edition | Price | Active contacts | Channels | Features |
 |---|---|---|---|---|
-| **مجاني / Free** | Free | TBD | TBD — see OQ-3 | Baseline |
+| **مجاني / Free** | Free | 100 *(with 100 outbound)* | Both, during trial — see OQ-3 | 3-day trial; higher features shown but locked |
 | **Standard** | Owner-set | Owner-set | **Choice**: OpenWA QR **or** Meta API (BYOT) | Inbound + outbound messaging **only** |
 | **Growth** | ~$49 *(example)* | ~2,500 *(example)* | Meta API only | Owner-chosen |
 | **Business** | ~$199 *(example)* | ~10,000 *(example)* | Meta API only | Owner-chosen |
 | **Enterprise** | Owner-set | Unlimited | Meta API only | Owner-chosen, full manual control |
 
-**مجاني / Free** is the baseline entry point. Its limits and its channel are not
-yet decided (OQ-3), and that gap matters more than it looks — it determines
-whether Free is usable before the Meta channel exists.
+**مجاني / Free** is a **3-day trial**, not a permanent free tier: inbound and
+outbound messaging, higher-tier features visible but locked, and a hard block on
+all system access at expiry until the workspace upgrades. It is bounded on two
+axes — 100 active contacts and 100 outbound messages alongside the 72-hour clock
+— because a limit of null would mean unlimited and leave Free indistinguishable
+from Enterprise on those meters if the clock were ever disabled. Its intended
+channel policy is **both**, which knowingly cuts against §3.2; see OQ-3.
 
 **Standard** is deliberately narrow: inbound and outbound messaging, nothing
 else. It is also the **only** edition that offers a channel choice, letting a
@@ -163,12 +167,35 @@ Is Standard genuinely the only edition with a channel choice, and are Growth,
 Business, and Enterprise genuinely Meta-only? See §3.2. This determines whether
 three of five editions are unsellable until the Meta adapter ships.
 
-### OQ-3 — Free edition: limits and channel
+### OQ-3 — Free edition: limits and channel — DECIDED 2026-08-29
 
-Neither the active-contact limit nor the channel for **مجاني / Free** has been
-decided. The channel half is the more urgent: if Free is Meta-only it is blocked
-alongside the paid tiers; if it runs on OpenWA it is available today. This
-directly changes the count in §5.3.
+**Free is a 3-day trial**, inbound and outbound messaging, with higher-tier
+features shown but locked. At expiry all system access is hard-blocked until
+upgrade.
+
+- **Limits: 100 active contacts, 100 outbound messages.** Bounded on two axes,
+  not only the clock. Null would mean unlimited, which would make Free
+  indistinguishable from Enterprise on those meters if the clock were ever
+  disabled.
+- **Duration: 72 hours**, set as `billing.trialHours` in the platform console
+  (`platform/settings`). The shipped default is `3` — three *hours*, not days —
+  so 72 must be set deliberately. A change affects **new signups only**:
+  `trialEndsAt` is stamped once at signup, so shortening the setting cannot
+  retroactively expire someone mid-trial.
+- **The expiry machinery already exists.** `trial.service.ts` resolves state at
+  read time and `access-gate.middleware.ts` returns `TRIAL_EXPIRED`. There is no
+  job and no trigger to build.
+
+**Channels: both, during the trial — and this contradicts §3.2.** That rule makes
+Standard the only edition offering a choice. Free offering both is a deliberate
+trial design: a prospect should be able to try the transport they intend to buy.
+Recorded here as a decision rather than left to emerge as a side effect.
+
+It is **not yet implemented**. The seed ships `["OPENWA"]`, the settled default,
+because `allowedChannels` carries no enforcement and Meta does not exist (§5.2).
+Revisit when OQ-2 and OQ-4 are answered: if Standard-only-choice is confirmed,
+Free needs an explicit exemption; if the rule softens, this stops being a
+conflict.
 
 ### OQ-4 — Is Standard's Meta option also BYOT?
 

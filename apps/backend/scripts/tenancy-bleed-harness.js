@@ -3806,6 +3806,65 @@ async function databaseAudits() {
       assert.equal(sum(reportB.byCategory), reportB.total);
       assert.equal(sum(reportB.bySource), reportB.total);
     });
+
+    await check('billing: the seeded edition catalogue matches PLAN_ENTITLEMENTS field for field', async () => {
+      const { PLAN_ENTITLEMENTS } = require('../src/modules/billing/plans');
+
+      // Plan is platform-owned global config, so it is read through the
+      // un-extended client: there is no organization to scope it to.
+      const rows = await raw.plan.findMany();
+      const byCode = Object.fromEntries(rows.map((row) => [row.code, row]));
+
+      // Every field the constant carries. Listed explicitly rather than derived
+      // from Object.keys so that adding a column to one side and forgetting the
+      // other fails here instead of passing quietly.
+      const fields = [
+        'name',
+        'monthlyPriceCents',
+        'monthlyActiveContactsLimit',
+        'monthlyOutboundMessagesLimit',
+        'monthlyCampaignSendsLimit',
+        'customFieldsLimit',
+        'usersLimit',
+        'workflowsLimit',
+        'campaignRateMax',
+        'campaignRateDurationMs',
+        'autoProvisionGateway',
+        'customDomain',
+        'whiteLabel',
+        'maskContactDetails',
+      ];
+
+      for (const [code, expected] of Object.entries(PLAN_ENTITLEMENTS)) {
+        const row = byCode[code];
+        assert.ok(row, `edition ${code} is missing from the catalogue`);
+        for (const field of fields) {
+          assert.deepEqual(
+            row[field],
+            expected[field],
+            `${code}.${field}: database has ${JSON.stringify(row[field])}, constant has ${JSON.stringify(expected[field])}`,
+          );
+        }
+        // Not in the constant - the settled default, carried unenforced.
+        assert.deepEqual(row.allowedChannels, ['OPENWA'], `${code}.allowedChannels`);
+      }
+
+      // A row the constant does not know about would resolve to nothing at the
+      // enforcement sites, so the catalogue must not grow behind the code.
+      assert.equal(
+        rows.length,
+        Object.keys(PLAN_ENTITLEMENTS).length,
+        'the catalogue has editions the constant does not define',
+      );
+
+      // Enterprise promises unlimited. Null is that promise; the billion-row
+      // sentinel belongs to OrganizationConfig, whose columns are NOT NULL, and
+      // must never leak into the catalogue where it reads as a bizarre quota.
+      const enterprise = byCode.ENTERPRISE;
+      assert.equal(enterprise.monthlyActiveContactsLimit, null);
+      assert.equal(enterprise.monthlyOutboundMessagesLimit, null);
+      assert.equal(enterprise.usersLimit, null);
+    });
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
       const hour = floorToHour(new Date());
