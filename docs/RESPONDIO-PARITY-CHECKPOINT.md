@@ -418,6 +418,42 @@ root** `.env`, not `apps/backend/.env`. That second copy existed, had drifted to
 the gate would have created its disposable schema somewhere that proves nothing
 about tenant isolation. It has been deleted; there is one `.env`, at the top.
 
+Precondition, before trusting the browser matrix. Playwright's browsers are not
+installed by `npm ci`. They live in `~/AppData/Local/ms-playwright/`, outside
+`node_modules`, so no lockfile install has ever restored them and the snapshot's
+`node_modules` exclusion never covered them. On 2026-08-29 that directory did not
+exist at all on this machine, and every one of the 75 tests failed identically at
+browser launch:
+
+```
+browserType.launch: Executable doesn't exist at
+  ...\ms-playwright\chromium_headless_shell-1234\chrome-headless-shell.exe
+```
+
+Run this once per machine, and after any Playwright version bump:
+
+```powershell
+cd "C:\Desktop\RabiTech V5 Unfoolded\RabiTech V5\apps\frontend"
+npx playwright install chromium
+```
+
+**The recorded `56/56` was not reproducible here.** Playwright enumerates and
+reports every test before it launches a browser, so a run with no browsers
+installed still looks like a real test session — it names all 75, then fails all
+75 on the same missing executable. The count in a report is not evidence that
+anything rendered.
+
+That makes **two of the three release gates in this section non-functional on
+this machine** when they were relied upon. The isolation gate hung silently after
+passing and had to be killed by hand; the browser matrix could not start a
+browser at all. Only the six core checks ran unaided. Both are now fixed — the
+queue handle closed, the browsers installed — and both were fixed only because
+someone ran them and read the output rather than trusting the recorded number.
+
+The rule this leaves behind: **a gate is green when you watched it run, not when
+a document says it was.** Before certifying any release, run all three and read
+the summary line of each.
+
 Core commands:
 
 ```powershell
