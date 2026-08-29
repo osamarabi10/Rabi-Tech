@@ -1,4 +1,5 @@
 import { prisma } from '../../prisma';
+import { runAsPlatform } from '../../lib/tenant-context';
 import logger from '../../lib/logger';
 import { PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, normalizePlanCode } from './plans';
 
@@ -105,9 +106,17 @@ function rowToEdition(row: {
  */
 export async function refreshEditions(): Promise<number> {
   try {
+    // Platform scope, explicitly. Plan is in PLATFORM_MODELS so no
+    // organizationId is injected, but the extension is fail-closed on a query
+    // with NO scope at all - and the background refresh runs on a timer, owned
+    // by no request. Without this the refresh threw on every tick, the catch
+    // below logged it, and getEdition fell back to the constant forever: the
+    // catalogue was owner-editable in the database and inert in the process.
+    //
     // Every edition, not only the active ones. isActive decides what is
     // offered; resolution must still work for subscribers on a retired plan.
-    const rows = await prisma.plan.findMany();
+    const rows = await runAsPlatform('refresh-edition-catalogue', () =>
+      prisma.plan.findMany());
     if (rows.length === 0) {
       logger.warn('Edition catalogue is empty; keeping previous values');
       return cache?.size ?? 0;
