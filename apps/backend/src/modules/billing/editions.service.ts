@@ -45,6 +45,16 @@ let cache: Map<string, PlanEntitlements> | null = null;
  * reason that is not drift. See detectQuotaDrift in billing.service.ts.
  */
 let editedAt: Map<string, Date> | null = null;
+/**
+ * Which editions are still offered.
+ *
+ * Separate from the cache because deactivating an edition must stop it being
+ * *sold*, not stop it *resolving*. Subscribers already on it keep their limits;
+ * dropping the row from the cache would silently fall them back to the shipped
+ * constant, quietly changing what they are entitled to as a side effect of a
+ * pricing-page edit.
+ */
+let activeCodes: Set<string> | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
 
 /** Shape a database row into the same object the constant provides. */
@@ -95,17 +105,21 @@ function rowToEdition(row: {
  */
 export async function refreshEditions(): Promise<number> {
   try {
-    const rows = await prisma.plan.findMany({ where: { isActive: true } });
+    // Every edition, not only the active ones. isActive decides what is
+    // offered; resolution must still work for subscribers on a retired plan.
+    const rows = await prisma.plan.findMany();
     if (rows.length === 0) {
       logger.warn('Edition catalogue is empty; keeping previous values');
       return cache?.size ?? 0;
     }
     const next = new Map<string, PlanEntitlements>();
     const nextEditedAt = new Map<string, Date>();
+    const nextActive = new Set<string>();
     for (const row of rows) {
       try {
         next.set(row.code, rowToEdition(row));
         nextEditedAt.set(row.code, row.updatedAt);
+        if (row.isActive) nextActive.add(row.code);
       } catch {
         // An edition the code has never heard of cannot be normalized. Skip it
         // rather than failing the whole refresh: one bad row must not take the
@@ -115,6 +129,7 @@ export async function refreshEditions(): Promise<number> {
     }
     cache = next;
     editedAt = nextEditedAt;
+    activeCodes = nextActive;
     return next.size;
   } catch (error) {
     logger.error('Failed to refresh edition catalogue; keeping previous values', {
@@ -148,10 +163,18 @@ export function getEdition(code: PlanCode): PlanEntitlements {
   return cache?.get(code) ?? PLAN_ENTITLEMENTS[code];
 }
 
-/** The published catalogue, in display order. */
+/**
+ * The published catalogue - what is currently offered.
+ *
+ * Filtered by isActive, unlike getEdition(), which resolves any edition a
+ * subscriber is actually on. A retired plan disappears from the price list
+ * without changing anything for the people already paying for it.
+ */
 export function getEditions(): PlanEntitlements[] {
   if (!cache) return Object.values(PLAN_ENTITLEMENTS);
-  return Array.from(cache.values());
+  return Array.from(cache.entries())
+    .filter(([code]) => activeCodes?.has(code) ?? true)
+    .map(([, edition]) => edition);
 }
 
 /**
@@ -168,4 +191,5 @@ export function getEditionEditedAt(code: PlanCode): Date | null {
 export function resetEditionCacheForTests(): void {
   cache = null;
   editedAt = null;
+  activeCodes = null;
 }

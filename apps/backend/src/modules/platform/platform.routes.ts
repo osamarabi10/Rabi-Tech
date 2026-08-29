@@ -13,7 +13,7 @@ import {
   markPaymentFailed,
 } from '../billing/billing.service';
 import { normalizePlanCode } from '../billing/plans';
-import { getEdition } from '../billing/editions.service';
+import { getEdition, refreshEditions } from '../billing/editions.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { probeOrganization } from '../gateway/health-monitor';
 import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
@@ -1305,4 +1305,123 @@ router.delete('/subscribers/:id', requirePlatformOwner, async (req, res) => {
   }
 });
 
+
+/**
+ * The edition catalogue: the product's offer, not one subscriber's deal.
+ *
+ * Distinct from /subscribers/:id/commercials, which grants one workspace an
+ * exception. This changes the menu everyone is sold from, so it is owner-only
+ * and it takes effect without a deploy - which was the entire point of moving
+ * the catalogue out of a TypeScript constant.
+ */
+router.get('/editions', requirePlatformOwner, async (_req, res) => {
+  const editions = await prisma.plan.findMany({ orderBy: { sortOrder: 'asc' } });
+  res.json({
+    editions,
+    // Stated, not implied. The console greys this control and says why; a
+    // disabled thing with no reason is worse than one that is simply absent.
+    notEnforced: ['autoProvisionGateway'],
+    channelsNotEnforced: true,
+  });
+});
+
+/** A limit is a non-negative integer, or null meaning unlimited. */
+function parseLimit(value: unknown, field: string): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw Object.assign(new Error(`${field} must be a non-negative whole number, or empty for unlimited`), { status: 400 });
+  }
+  return parsed;
+}
+
+function parseFlag(value: unknown): boolean | undefined {
+  if (value === undefined) return undefined;
+  return Boolean(value);
+}
+
+router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
+  try {
+    const code = normalizePlanCode(req.params.code);
+    const body = (req.body || {}) as Record<string, unknown>;
+
+    // Refused rather than silently ignored. Accepting a value nothing reads
+    // would let an owner believe they had granted something; saying so is the
+    // honest failure.
+    if (body.autoProvisionGateway !== undefined) {
+      return res.status(400).json({
+        error: 'autoProvisionGateway is not enforced anywhere yet, so setting it would grant nothing. It is reported in the billing summary only.',
+      });
+    }
+    if (body.allowedChannels !== undefined) {
+      return res.status(400).json({
+        error: 'Channel policy is not enforced yet and the per-edition rule is still an open product question. Editing it here would imply a guarantee the server does not make.',
+      });
+    }
+
+    const data: Record<string, unknown> = {};
+    if (body.name !== undefined) {
+      const name = String(body.name).trim();
+      if (!name) return res.status(400).json({ error: 'Name is required' });
+      data.name = name;
+    }
+    const price = parseLimit(body.monthlyPriceCents, 'Monthly price');
+    if (price !== undefined) {
+      if (price === null) return res.status(400).json({ error: 'Monthly price is required; use 0 for a free or negotiated edition' });
+      data.monthlyPriceCents = price;
+    }
+    for (const field of [
+      'monthlyActiveContactsLimit',
+      'monthlyOutboundMessagesLimit',
+      'monthlyCampaignSendsLimit',
+      'customFieldsLimit',
+      'usersLimit',
+      'workflowsLimit',
+      'campaignRateMax',
+      'campaignRateDurationMs',
+    ] as const) {
+      const parsed = parseLimit(body[field], field);
+      if (parsed !== undefined) data[field] = parsed;
+    }
+    for (const flag of ['customDomain', 'whiteLabel', 'maskContactDetails'] as const) {
+      const parsed = parseFlag(body[flag]);
+      if (parsed !== undefined) data[flag] = parsed;
+    }
+    const isActive = parseFlag(body.isActive);
+    if (isActive !== undefined) data.isActive = isActive;
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'No editable fields supplied' });
+    }
+
+    const before = await prisma.plan.findUnique({ where: { code } });
+    const updated = await prisma.plan.update({ where: { code }, data });
+
+    // Make the change live in this process immediately rather than waiting for
+    // the next scheduled refresh. Other processes pick it up within their
+    // refresh interval; nobody has to restart anything.
+    await refreshEditions();
+
+    // Platform audit, not tenant audit: this changes the offer, not one
+    // workspace. targetOrg stays null for the same reason - no subscriber was
+    // acted on, and pretending otherwise would make the per-org trail lie.
+    await prisma.platformAuditLog.create({
+      data: {
+        reason: `edition ${code} updated`,
+        action: 'platform.edition.updated',
+        actorIdentityId: req.platformUser!.id,
+        actorEmail: req.platformUser!.email,
+        beforeState: before as never,
+        afterState: updated as never,
+        ipAddress: req.ip,
+      },
+    });
+
+    res.json({ edition: updated });
+  } catch (error) {
+    const status = (error as { status?: number }).status || 400;
+    res.status(status).json({ error: (error as Error).message || 'Failed to update edition' });
+  }
+});
 export default router;

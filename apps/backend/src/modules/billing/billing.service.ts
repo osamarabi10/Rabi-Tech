@@ -74,7 +74,7 @@ export async function ensurePlans(): Promise<void> {
           code: plan.code,
           name: plan.name,
           monthlyPriceCents: plan.monthlyPriceCents,
-          sortOrder: ['FREE', 'GROWTH', 'BUSINESS', 'ENTERPRISE'].indexOf(plan.code),
+          sortOrder: ['FREE', 'STANDARD', 'GROWTH', 'BUSINESS', 'ENTERPRISE'].indexOf(plan.code),
         },
         // Empty on purpose. An existing row is owner-editable state, not a
         // copy of the constant to be refreshed. See the note above.

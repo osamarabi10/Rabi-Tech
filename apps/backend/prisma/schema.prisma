@@ -13,7 +13,7 @@ model Organization {
   name                 String
   slug                 String    @unique // for Phase 1.5 subdomain routing
   status               String    @default("ACTIVE") // ACTIVE|SUSPENDED|PROVISIONING
-  tier                 String    @default("FREE") // FREE|GROWTH|BUSINESS|ENTERPRISE
+  tier                 String    @default("FREE") // FREE|STANDARD|GROWTH|BUSINESS|ENTERPRISE
   paymentProvider      String    @default("manual")
   paymentCustomerRef   String?
   emailVerifiedAt      DateTime?

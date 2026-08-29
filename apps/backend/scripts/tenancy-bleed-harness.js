@@ -3979,6 +3979,158 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
       resetEditionCacheForTests();
     });
+
+    // resolveEntitlements reads override, then subscription, then tier. Earlier
+    // billing checks leave live subscriptions on these fixtures, so setting tier
+    // alone is silently ignored - correct behaviour, and caught here by a check
+    // that asserted against it. These four checks are about the catalogue, not
+    // about subscription precedence, so they clear the subscription and let tier
+    // govern.
+    const setTierGoverned = async (org, tier) => {
+      await raw.subscription.deleteMany({ where: { organizationId: org.organizationId } });
+      await raw.organization.update({ where: { id: org.organizationId }, data: { tier } });
+    };
+
+    await check('billing: Standard resolves end-to-end as messaging only', async () => {
+      const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
+      const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      const standard = getEdition('STANDARD');
+      assert.ok(standard, 'STANDARD must resolve');
+      assert.equal(standard.code, 'STANDARD');
+
+      // Messaging is the scope, so the two messaging allowances are real.
+      assert.ok((standard.monthlyActiveContactsLimit ?? 0) > 0, 'Standard must allow contacts');
+      assert.ok((standard.monthlyOutboundMessagesLimit ?? 0) > 0, 'Standard must allow outbound');
+
+      // Everything past inbound and outbound is closed. Zero, not "a few":
+      // a tier granting three workflows invites an argument about why not four.
+      assert.equal(standard.monthlyCampaignSendsLimit, 0, 'broadcasting is not messaging');
+      assert.equal(standard.customFieldsLimit, 0);
+      assert.equal(standard.workflowsLimit, 0);
+      assert.equal(standard.whiteLabel, false);
+      assert.equal(standard.customDomain, false);
+      assert.equal(standard.maskContactDetails, false);
+      assert.equal(standard.autoProvisionGateway, false);
+
+      // And it resolves for a real organization, not just in the catalogue.
+      await setTierGoverned(orgB, 'STANDARD');
+      const effective = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgB.organizationId));
+      assert.equal(effective.plan, 'STANDARD');
+      assert.equal(effective.planName, 'Standard');
+      assert.equal(effective.seatLimit, standard.usersLimit);
+
+      await setTierGoverned(orgB, 'FREE');
+      resetEditionCacheForTests();
+    });
+
+    await check('billing: the catalogue is platform-owned and cannot be reached by a tenant actor', async () => {
+      // Plan is in PLATFORM_MODELS, so the extension does not inject an
+      // organizationId. Read under a tenant scope it returns the global
+      // catalogue rather than an empty set - the correct behaviour for shared
+      // config, and the reason the HTTP layer is what must refuse a tenant.
+      const underTenant = await runAsOrganization(orgA.organizationId, () =>
+        scoped.plan.findMany({ select: { code: true } }));
+      assert.ok(underTenant.length >= 5, 'the catalogue is global, not tenant-filtered');
+
+      // The boundary that matters is the endpoint. An organization token, even
+      // an ADMIN one, is not a platform actor.
+      const asTenant = await fetch(`${baseUrl}/api/platform/editions`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.ok([401, 403].includes(asTenant.status), `tenant read must be refused, got ${asTenant.status}`);
+
+      const writeAsTenant = await fetch(`${baseUrl}/api/platform/editions/GROWTH`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monthlyPriceCents: 1 }),
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.ok([401, 403].includes(writeAsTenant.status), `tenant write must be refused, got ${writeAsTenant.status}`);
+
+      // The price must be untouched by the refused write.
+      const growth = await raw.plan.findUnique({ where: { code: 'GROWTH' } });
+      assert.equal(growth.monthlyPriceCents, 4900, 'a refused write must change nothing');
+    });
+
+    await check('billing: editing one edition does not move another tenant', async () => {
+      const { refreshEditions, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
+      const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
+
+      await setTierGoverned(orgA, 'GROWTH');
+      await setTierGoverned(orgB, 'BUSINESS');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      const beforeB = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgB.organizationId));
+
+      // Move GROWTH substantially. Org B is on BUSINESS and must not notice.
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: { monthlyPriceCents: 9900, monthlyActiveContactsLimit: 99999, whiteLabel: true },
+      });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      const afterB = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgB.organizationId));
+      assert.equal(afterB.plan, beforeB.plan);
+      assert.equal(afterB.listPriceCents, beforeB.listPriceCents, 'another edition price must not leak');
+      assert.equal(afterB.seatLimit, beforeB.seatLimit);
+      assert.deepEqual(afterB.limits, beforeB.limits, 'another edition limits must not leak');
+
+      // And org A, which is on GROWTH, does see it.
+      const afterA = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgA.organizationId));
+      assert.equal(afterA.listPriceCents, 9900, 'the edited edition must apply to its own tenants');
+
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: { monthlyPriceCents: 4900, monthlyActiveContactsLimit: 2500, whiteLabel: false },
+      });
+      await setTierGoverned(orgA, 'FREE');
+      await setTierGoverned(orgB, 'FREE');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      resetEditionCacheForTests();
+    });
+
+    await check('billing: deactivating an edition retires it without orphaning its subscribers', async () => {
+      const { refreshEditions, getEdition, getEditions, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
+      const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
+
+      await setTierGoverned(orgA, 'GROWTH');
+      // A distinguishable value, so a silent fall back to the shipped constant
+      // is visible rather than looking like a correct answer.
+      await raw.plan.update({ where: { code: 'GROWTH' }, data: { monthlyActiveContactsLimit: 4242 } });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      assert.equal(getEdition('GROWTH').monthlyActiveContactsLimit, 4242);
+
+      await raw.plan.update({ where: { code: 'GROWTH' }, data: { isActive: false } });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      // Retired from the price list...
+      assert.ok(
+        !getEditions().some((edition) => edition.code === 'GROWTH'),
+        'a deactivated edition must leave the published catalogue',
+      );
+
+      // ...but still resolving, with its edited value intact. Falling back to
+      // the constant here would silently change what a paying subscriber is
+      // entitled to as a side effect of a pricing-page edit.
+      assert.equal(
+        getEdition('GROWTH').monthlyActiveContactsLimit,
+        4242,
+        'a subscriber on a retired edition keeps the edition they are on',
+      );
+      const stillResolves = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgA.organizationId));
+      assert.equal(stillResolves.plan, 'GROWTH');
+
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: { isActive: true, monthlyActiveContactsLimit: 2500 },
+      });
+      await setTierGoverned(orgA, 'FREE');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      resetEditionCacheForTests();
+    });
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
       const hour = floorToHour(new Date());

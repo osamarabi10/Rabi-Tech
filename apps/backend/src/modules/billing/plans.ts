@@ -1,4 +1,4 @@
-export type PlanCode = 'FREE' | 'GROWTH' | 'BUSINESS' | 'ENTERPRISE';
+export type PlanCode = 'FREE' | 'STANDARD' | 'GROWTH' | 'BUSINESS' | 'ENTERPRISE';
 
 export type PlanEntitlements = {
   code: PlanCode;
@@ -41,6 +41,36 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     workflowsLimit: 1,
     campaignRateMax: 1,
     campaignRateDurationMs: 2_000,
+    autoProvisionGateway: false,
+    customDomain: false,
+    whiteLabel: false,
+    maskContactDetails: false,
+  },
+  /**
+   * Messaging and nothing else: a shared inbox on the subscriber's own number.
+   *
+   * Every feature limit is zero rather than small. A tier that grants "a few"
+   * workflows invites a support conversation about why three is not four; one
+   * that grants none states the boundary. Campaign sends are zero for the same
+   * reason - broadcasting is a feature, not part of inbound and outbound.
+   *
+   * PLACEHOLDER VALUES. Price and the two messaging allowances are owner-set by
+   * design (see RABITECH-PRODUCT-VISION.md section 2), and these are starting
+   * points chosen to be conservative, not decisions. They are editable from the
+   * console the moment this ships, which is the whole point of the phase.
+   */
+  STANDARD: {
+    code: 'STANDARD',
+    name: 'Standard',
+    monthlyPriceCents: 0,
+    monthlyActiveContactsLimit: 1000,
+    monthlyOutboundMessagesLimit: 5000,
+    monthlyCampaignSendsLimit: 0,
+    customFieldsLimit: 0,
+    usersLimit: 3,
+    workflowsLimit: 0,
+    campaignRateMax: 1,
+    campaignRateDurationMs: 1_500,
     autoProvisionGateway: false,
     customDomain: false,
     whiteLabel: false,

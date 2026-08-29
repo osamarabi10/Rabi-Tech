@@ -43,3 +43,19 @@ ALTER TABLE "Plan"
 -- by edition yet, and the policy is still an open product question.
 ALTER TABLE "Plan"
   ADD COLUMN "allowedChannels" TEXT[] NOT NULL DEFAULT ARRAY['OPENWA']::TEXT[];
+
+-- Widen the plan-override constraint to admit STANDARD.
+--
+-- Organization.planOverride is TEXT with a CHECK listing the valid codes, not an
+-- enum, so the code list lives in SQL as well as in PlanCode. Adding a fifth
+-- edition without this would let an owner select Standard in the console and be
+-- refused by the database at write time - the failure landing on the one person
+-- who has no way to diagnose it.
+--
+-- Dropped and recreated rather than altered: Postgres has no ALTER CONSTRAINT
+-- for a CHECK expression, and IF EXISTS keeps this rerunnable on a database
+-- where the constraint was never created.
+ALTER TABLE "Organization" DROP CONSTRAINT IF EXISTS "Organization_planOverride_check";
+ALTER TABLE "Organization" ADD CONSTRAINT "Organization_planOverride_check"
+  CHECK ("planOverride" IS NULL
+         OR "planOverride" IN ('FREE','STANDARD','GROWTH','BUSINESS','ENTERPRISE'));
