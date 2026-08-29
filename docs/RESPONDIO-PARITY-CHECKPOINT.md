@@ -560,6 +560,35 @@ docker compose run --rm --no-deps backend npx prisma migrate status
 docker compose run --rm --no-deps backend npx prisma migrate deploy
 ```
 
+Precondition, before the first real customer Meta credential is stored.
+**`ALLOW_INSECURE_SECRETS` must be `0`.** This gate is about onboarding, not
+about shipping: Phase 4 may be built and piloted against Meta Development Mode
+test credentials with the flag standing, but the moment a real customer pastes a
+System User token it becomes a vault of another company's secrets.
+
+The asymmetry is what makes it a hard gate. A System User token sends **as that
+business**, so losing one is impersonating a company to its own customers — a
+different risk class from losing RabiTech's own gateway key. And this repository
+is public with credentials in its history, which is a demonstrated leak path, not
+a hypothetical one. Storing other businesses' tokens under a flag whose entire
+purpose is to announce that the posture is knowingly unclean is not a trade
+anyone would make deliberately; it is one that gets made by forgetting.
+
+Concretely, before onboarding the first Meta customer: rotate `OPENWA_API_KEY`
+off its known-weak value, set `ALLOW_INSECURE_SECRETS=0`, and confirm the boot
+log no longer prints `RUNNING WITH INSECURE SECRETS`. The rotation needs an
+OpenWA gateway restart, so it is scheduled work rather than a flag flip — which
+is precisely why it is written down here rather than left to the moment.
+
+Related, and deliberately **not** solved by that rotation:
+`CHANNEL_ENCRYPTION_KEY` still has no re-encryption routine. A leaked Meta token
+is customer-recoverable — they revoke it and paste a new one. A leaked
+`CHANNEL_ENCRYPTION_KEY` exposes every stored token at once with no way to
+re-encrypt, and the only remedy would be asking every customer to re-enter their
+credentials. The Meta credential table therefore carries a `keyVersion` column
+from the start: rotation stays out of scope, but making it possible later is a
+different thing from building it now, and retrofitting the column is expensive.
+
 Precondition, before trusting the isolation gate. The gate has silently failed
 to complete at least four times, and nobody noticed because the failure mode
 produces no output at all. Two independent causes compound, and both must be
