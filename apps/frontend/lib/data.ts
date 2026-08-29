@@ -2196,3 +2196,60 @@ export async function fetchCampaignReplies(campaignId: string): Promise<Campaign
   const { data } = await api.get(`/api/analytics/campaigns/${campaignId}/replies`);
   return data;
 }
+
+// ---------- Meta WhatsApp Cloud API channel ----------
+
+/**
+ * The organization's Meta channel. Never carries the access token — the API
+ * does not return it, and nothing here should invite a caller to expect it.
+ */
+export type MetaChannel = {
+  connected: boolean;
+  status: string;
+  phoneNumberId: string | null;
+  displayPhoneNumber: string | null;
+  verifiedName: string | null;
+  qualityRating: string | null;
+  messagingTier: string | null;
+  lastValidatedAt: string | null;
+  invalidReason: string | null;
+  graphVersion: string;
+};
+
+/**
+ * Which of the four connection checks failed, and why.
+ *
+ * `code` is the stable one. The server also sends an Arabic `message`, but the
+ * UI renders `code` through the dictionary so a Hebrew or English admin is not
+ * shown Arabic — the server's copy is the fallback, not the display value.
+ */
+export type MetaConnectProblem = {
+  code: string;
+  step: 'PHONE_NUMBER' | 'WABA_ACCESS' | 'SUBSCRIBE' | 'STANDING';
+  message: string;
+};
+
+export type MetaConnectSuccess = {
+  channel: MetaChannel;
+  /** Set when the connection succeeded but tier/quality could not be read. */
+  warning: MetaConnectProblem | null;
+};
+
+export async function fetchMetaChannel(): Promise<MetaChannel | null> {
+  const { data } = await api.get('/api/channels/meta');
+  return data.channel ?? null;
+}
+
+export async function connectMetaChannel(input: {
+  phoneNumberId: string;
+  wabaId: string;
+  accessToken: string;
+}): Promise<MetaConnectSuccess> {
+  const { data } = await api.post('/api/channels/meta/connect', input);
+  return { channel: data.channel, warning: data.warning ?? null };
+}
+
+export async function disconnectMetaChannel(): Promise<boolean> {
+  const { data } = await api.delete('/api/channels/meta');
+  return !!data.removed;
+}

@@ -43,6 +43,7 @@ import {
   DrawerTitle,
 } from '@/components/ui/drawer';
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
+import { MetaChannelCard } from '@/components/settings/meta-channel-card';
 
 const EMPTY_CAPABILITIES: WorkspaceUserCapabilities = {
   canInvite: false,
@@ -180,6 +181,8 @@ export function WorkspaceChannels() {
             ))}
           </div>
         )}
+
+        <MetaChannelCard canManage={capabilities.canManage} />
       </div>
 
       <Drawer open={!!selected} onOpenChange={(open) => { if (!open) setSelected(null); }}>

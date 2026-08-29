@@ -68,6 +68,7 @@ model Organization {
   workingHours            WorkingHours?
   sequences               OrgSequence[]
   channels                OrganizationChannel[]
+  metaCredentials         MetaChannelCredential[]
   usageEvents             UsageEvent[]
   dailyMetrics            PlatformDailyMetric[]
   platformAlerts          PlatformAlert[]
@@ -162,6 +163,79 @@ model Plan {
   updatedAt DateTime @updatedAt
 
   subscriptions Subscription[]
+}
+
+/// Meta WhatsApp Cloud API credentials for one organization's channel.
+///
+/// Bring-your-own-token: the customer creates their own Meta Business account,
+/// obtains their own number, generates a System User token, and supplies it
+/// here. RabiTech has no Meta billing relationship - see OQ-1 in
+/// docs/RABITECH-PRODUCT-VISION.md.
+///
+/// **What is secret and what is not.** The access token is the credential: it
+/// sends as that business, so losing one is impersonating a company to its own
+/// customers. It is encrypted at rest and never returned by any endpoint.
+/// phoneNumberId and wabaId are *identifiers*, not secrets - Meta puts the
+/// phone number id in the body of every inbound webhook, so it is already
+/// public to anyone Meta talks to, and knowing it grants nothing. They are
+/// stored in plaintext because the webhook has to resolve an organization from
+/// phoneNumberId on every inbound message, and an encrypted column cannot be
+/// looked up.
+///
+/// **phoneNumberId is globally unique, deliberately.** It is the only key the
+/// inbound webhook has - Meta posts every customer's messages to one URL - so
+/// exactly one organization may claim a given number. Two rows sharing it would
+/// make tenant resolution ambiguous, which on this path means delivering one
+/// business's customer messages into another business's inbox. The database
+/// refuses that rather than the application checking for it.
+model MetaChannelCredential {
+  id             String @id @default(cuid())
+  organizationId String
+  channelId      String
+
+  /// Identifiers, not secrets. See the note above.
+  phoneNumberId String
+  wabaId        String
+
+  /// The credential. AES-256-GCM via lib/credential-crypto, never read back.
+  accessTokenEnc String
+
+  /// Which encryption key this row was sealed with.
+  ///
+  /// CHANNEL_ENCRYPTION_KEY has no rotation routine today, and rotating it
+  /// would orphan every encrypted row. That is survivable for an OpenWA gateway
+  /// key; it is not survivable for a vault of other businesses' tokens, where
+  /// the only remedy would be asking every customer to re-enter credentials.
+  /// The column exists so a future re-encryption can tell which rows it has
+  /// already migrated. Rotation itself remains out of scope - making it
+  /// possible later is a different thing from building it now, and retrofitting
+  /// this column across live encrypted rows is expensive.
+  keyVersion Int @default(1)
+
+  /// ACTIVE | INVALID | PENDING. Tokens die on their own - a password change, a
+  /// permission revoke, or the System User being deleted - so a credential that
+  /// worked yesterday is not assumed to work today.
+  status          String    @default("PENDING")
+  invalidReason   String?
+  lastValidatedAt DateTime?
+
+  /// Non-secret display values read back from Meta, so the console can show
+  /// which number is connected without decrypting anything.
+  displayPhoneNumber String?
+  verifiedName       String?
+  qualityRating      String?
+  messagingTier      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      OrganizationChannel @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([phoneNumberId])
+  @@unique([channelId, organizationId])
+  @@index([organizationId, status])
 }
 
 model Subscription {
@@ -658,8 +732,10 @@ model OrganizationChannel {
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization    Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  metaCredentials MetaChannelCredential[]
 
+  @@unique([id, organizationId])
   @@unique([organizationId, kind])
   @@index([organizationId, status])
   @@index([managedByProvisioner, provisioningState])

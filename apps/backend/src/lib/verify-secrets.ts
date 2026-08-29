@@ -32,7 +32,16 @@ function weak(value: string): boolean {
   return inUrl ? KNOWN_WEAK.has(inUrl[1]) : false;
 }
 
-export function verifySecrets(): void {
+/**
+ * The current secret problems, or an empty list when the configuration is sound.
+ *
+ * Exported apart from `verifySecrets` so that a *feature* can refuse to run
+ * under weak secrets without also being able to take the process down. The Meta
+ * credential vault is the first thing this platform stores that is worth more
+ * than its own data — a System User token sends as someone else's business — and
+ * it must not be written into a database whose password is still `secret`.
+ */
+export function secretProblems(): string[] {
   const problems: string[] = [];
 
   for (const key of REQUIRED) {
@@ -51,6 +60,12 @@ export function verifySecrets(): void {
   if (process.env.OPENWA_API_KEY && weak(process.env.OPENWA_API_KEY)) {
     problems.push('OPENWA_API_KEY uses a known-weak value');
   }
+
+  return problems;
+}
+
+export function verifySecrets(): void {
+  const problems = secretProblems();
 
   if (problems.length === 0) return;
 

@@ -246,6 +246,26 @@ async function prepareSettings(
     }
     await route.continue();
   });
+  // The Meta Cloud API card on /settings/channels reads its own endpoint when
+  // it mounts. Left unmocked the request falls through to a backend that is
+  // not running here, and the 401 interceptor in lib/api.ts redirects to
+  // /login - which takes every settings page down with it, not just this card.
+  // That is why one new card failed eighteen unrelated responsive checks.
+  await page.route('**/api/channels/meta**', async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'GET' && path === '/api/channels/meta') {
+      // Not connected: the state that renders the connect affordance, which is
+      // the one this page is asserted against.
+      await route.fulfill({ json: { channel: null } });
+      return;
+    }
+    if (request.method() === 'DELETE' && path === '/api/channels/meta') {
+      await route.fulfill({ json: { removed: true } });
+      return;
+    }
+    await route.continue();
+  });
   const lifecycleStages = [
     { id: 'stage-lead', name: 'Lead', description: 'A new opportunity', color: '#2563EB', emoji: null, kind: 'ACTIVE', isDefault: true, isWon: false, orderIndex: 0, contactCount: 12 },
     { id: 'stage-qualified', name: 'Qualified', description: 'Ready for an offer', color: '#7C3AED', emoji: null, kind: 'ACTIVE', isDefault: false, isWon: false, orderIndex: 1, contactCount: 7 },
