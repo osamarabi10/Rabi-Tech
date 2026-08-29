@@ -50,20 +50,26 @@ point at `localhost:15432` — pointing it at `5432` reaches the other stack.
 
 Live database state:
 
-- `64` Prisma migrations are applied.
-- Latest live migration: `20260916090000_conversation_operations` (deployed 2026-08-29 — see §6).
+- `66` Prisma migrations are applied.
+- Latest live migration: `20260918090000_plan_editions_seed` (deployed 2026-08-29 — see §6b).
 - `/settings/snippets`, `/settings/tags`, and `/settings/contact-fields` return `200`.
 - Anonymous `/api/snippets`, `/api/contacts/tags`, and `/api/contacts/contact-fields` return `401`.
 - `/health` returns `healthy`; database, Redis, OpenWA, and queue depth are `ok`.
 
 Latest release evidence:
 
-- Backend isolation and usage harness: `91/91`.
-- Browser matrix: `56/56`.
+- Backend isolation and usage harness: `109/109`.
+- Browser matrix: `75/75`.
 - Backend production build and Prisma constructor lint: pass.
 - Frontend production build, i18n completeness, and mojibake checks: pass.
-- Verified backup: `auto-20260826-131332.dump`, `1.87 MB`.
-- The backup was restored into a scratch database and counted `31` conversations, `97` messages, and `33` contacts before migration 63 was deployed.
+- Verified backup: `auto-20260829-143026.dump`, `1,109,740` bytes.
+- The backup was restored into a scratch database and counted `31` conversations, `97` messages, and `33` contacts before migrations 65 and 66 were deployed. Data is unchanged after them.
+
+Both gate numbers rose because two gates were found non-functional on this
+machine and repaired — see the preconditions in §8. Neither number is
+comparable to the one it replaces without that context: the harness gained
+conversation-lifecycle, closure-reporting and edition coverage, and the browser
+matrix gained `/settings/conversations` across all eighteen combinations.
 
 Known local deployment warnings, not introduced by the current parity work:
 
@@ -310,6 +316,114 @@ spec gets built for other reasons.
 - Desktop/tablet/mobile Inbox behavior passes Arabic/Hebrew/English and light/dark browser coverage.
 - The release evidence is written here before moving to R2.
 
+## 6b. Owner-controlled edition ladder — released 2026-08-29
+
+**Migrations `20260917090000_plan_editions` and `20260918090000_plan_editions_seed`
+are deployed.** Two migrations applied, `64` → `66`. Transcribed from command
+output, not from intent.
+
+Until this, an owner could grant one subscriber a commercial exception — the P9
+overrides are shipped and audited — but could not change the menu everyone is
+sold from. Which editions existed, what each granted, and each list price lived
+in a TypeScript constant, so repricing a tier was a code change and a deploy.
+
+Release gates, executed fresh immediately before the deploy:
+
+- Isolation and usage harness: **`109/109`**, exit 0.
+- Responsive browser matrix: **`75/75`**, exit 0.
+- Prisma format (no drift), generate (`5.22.0`), backend build, constructor lint, `check:i18n`, `check:mojibake`, frontend production build: all pass.
+- Backup, restore-verified: `auto-20260829-143026.dump`, `1,109,740` bytes, restored into a scratch database and counted `31` conversations, `97` messages, `33` contacts. **Unused — no rollback was needed.**
+
+**Both halves confirmed, not just the first.** A columns-only landing is the
+subtle failure here: the schema would look right while every enforcement site
+silently kept reading the compiled-in constant.
+
+- Columns: all **13** new `Plan` columns present.
+- Constraint: `Organization_planOverride_check` now admits `FREE, STANDARD, GROWTH, BUSINESS, ENTERPRISE`.
+- Catalogue: **five editions seeded**, byte-identical to `PLAN_ENTITLEMENTS` — asserted field by field by a harness check, so a drift between the two is a failed gate rather than a surprise on an invoice.
+
+| code | price | MAC | outbound | users | channels |
+|---|---|---|---|---|---|
+| FREE | 0 | 100 | 100 | 1 | `{OPENWA}` |
+| **STANDARD** | **1900** | **500** | **2000** | **2** | `{OPENWA}` |
+| GROWTH | 4900 | 2500 | 10000 | 5 | `{OPENWA}` |
+| BUSINESS | 19900 | 10000 | 50000 | 25 | `{OPENWA}` |
+| ENTERPRISE | 0 | *null* | *null* | *null* | `{OPENWA}` |
+
+Enterprise keeps `NULL` on every metered limit, because null is the promise the
+tier makes. The `1,000,000,000` sentinel lives in `OrganizationConfig`, whose
+columns are NOT NULL, and a harness check asserts it never leaks into the
+catalogue where it would read as a bizarre quota.
+
+Post-deploy verification: `migrate status` reports `66 migrations found` and
+`Database schema is up to date!`; `/health` green on database, Redis, OpenWA and
+queue depth; data intact at **`31` / `97` / `33`**; `/platform/editions`,
+`/platform/subscribers`, `/settings/conversations` and `/inbox` all `200`;
+`/api/platform/editions` returns `401` anonymously — the auth gate, not a `500`;
+no unhandled exceptions and no `prisma:error` entries.
+
+**The proof of the phase is the restart test.** A price was edited, the backend
+restarted, and the edit held:
+
+```
+before edit:    4900
+after edit:     5500
+docker compose restart backend      (ensurePlans runs at boot)
+after restart:  5500   <- held
+```
+
+Before `ensurePlans` became create-only, that last line would have read `4900`:
+the boot seeder rewrote the row from the constant, so an owner's Friday price
+change was gone by Monday with nothing in any log to explain it. GROWTH was
+restored to `4900` afterwards.
+
+### Two bugs the pass criteria caught
+
+Neither was found by reading the code. Both were found by writing the check that
+had to pass.
+
+**A SQL constraint would have blocked Standard at runtime.**
+`Organization.planOverride` is `TEXT` with a CHECK listing valid codes, not an
+enum, so the code list lives in SQL as well as in `PlanCode`. A fifth edition
+without widening it would have let an owner select Standard in the console and
+be refused by the database at write time — the failure landing on the one person
+with no way to diagnose it. Folded into migration 65 rather than a third
+migration, since 65 was unapplied everywhere.
+
+**Deactivating an edition silently reverted its subscribers to compiled
+defaults.** `refreshEditions` filtered `isActive: true`, so retiring a plan
+dropped it from the cache and everyone on it fell back to `PLAN_ENTITLEMENTS` —
+changing what a paying customer was entitled to as a side effect of a
+pricing-page edit, and presenting as a billing bug days later. The cache now
+holds **every** edition; only the published catalogue filters by `isActive`.
+Retiring a plan removes it from the price list without touching the people
+already paying for it.
+
+### Standing caveat
+
+**`ALLOW_INSECURE_SECRETS` is still `1`**, with `OPENWA_API_KEY` on a known-weak
+value as the outstanding deferred item. It was deferred because rotating it
+requires restarting the OpenWA gateway, and the live WhatsApp session is worth
+more than closing a local key whose ports are now loopback-only. **This release
+is complete; the security posture is not clean**, and nothing here should be
+read as saying otherwise.
+
+### Not built
+
+**Creating an edition from the console.** A code must exist in `PlanCode` before
+anything can resolve it, so a row created from the console would be a plan no
+enforcement path recognises — and the seed diff test would fail on it. The page
+states this rather than offering a button that produces an unusable row.
+Deferred until `PlanCode` becomes data-driven, which is a larger change than this
+phase.
+
+Also carried but deliberately unenforced, both stated inline in the console with
+their reason rather than greyed in silence: `autoProvisionGateway` (no
+enforcement site exists) and `allowedChannels` (per-edition channel policy is
+still OQ-2/OQ-4 in `docs/RABITECH-PRODUCT-VISION.md`). The API refuses both
+fields as well — accepting a value nothing reads would let an owner believe they
+had granted something.
+
 ## 7. Later roadmap
 
 Execute in this dependency order after Conversation Operations.
@@ -394,6 +508,22 @@ npx prisma --version
 # ^5.10.0 range declared in apps/backend/package.json. Any other version
 # means npx resolved a CLI from outside the project: do not run format,
 # generate, migrate, or deploy until it reports 5.x.
+```
+
+Precondition, and it applies to the **frontend** too. `docker compose up`
+rebuilds nothing, and a route added since the last image build returns `404`
+from a container that is otherwise healthy. That symptom is indistinguishable
+from "the page was never written", which is how a working screen gets debugged
+as missing code. On 2026-08-29 the frontend image was from `08-28 12:44` while
+`app/platform/editions/page.tsx` was written `08-29 17:16`; restarting without
+rebuilding would have served a `404` for a page that existed and compiled.
+
+**Whenever a route is added, rebuild the frontend as well as the backend before
+restarting:**
+
+```powershell
+docker compose build backend frontend
+docker compose up -d backend frontend
 ```
 
 Precondition, every resume after a transfer, restore, or long pause.

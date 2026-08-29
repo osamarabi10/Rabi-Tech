@@ -100,8 +100,17 @@ the whole point of this document:
   adding one, or repricing a tier is a **code change and a deploy**, not a
   console action.
 
-So the owner can today make an exception for one customer, but cannot change the
-menu. Closing that gap is §6.1.
+**Both halves are now shipped** (2026-08-29, migrations 65 and 66). The ladder
+lives in the `Plan` table, is edited from `/platform/editions`, takes effect
+without a deploy, and survives a restart — the last of those being the property
+`ensurePlans` had to stop breaking. The constant is now only a seed source and a
+boot fallback, and a harness check asserts the database matches it field by
+field.
+
+Two fields are carried but **not enforced**, stated in the console with their
+reason: `autoProvisionGateway` has no enforcement site, and `allowedChannels`
+waits on OQ-2/OQ-4. Creating a new edition is not available either: a code must
+exist in `PlanCode` before anything resolves it. See §6.1 for what remains.
 
 ### 3.2 Channel policy — OPEN QUESTION
 
