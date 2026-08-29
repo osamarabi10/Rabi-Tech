@@ -27,7 +27,7 @@ import logger from '../../lib/logger';
 import { auditLog } from '../../lib/audit';
 import { issueUserInvitation } from './user-invitations.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
-import { PLAN_ENTITLEMENTS } from '../billing/plans';
+import { getEdition } from '../billing/editions.service';
 
 const router = Router();
 router.use(verifyToken);
@@ -510,7 +510,7 @@ router.get('/users', async (req, res) => {
         canInvite: ['ADMIN', 'SUPERVISOR'].includes(req.user!.role || ''),
         canManage: req.user!.role === 'ADMIN',
         managerInviteRole: 'AGENT',
-        maskPhoneAndEmail: PLAN_ENTITLEMENTS[effective.plan].maskContactDetails,
+        maskPhoneAndEmail: getEdition(effective.plan).maskContactDetails,
         callsAvailable: false,
       },
     });
@@ -707,7 +707,7 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
     }
     if (maskPhoneAndEmail === true) {
       const effective = await resolveEntitlements(req.user!.organizationId);
-      if (!PLAN_ENTITLEMENTS[effective.plan].maskContactDetails) {
+      if (!getEdition(effective.plan).maskContactDetails) {
         return res.status(402).json({
           error: 'Masking contact phone numbers and email addresses requires Business or Enterprise',
           code: 'PLAN_UPGRADE_REQUIRED',

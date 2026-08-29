@@ -6,7 +6,7 @@ import { socketRoom } from '../socket/rooms';
 import { runAsOrganization } from '../lib/tenant-context';
 import { isQuotaExceededError } from '../modules/usage/entitlements';
 import { resolveEntitlements } from '../modules/billing/entitlements.resolver';
-import { PLAN_ENTITLEMENTS } from '../modules/billing/plans';
+import { getEdition } from '../modules/billing/editions.service';
 import {
   coordinationKey,
   waitForRedisRateLimit,
@@ -47,7 +47,7 @@ export async function processCampaignJob(data: any) {
 
     try {
       const effective = await resolveEntitlements(organizationId);
-      const planRate = PLAN_ENTITLEMENTS[effective.plan];
+      const planRate = getEdition(effective.plan);
       const hardMax = positiveInteger(process.env.CAMPAIGN_RATE_HARD_MAX);
       const minimumDuration = positiveInteger(process.env.CAMPAIGN_RATE_MIN_DURATION_MS);
       await waitForRedisRateLimit(

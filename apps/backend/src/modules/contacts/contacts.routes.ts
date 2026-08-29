@@ -9,7 +9,8 @@ import {
   parseContactFilterDsl,
   filterVocabulary,
 } from '../../lib/contact-filter-dsl';
-import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
+import { normalizePlanCode } from '../billing/plans';
+import { getEdition } from '../billing/editions.service';
 import { setContactConsent } from '../../utils/consent';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
@@ -265,7 +266,7 @@ router.post('/custom-fields', requireSupervisor, async (req, res) => {
       return res.status(409).json({ error: 'Custom field names must differ from standard Contact fields' });
     }
     const effective = await resolveEntitlements(req.user!.organizationId);
-    const limit = PLAN_ENTITLEMENTS[effective.plan].customFieldsLimit;
+    const limit = getEdition(effective.plan).customFieldsLimit;
     const existing = await prisma.customFieldDefinition.count();
     if (limit !== null && existing >= limit) return res.status(429).json({ error: `Current plan allows ${limit} custom fields` });
     const maxOrder = await prisma.customFieldDefinition.aggregate({ _max: { sortOrder: true } });

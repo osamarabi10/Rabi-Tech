@@ -12,7 +12,8 @@ import {
   cancelCurrentSubscription,
   markPaymentFailed,
 } from '../billing/billing.service';
-import { PLAN_ENTITLEMENTS, normalizePlanCode } from '../billing/plans';
+import { normalizePlanCode } from '../billing/plans';
+import { getEdition } from '../billing/editions.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { probeOrganization } from '../gateway/health-monitor';
 import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
@@ -324,7 +325,7 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
 
     const mrrCents = paid.reduce((sum, subscription) => {
       const code = normalizePlanCode(subscription.planCode);
-      return sum + PLAN_ENTITLEMENTS[code].monthlyPriceCents;
+      return sum + getEdition(code).monthlyPriceCents;
     }, 0);
 
     const now = Date.now();
@@ -339,7 +340,7 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
         // accident.
         potentialCents: trialing
           .filter((t) => t.trialEndsAt && t.trialEndsAt.getTime() > now)
-          .reduce((sum, t) => sum + PLAN_ENTITLEMENTS[normalizePlanCode(t.planCode)].monthlyPriceCents, 0),
+          .reduce((sum, t) => sum + getEdition(normalizePlanCode(t.planCode)).monthlyPriceCents, 0),
       },
       byTier: paid.reduce<Record<string, number>>((acc, subscription) => {
         acc[subscription.planCode] = (acc[subscription.planCode] || 0) + 1;

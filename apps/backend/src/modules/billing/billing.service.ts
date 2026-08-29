@@ -12,7 +12,8 @@ import {
   trialDeadlineFrom,
 } from './trial.service';
 import { getPaymentProvider } from './provider-registry';
-import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode } from './plans';
+import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements } from './plans';
+import { getEdition, getEditions } from './editions.service';
 import { resolveEntitlements } from './entitlements.resolver';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
 import { seedLifecycleStages } from '../lifecycle/lifecycle.service';
@@ -104,7 +105,7 @@ export async function listPlans() {
     });
 
     return plans.map((plan) => {
-      const entitlements = PLAN_ENTITLEMENTS[normalizePlanCode(plan.code)];
+      const entitlements = getEdition(normalizePlanCode(plan.code));
       return {
         code: plan.code,
         name: plan.name,
@@ -123,7 +124,7 @@ export async function listPlans() {
 }
 
 async function applyPlanLimits(organizationId: string, planCode: PlanCode): Promise<void> {
-  const plan = PLAN_ENTITLEMENTS[planCode];
+  const plan = getEdition(planCode);
   const activeContactsLimit = plan.monthlyActiveContactsLimit ?? 1_000_000_000;
   const outboundLimit = plan.monthlyOutboundMessagesLimit ?? 1_000_000_000;
   const campaignLimit = plan.monthlyCampaignSendsLimit ?? 1_000_000_000;
@@ -265,9 +266,9 @@ export async function createSignup(input: {
           organizationId: organization.id,
           sharedLine: false,
           // Seeded from the same plan as the tier, for the same reason.
-          monthlyActiveContactsLimit: PLAN_ENTITLEMENTS[effectivePlanCode].monthlyActiveContactsLimit ?? 1_000_000_000,
-          monthlyOutboundMessagesLimit: PLAN_ENTITLEMENTS[effectivePlanCode].monthlyOutboundMessagesLimit ?? 1_000_000_000,
-          monthlyCampaignSendsLimit: PLAN_ENTITLEMENTS[effectivePlanCode].monthlyCampaignSendsLimit ?? 1_000_000_000,
+          monthlyActiveContactsLimit: getEdition(effectivePlanCode).monthlyActiveContactsLimit ?? 1_000_000_000,
+          monthlyOutboundMessagesLimit: getEdition(effectivePlanCode).monthlyOutboundMessagesLimit ?? 1_000_000_000,
+          monthlyCampaignSendsLimit: getEdition(effectivePlanCode).monthlyCampaignSendsLimit ?? 1_000_000_000,
         },
       });
       await tx.organizationBranding.create({ data: { organizationId: organization.id, productName: organization.name } });
@@ -408,7 +409,7 @@ export async function activateManualSubscription(organizationId: string, planInp
     });
 
     const currentMac = await runAsOrganization(organizationId, () => getMetricUsage('active_contacts'));
-    const targetLimit = PLAN_ENTITLEMENTS[planCode].monthlyActiveContactsLimit;
+    const targetLimit = getEdition(planCode).monthlyActiveContactsLimit;
     const overLimit = targetLimit !== null && currentMac > BigInt(targetLimit);
     const graceEnd = overLimit ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null;
 
@@ -590,7 +591,7 @@ export async function getCurrentBilling(organizationId: string) {
       subscription: organization.subscriptions[0] ?? null,
       invoices: organization.invoices,
       gateway: organization.channels[0] ?? null,
-      plans: Object.values(PLAN_ENTITLEMENTS),
+      plans: getEditions(),
     };
   });
 }
@@ -664,7 +665,7 @@ function normalize(raw: number | bigint | null | undefined): number | null {
  * longer paying for. Surfacing it makes that visible instead of invisible.
  */
 function detectQuotaDrift(
-  planOfRecord: (typeof PLAN_ENTITLEMENTS)[PlanCode],
+  planOfRecord: PlanEntitlements,
   config: OrganizationConfig | null,
   effective: Record<string, number | null>,
   isOverridden: boolean,
@@ -735,7 +736,7 @@ export async function getBillingSummary(organizationId: string) {
   // The effective entitlement, after any platform-owner override. The tenant is
   // shown what is actually enforced, not what their nominal tier would grant.
   const effective = await resolveEntitlements(organizationId);
-  const plan = PLAN_ENTITLEMENTS[effective.plan];
+  const plan = getEdition(effective.plan);
   const config = await runAsPlatform('billing-summary:config', () =>
     prisma.organizationConfig.findUnique({ where: { organizationId } }));
 
@@ -777,7 +778,7 @@ export async function getBillingSummary(organizationId: string) {
     },
     /** Non-empty means enforced quotas no longer match the named plan. */
     quotaDrift: detectQuotaDrift(
-      PLAN_ENTITLEMENTS[effective.planOfRecord],
+      getEdition(effective.planOfRecord),
       config,
       effective.limits,
       effective.isOverridden,

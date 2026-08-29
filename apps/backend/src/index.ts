@@ -43,6 +43,7 @@ import { verifyMediaProxyToken, verifyMediaToken } from './utils/signed-url';
 import { runAsOrganization, runAsPlatform } from './lib/tenant-context';
 import { assertKnownPaymentProvider } from './modules/billing/provider-registry';
 import { ensurePlans } from './modules/billing/billing.service';
+import { startEditionRefresh } from './modules/billing/editions.service';
 import { startBillingReconciliationWorker } from './workers/billing-reconciliation.worker';
 import { scheduleGatewayHealthChecks, startGatewayHealthWorker } from './workers/gateway-health.worker';
 import { scheduleAnalyticsRollup, startAnalyticsRollupWorker } from './workers/analytics-rollup.worker';
@@ -517,6 +518,10 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 httpServer.listen(Number(PORT), HOST, () => {
   ensurePlans().catch((error) => logger.error('Failed to ensure billing plans', { error: String(error) }));
+  // Seed first, then load the catalogue into memory. The accessor is
+  // synchronous and falls back to the constant until this completes, so a slow
+  // first read costs correctness for a moment, not availability.
+  startEditionRefresh();
   logger.info(`RabiTech Backend running on http://${HOST}:${PORT}`);
   if (process.env.DISABLE_CAMPAIGN_WORKER === '1') {
     logger.info('Campaign worker disabled (DISABLE_CAMPAIGN_WORKER=1)');

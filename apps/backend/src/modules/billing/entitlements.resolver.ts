@@ -2,7 +2,8 @@ import { OrganizationConfig, UsageMetric } from '@prisma/client';
 import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { METRIC_LIMIT_FIELDS, USAGE_METRICS } from '../usage/metrics';
-import { PLAN_ENTITLEMENTS, PlanCode, normalizePlanCode } from './plans';
+import { PlanCode, normalizePlanCode } from './plans';
+import { getEdition } from './editions.service';
 
 /**
  * The single place that answers "what is this organization actually entitled to
@@ -96,7 +97,7 @@ function normalizeLimit(raw: number | bigint | null | undefined): number | null 
  * per deal rather than set per plan. Both fall through to config.
  */
 function planLimits(plan: PlanCode): Partial<Record<UsageMetric, number | null>> {
-  const entitlements = PLAN_ENTITLEMENTS[plan];
+  const entitlements = getEdition(plan);
   return {
     messages_outbound: entitlements.monthlyOutboundMessagesLimit,
     active_contacts: entitlements.monthlyActiveContactsLimit,
@@ -228,18 +229,18 @@ export async function resolveEntitlements(
   const limits = effectiveLimits(organization.configuration, overridePlan, macQuota);
 
   const discountPercent = overrideLive ? organization.discountPercent : null;
-  const listPriceCents = PLAN_ENTITLEMENTS[plan].monthlyPriceCents;
+  const listPriceCents = getEdition(plan).monthlyPriceCents;
   const effectivePriceCents = discountPercent
     ? Math.round(listPriceCents * (100 - discountPercent) / 100)
     : listPriceCents;
 
   return {
     plan,
-    planName: PLAN_ENTITLEMENTS[plan].name,
+    planName: getEdition(plan).name,
     planOfRecord,
     source,
     limits,
-    seatLimit: PLAN_ENTITLEMENTS[plan].usersLimit,
+    seatLimit: getEdition(plan).usersLimit,
     isOverridden: overrideLive,
     override: {
       plan: safePlanCode(organization.planOverride, 'planOverride'),
