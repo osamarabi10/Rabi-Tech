@@ -2331,6 +2331,7 @@ export async function fetchMetaChannel(): Promise<MetaChannel | null> {
 export async function connectMetaChannel(input: {
   phoneNumberId: string;
   wabaId: string;
+  businessPortfolioId: string;
   accessToken: string;
 }): Promise<MetaConnectSuccess> {
   const { data } = await api.post('/api/channels/meta/connect', input);

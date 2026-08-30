@@ -30,7 +30,7 @@ import { PermissionNotice } from '@/components/permission-notice';
  *
  * Kept in its own file rather than inlined into WorkspaceChannels because the
  * two channels share a page and nothing else: OpenWA is paired by scanning a
- * QR, Meta by pasting three identifiers, and the states they can be in do not
+ * QR, Meta by pasting its identifiers and token, and the states they can be in do not
  * overlap at all.
  */
 
@@ -46,7 +46,7 @@ import { PermissionNotice } from '@/components/permission-notice';
 const PROBLEM_TEXT: Record<string, string> = {
   META_VAULT_LOCKED:
     'Meta credentials cannot be saved while the platform is running with insecure secrets. Contact the platform administrator.',
-  META_MISSING_FIELDS: 'All three fields are required.',
+  META_MISSING_FIELDS: 'All four fields are required.',
   META_PHONE_NUMBER_INVALID:
     'The Phone Number ID is wrong, or the token cannot reach it. Copy it from WhatsApp → API setup in Meta Business Suite — it is a long number, not the phone number itself.',
   META_WABA_ACCESS_DENIED:
@@ -63,7 +63,7 @@ const PROBLEM_TEXT: Record<string, string> = {
     'Connected, but the messaging tier and quality rating could not be read. The channel works; the values appear after the next successful refresh.',
 };
 
-const EMPTY_FORM = { phoneNumberId: '', wabaId: '', accessToken: '' };
+const EMPTY_FORM = { phoneNumberId: '', wabaId: '', businessPortfolioId: '', accessToken: '' };
 
 export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onChannelChanged }: {
   canManage: boolean;
@@ -80,6 +80,12 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
   const [problem, setProblem] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [confirmActivate, setConfirmActivate] = useState(false);
+  const canSubmit = Boolean(
+    form.phoneNumberId.trim()
+    && form.wabaId.trim()
+    && form.businessPortfolioId.trim()
+    && form.accessToken.trim(),
+  );
 
   const load = useCallback(async () => {
     if (!canManage) { setLoading(false); return; }
@@ -104,6 +110,7 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
       const result = await connectMetaChannel({
         phoneNumberId: form.phoneNumberId.trim(),
         wabaId: form.wabaId.trim(),
+        businessPortfolioId: form.businessPortfolioId.trim(),
         accessToken: form.accessToken.trim(),
       });
       setChannel(result.channel);
@@ -241,7 +248,7 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t('Connect Meta number')}</DialogTitle>
-            <DialogDescription>{t('Copy all three values from Meta Business Suite, under WhatsApp → API setup.')}</DialogDescription>
+            <DialogDescription>{t('Copy all four values from Meta Business Suite, under WhatsApp → API setup.')}</DialogDescription>
           </DialogHeader>
 
           <form
@@ -259,6 +266,12 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
               label={t('WhatsApp Business Account ID')}
               value={form.wabaId}
               onChange={(value) => setForm((f) => ({ ...f, wabaId: value }))}
+            />
+            <Field
+              id="meta-business-portfolio-id"
+              label={t('Business Portfolio ID')}
+              value={form.businessPortfolioId}
+              onChange={(value) => setForm((f) => ({ ...f, businessPortfolioId: value }))}
             />
             <div className="space-y-1.5">
               <Label htmlFor="meta-access-token">{t('System User access token')}</Label>
@@ -284,7 +297,7 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
               <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>
                 {t('Cancel')}
               </Button>
-              <Button type="submit" disabled={busy}>
+              <Button type="submit" disabled={busy || !canSubmit}>
                 {busy && <Loader2 className="size-4 animate-spin" />}
                 {busy ? t('Checking with Meta…') : t('Connect')}
               </Button>
