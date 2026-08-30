@@ -267,6 +267,10 @@ export type Session = {
   phoneNumber: string | null;
   teamId: string | null;
   isActive: boolean;
+  /** Live gateway probe result. UNAVAILABLE is not the same as disconnected. */
+  connectionStatus: 'CONNECTED' | 'DISCONNECTED' | 'UNAVAILABLE';
+  /** Whether the organization currently sends through OpenWA. */
+  isActiveChannel: boolean;
 };
 export type InboxConfig = {
   sessions: { id: string; sessionName: string; label: string | null; phoneNumber: string | null; teamId: string | null }[];
@@ -963,9 +967,15 @@ export async function fetchSessions(): Promise<Session[]> {
     sessionName: s.sessionName,
     label: s.label,
     connected: !!s.connected,
+    connectionStatus: s.connectionStatus === 'UNAVAILABLE'
+      ? 'UNAVAILABLE'
+      : s.connected ? 'CONNECTED' : 'DISCONNECTED',
     phoneNumber: s.phoneNumber ?? null,
     teamId: s.teamId ?? null,
     isActive: !!s.isActive,
+    // Older backends have no OrganizationChannel row and resolve OpenWA by
+    // default, so an absent fact carries the same legacy-active meaning.
+    isActiveChannel: s.isActiveChannel !== false,
   }));
 }
 

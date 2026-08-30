@@ -7,16 +7,20 @@ import {
   MessageCircle,
   PowerOff,
   QrCode,
+  Radio,
   ShieldCheck,
   Unplug,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   disconnectSession,
+  fetchChannelCapabilities,
   fetchSessionQR,
   fetchSessions,
   fetchTeams,
   fetchWorkspaceUsers,
+  setActiveChannel,
+  type ChannelCapabilities,
   type Session,
   type SessionQR,
   type Team,
@@ -44,6 +48,7 @@ import {
 } from '@/components/ui/drawer';
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
 import { MetaChannelCard } from '@/components/settings/meta-channel-card';
+import { ChannelCapabilitiesPanel } from '@/components/settings/channel-capabilities-panel';
 
 const EMPTY_CAPABILITIES: WorkspaceUserCapabilities = {
   canInvite: false,
@@ -54,6 +59,11 @@ const EMPTY_CAPABILITIES: WorkspaceUserCapabilities = {
 };
 
 type DestructiveAction = { session: Session; unlink: boolean } | null;
+type ChannelState = {
+  capabilities: ChannelCapabilities | null;
+  code: string | null;
+  message: string | null;
+};
 
 export function WorkspaceChannels() {
   const { t } = useT();
@@ -67,19 +77,28 @@ export function WorkspaceChannels() {
   const [qr, setQr] = useState<SessionQR | null>(null);
   const [action, setAction] = useState<DestructiveAction>(null);
   const [busy, setBusy] = useState(false);
+  const [channelState, setChannelState] = useState<ChannelState>({ capabilities: null, code: null, message: null });
+  const [confirmOpenWA, setConfirmOpenWA] = useState(false);
+  const [channelRevision, setChannelRevision] = useState(0);
 
   const load = useCallback(async (showLoader = true) => {
     if (showLoader) setLoading(true);
     setFailed(false);
     try {
-      const [sessionRows, teamRows, roster] = await Promise.all([
+      const [sessionRows, teamRows, roster, activeChannel] = await Promise.all([
         fetchSessions(),
         fetchTeams(),
         fetchWorkspaceUsers(),
+        fetchChannelCapabilities().catch(() => ({
+          capabilities: null,
+          code: 'CHANNEL_CAPABILITIES_UNAVAILABLE',
+          message: null,
+        })),
       ]);
       setSessions(sessionRows);
       setTeams(teamRows);
       setCapabilities(roster.capabilities);
+      setChannelState(activeChannel);
       setSelected((current) => current ? sessionRows.find((row) => row.id === current.id) || null : null);
     } catch {
       setFailed(true);
@@ -123,6 +142,11 @@ export function WorkspaceChannels() {
 
   const teamNames = useMemo(() => new Map(teams.map((team) => [team.id, team.name])), [teams]);
   const label = (session: Session) => session.label || t('WhatsApp channel');
+  const openWAIsActive = sessions.some((session) => session.isActiveChannel);
+  const openWAConnected = sessions.some((session) => session.connected);
+  const openWAProbeUnavailable = !openWAConnected && sessions.some((session) => session.connectionStatus === 'UNAVAILABLE');
+  const repairAmbiguous = channelState.code === 'CHANNEL_AMBIGUOUS';
+  const offerOpenWASwitch = capabilities.canManage && (!openWAIsActive || repairAmbiguous);
 
   const runAction = async () => {
     if (!action) return;
@@ -139,6 +163,29 @@ export function WorkspaceChannels() {
     }
   };
 
+  const channelChanged = useCallback(async () => {
+    await load(false);
+    setChannelRevision((value) => value + 1);
+  }, [load]);
+
+  const activateOpenWA = async () => {
+    setBusy(true);
+    try {
+      await setActiveChannel('OPENWA');
+      setConfirmOpenWA(false);
+      await channelChanged();
+      toast.success(t('This workspace now sends through OpenWA'));
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || t('Could not switch the sending channel'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const channelProblem = channelState.code
+    ? channelProblemCopy(channelState.code, t)
+    : null;
+
   if (loading) return <LayoutSkeleton label={t('Loading channels')} className="m-4" />;
   if (failed) return <ErrorState title={t('Could not load channels')} retryLabel={t('Try again')} onRetry={load} className="m-4" />;
 
@@ -153,6 +200,57 @@ export function WorkspaceChannels() {
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
+        {channelProblem && (
+          <div role="alert" className="mb-6 border border-warning/40 bg-warning/5">
+            <ErrorState
+              title={channelProblem.title}
+              description={channelProblem.description}
+              retryLabel={t('Check again')}
+              onRetry={() => load(false)}
+              compact
+            />
+          </div>
+        )}
+
+        {channelState.capabilities && <ChannelCapabilitiesPanel capabilities={channelState.capabilities} />}
+
+        {!!sessions.length && (
+          <section className="mb-4 flex flex-wrap items-start justify-between gap-3" aria-labelledby="openwa-channel-heading">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 id="openwa-channel-heading" className="text-small font-semibold">OpenWA</h2>
+                <ActiveChannelStatus
+                  active={openWAIsActive && !repairAmbiguous}
+                  activeLabel={t('Active sending channel')}
+                  inactiveLabel={repairAmbiguous ? t('Sending channel needs selection') : t('Inactive sending channel')}
+                />
+              </div>
+              <p className="mt-1 text-caption text-muted-foreground">{t('QR-linked WhatsApp sessions for this workspace.')}</p>
+            </div>
+            {offerOpenWASwitch && (
+              <div className="max-w-md text-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || !openWAConnected}
+                  onClick={() => setConfirmOpenWA(true)}
+                >
+                  {busy ? <Loader2 className="size-4 animate-spin" /> : <Radio className="size-4" />}
+                  {repairAmbiguous ? t('Use OpenWA and repair sending') : t('Send through OpenWA')}
+                </Button>
+                {!openWAConnected && (
+                  <p role="status" className="mt-2 text-micro text-warning">
+                    {openWAProbeUnavailable
+                      ? t('RabiTech could not check whether OpenWA is connected. Check again before switching.')
+                      : t('Connect an OpenWA session before switching to it.')}
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
         {!sessions.length ? (
           <EmptyState icon={MessageCircle} title={t('No channels configured')} description={t('A channel appears here after workspace provisioning completes.')} />
         ) : (
@@ -182,7 +280,12 @@ export function WorkspaceChannels() {
           </div>
         )}
 
-        <MetaChannelCard canManage={capabilities.canManage} />
+        <MetaChannelCard
+          canManage={capabilities.canManage}
+          resolutionCode={channelState.code}
+          refreshToken={channelRevision}
+          onChannelChanged={channelChanged}
+        />
       </div>
 
       <Drawer open={!!selected} onOpenChange={(open) => { if (!open) setSelected(null); }}>
@@ -224,6 +327,18 @@ export function WorkspaceChannels() {
       </Dialog>
 
       <ConfirmDialog
+        open={confirmOpenWA}
+        onOpenChange={setConfirmOpenWA}
+        title={t('Switch sending channel to OpenWA?')}
+        description={t('Future messages and automatic replies will use OpenWA. The Meta credential stays saved, but customer messages sent to the inactive Meta number will not reach RabiTech until Meta is reactivated. Existing conversations and message history remain saved.')}
+        cancelLabel={t('Cancel')}
+        confirmLabel={repairAmbiguous ? t('Use OpenWA and repair sending') : t('Send through OpenWA')}
+        onConfirm={activateOpenWA}
+        busy={busy}
+        destructive={false}
+      />
+
+      <ConfirmDialog
         open={!!action}
         onOpenChange={(open) => { if (!open) setAction(null); }}
         title={action?.unlink ? t('Unlink WhatsApp number') : t('Disconnect channel')}
@@ -240,6 +355,29 @@ export function WorkspaceChannels() {
 
 function ChannelStatus({ connected, connectedLabel, disconnectedLabel }: { connected: boolean; connectedLabel: string; disconnectedLabel: string }) {
   return <span className={connected ? 'inline-flex items-center gap-1.5 text-caption font-medium text-success' : 'inline-flex items-center gap-1.5 text-caption font-medium text-warning'}><span className="size-2 rounded-full bg-current" />{connected ? connectedLabel : disconnectedLabel}</span>;
+}
+
+function ActiveChannelStatus({ active, activeLabel, inactiveLabel }: { active: boolean; activeLabel: string; inactiveLabel: string }) {
+  return <span className={active ? 'inline-flex items-center gap-1.5 text-caption font-medium text-success' : 'inline-flex items-center gap-1.5 text-caption font-medium text-warning'}><span className="size-2 rounded-full bg-current" />{active ? activeLabel : inactiveLabel}</span>;
+}
+
+function channelProblemCopy(code: string, t: (key: string) => string) {
+  if (code === 'CHANNEL_NOT_ACTIVE') {
+    return {
+      title: t('No sending channel is active'),
+      description: t('Sending is paused. A workspace owner must choose a connected channel below.'),
+    };
+  }
+  if (code === 'CHANNEL_AMBIGUOUS') {
+    return {
+      title: t('More than one sending channel is active'),
+      description: t('Sending is paused to prevent messages leaving from the wrong number. A workspace owner must select one channel below.'),
+    };
+  }
+  return {
+    title: t('Could not check the sending channel'),
+    description: t('RabiTech could not read the active channel capabilities. Check again before changing channel settings.'),
+  };
 }
 
 function Detail({ label, value, ltr }: { label: string; value: string; ltr?: boolean }) {

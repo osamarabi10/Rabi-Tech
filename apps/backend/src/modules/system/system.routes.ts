@@ -25,6 +25,7 @@ import {
 import { resolveTeamId } from '../../utils/teams';
 import logger from '../../lib/logger';
 import { auditLog } from '../../lib/audit';
+import { getTenantId } from '../../lib/tenant-context';
 import { issueUserInvitation } from './user-invitations.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { getEdition } from '../billing/editions.service';
@@ -977,10 +978,25 @@ router.patch('/organization-config', requireAdmin, async (req, res) => {
 // GET /api/system/sessions — WhatsApp session list + live connection state
 router.get('/sessions', async (_req, res) => {
   try {
-    const sessions = await prisma.whatsappSession.findMany();
+    const [sessions, channel] = await Promise.all([
+      prisma.whatsappSession.findMany(),
+      prisma.organizationChannel.findUnique({
+        where: {
+          organizationId_kind: {
+            organizationId: getTenantId(),
+            kind: 'OPENWA',
+          },
+        },
+        select: { status: true },
+      }),
+    ]);
+    // Organizations predating OrganizationChannel still resolve through
+    // OpenWA, so a missing row is active for display just as it is for sends.
+    const isActiveChannel = !channel || channel.status === 'ACTIVE';
     const withStatus = await Promise.all(
       sessions.map(async (s) => {
         let connected = false;
+        let connectionStatus: 'CONNECTED' | 'DISCONNECTED' | 'UNAVAILABLE' = 'DISCONNECTED';
         let livePhone: string | null = null;
         try {
           const r = await OpenWAService.getStatus(s.sessionName);
@@ -988,9 +1004,12 @@ router.get('/sessions', async (_req, res) => {
           connected =
             ['connected', 'authenticated', 'working', 'ready'].includes(st) ||
             r.data?.connected === true;
+          connectionStatus = connected ? 'CONNECTED' : 'DISCONNECTED';
           livePhone = typeof r.data?.phone === 'string' ? r.data.phone : null;
         } catch {
-          // OpenWA unreachable — report disconnected
+          // Distinct from disconnected: the UI must explain why activation is
+          // unavailable when the live readiness probe itself could not answer.
+          connectionStatus = 'UNAVAILABLE';
         }
 
         if (connected) {
@@ -1013,7 +1032,7 @@ router.get('/sessions', async (_req, res) => {
               );
           }
         }
-        return { ...s, connected };
+        return { ...s, connected, connectionStatus, isActiveChannel };
       })
     );
     res.json(withStatus);

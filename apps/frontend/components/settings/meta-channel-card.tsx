@@ -6,10 +6,8 @@ import { toast } from 'sonner';
 import {
   connectMetaChannel,
   disconnectMetaChannel,
-  fetchChannelCapabilities,
   fetchMetaChannel,
   setActiveChannel,
-  type ChannelCapabilities,
   type MetaChannel,
 } from '@/lib/data';
 import { useT } from '@/lib/i18n';
@@ -67,7 +65,12 @@ const PROBLEM_TEXT: Record<string, string> = {
 
 const EMPTY_FORM = { phoneNumberId: '', wabaId: '', accessToken: '' };
 
-export function MetaChannelCard({ canManage }: { canManage: boolean }) {
+export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onChannelChanged }: {
+  canManage: boolean;
+  resolutionCode: string | null;
+  refreshToken: number;
+  onChannelChanged: () => Promise<void>;
+}) {
   const { t } = useT();
   const [channel, setChannel] = useState<MetaChannel | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,14 +79,12 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const [capabilities, setCapabilities] = useState<ChannelCapabilities | null>(null);
+  const [confirmActivate, setConfirmActivate] = useState(false);
 
   const load = useCallback(async () => {
     if (!canManage) { setLoading(false); return; }
     try {
-      const [meta, caps] = await Promise.all([fetchMetaChannel(), fetchChannelCapabilities()]);
-      setChannel(meta);
-      setCapabilities(caps.capabilities);
+      setChannel(await fetchMetaChannel());
     } catch {
       // Reading the channel is not the point of this page. A failure here shows
       // as "not connected" rather than as an error state that would also hide
@@ -92,7 +93,7 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
     } finally {
       setLoading(false);
     }
-  }, [canManage]);
+  }, [canManage, refreshToken]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -108,6 +109,7 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
       setChannel(result.channel);
       setForm(EMPTY_FORM);
       setOpen(false);
+      await onChannelChanged();
       toast.success(t('Meta channel connected'));
       // A connection that succeeded with a caveat still succeeded, so this is a
       // second notice rather than an error: the channel is live either way.
@@ -136,7 +138,9 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
       // The kind travels as data, never as a comparison. Which channel this card
       // manages is this component's own subject; what that channel can DO is
       // read from the capability descriptor, never inferred from its name.
-      setCapabilities(await setActiveChannel('WHATSAPP_CLOUD'));
+      await setActiveChannel('WHATSAPP_CLOUD');
+      setConfirmActivate(false);
+      await onChannelChanged();
       setChannel(await fetchMetaChannel());
       toast.success(t('This workspace now sends through Meta'));
     } catch (error: any) {
@@ -152,6 +156,7 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
       await disconnectMetaChannel();
       setChannel(null);
       setConfirmRemove(false);
+      await onChannelChanged();
       toast.success(t('Meta credentials removed'));
     } catch {
       toast.error(t('Could not remove Meta credentials'));
@@ -180,7 +185,7 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
       </div>
 
       {!canManage ? (
-        <PermissionNotice action="ربط قناة Meta" className="mt-4" />
+        <PermissionNotice action={t('Connect Meta channel')} className="mt-4" />
       ) : channel ? (
         <>
           <dl className="mt-5 grid gap-x-4 gap-y-2 text-caption sm:grid-cols-2">
@@ -202,25 +207,14 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
             </p>
           )}
 
-          {/* Read from the capability descriptor, never from the channel's name.
-              This is what stops every consumer growing its own comparison
-              against a channel kind, which the isolation gate asserts does not
-              exist anywhere in this app — including, as it turns out, in
-              comments. */}
-          {channel.isActiveChannel && capabilities && !capabilities.canInitiateConversations && (
-            <p className="mt-4 border-s-2 border-warning bg-warning/5 px-3 py-2 text-caption text-warning">
-              {t('This channel can only reply within 24 hours of a customer message. It cannot start a conversation, so broadcasts and first-contact messages will be refused.')}
-            </p>
-          )}
-
-          {!channel.isActiveChannel && (
+          {(!channel.isActiveChannel || resolutionCode === 'CHANNEL_AMBIGUOUS') && (
             <div className="mt-4 space-y-2">
               <p className="text-micro text-muted-foreground">
                 {t('Connected, but this workspace still sends through its other channel.')}
               </p>
-              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={activate}>
+              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setConfirmActivate(true)}>
                 {busy ? <Loader2 className="size-4 animate-spin" /> : <Radio className="size-4" />}
-                {t('Send through this channel')}
+                {resolutionCode === 'CHANNEL_AMBIGUOUS' ? t('Use Meta and repair sending') : t('Send through this channel')}
               </Button>
             </div>
           )}
@@ -298,6 +292,18 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
           </form>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={confirmActivate}
+        onOpenChange={setConfirmActivate}
+        title={t('Switch sending channel to Meta?')}
+        description={t('Future messages and automatic replies will use Meta. Customer messages sent to inactive OpenWA numbers will not reach RabiTech until OpenWA is reactivated. Existing conversations and message history remain saved.')}
+        cancelLabel={t('Cancel')}
+        confirmLabel={resolutionCode === 'CHANNEL_AMBIGUOUS' ? t('Use Meta and repair sending') : t('Send through this channel')}
+        onConfirm={activate}
+        busy={busy}
+        destructive={false}
+      />
 
       <ConfirmDialog
         open={confirmRemove}

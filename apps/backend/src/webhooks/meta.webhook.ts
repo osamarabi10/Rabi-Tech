@@ -93,13 +93,27 @@ export async function organizationForPhoneNumberId(phoneNumberId: string): Promi
   organizationId: string;
   channelId: string;
   wabaId: string;
+  channelStatus: string;
 } | null> {
   if (!phoneNumberId) return null;
-  return runAsPlatform('meta-webhook:resolve-phone-number-id', () =>
-    prisma.metaChannelCredential.findUnique({
+  return runAsPlatform('meta-webhook:resolve-phone-number-id', async () => {
+    const credential = await prisma.metaChannelCredential.findUnique({
       where: { phoneNumberId },
-      select: { organizationId: true, channelId: true, wabaId: true },
-    }));
+      select: {
+        organizationId: true,
+        channelId: true,
+        wabaId: true,
+        channel: { select: { status: true } },
+      },
+    });
+    if (!credential) return null;
+    return {
+      organizationId: credential.organizationId,
+      channelId: credential.channelId,
+      wabaId: credential.wabaId,
+      channelStatus: credential.channel.status,
+    };
+  });
 }
 
 /**
@@ -282,13 +296,33 @@ export async function dispatchMetaWebhookPayload(
         });
       }
 
+      // A retained credential keeps late delivery receipts routable after a
+      // switch, but an inactive number must never create an inbox message. If
+      // it did, every reply and automation would resolve the workspace's new
+      // ACTIVE adapter and leave from a different number than the customer
+      // wrote to. Keep only statuses in that state; Meta receives 200 for the
+      // skipped customer message and therefore does not retry it.
+      const resolvedValue = (change.value || {}) as Record<string, unknown>;
+      const statuses = Array.isArray(resolvedValue.statuses) ? resolvedValue.statuses : [];
+      if (resolved.channelStatus !== 'ACTIVE' && statuses.length === 0) {
+        logger.warn('Meta webhook: inactive channel message skipped', {
+          organizationId: resolved.organizationId,
+          channelId: resolved.channelId,
+          phoneNumberId,
+        });
+        continue;
+      }
+      const acceptedValue = resolved.channelStatus === 'ACTIVE'
+        ? resolvedValue
+        : { ...resolvedValue, messages: undefined, statuses };
+
       try {
         await runAsOrganization(resolved.organizationId, () => onChange({
           organizationId: resolved.organizationId,
           channelId: resolved.channelId,
           phoneNumberId,
           field: String(change.field || ''),
-          value: (change.value || {}) as Record<string, unknown>,
+          value: acceptedValue,
         }));
       } catch (error) {
         // One tenant's failure must not abandon the rest of the batch: Meta

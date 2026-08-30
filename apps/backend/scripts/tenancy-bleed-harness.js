@@ -4746,12 +4746,12 @@ async function databaseAudits() {
       // conversations into another business's inbox.
       const channelA = await raw.organizationChannel.create({ data: {
         id: 'bleed_meta_channel_a', organizationId: orgA.organizationId, kind: 'WHATSAPP_CLOUD',
-        status: 'PENDING', baseUrl: 'https://graph.facebook.com/v21.0', apiKeyEnc: '',
+        status: 'ACTIVE', baseUrl: 'https://graph.facebook.com/v21.0', apiKeyEnc: '',
         webhookToken: 'bleed-meta-token-a',
       } });
       const channelB = await raw.organizationChannel.create({ data: {
         id: 'bleed_meta_channel_b', organizationId: orgB.organizationId, kind: 'WHATSAPP_CLOUD',
-        status: 'PENDING', baseUrl: 'https://graph.facebook.com/v21.0', apiKeyEnc: '',
+        status: 'ACTIVE', baseUrl: 'https://graph.facebook.com/v21.0', apiKeyEnc: '',
         webhookToken: 'bleed-meta-token-b',
       } });
       await raw.metaChannelCredential.create({ data: {
@@ -4797,6 +4797,49 @@ async function databaseAudits() {
         await dispatchMetaWebhookPayload(payloadFor('PN_ORG_B', 'WABA_B'), recorder);
         assert.deepEqual(entered.map((item) => item.scope), [orgB.organizationId]);
         assert.deepEqual(entered[0].visible, ['PN_ORG_B']);
+
+        // Switching away retains the credential so late delivery receipts can
+        // still settle, but customer messages from that inactive number must
+        // not enter any tenant scope. Otherwise the shared send path replies
+        // through the newly ACTIVE channel and creates a split-brain thread.
+        await raw.organizationChannel.update({
+          where: { id: channelA.id },
+          data: { status: 'INACTIVE' },
+        });
+        entered.length = 0;
+        await dispatchMetaWebhookPayload(payloadFor('PN_ORG_A', 'WABA_A'), recorder);
+        assert.equal(
+          entered.length,
+          0,
+          'an inactive Meta channel admitted a customer message into the inbox',
+        );
+        const inactiveResolution = await organizationForPhoneNumberId('PN_ORG_A');
+        assert.equal(inactiveResolution.channelStatus, 'INACTIVE');
+
+        const inactiveReceipts = [];
+        await dispatchMetaWebhookPayload({
+          object: 'whatsapp_business_account',
+          entry: [{ id: 'WABA_A', changes: [{ field: 'messages', value: {
+            metadata: { phone_number_id: 'PN_ORG_A' },
+            messages: [{ id: 'wamid.must-not-enter', from: '972500000001', type: 'text' }],
+            statuses: [{ id: 'wamid.before-switch', status: 'delivered' }],
+          } }] }],
+        }, async (context) => {
+          inactiveReceipts.push({
+            scope: getTenantId(),
+            messages: context.value.messages,
+            statuses: context.value.statuses,
+          });
+        });
+        assert.equal(inactiveReceipts.length, 1, 'an inactive Meta channel dropped a pre-switch status receipt');
+        assert.equal(inactiveReceipts[0].scope, orgA.organizationId);
+        assert.equal(inactiveReceipts[0].messages, undefined, 'inactive Meta content reached the status-only handler');
+        assert.equal(inactiveReceipts[0].statuses.length, 1);
+
+        await raw.organizationChannel.update({
+          where: { id: channelA.id },
+          data: { status: 'ACTIVE' },
+        });
 
         // An unrecognised number is dropped, never guessed onto whichever tenant
         // happens to be first. There is no fallback by design.

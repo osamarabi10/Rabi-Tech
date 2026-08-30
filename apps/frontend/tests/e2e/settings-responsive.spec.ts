@@ -214,10 +214,12 @@ async function prepareSettings(
     {
       id: 'session-sales', sessionName: 'sales-whatsapp', label: 'Sales WhatsApp',
       connected: true, phoneNumber: '+970599111222', teamId: 'team-sales', isActive: true,
+      connectionStatus: 'CONNECTED', isActiveChannel: true,
     },
     {
       id: 'session-support', sessionName: 'support-whatsapp', label: 'Support WhatsApp',
       connected: false, phoneNumber: null, teamId: 'team-support', isActive: false,
+      connectionStatus: 'DISCONNECTED', isActiveChannel: true,
     },
   ];
   await page.route('**/api/system/sessions**', async (route) => {
@@ -696,6 +698,132 @@ test('channel settings disconnect safely and expose QR pairing for an unlinked s
   await supportCard.getByRole('button', { name: 'Link device' }).click();
   await expect(page.getByRole('dialog', { name: 'Link WhatsApp device' }).getByRole('img', { name: 'WhatsApp linking QR code' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('channel-qr-pairing.png'), fullPage: true });
+});
+
+test('channel settings show capabilities and require the explicit Meta loss warning before switching to OpenWA', async ({ page }) => {
+  await prepareSettings(page, { locale: 'en', theme: 'light', width: 1440, height: 900 });
+  let openWAActive = false;
+  const activationRequests: Record<string, unknown>[] = [];
+
+  await page.unroute('**/api/system/sessions**');
+  await page.route('**/api/system/sessions**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'GET' && path === '/api/system/sessions') {
+      await route.fulfill({ json: [{
+        id: 'session-sales', sessionName: 'sales-whatsapp', label: 'Sales WhatsApp',
+        connected: true, connectionStatus: 'CONNECTED', phoneNumber: '+970599111222',
+        teamId: 'team-sales', isActive: true, isActiveChannel: openWAActive,
+      }] });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.unroute('**/api/channels/**');
+  await page.route('**/api/channels/**', async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'GET' && path === '/api/channels/capabilities') {
+      await route.fulfill({ json: { capabilities: openWAActive ? {
+        kind: 'OPENWA', requiresServiceWindow: false, supportsTemplates: false,
+        supportsQrPairing: true, maxUniqueRecipientsPer24h: null,
+        canInitiateConversations: true, messagingTier: null, qualityRating: null,
+      } : {
+        kind: 'WHATSAPP_CLOUD', requiresServiceWindow: true, supportsTemplates: false,
+        supportsQrPairing: false, maxUniqueRecipientsPer24h: 250,
+        canInitiateConversations: false, messagingTier: null, qualityRating: null,
+      } } });
+      return;
+    }
+    if (request.method() === 'GET' && path === '/api/channels/meta') {
+      await route.fulfill({ json: { channel: {
+        connected: true, status: 'ACTIVE', phoneNumberId: '123456789',
+        displayPhoneNumber: '+970599333444', verifiedName: 'RabiTech Demo',
+        qualityRating: 'GREEN', messagingTier: 'TIER_250', lastValidatedAt: null,
+        invalidReason: null, graphVersion: 'v21.0', isActiveChannel: !openWAActive,
+      } } });
+      return;
+    }
+    if (request.method() === 'POST' && path === '/api/channels/active') {
+      activationRequests.push(request.postDataJSON());
+      openWAActive = true;
+      await route.fulfill({ json: { activeKind: 'OPENWA', capabilities: null } });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/settings/channels');
+  await expect(page.getByText('Start new conversations', { exact: true })).toBeVisible();
+  await expect(page.getByText('Unavailable', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/broadcasts and first-contact messages will be refused/)).toBeVisible();
+
+  await page.getByRole('button', { name: 'Send through OpenWA' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Switch sending channel to OpenWA?' });
+  await expect(dialog).toContainText('customer messages sent to the inactive Meta number will not reach RabiTech until Meta is reactivated');
+  expect(activationRequests).toEqual([]);
+  await dialog.getByRole('button', { name: 'Send through OpenWA' }).click();
+  await expect.poll(() => activationRequests).toEqual([{ kind: 'OPENWA' }]);
+});
+
+test('OpenWA activation explains a failed live connection probe', async ({ page }) => {
+  await prepareSettings(page, { locale: 'en', theme: 'light', width: 1440, height: 900 });
+  await page.unroute('**/api/system/sessions**');
+  await page.route('**/api/system/sessions**', async (route) => {
+    await route.fulfill({ json: [{
+      id: 'session-sales', sessionName: 'sales-whatsapp', label: 'Sales WhatsApp',
+      connected: false, connectionStatus: 'UNAVAILABLE', phoneNumber: '+970599111222',
+      teamId: 'team-sales', isActive: true, isActiveChannel: false,
+    }] });
+  });
+
+  await page.goto('/settings/channels');
+  await expect(page.getByRole('button', { name: 'Send through OpenWA' })).toBeDisabled();
+  await expect(page.getByText('RabiTech could not check whether OpenWA is connected. Check again before switching.')).toBeVisible();
+});
+
+test('CHANNEL_AMBIGUOUS renders and repairs through the transactional active-channel endpoint', async ({ page }) => {
+  await prepareSettings(page, { locale: 'en', theme: 'light', width: 1440, height: 900 });
+  let ambiguous = true;
+  const activationRequests: Record<string, unknown>[] = [];
+  await page.unroute('**/api/channels/**');
+  await page.route('**/api/channels/**', async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'GET' && path === '/api/channels/capabilities') {
+      if (ambiguous) {
+        await route.fulfill({ status: 409, json: {
+          code: 'CHANNEL_AMBIGUOUS', error: 'ambiguous', capabilities: null,
+        } });
+      } else {
+        await route.fulfill({ json: { capabilities: {
+          kind: 'OPENWA', requiresServiceWindow: false, supportsTemplates: false,
+          supportsQrPairing: true, maxUniqueRecipientsPer24h: null,
+          canInitiateConversations: true, messagingTier: null, qualityRating: null,
+        } } });
+      }
+      return;
+    }
+    if (request.method() === 'POST' && path === '/api/channels/active') {
+      activationRequests.push(request.postDataJSON());
+      ambiguous = false;
+      await route.fulfill({ json: { activeKind: 'OPENWA', capabilities: null } });
+      return;
+    }
+    if (request.method() === 'GET' && path === '/api/channels/meta') {
+      await route.fulfill({ json: { channel: null } });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/settings/channels');
+  await expect(page.getByText('More than one sending channel is active')).toBeVisible();
+  await page.getByRole('button', { name: 'Use OpenWA and repair sending' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Switch sending channel to OpenWA?' });
+  await dialog.getByRole('button', { name: 'Use OpenWA and repair sending' }).click();
+  await expect.poll(() => activationRequests).toEqual([{ kind: 'OPENWA' }]);
+  await expect(page.getByText('More than one sending channel is active')).not.toBeVisible();
 });
 
 test('lifecycle settings create, reorder, select default, and reassign contacts on delete', async ({ page }, testInfo) => {
