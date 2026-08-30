@@ -65,19 +65,16 @@ Latest release evidence:
 - Verified backup: `auto-20260829-143026.dump`, `1,109,740` bytes.
 - The backup was restored into a scratch database and counted `31` conversations, `97` messages, and `33` contacts before migrations 65 and 66 were deployed. Data is unchanged after them.
 
-Current head, **not yet released** (2026-08-30):
+Current head (2026-08-30), **migration 67 released**:
 
-- Isolation and usage harness: **`112/112`**, exit 0. Two checks added since the
-  release above — a where-less `updateMany` tenancy check, and Meta webhook
-  tenant routing. Both were mutation-tested: each fails when the fix it guards
-  is reverted, so neither is passing through a fallback.
+- Isolation and usage harness: **`119/119`**, exit 0, on a clean `npm ci`.
+  Every check added since the release above was mutation-tested — each fails
+  when the fix it guards is reverted, so none is passing through a fallback.
 - Browser matrix: **`75/75`**, exit 0. Backend and frontend builds, i18n and
   mojibake: pass.
-- **One migration is written and unapplied** — `20260919090000_meta_credential_vault`
-  (`67`). `prisma migrate status` from the host reports 67 found with exactly one
-  pending; the live database stays at `66` and the vault table does not exist.
-  Run it from the host: the container's copy predates the migration and answers
-  "66 found / up to date", which is the stale-image signature, not evidence.
+- **`67` migrations applied.** `20260919090000_meta_credential_vault` was
+  deployed 2026-08-30 10:31:58 — see §6c. Nothing is pending.
+  `MetaChannelCredential` exists with 16 columns and **0 rows**.
 - The GitHub Actions gate is red and has never been green. It is not blocking
   and it is not caused by any of the above — see §8.
 
@@ -472,6 +469,100 @@ still OQ-2/OQ-4 in `docs/RABITECH-PRODUCT-VISION.md`). The API refuses both
 fields as well — accepting a value nothing reads would let an owner believe they
 had granted something.
 
+## 6c. Meta credential vault — migration 67 released 2026-08-30
+
+A **schema-only** deploy, chosen deliberately because nothing can use the table
+yet. That is the whole reason it was safe to ship on its own: there is no
+behaviour to regress, and it stopped the vault accumulating a sixth pending gate
+after riding along through five.
+
+### What was verified, transcribed from command output
+
+```
+npm ci (backend + frontend)   clean; prisma / @prisma/client 5.22.0 unchanged
+prisma format / generate      no schema drift; client knows MetaChannelCredential
+isolation gate                119/119, exit 0, 52s   (run alone)
+browser matrix                 75/75,  exit 0, 4.7m  (started after the harness returned)
+backup                        auto-20260830-101506.dump, 1,150,640 bytes
+                              restore-verified into a scratch database:
+                              31 conversations / 97 messages / 33 contacts
+docker compose build          backend + frontend, exit 0
+migrate deploy                applied 20260919090000_meta_credential_vault
+migrate status (container)    67 found, "Database schema is up to date!"
+_prisma_migrations            67 applied; newest = the vault, 2026-08-30 10:31:58
+MetaChannelCredential         exists, 16 columns, 0 rows
+                              MetaChannelCredential_phoneNumberId_key present
+counts after                  31 conversations / 97 messages / 33 contacts
+/health                       database, redis, openwa, queue_depth all ok
+frontend                      /login returns 200
+logs                          no unhandled exceptions since restart
+openwa                        Up 39 hours — never restarted
+```
+
+**The stale-image trap was live and was caught.** Before the rebuild the
+container answered *"66 migrations found / Database schema is up to date!"* while
+the host answered *"67 found, one pending"*. Trusting the container would have
+made 67 look already-released. After `docker compose build backend frontend`
+the container named 67 as pending, which is the only form of that check worth
+anything.
+
+### What this release gives
+
+- The vault schema in production: `MetaChannelCredential`, with the globally
+  unique `phoneNumberId` index that lets the database — not application
+  vigilance — refuse two workspaces claiming one number.
+- The **entire connect → webhook → ingest path** deployed: four-step credential
+  validation, `X-Hub-Signature-256` verified over raw bytes, tenant resolution
+  from `phone_number_id`, and inbound messages normalised into the existing
+  pipeline with media downloaded at ingest.
+
+### What this release does NOT give
+
+**Meta is not usable.** Two independent gates stand between this schema and a
+working channel, and both are deliberate:
+
+1. **The vault hard gate is locked.** `secretProblems()` currently returns one
+   problem — `OPENWA_API_KEY uses a known-weak value` — so
+   `connectMetaChannel` refuses every credential with `META_VAULT_LOCKED`.
+   The backend announces this on every boot. It does **not** honour
+   `ALLOW_INSECURE_SECRETS`: that flag is permission to keep serving through a
+   half-finished rotation, never permission to start storing other businesses'
+   secrets. Rotating `OPENWA_API_KEY` is what opens it.
+2. **The webhook fails closed.** `META_APP_SECRET` and
+   `META_WEBHOOK_VERIFY_TOKEN` are unset, so every inbound delivery is rejected
+   unsigned rather than trusted. An unsigned endpoint anyone can POST to is a way
+   to inject messages into any tenant, which is why absence means refusal rather
+   than a default.
+
+So **releasing 67 and Meta becoming usable are two separate events.** This one
+carried no behaviour change; the next one will.
+
+### The four remaining Phase 4 items
+
+1. **Meta template management, and the messaging-tier ceiling with it.** The
+   largest piece. Outside the 24-hour window Meta accepts only approved
+   templates, so until this exists a Meta workspace can reply and can never
+   initiate — no broadcasts, no first contact, no next-day follow-up (§3.9 of
+   docs/RABITECH-PRODUCT-VISION.md). The tier ceiling belongs in this same step
+   and cannot usefully precede it: until templates exist no business-initiated
+   conversation can start, so a counter would guard an unreachable state.
+   This decides whether Growth, Business and Enterprise are sellable as
+   described.
+2. **`/settings/channels` completion.** Includes a real defect: **the channel
+   switch is one-way.** The UI only ever calls
+   `setActiveChannel('WHATSAPP_CLOUD')`; nothing calls it with `'OPENWA'`, so
+   a workspace that moves to Meta cannot move back without a database edit. The
+   backend supports both directions and the harness covers it — only the control
+   is missing. Also outstanding: OpenWA has no capability display, and the page
+   does not render the `409` capabilities state (mid-switch, or two active).
+3. **Meta App Review.** External, gated on Meta's queue, and the long pole in
+   calendar time rather than in work. Worth starting before it blocks anything.
+4. **Never tested end-to-end against real Meta.** Every layer is unit- and
+   harness-tested against stubs; no message has travelled from a real WhatsApp
+   number into this inbox. That gap closes only with a real credential, which
+   item 1 of the previous section currently forbids — so the sequence is:
+   rotate the key, set the two secrets, connect one number, then test.
+
 ## 7. Later roadmap
 
 Execute in this dependency order after Conversation Operations.
@@ -864,17 +955,32 @@ environment reproduces five failures, every one of them
 cause for a red gate on its own, and the fix is one line of workflow `env:`
 holding a CI-only dummy of at least 32 characters.
 
-*Unconfirmed.* That does not explain the timings. Run 43 spent **19 seconds** in
-`npm run test:tenancy` — far too little to reach those checks — while `npm ci`
-passed in 5. `command()` records a failure and returns, so a failing check
-cannot end a run early; the one thing that can is `if (!migrated) return` after
-`prisma migrate deploy`, which skips the entire database suite. That fits the 19
-seconds and remains **a hypothesis, not a measurement**. Settling it needs the
-job log, which this machine cannot read: `gh` is not installed, and the
-unauthenticated logs endpoint returns `403 Must have admin rights to
-Repository`. Get it with `gh run view <run-id> --log-failed` or from the Actions
-UI before changing anything beyond the missing variable — otherwise the visible
-half gets patched and the half that ends the run at 19 seconds does not.
+**Settled 2026-08-30 from the job log: the missing key is the whole cause.**
+The log shows `[PASS] database: apply migrations to disposable schema` and all
+112 checks running to completion. The run was not truncated — it was simply
+fast, on a runner with no other load. `CHANNEL_ENCRYPTION_KEY` produces five
+failures and there is nothing else.
+
+**The early-return hypothesis is disproved.** It had been reasoned from the
+19-second duration and the `if (!migrated) return` after `prisma migrate
+deploy`, which would indeed skip the whole database suite — but the log shows
+that step passing, so the mechanism never fired. Recorded as disproved rather
+than deleted, so it is not re-derived from the same timing evidence by the next
+person who notices 19 seconds and finds the same early return. **A duration is
+not a measurement of what ran.**
+
+Two related things were also ruled out along the way and are worth not
+re-investigating. The harness reading its environment from the repository root
+`.env` cannot break CI: `dotenv` is strictly additive, tested against a
+controlled file — an already-set `DATABASE_URL` survived the load while an
+absent variable was filled in — and a missing file returns `{ error: ENOENT }`
+rather than throwing. And `@prisma/client` **does** generate on a clean
+install here: `npm ci` on 2026-08-30 produced a client that knows
+`MetaChannelCredential`, so "the client was never generated" is not the
+explanation either.
+
+**The fix is one line of workflow `env:`** holding a CI-only dummy of at least
+32 characters.
 
 *Explicitly not the cause:* the harness loading its environment from the
 repository root `.env`. `dotenv` is strictly additive — tested against a
