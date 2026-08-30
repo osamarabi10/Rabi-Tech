@@ -86,6 +86,16 @@ hardcoded.
 **What is true today** is narrower than the rule, and stating it precisely is
 the whole point of this document:
 
+> **SUPERSEDED 2026-08-30.** The two bullets below are the 2026-08-28 snapshot,
+> before migrations `20260917090000_plan_editions` and
+> `20260918090000_plan_editions_seed` shipped. Verified before this correction:
+> `apps/backend/prisma/schema.prisma` now has a `Plan` model,
+> `apps/backend/src/modules/billing/plans.ts` has `PlanCode = 'FREE' |
+> 'STANDARD' | 'GROWTH' | 'BUSINESS' | 'ENTERPRISE'`, the live database has
+> five `Plan` rows, and `docker compose exec -T backend npx prisma migrate
+> status` reports 67 applied migrations and no pending migration. Read the
+> "Both halves are now shipped" paragraph below as the current state.
+
 - **Per-subscriber overrides are shipped.** An owner can override a specific
   organization's plan, MAC quota, discount, and credit, with an expiry and an
   audit trail, from the platform console. This is database-backed
@@ -304,6 +314,21 @@ Verified against the tree at commit `1468bfce`, 2026-08-28.
 
 ### 5.2 What does not exist
 
+> **SUPERSEDED 2026-08-30.** This section is the ground truth from commit
+> `1468bfce` on 2026-08-28. It is retained for provenance and is no longer
+> current for the ladder, Standard, or Meta. Verified before this correction:
+> migrations `20260917090000_plan_editions`,
+> `20260918090000_plan_editions_seed`, and
+> `20260919090000_meta_credential_vault` are applied in the live database;
+> `Plan`, `MetaChannelCredential`, `ConversationCategory`, and
+> `ConversationClosure` all exist; the `Plan` table contains `FREE`,
+> `STANDARD`, `GROWTH`, `BUSINESS`, and `ENTERPRISE`; and Meta backend code now
+> includes a client, adapter, credential service/model, webhook handler, pure
+> inbound normaliser, downloaded-at-ingest media storage, and monotonic status
+> acks. What remains true from the list below: per-edition channel policy is
+> still carried but not enforced, and there is still no separate transport-mode
+> field.
+
 - **No Meta / Cloud API implementation of any kind.** A search across
   `apps/backend/src`, `apps/frontend/lib`, and `apps/frontend/app` for
   `graph.facebook.com`, `cloud api`, `WABA`, `phone_number_id`, and
@@ -320,6 +345,16 @@ Verified against the tree at commit `1468bfce`, 2026-08-28.
   from a Meta-only from a mixed organization.
 
 ### 5.3 Functional consequence
+
+> **SUPERSEDED 2026-08-30.** The consequence list below depended on "Meta does
+> not exist" and "the ladder is a code constant." Both have been superseded by
+> releases 65, 66, and 67. The current state is narrower: the owner-editable
+> five-edition ladder exists, Standard exists, and the Meta adapter/vault/webhook
+> path exists in code, but Meta is not usable for a real customer until the
+> vault hard gate is opened (`OPENWA_API_KEY` rotated,
+> `ALLOW_INSECURE_SECRETS=0`) and `META_APP_SECRET` /
+> `META_WEBHOOK_VERIFY_TOKEN` are set. Meta channels can reply inside the
+> 24-hour service window and cannot initiate until template management ships.
 
 Stated precisely, because the rounded version is wrong:
 
@@ -340,6 +375,13 @@ that are otherwise deliverable.
 ## 6. What building this vision requires
 
 Four workstreams, in dependency order.
+
+> **SUPERSEDED 2026-08-30.** The workstream list below is preserved as the
+> original build sequence. Workstreams 6.1, 6.2, and the schema/adapter/webhook
+> portions of 6.3 have since shipped. The remaining current work is template
+> management and messaging-tier enforcement, completing `/settings/channels`,
+> real Meta end-to-end testing after the vault/secrets gates open, and the
+> still-unresolved/enforced per-edition channel policy in 6.4.
 
 ### 6.1 Move the ladder from code constant to owner-editable records
 

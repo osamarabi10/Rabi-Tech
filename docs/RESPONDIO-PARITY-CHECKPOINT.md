@@ -622,6 +622,18 @@ Execute in this dependency order after Conversation Operations.
 
 When work resumes:
 
+> **SUPERSEDED 2026-08-30.** The numbered resume list below was written before
+> Conversation Operations and the two following release records were completed.
+> It is retained as evidence of the old resume point, not as current
+> instruction. Verified on 2026-08-30: `docker compose exec -T backend npx
+> prisma migrate status` reports **67 migrations found** and
+> `Database schema is up to date!`; `_prisma_migrations` has **67** finished
+> rows, newest `20260919090000_meta_credential_vault` at
+> `2026-08-30 10:31:58.901589+00`. The current rule is: read this checkpoint,
+> run `git status --short`, confirm `/health`, confirm no pending migration
+> before creating a new one, and use the full gated release sequence for any
+> migration.
+
 1. Read this file and `docs/RESPONDIO-UI-EXECUTION.md`.
 2. Run `git status --short`; the current dirty worktree contains the ongoing implementation and must not be reset.
 3. Confirm live migration status is still `63` before creating the next migration.
@@ -698,6 +710,14 @@ docker compose run --rm --no-deps backend npx prisma migrate status
 # and migrate deploy would be a no-op.
 docker compose run --rm --no-deps backend npx prisma migrate deploy
 ```
+
+> **SUPERSEDED 2026-08-30, lesson retained.** The specific "next session"
+> warning above was true before migrations 64-67 were released. It is no longer
+> the current state: the live database and backend container both report **67**
+> migrations and no pending migration. The stale-image rule remains current:
+> rebuild images before trusting container route status or container Prisma
+> migration status, and before deploying require the rebuilt image to name the
+> intended migration as pending.
 
 Precondition, before the first real customer Meta credential is stored.
 **`ALLOW_INSECURE_SECRETS` must be `0`.** This gate is about onboarding, not
@@ -1013,6 +1033,22 @@ management, and the messaging-tier ceiling (250 recipients per rolling 24 hours
 unverified) becomes enforceable in that same step and not before — until
 templates exist no business-initiated conversation can start, so a counter would
 guard a state that cannot be reached.
+
+> **SUPERSEDED 2026-08-30.** The `ingestChange` note below is stale. Verified
+> against code before this correction: `src/webhooks/meta.webhook.ts` now uses
+> `ingestChange` as the default `dispatchMetaWebhookPayload` handler; it calls
+> the pure `normalizeMetaMessages` / `normalizeMetaStatuses` normaliser in
+> `src/modules/channels/meta-inbound.ts`, downloads Meta media at ingest through
+> `downloadMetaMedia`, queues inbound messages into
+> `workers/incoming-message.worker.ts`, and applies monotonic delivery acks via
+> `applyMetaStatus`. The existing worker then upserts the contact, opens or
+> reuses the one-thread-per-contact conversation, creates the message, meters
+> it, and emits through the existing pipeline. The harness contains the three
+> added checks that brought the Meta ingest coverage to 119: tenant-scoped acks,
+> redelivery uniqueness, and normaliser/status/placeholder behaviour, plus the
+> webhook tenant-routing/signature boundary check. Remaining caveat verified in
+> code: the shared inbound queue still carries `mediaUrl` and `mediaType`, but
+> not `mediaFileName`, so document filenames are not persisted by this path yet.
 
 **Next scoped step: wire `ingestChange`.** The Meta inbound webhook is complete
 up to the point of ingestion — signature verified over the raw bytes, tenant

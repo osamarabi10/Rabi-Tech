@@ -88,6 +88,17 @@ build state by `page.tsx` size would conclude the product is a shell; it is not.
 | `/settings/tags` | `workspace-tags.tsx` | 116 | Built |
 | `/settings/notifications` | `settings/notifications/page.tsx` | 114 | Built |
 
+> **SUPERSEDED 2026-08-30.** The `/settings/conversations` row's "not
+> functional" flag and the paragraphs below were true while migration
+> `20260916090000_conversation_operations` was still unapplied. Verified before
+> this correction: the live database has 67 finished migrations, migration 64
+> finished at `2026-08-29 13:06:00.056345+00`, `ConversationCategory` and
+> `ConversationClosure` both exist, `http://127.0.0.1:18080/settings/conversations`
+> returns `200`, `http://127.0.0.1:4000/api/conversation-settings` returns
+> anonymous `401` rather than `500`, and `/health` reports database, Redis,
+> OpenWA, and queue depth `ok`. This correction does not certify every
+> authenticated Settings workflow; it only removes the stale migration blocker.
+
 Supporting components: `snippets-card` (345), `team-members` (247),
 `subscription-card` (228), `auto-replies-card` (206), `settings-sub-navigation`
 (165), `team-routing` (115), `settings-rail` (106).
@@ -111,6 +122,13 @@ not exist in the database**: migration `20260916090000_conversation_operations`
 is on disk and unapplied. Any authenticated request reaches the database and
 fails. *Renders 200* and *works* are different claims, and only the first is
 currently true.
+
+> **Correction 2026-08-30.** Superseded by the Conversation Operations release.
+> `ConversationCategory` and `ConversationClosure` exist in Prisma and in the
+> live database, and migration `20260916090000_conversation_operations` is
+> applied. Keep the paragraph above as the old failure mode: *renders 200* and
+> *works* are different claims, but the specific database blocker it named is
+> gone.
 
 ### Not verified
 
@@ -214,6 +232,10 @@ do not invent per-screen variants.
 
 ### Blocked — built, waiting on a dependency
 
+> **SUPERSEDED 2026-08-30.** `/settings/conversations` is no longer blocked on
+> migration 64. The component and API may still need normal authenticated
+> workflow verification, but the migration dependency named here is released.
+
 **`/settings/conversations`** — the component and its six API endpoints exist
 and are correct. It is blocked entirely on migration
 `20260916090000_conversation_operations` being certified and applied. **No UI
@@ -244,6 +266,11 @@ and its acceptance criteria, not from inference about the reference.
 
 ## 8. Dependencies and sequencing
 
+> **SUPERSEDED 2026-08-30.** Items 1 and 2 below predate releases 64, 65, and
+> 66. Conversation Operations and the owner-editable edition ladder have since
+> been applied to the live database. Item 3 remains a product-placement
+> decision; item 4 remains independent.
+
 1. **Conversation Operations before `/settings/conversations`.** Migration 64
    must be certified and applied first. Until then that screen cannot be tested,
    and any work on it is unverifiable.
@@ -264,3 +291,4 @@ and its acceptance criteria, not from inference about the reference.
 | Date | Change |
 |---|---|
 | 2026-08-29 | Created. Ground truth verified at `e765b40c`: 11 routes, 16 components, 3,765 lines, no stubs. Delta is three unlabelled icon buttons, an empty-state pass, and one screen blocked on migration 64. External audit unavailable — §3 blocked, Module 7 gap recorded without reconstruction. |
+| 2026-08-30 | Corrected stale migration-64 blocker. Verified live database has 67 finished migrations, `ConversationCategory` and `ConversationClosure` exist, `/settings/conversations` returns `200`, the anonymous API gate returns `401`, and `/health` is green. The old text is retained as the pre-release state, not current instruction. |
