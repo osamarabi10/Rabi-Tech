@@ -37,6 +37,38 @@ export type ChannelCapabilities = {
    * has no tier, only the pacing that keeps a number from being banned.
    */
   maxUniqueRecipientsPer24h: number | null;
+
+  /**
+   * Can this channel start a conversation, or only answer one?
+   *
+   * This is the single most consequential thing to read before showing a
+   * composer or launching a campaign, and it is stated as a capability rather
+   * than inferred from `requiresServiceWindow` because the two are not the same
+   * question: a channel could have a window and still be able to open
+   * conversations through approved templates.
+   *
+   * False for Meta today. Outside the 24-hour window Meta permits only
+   * pre-approved templates, and this product has no Meta template management —
+   * our MessageTemplate rows are unrelated to Meta's approved templates. So a
+   * Meta channel can reply within 24 hours of a customer message and can never
+   * initiate. See docs/RABITECH-PRODUCT-VISION.md; it becomes true in the step
+   * that adds template support, and the tier ceiling starts being enforceable
+   * in that same step because that is when business-initiated sends first exist.
+   */
+  canInitiateConversations: boolean;
+
+  /**
+   * Provider standing. **Display values, not capabilities** — they describe how
+   * this number is currently regarded, not what the channel can do, and nothing
+   * should gate behaviour on them.
+   *
+   * They live here because the alternative is a second per-channel endpoint
+   * that every consumer has to know to call, and because a UI that can render
+   * "tier 2, quality GREEN" without asking which provider it is talking to is
+   * exactly the property this type exists to protect.
+   */
+  messagingTier: string | null;
+  qualityRating: string | null;
 };
 
 export type ChannelKind = 'OPENWA' | 'WHATSAPP_CLOUD';

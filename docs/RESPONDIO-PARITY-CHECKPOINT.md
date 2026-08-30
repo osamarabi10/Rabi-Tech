@@ -773,6 +773,52 @@ The rule this leaves behind: **a gate is green when you watched it run, not when
 a document says it was.** Before certifying any release, run all three and read
 the summary line of each.
 
+**Mutation-test every check that guards a boundary — standing practice from
+2026-08-30.** A check that has never been seen to fail proves only that it runs.
+Before a check guarding a tenancy or policy boundary is trusted, revert the fix
+it guards, watch it go red, and restore — and keep the failure message it
+produced, because that message is what the next person will have to diagnose
+from.
+
+This is not a theoretical discipline. It caught two distinct failure modes in
+one phase, and they are different from each other:
+
+- **A check that could not fail.** The Meta webhook routing check was written,
+  passed, and would have passed just as happily against a resolver that guessed.
+  Adding the forbidden `findFirst` fallback made it fail with "an unrecognised
+  phone_number_id entered a tenant scope" — which is the only reason it is known
+  to test anything.
+- **A check passing through the wrong path.** The service-window check reused a
+  seeded fixture contact that already carries an INBOUND message, so the window
+  it observed was held open by seed data rather than by the code under test. It
+  now builds its own contact and thread.
+
+Both are the same class as the edition-cache incident in §6b, where a green
+restart test proved persistence while the value was never read. **A test that
+passes through a fallback, a default, or someone else's fixture proves the
+fallback.** Mutation is what tells the difference, and it costs one extra run.
+
+**Do not add exceptions to a mechanical gate.** The capability gate — no
+frontend file may compare a channel kind, because behaviour must be read from
+the capability descriptor — caught a violation on its very first execution: a
+*comment* in `meta-channel-card.tsx` that quoted the pattern it was warning
+against. The comment was reworded rather than the gate taught to skip comments.
+An exception is where the next violation hides, and the cost of having none is
+rewording a sentence.
+
+**Accepted behaviour change, not a regression — 2026-08-30.** Phase 4.5 made
+channel resolution deterministic, so an organization holding channels with none
+ACTIVE now raises a named `CHANNEL_NOT_ACTIVE` with an Arabic message instead
+of falling through to OpenWA. One organization on the live database is in that
+state: the one named `test`, with `status=PENDING` and
+`provisioningState=PENDING` — a half-provisioned subscriber that has never been
+able to send. It failed before this change too, reaching
+`OpenWAService.getProvider` and throwing the internal English "Active OpenWA
+channel is not configured for organization". The change replaces an internal
+error with a named, actionable, Arabic one for an org that could not send under
+either. Recorded here so a later reader does not rediscover it and mistake an
+improvement for a regression.
+
 **The GitHub Actions gate is red, and has never been green — 2026-08-30.**
 `.github/workflows/tenancy-bleed.yml` has run 43 times since 2026-08-20 with
 **zero successes** (41 failures, 2 cancelled). It was already failing on run 1,
@@ -813,6 +859,24 @@ genuinely executable here: isolation 112/112, browser matrix 75/75, six core
 checks. A gate nobody can run is not evidence of anything, in either direction —
 which is the same rule as above, applied to a gate that has never once been
 watched succeeding.
+
+**A Meta channel can reply, and can never initiate — recorded 2026-08-30.**
+Meta allows free-form messages only within 24 hours of the customer's last
+message; outside it, only pre-approved templates, which this product does not
+manage. So a workspace sending through Meta can answer within 24 hours and
+cannot start a conversation: no broadcasts, no first contact, no next-day
+follow-up. The send path refuses these locally with an Arabic message rather
+than relaying them to Meta, because rejected sends depress the number's quality
+rating and therefore its messaging tier — spending the customer's own standing
+to learn something already known.
+
+This is material to Growth, Business and Enterprise, which are the Meta-capable
+editions, so it is a launch conversation rather than a later support ticket. See
+§3.9 of docs/RABITECH-PRODUCT-VISION.md. It closes with Meta template
+management, and the messaging-tier ceiling (250 recipients per rolling 24 hours
+unverified) becomes enforceable in that same step and not before — until
+templates exist no business-initiated conversation can start, so a counter would
+guard a state that cannot be reached.
 
 **Next scoped step: wire `ingestChange`.** The Meta inbound webhook is complete
 up to the point of ingestion — signature verified over the raw bytes, tenant

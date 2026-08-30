@@ -27,6 +27,18 @@ const capabilities = {
   // No provider-imposed recipient ceiling. Pacing is a plan limit, not a
   // transport limit, so it is not represented here.
   maxUniqueRecipientsPer24h: null,
+
+  // No window and no template gate, so this channel can open a conversation
+  // with anyone. This is the capability a composer or campaign should read;
+  // asking "is this OpenWA?" gets the right answer today and the wrong one the
+  // moment a third channel exists.
+  canInitiateConversations: true,
+
+  // OpenWA has no provider standing to report - there is no tier and no quality
+  // rating behind WhatsApp Web. Null means "this provider does not have one",
+  // which is why these are nullable rather than defaulted to a flattering value.
+  messagingTier: null,
+  qualityRating: null,
 };
 
 export const OpenWASendAdapter: ChannelAdapter = {

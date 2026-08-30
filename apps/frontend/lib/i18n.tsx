@@ -1903,6 +1903,13 @@ const D: Dict = {
   "رسائل جديدة": { he: "הודעות חדשות", en: "New messages" },
   "تنقّل": { he: "ניווט", en: "navigate" },
   "إدراج": { he: "הוספה", en: "insert" },
+
+  // ---------- Phase 4.5: capability-driven channel copy ----------
+  "This channel can only reply within 24 hours of a customer message. It cannot start a conversation, so broadcasts and first-contact messages will be refused.": { ar: "هالقناة بترد بس خلال ٢٤ ساعة من آخر رسالة من الزبون، وما بتقدر تبدأ محادثة. يعني الحملات وأول رسالة لزبون جديد رح تنرفض.", he: "ערוץ זה יכול להשיב רק בתוך 24 שעות מהודעת הלקוח האחרונה, ואינו יכול לפתוח שיחה. לכן דיוורים והודעה ראשונה ללקוח חדש יידחו.", en: "This channel can only reply within 24 hours of a customer message. It cannot start a conversation, so broadcasts and first-contact messages will be refused." },
+  "Connected, but this workspace still sends through its other channel.": { ar: "مربوطة، بس مساحة العمل لسه عم تبعث من القناة التانية.", he: "מחובר, אך סביבת העבודה עדיין שולחת דרך הערוץ האחר.", en: "Connected, but this workspace still sends through its other channel." },
+  "Send through this channel": { ar: "خلّي الإرسال من هالقناة", he: "שליחה דרך ערוץ זה", en: "Send through this channel" },
+  "This workspace now sends through Meta": { ar: "صار الإرسال من قناة Meta", he: "סביבת העבודה שולחת כעת דרך Meta", en: "This workspace now sends through Meta" },
+  "Could not switch the sending channel": { ar: "تعذّر تبديل قناة الإرسال", he: "לא ניתן להחליף את ערוץ השליחה", en: "Could not switch the sending channel" },
   // ---------- Meta WhatsApp Cloud API channel ----------
   "ربط قناة Meta": { he: "חיבור ערוץ Meta", en: "connect a Meta channel" },
   "The Phone Number ID is wrong, or the token cannot reach it. Copy it from WhatsApp → API setup in Meta Business Suite — it is a long number, not the phone number itself.": { ar: "معرّف رقم الهاتف (Phone Number ID) غير صحيح، أو التوكن لا يملك صلاحية الوصول إليه. انسخ المعرّف من إعدادات WhatsApp في حساب Meta للأعمال — وهو رقم طويل، وليس رقم الهاتف نفسه.", he: "מזהה מספר הטלפון (Phone Number ID) שגוי, או שלטוקן אין הרשאה אליו. העתק אותו מהגדרות WhatsApp בחשבון Meta העסקי — זהו מספר ארוך, ולא מספר הטלפון עצמו.", en: "The Phone Number ID is wrong, or the token cannot reach it. Copy it from WhatsApp → API setup in Meta Business Suite — it is a long number, not the phone number itself." },

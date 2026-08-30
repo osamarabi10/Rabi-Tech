@@ -1,12 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Cloud, Loader2, Trash2 } from 'lucide-react';
+import { AlertTriangle, Cloud, Loader2, Radio, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   connectMetaChannel,
   disconnectMetaChannel,
+  fetchChannelCapabilities,
   fetchMetaChannel,
+  setActiveChannel,
+  type ChannelCapabilities,
   type MetaChannel,
 } from '@/lib/data';
 import { useT } from '@/lib/i18n';
@@ -73,11 +76,14 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [capabilities, setCapabilities] = useState<ChannelCapabilities | null>(null);
 
   const load = useCallback(async () => {
     if (!canManage) { setLoading(false); return; }
     try {
-      setChannel(await fetchMetaChannel());
+      const [meta, caps] = await Promise.all([fetchMetaChannel(), fetchChannelCapabilities()]);
+      setChannel(meta);
+      setCapabilities(caps.capabilities);
     } catch {
       // Reading the channel is not the point of this page. A failure here shows
       // as "not connected" rather than as an error state that would also hide
@@ -119,6 +125,22 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
         || serverMessage
         || t('Could not connect the Meta channel'),
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activate = async () => {
+    setBusy(true);
+    try {
+      // The kind travels as data, never as a comparison. Which channel this card
+      // manages is this component's own subject; what that channel can DO is
+      // read from the capability descriptor, never inferred from its name.
+      setCapabilities(await setActiveChannel('WHATSAPP_CLOUD'));
+      setChannel(await fetchMetaChannel());
+      toast.success(t('This workspace now sends through Meta'));
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || t('Could not switch the sending channel'));
     } finally {
       setBusy(false);
     }
@@ -170,12 +192,38 @@ export function MetaChannelCard({ canManage }: { canManage: boolean }) {
             <Row label={t('Graph version')} value={channel.graphVersion} ltr mono />
           </dl>
 
-          {/* Stated plainly rather than left to be discovered by a message that
-              never sends. Inbound arrives once connected; outbound waits on the
-              send path. */}
-          <p className="mt-4 text-micro text-muted-foreground">
-            {t('Sending through this channel is not enabled yet.')}
-          </p>
+          {/* A dead token degrades the channel visibly, with the reason the
+              server recorded and what to do about it. The alternative is
+              messages that quietly stop arriving. */}
+          {channel.invalidReason && (
+            <p role="alert" className="mt-4 flex items-start gap-2 border-s-2 border-danger bg-danger/5 px-3 py-2 text-caption text-danger">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>{channel.invalidReason}</span>
+            </p>
+          )}
+
+          {/* Read from the capability descriptor, never from the channel's name.
+              This is what stops every consumer growing its own comparison
+              against a channel kind, which the isolation gate asserts does not
+              exist anywhere in this app — including, as it turns out, in
+              comments. */}
+          {channel.isActiveChannel && capabilities && !capabilities.canInitiateConversations && (
+            <p className="mt-4 border-s-2 border-warning bg-warning/5 px-3 py-2 text-caption text-warning">
+              {t('This channel can only reply within 24 hours of a customer message. It cannot start a conversation, so broadcasts and first-contact messages will be refused.')}
+            </p>
+          )}
+
+          {!channel.isActiveChannel && (
+            <div className="mt-4 space-y-2">
+              <p className="text-micro text-muted-foreground">
+                {t('Connected, but this workspace still sends through its other channel.')}
+              </p>
+              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={activate}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <Radio className="size-4" />}
+                {t('Send through this channel')}
+              </Button>
+            </div>
+          )}
 
           <DangerZone
             className="mt-5"

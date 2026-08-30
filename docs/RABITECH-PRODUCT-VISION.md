@@ -148,6 +148,54 @@ They exist to make the ladder concrete, not to fix it. No number in this
 document should be treated as a price the business has committed to, and no
 implementation should hardcode one as though it were.
 
+## 3.9 Known gap — a Meta channel can reply, but cannot initiate
+
+**Decided 2026-08-30, during the Meta send path (Phase 4.5).**
+
+Meta permits free-form messages only within **24 hours of the customer's last
+message**. Outside that window it accepts nothing but pre-approved templates —
+and RabiTech has no Meta template management. Our `MessageTemplate` rows are
+quick replies stored in our own database; they are unrelated to, and not
+registered with, Meta.
+
+The consequence, stated plainly so it is not discovered by a customer:
+
+> **A workspace sending through Meta can answer a customer within 24 hours of
+> their message, and can never start a conversation.** Broadcasts to a Meta
+> channel are refused. A first message to a new lead is refused. A follow-up the
+> day after a conversation goes quiet is refused.
+
+**This is material to the paid tiers.** Growth, Business and Enterprise are the
+Meta-capable editions in §3.2, so this limitation lands on the editions
+customers pay most for. A business buying Business expecting to run broadcasts
+over its own Meta number cannot, until template support ships. That is a launch
+conversation, not a support ticket to have later.
+
+**What it is not.** It is not a defect in the send path, and it is not a
+limitation of OpenWA — OpenWA has no window and can message anyone, which is
+precisely why the two channels needed a capability descriptor rather than a
+shared assumption. The restriction is Meta's, and it applies to every product
+built on the Cloud API.
+
+**How the product behaves about it today.** The send path refuses out-of-window
+sends *locally*, before calling Meta, with an Arabic message that says the
+window closed and that the customer must write first. Refusing locally rather
+than letting Meta reject matters for a reason beyond legibility: rejected sends
+depress a number's quality rating, which governs its messaging tier, so relaying
+requests we already know will fail would degrade the customer's own number to
+tell them something we could have said ourselves. The channels card carries the
+same statement whenever the active channel reports
+`canInitiateConversations: false`, so an admin reads it on connection rather
+than on first refusal.
+
+**What closes it.** Meta template management — creating templates, submitting
+them for approval, tracking approval state, and sending them. The messaging-tier
+ceiling (250 recipients per rolling 24 hours for an unverified business) becomes
+enforceable in that same step and not before, because until templates exist no
+business-initiated conversation can start, so the ceiling guards a state that
+cannot be reached. Building the counter earlier would be machinery defending an
+impossibility.
+
 ## 4. Open questions
 
 Unresolved. **Do not guess these into code.**
@@ -324,3 +372,5 @@ exist in any form. Blocked on OQ-2.
 | Date | Change |
 |---|---|
 | 2026-08-28 | Created. Records the five-edition ladder, the owner-control principle, the channel policy, and OQ-1 through OQ-4, with ground truth verified at `1468bfce`. |
+| 2026-08-29 | OQ-1 resolved as bring-your-own-token; OQ-3 decided (Free = 3-day trial, 100/100). §3.1 corrected: "takes effect without a deploy" was untrue until `bc66c468`, because the edition cache never loaded. |
+| 2026-08-30 | §3.9 added. A Meta channel can reply within 24 hours and can never initiate, because Meta requires approved templates outside the window and this product has no template management. Material to Growth, Business and Enterprise — the Meta-capable editions. Closes with template support, which is also when the messaging-tier ceiling first becomes enforceable. |

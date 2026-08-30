@@ -130,7 +130,16 @@ function normalizedDirectAddress(address: string): string | null {
   return normalized || null;
 }
 
-async function contactIdForAddress(address: string): Promise<string | null> {
+/**
+ * The contact behind an outbound address, or null.
+ *
+ * Exported because the Meta service-window check needs the same answer BEFORE
+ * metering runs - the window decides whether a send is allowed at all, and a
+ * refused send must not consume quota. Two normalisations of the same address
+ * would eventually disagree, and the one place that would show up is a message
+ * charged to a tenant that was never sent.
+ */
+export async function contactIdForAddress(address: string): Promise<string | null> {
   const phone = normalizedDirectAddress(address);
   if (!phone) return null;
   const contact = await prisma.contact.findUnique({

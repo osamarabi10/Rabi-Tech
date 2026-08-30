@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
-import { encryptCredential } from '../../lib/credential-crypto';
+import { decryptCredential, encryptCredential } from '../../lib/credential-crypto';
 import logger from '../../lib/logger';
 import { getTenantId } from '../../lib/tenant-context';
 import { secretProblems } from '../../lib/verify-secrets';
@@ -127,6 +127,15 @@ export type MetaChannelStatus = {
   lastValidatedAt: Date | null;
   invalidReason: string | null;
   graphVersion: string;
+  /**
+   * Is this the channel the workspace currently sends through?
+   *
+   * Returned as its own fact so the UI never has to compare channel kinds to
+   * find out. A component asking `capabilities.kind === 'WHATSAPP_CLOUD'`
+   * is the exact pattern the capability descriptor exists to prevent, and it
+   * is asserted against by the isolation gate.
+   */
+  isActiveChannel: boolean;
 };
 
 export type MetaConnectOutcome =
@@ -362,7 +371,9 @@ async function persist(input: {
       },
     });
 
-    return present(credential);
+    // Freshly connected channels are PENDING, never the sending channel, until
+    // the admin switches to them - see setActiveChannelKind.
+    return present(credential, channel.status === 'ACTIVE');
   });
 }
 
@@ -375,7 +386,7 @@ function present(row: {
   messagingTier: string | null;
   lastValidatedAt: Date | null;
   invalidReason: string | null;
-}): MetaChannelStatus {
+}, isActiveChannel: boolean): MetaChannelStatus {
   return {
     connected: row.status === 'ACTIVE',
     status: row.status,
@@ -387,6 +398,7 @@ function present(row: {
     lastValidatedAt: row.lastValidatedAt,
     invalidReason: row.invalidReason,
     graphVersion: META_GRAPH_VERSION,
+    isActiveChannel,
   };
 }
 
@@ -405,9 +417,13 @@ export async function getMetaChannel(): Promise<MetaChannelStatus | null> {
       messagingTier: true,
       lastValidatedAt: true,
       invalidReason: true,
+      // Whether this channel is the one the workspace sends through. Read from
+      // the parent row so the UI is told the fact directly instead of deducing
+      // it by comparing channel kinds.
+      channel: { select: { status: true } },
     },
   });
-  return row ? present(row) : null;
+  return row ? present(row, row.channel?.status === 'ACTIVE') : null;
 }
 
 /**
@@ -433,5 +449,76 @@ export async function disconnectMetaChannel(): Promise<boolean> {
   const { count } = await prisma.metaChannelCredential.deleteMany({
     where: { organizationId: getTenantId() },
   });
+  return count > 0;
+}
+
+/**
+ * The credential the send path uses, with the token decrypted.
+ *
+ * Separate from getMetaChannel because the two have opposite obligations: that
+ * one is shaped for an HTTP response and must never carry the token, this one
+ * exists to hand the token to the adapter and must never reach a route. Keeping
+ * them apart means a careless `res.json(credential)` cannot compile into a leak.
+ *
+ * Returns null when there is no credential or it has already been marked
+ * invalid — a known-dead token should not be spent on a send that will fail and
+ * cost quality rating.
+ */
+export async function activeMetaCredential(): Promise<{
+  id: string;
+  phoneNumberId: string;
+  accessToken: string;
+  messagingTier: string | null;
+  qualityRating: string | null;
+} | null> {
+  const row = await prisma.metaChannelCredential.findFirst({
+    where: { status: 'ACTIVE' },
+    select: {
+      id: true,
+      phoneNumberId: true,
+      accessTokenEnc: true,
+      messagingTier: true,
+      qualityRating: true,
+    },
+  });
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    phoneNumberId: row.phoneNumberId,
+    accessToken: decryptCredential(row.accessTokenEnc),
+    messagingTier: row.messagingTier,
+    qualityRating: row.qualityRating,
+  };
+}
+
+/**
+ * Mark a credential dead, once, with a reason the admin can act on.
+ *
+ * Tokens die on their own — a password change, a permission revoke, a deleted
+ * System User — and the first symptom is a 401 on an ordinary send. Recording
+ * it turns "messages silently stopped going out" into a visible degraded
+ * channel that says what happened, which is the difference between a customer
+ * noticing and an agent noticing.
+ *
+ * Deliberately idempotent-ish: it only writes while the row still reads ACTIVE,
+ * so a burst of concurrent sends all failing at once produces one transition
+ * and one audit line rather than fifty.
+ */
+export async function markMetaCredentialInvalid(
+  credentialId: string,
+  reason: string,
+): Promise<boolean> {
+  const { count } = await prisma.metaChannelCredential.updateMany({
+    where: { id: credentialId, status: 'ACTIVE' },
+    data: { status: 'INVALID', invalidReason: reason, lastValidatedAt: new Date() },
+  });
+  if (count > 0) {
+    logger.error('Meta credential marked invalid; channel degraded', {
+      organizationId: getTenantId(),
+      credentialId,
+      reason,
+    });
+  }
   return count > 0;
 }

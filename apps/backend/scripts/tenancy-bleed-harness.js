@@ -259,6 +259,48 @@ function staticAudits() {
     rendered === 'Hi Maya / A-42 / 2026-08-26 / $contact.missing',
     rendered,
   );
+
+  // The capability principle, as something a machine can check.
+  //
+  // Channels differ - Meta has a 24-hour service window and cannot open a
+  // conversation, OpenWA has neither restriction - and the ONLY sanctioned way
+  // for the UI to learn that is the capability descriptor. A component that asks
+  // "is this Meta?" has to be edited every time a channel is added, and until
+  // someone remembers to, it forbids what one channel allows or offers what
+  // another rejects. Asking "can this channel start a conversation?" is a
+  // question about the rule, and a new channel answers it by existing.
+  //
+  // Kept as a literal grep because that is exactly what makes it enforceable:
+  // the principle is otherwise a paragraph in a type definition that nothing
+  // stops the next component from ignoring.
+  const frontendRoot = path.resolve(REPO_ROOT, 'apps', 'frontend');
+  const uiDirs = ['app', 'components', 'lib', 'hooks'];
+  const kindComparisons = [];
+  for (const dir of uiDirs) {
+    const full = path.join(frontendRoot, dir);
+    if (!fs.existsSync(full)) continue;
+    for (const file of walk(full)) {
+      if (!/\.(?:ts|tsx)$/.test(file)) continue;
+      const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+      lines.forEach((line, index) => {
+        // Comparisons only. Passing a kind as data - a request body naming which
+        // channel to activate - is legitimate and not what this forbids.
+        if (/[=!]==\s*['"`](?:WHATSAPP_CLOUD|META)['"`]/.test(line)
+          || /['"`](?:WHATSAPP_CLOUD|META)['"`]\s*[=!]==/.test(line)) {
+          kindComparisons.push(`${path.relative(frontendRoot, file).replace(/\\/g, '/')}:${index + 1}`);
+        }
+      });
+    }
+  }
+  // Note this matches comments as well as code, deliberately. The cost is
+  // rewording a sentence; the benefit is a rule with no exceptions to argue
+  // about, and it has already caught one comment that quoted the very pattern
+  // it was warning against.
+  record(
+    'audit: no frontend component branches on channel identity instead of capabilities',
+    kindComparisons.length === 0,
+    kindComparisons.join(', '),
+  );
 }
 
 function makeTestUrl(baseUrl, schema) {
@@ -4338,6 +4380,130 @@ async function databaseAudits() {
         await raw.team.deleteMany({ where: { id: { in: [teamA.id, teamB.id] } } });
       }
     });
+    await check('channels: two ACTIVE channels are refused, never silently picked', async () => {
+      const { ChannelService, setActiveChannelKind } = require('../src/modules/channels/channel.service');
+
+      const ids = ['bleed_chan_openwa', 'bleed_chan_meta'];
+      await raw.organizationChannel.create({ data: {
+        id: ids[0], organizationId: orgA.organizationId, kind: 'OPENWA', status: 'ACTIVE',
+        baseUrl: 'http://openwa.invalid', apiKeyEnc: '', webhookToken: 'bleed-switch-openwa',
+      } });
+      await raw.organizationChannel.create({ data: {
+        id: ids[1], organizationId: orgA.organizationId, kind: 'WHATSAPP_CLOUD', status: 'ACTIVE',
+        baseUrl: 'https://graph.facebook.com/v21.0', apiKeyEnc: '', webhookToken: 'bleed-switch-meta',
+      } });
+
+      try {
+        // The old resolver took findFirst({status:'ACTIVE'}) with no ordering,
+        // so this exact state resolved to whichever row came back first: the
+        // same tenant could send through OpenWA on one request and Meta on the
+        // next, with nothing raised and no way to notice except customers
+        // replying to a number that was not the one they wrote to.
+        await assert.rejects(
+          () => runAsOrganization(orgA.organizationId, () =>
+            ChannelService.sendText('session', '+972500000001', 'hello')),
+          /CHANNEL_AMBIGUOUS/,
+          'two ACTIVE channels must raise, not resolve to an arbitrary one',
+        );
+
+        // The switch leaves exactly one active, and leaves it in one statement
+        // so nothing can observe zero.
+        await runAsOrganization(orgA.organizationId, () => setActiveChannelKind('OPENWA'));
+        const after = await raw.organizationChannel.findMany({
+          where: { organizationId: orgA.organizationId, id: { in: ids } },
+          select: { kind: true, status: true },
+        });
+        assert.equal(
+          after.filter((row) => row.status === 'ACTIVE').length,
+          1,
+          'after a switch exactly one channel must be ACTIVE',
+        );
+        assert.equal(after.find((row) => row.status === 'ACTIVE').kind, 'OPENWA');
+
+        // A workspace with channels but none active must say so distinctly. The
+        // generic OpenWA failure sends an agent to debug a healthy gateway.
+        await raw.organizationChannel.updateMany({
+          where: { organizationId: orgA.organizationId, id: { in: ids } },
+          data: { status: 'INACTIVE' },
+        });
+        await assert.rejects(
+          () => runAsOrganization(orgA.organizationId, () =>
+            ChannelService.sendText('session', '+972500000001', 'hello')),
+          /CHANNEL_NOT_ACTIVE/,
+          'no active channel must be named, not reported as a gateway fault',
+        );
+      } finally {
+        await raw.organizationChannel.deleteMany({
+          where: { organizationId: orgA.organizationId, id: { in: ids } },
+        });
+      }
+    });
+
+    await check('channels: the Meta service window is enforced before Meta is called', async () => {
+      const { serviceWindowFor, SERVICE_WINDOW_MS } = require('../src/modules/channels/service-window');
+
+      // Its own contact and thread, because the seeded fixtures already carry an
+      // INBOUND message - the first version of this check reused one and passed
+      // for the wrong reason, reading a window held open by seed data rather
+      // than by anything under test.
+      const contactId = 'bleed_window_contact';
+      const conversationId = 'bleed_window_conversation';
+      await raw.contact.create({ data: {
+        id: contactId, organizationId: orgA.organizationId,
+        phone: '+972599000111', name: 'Service Window',
+      } });
+      await raw.conversation.create({ data: {
+        id: conversationId, organizationId: orgA.organizationId, displayId: 98765,
+        contactId, sessionId: orgA.sessionId,
+      } });
+
+      try {
+        // Never written: no window at all. Distinct from a window that closed,
+        // and given a different message because the remedies differ - one waits
+        // for the customer, the other cannot be fixed by waiting.
+        const never = await runAsOrganization(orgA.organizationId, () => serviceWindowFor(contactId));
+        assert.equal(never.open, false);
+        assert.equal(never.lastInboundAt, null, 'a contact who never wrote has no last inbound');
+
+        await raw.message.create({ data: {
+          id: 'bleed_window_inbound', organizationId: orgA.organizationId,
+          conversationId, direction: 'INBOUND', body: 'hello',
+          timestamp: new Date(Date.now() - 60_000),
+        } });
+        const open = await runAsOrganization(orgA.organizationId, () => serviceWindowFor(contactId));
+        assert.equal(open.open, true, 'a message a minute old must leave the window open');
+
+        // Age it past 24 hours, then reply. The OUTBOUND message must NOT
+        // reopen the window. Conversation.lastMessageAt moves on outbound, which
+        // is precisely why the window is computed from inbound only: believing a
+        // window is open when Meta considers it shut is the direction of error
+        // that spends a number's quality rating on rejected sends.
+        await raw.message.update({
+          where: { id: 'bleed_window_inbound' },
+          data: { timestamp: new Date(Date.now() - SERVICE_WINDOW_MS - 60_000) },
+        });
+        await raw.message.create({ data: {
+          id: 'bleed_window_outbound', organizationId: orgA.organizationId,
+          conversationId, direction: 'OUTBOUND', body: 'agent reply',
+          timestamp: new Date(),
+        } });
+
+        const closed = await runAsOrganization(orgA.organizationId, () => serviceWindowFor(contactId));
+        assert.equal(closed.open, false, 'an outbound message must not reopen the service window');
+        assert.ok(closed.lastInboundAt, 'a closed window still knows when it closed');
+        assert.ok(closed.expiresAt < new Date(), 'a closed window reports an expiry in the past');
+
+        // And the window belongs to the contact, not to whoever asks: org B must
+        // not be able to read org A's window into its own send decision.
+        const fromOrgB = await runAsOrganization(orgB.organizationId, () => serviceWindowFor(contactId));
+        assert.equal(fromOrgB.lastInboundAt, null, 'org B read org A inbound history through the window check');
+      } finally {
+        await raw.message.deleteMany({ where: { organizationId: orgA.organizationId, conversationId } });
+        await raw.conversation.deleteMany({ where: { organizationId: orgA.organizationId, id: conversationId } });
+        await raw.contact.deleteMany({ where: { organizationId: orgA.organizationId, id: contactId } });
+      }
+    });
+
     await check('meta webhook: a payload naming one tenant cannot enter another tenant scope', async () => {
       const crypto = require('crypto');
       const { getTenantId } = require('../src/lib/tenant-context');

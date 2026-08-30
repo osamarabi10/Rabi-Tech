@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { auditLog } from '../../lib/audit';
 import { requireAdmin } from '../../middleware/rbac.middleware';
+import { ChannelKind } from './channel.types';
+import { channelCapabilities, isChannelSendError, setActiveChannelKind } from './channel.service';
 import { verifyToken } from '../auth/auth.middleware';
 import {
   connectMetaChannel,
@@ -90,6 +92,66 @@ router.delete('/meta', requireAdmin, async (req: any, res) => {
     });
   }
   res.json({ removed });
+});
+
+/**
+ * What the organization's channel can do.
+ *
+ * Not admin-only, unlike the rest of this file. The composer and the campaign
+ * builder need it to decide what to offer an agent, and an agent who cannot
+ * read it gets a UI that offers actions the server will refuse - which is the
+ * failure this endpoint exists to prevent. Nothing here is a secret: it
+ * describes the shape of the channel, never its credentials.
+ */
+router.get('/capabilities', async (_req, res) => {
+  try {
+    res.json({ capabilities: await channelCapabilities() });
+  } catch (error) {
+    // A workspace mid-switch, or with two active channels, has no single answer.
+    // Reported as a named state rather than a 500, so the UI can say so.
+    if (isChannelSendError(error)) {
+      return res.status(409).json({
+        error: error.userMessage,
+        code: error.code,
+        capabilities: null,
+      });
+    }
+    throw error;
+  }
+});
+
+/**
+ * Choose which channel this workspace sends through.
+ *
+ * A switch, not a toggle: exactly one channel is active afterwards, and the
+ * transaction behind it is why a send in flight never sees zero.
+ */
+router.post('/active', requireAdmin, async (req: any, res) => {
+  const kind = String(req.body?.kind || '') as ChannelKind;
+  if (kind !== 'OPENWA' && kind !== 'WHATSAPP_CLOUD') {
+    return res.status(400).json({ error: 'نوع القناة غير معروف.', code: 'CHANNEL_KIND_UNKNOWN' });
+  }
+
+  try {
+    await setActiveChannelKind(kind);
+  } catch (error) {
+    if (isChannelSendError(error)) {
+      return res.status(422).json({ error: error.userMessage, code: error.code });
+    }
+    throw error;
+  }
+
+  await auditLog({
+    userId: req.user?.id,
+    action: 'channel.activated',
+    resource: 'OrganizationChannel',
+    resourceId: kind,
+    description: `active channel set to ${kind}`,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
+  return res.json({ activeKind: kind, capabilities: await channelCapabilities() });
 });
 
 export default router;

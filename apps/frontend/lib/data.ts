@@ -2214,6 +2214,8 @@ export type MetaChannel = {
   lastValidatedAt: string | null;
   invalidReason: string | null;
   graphVersion: string;
+  /** Whether the workspace currently sends through this channel. */
+  isActiveChannel: boolean;
 };
 
 /**
@@ -2252,4 +2254,60 @@ export async function connectMetaChannel(input: {
 export async function disconnectMetaChannel(): Promise<boolean> {
   const { data } = await api.delete('/api/channels/meta');
   return !!data.removed;
+}
+
+// ---------- Channel capabilities ----------
+
+/**
+ * What the workspace's active channel can do.
+ *
+ * The point of this type is that no component should ever ask *which* channel
+ * it is talking to. A composer asking "is this Meta?" has to be edited every
+ * time a channel is added, and in the meantime forbids something one channel
+ * allows or offers something another rejects. Asking "can this channel start a
+ * conversation?" is a question about the rule, and a new channel answers it by
+ * existing.
+ */
+export type ChannelCapabilities = {
+  kind: string;
+  requiresServiceWindow: boolean;
+  supportsTemplates: boolean;
+  supportsQrPairing: boolean;
+  maxUniqueRecipientsPer24h: number | null;
+  /** False for Meta while template management is absent: it can reply, never initiate. */
+  canInitiateConversations: boolean;
+  /** Display only. Never gate behaviour on these. */
+  messagingTier: string | null;
+  qualityRating: string | null;
+};
+
+/**
+ * Null when the workspace has no single answer — mid-switch, or two channels
+ * active. The `code` says which, so the UI can describe the state instead of
+ * rendering an empty card that looks like a missing feature.
+ */
+export async function fetchChannelCapabilities(): Promise<{
+  capabilities: ChannelCapabilities | null;
+  code: string | null;
+  message: string | null;
+}> {
+  try {
+    const { data } = await api.get('/api/channels/capabilities');
+    return { capabilities: data.capabilities ?? null, code: null, message: null };
+  } catch (error: any) {
+    if (error?.response?.status === 409) {
+      return {
+        capabilities: null,
+        code: error.response.data?.code ?? null,
+        message: error.response.data?.error ?? null,
+      };
+    }
+    throw error;
+  }
+}
+
+/** Choose the channel this workspace sends through. Exactly one, always. */
+export async function setActiveChannel(kind: string): Promise<ChannelCapabilities | null> {
+  const { data } = await api.post('/api/channels/active', { kind });
+  return data.capabilities ?? null;
 }

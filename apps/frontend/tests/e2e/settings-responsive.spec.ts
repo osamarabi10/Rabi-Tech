@@ -251,9 +251,23 @@ async function prepareSettings(
   // not running here, and the 401 interceptor in lib/api.ts redirects to
   // /login - which takes every settings page down with it, not just this card.
   // That is why one new card failed eighteen unrelated responsive checks.
-  await page.route('**/api/channels/meta**', async (route) => {
+  await page.route('**/api/channels/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (request.method() === 'GET' && path === '/api/channels/capabilities') {
+      // The capability descriptor the card reads instead of asking which
+      // channel it is. OpenWA shape: no window, can start conversations.
+      await route.fulfill({ json: { capabilities: {
+        kind: 'OPENWA', requiresServiceWindow: false, supportsTemplates: false,
+        supportsQrPairing: true, maxUniqueRecipientsPer24h: null,
+        canInitiateConversations: true, messagingTier: null, qualityRating: null,
+      } } });
+      return;
+    }
+    if (request.method() === 'POST' && path === '/api/channels/active') {
+      await route.fulfill({ json: { activeKind: request.postDataJSON()?.kind, capabilities: null } });
+      return;
+    }
     if (request.method() === 'GET' && path === '/api/channels/meta') {
       // Not connected: the state that renders the connect affordance, which is
       // the one this page is asserted against.
