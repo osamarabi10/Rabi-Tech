@@ -65,6 +65,22 @@ Latest release evidence:
 - Verified backup: `auto-20260829-143026.dump`, `1,109,740` bytes.
 - The backup was restored into a scratch database and counted `31` conversations, `97` messages, and `33` contacts before migrations 65 and 66 were deployed. Data is unchanged after them.
 
+Current head, **not yet released** (2026-08-30):
+
+- Isolation and usage harness: **`112/112`**, exit 0. Two checks added since the
+  release above — a where-less `updateMany` tenancy check, and Meta webhook
+  tenant routing. Both were mutation-tested: each fails when the fix it guards
+  is reverted, so neither is passing through a fallback.
+- Browser matrix: **`75/75`**, exit 0. Backend and frontend builds, i18n and
+  mojibake: pass.
+- **One migration is written and unapplied** — `20260919090000_meta_credential_vault`
+  (`67`). `prisma migrate status` from the host reports 67 found with exactly one
+  pending; the live database stays at `66` and the vault table does not exist.
+  Run it from the host: the container's copy predates the migration and answers
+  "66 found / up to date", which is the stale-image signature, not evidence.
+- The GitHub Actions gate is red and has never been green. It is not blocking
+  and it is not caused by any of the above — see §8.
+
 Both gate numbers rose because two gates were found non-functional on this
 machine and repaired — see the preconditions in §8. Neither number is
 comparable to the one it replaces without that context: the harness gained
@@ -756,6 +772,61 @@ someone ran them and read the output rather than trusting the recorded number.
 The rule this leaves behind: **a gate is green when you watched it run, not when
 a document says it was.** Before certifying any release, run all three and read
 the summary line of each.
+
+**The GitHub Actions gate is red, and has never been green — 2026-08-30.**
+`.github/workflows/tenancy-bleed.yml` has run 43 times since 2026-08-20 with
+**zero successes** (41 failures, 2 cancelled). It was already failing on run 1,
+three days before any of the harness work in this checkpoint, so nothing here
+caused it and no local change is going to fix it by itself.
+
+*Confirmed cause.* The workflow's `env:` block supplies four variables;
+this project's environment defines twenty-three. **`CHANNEL_ENCRYPTION_KEY` is
+among the missing**, and running the harness locally under CI's exact
+environment reproduces five failures, every one of them
+`CHANNEL_ENCRYPTION_KEY must be at least 32 characters` — the four
+`provisioning:` checks and the TOTP encryption check. That is a sufficient
+cause for a red gate on its own, and the fix is one line of workflow `env:`
+holding a CI-only dummy of at least 32 characters.
+
+*Unconfirmed.* That does not explain the timings. Run 43 spent **19 seconds** in
+`npm run test:tenancy` — far too little to reach those checks — while `npm ci`
+passed in 5. `command()` records a failure and returns, so a failing check
+cannot end a run early; the one thing that can is `if (!migrated) return` after
+`prisma migrate deploy`, which skips the entire database suite. That fits the 19
+seconds and remains **a hypothesis, not a measurement**. Settling it needs the
+job log, which this machine cannot read: `gh` is not installed, and the
+unauthenticated logs endpoint returns `403 Must have admin rights to
+Repository`. Get it with `gh run view <run-id> --log-failed` or from the Actions
+UI before changing anything beyond the missing variable — otherwise the visible
+half gets patched and the half that ends the run at 19 seconds does not.
+
+*Explicitly not the cause:* the harness loading its environment from the
+repository root `.env`. `dotenv` is strictly additive — tested against a
+controlled file, an already-set `DATABASE_URL` survived the load while a
+variable absent from the environment was filled in — and a missing file returns
+`{ error: ENOENT }` rather than throwing. CI's own `env:` therefore wins, which
+is exactly the behaviour wanted in both environments. The repoint also landed 25
+commits before the run in question.
+
+**This is not blocking.** All three local gates are green and, unlike this one,
+genuinely executable here: isolation 112/112, browser matrix 75/75, six core
+checks. A gate nobody can run is not evidence of anything, in either direction —
+which is the same rule as above, applied to a gate that has never once been
+watched succeeding.
+
+**Next scoped step: wire `ingestChange`.** The Meta inbound webhook is complete
+up to the point of ingestion — signature verified over the raw bytes, tenant
+resolved from `phone_number_id`, scope entered, unknown ids dropped — and
+`ingestChange` in `src/webhooks/meta.webhook.ts` currently resolves, logs and
+returns. It creates no contacts, conversations or messages. The reason it stops
+there is that the Cloud API payload is a different shape from OpenWA's, so
+normalising it into this product's inbox — contacts, one-thread-per-contact
+sessions, delivery acks, media — is its own piece of work rather than a few
+lines at the end of a webhook. Everything outside that function is the part that
+cannot be corrected later without consequence, which is why it was finished
+first. Until it is wired, **a connected Meta number sends nothing and receives
+nothing into the inbox**, and `/settings/channels` says so on the card rather
+than leaving it to be discovered.
 
 **Run the isolation gate and the browser matrix serially. Never concurrently.**
 They contend for the same machine and the loser reports a false failure. The
