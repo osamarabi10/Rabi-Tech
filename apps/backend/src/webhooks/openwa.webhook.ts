@@ -130,6 +130,7 @@ router.post('/webhooks/openwa/:webhookToken', async (req, res, next) => {
         hasMedia,
         mediaUrl: msg.mediaUrl || data?.mediaUrl || data?.media?.url,
         mediaType: msg.mediaType || msg.type || data?.type,
+        mediaFileName: msg.media?.filename || data?.media?.filename,
         senderId: from && !from.includes('@g.us') ? from : data?.participant || data?.senderId,
       };
 
@@ -159,6 +160,7 @@ router.post('/webhooks/openwa/:webhookToken', async (req, res, next) => {
           hasMedia: payload.hasMedia,
           mediaUrl: toProxyMediaUrl(payload.mediaUrl, session || '', payload.id, payload.mediaType) ?? undefined,
           mediaType: payload.mediaType,
+          mediaFileName: payload.mediaFileName,
           fromMe: payload.fromMe,
         });
       }

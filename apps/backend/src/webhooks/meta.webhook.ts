@@ -130,6 +130,7 @@ async function ingestChange(context: MetaChangeContext): Promise<void> {
   for (const message of messages) {
     let mediaUrl: string | undefined;
     let mediaType: string | undefined = message.mimeType || undefined;
+    let mediaFileName: string | undefined = message.fileName || undefined;
 
     if (message.mediaId && credential) {
       // Fetched now, not on view. Meta's download URLs expire in minutes, and
@@ -144,6 +145,7 @@ async function ingestChange(context: MetaChangeContext): Promise<void> {
       if (stored) {
         mediaUrl = stored.url;
         mediaType = stored.mimeType || mediaType;
+        mediaFileName = stored.fileName || mediaFileName;
       }
     }
 
@@ -167,6 +169,7 @@ async function ingestChange(context: MetaChangeContext): Promise<void> {
       hasMedia: Boolean(mediaUrl),
       mediaUrl,
       mediaType,
+      mediaFileName,
       fromMe: false,
     });
   }

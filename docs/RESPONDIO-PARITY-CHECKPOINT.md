@@ -67,7 +67,8 @@ Latest release evidence:
 
 Current head (2026-08-30), **migration 67 released**:
 
-- Isolation and usage harness: **`119/119`**, exit 0, on a clean `npm ci`.
+- Isolation and usage harness: **`120/120`**, exit 0. The latest check pins
+  inbound media filename persistence across both OpenWA and Meta.
   Every check added since the release above was mutation-tested — each fails
   when the fix it guards is reverted, so none is passing through a fallback.
 - Browser matrix: **`75/75`**, exit 0. Backend and frontend builds, i18n and
@@ -889,6 +890,10 @@ Both were found while wiring the Meta inbound path, both are pre-existing, and
 neither is blocking. Recorded here so they are visible rather than rediscovered
 as a surprise.
 
+> **PARTIALLY SUPERSEDED 2026-08-30.** Defect 1 below remains open. Defect 2 is
+> fixed for both inbound channels and its original text is retained as the
+> pre-fix diagnosis.
+
 1. **Stored Arabic sentinels in `Message.body`.**
    `workers/incoming-message.worker.ts:136` writes `[صورة]`, `[فيديو]`,
    `[رسالة صوتية]` or `[ملف]` into the body of an uncaptioned media message.
@@ -913,6 +918,13 @@ as a surprise.
    Fixing it means widening that payload and the worker's create — small, and
    touching a path both channels share, which is why it was not folded into the
    Meta work.
+
+   > **SUPERSEDED 2026-08-30.** OpenWA now extracts the live gateway contract's
+   > `media.filename`; Meta carries `document.filename` through download; the
+   > shared queue persists both to `Message.mediaFileName`. The isolation
+   > harness is `120/120`. Mutation proof: forcing the worker write back to
+   > `null` produced `119/120`, with only `audit: inbound media filenames reach
+   > Message.mediaFileName on OpenWA and Meta` failing.
 
 **Mutation-test every check that guards a boundary — standing practice from
 2026-08-30.** A check that has never been seen to fail proves only that it runs.

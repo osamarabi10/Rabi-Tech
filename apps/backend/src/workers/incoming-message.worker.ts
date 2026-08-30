@@ -55,6 +55,7 @@ export async function queueIncomingMessage(payload: {
   hasMedia?: boolean;
   mediaUrl?: string;
   mediaType?: string;
+  mediaFileName?: string;
   fromMe?: boolean;
   organizationId: string;
 }) {
@@ -80,6 +81,7 @@ async function processInboundMessage(data: {
   hasMedia?: boolean;
   mediaUrl?: string;
   mediaType?: string;
+  mediaFileName?: string;
   fromMe?: boolean;
   organizationId: string;
 }) {
@@ -92,6 +94,7 @@ async function processInboundMessage(data: {
     hasMedia,
     mediaUrl,
     mediaType,
+    mediaFileName,
     fromMe,
   } = data;
 
@@ -150,6 +153,7 @@ async function processInboundMessage(data: {
       body: messageBody,
       mediaUrl: hasMedia ? mediaUrl : null,
       mediaType: hasMedia ? mediaType : null,
+      mediaFileName: hasMedia ? mediaFileName : null,
     },
   });
   try {

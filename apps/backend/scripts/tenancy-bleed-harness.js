@@ -301,6 +301,32 @@ function staticAudits() {
     kindComparisons.length === 0,
     kindComparisons.join(', '),
   );
+
+  const openwaWebhookSource = fs.readFileSync(
+    path.join(ROOT, 'src', 'webhooks', 'openwa.webhook.ts'), 'utf8');
+  const metaWebhookSource = fs.readFileSync(
+    path.join(ROOT, 'src', 'webhooks', 'meta.webhook.ts'), 'utf8');
+  const incomingWorkerSource = fs.readFileSync(
+    path.join(ROOT, 'src', 'workers', 'incoming-message.worker.ts'), 'utf8');
+  const filenameHandoffFailures = [];
+  if (!/mediaFileName:\s*msg\.media\?\.filename/.test(openwaWebhookSource)) {
+    filenameHandoffFailures.push('OpenWA media.filename is not extracted');
+  }
+  if (!/mediaFileName:\s*payload\.mediaFileName/.test(openwaWebhookSource)) {
+    filenameHandoffFailures.push('OpenWA filename is not queued');
+  }
+  if (!/mediaFileName\s*=\s*stored\.fileName\s*\|\|\s*mediaFileName/.test(metaWebhookSource)
+    || !/\n\s*mediaFileName,\n\s*fromMe: false/.test(metaWebhookSource)) {
+    filenameHandoffFailures.push('Meta filename is not queued');
+  }
+  if (!/mediaFileName:\s*hasMedia\s*\?\s*mediaFileName\s*:\s*null/.test(incomingWorkerSource)) {
+    filenameHandoffFailures.push('queued filename is not written to Message.mediaFileName');
+  }
+  record(
+    'audit: inbound media filenames reach Message.mediaFileName on OpenWA and Meta',
+    filenameHandoffFailures.length === 0,
+    filenameHandoffFailures.join(' | '),
+  );
 }
 
 function makeTestUrl(baseUrl, schema) {
@@ -4479,6 +4505,12 @@ async function databaseAudits() {
       assert.equal(image.mediaId, 'MEDIA_1');
       assert.equal(image.body, 'look', 'a caption is the customer word and belongs in the body');
       assert.equal(image.phone, '972500000001', 'a leading + must be normalised away');
+
+      const [document] = normalizeMetaMessages(wrap({
+        id: 'wamid.d', from: '972500000001', timestamp: '1756500000', type: 'document',
+        document: { id: 'MEDIA_2', mime_type: 'application/pdf', filename: 'invoice-2026.pdf' },
+      }));
+      assert.equal(document.fileName, 'invoice-2026.pdf', 'Meta document.filename must survive normalisation');
 
       // The rule this check exists for: store the TYPE, never a sentence. A
       // stored "[location]" cannot be translated afterwards, which is the
