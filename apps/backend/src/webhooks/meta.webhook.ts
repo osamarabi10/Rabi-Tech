@@ -3,6 +3,13 @@ import { Request, Response } from 'express';
 import logger from '../lib/logger';
 import { getTenantId, runAsOrganization, runAsPlatform } from '../lib/tenant-context';
 import { prisma } from '../prisma';
+import { getIO, SocketEvents } from '../socket';
+import { socketRoom } from '../socket/rooms';
+import { advanceMessageStatus } from '../utils/message-status';
+import { queueIncomingMessage } from '../workers/incoming-message.worker';
+import { normalizeMetaMessages, normalizeMetaStatuses } from '../modules/channels/meta-inbound';
+import { downloadMetaMedia } from '../modules/channels/meta-media';
+import { activeMetaCredential, metaSessionName } from '../modules/channels/meta.service';
 
 /**
  * The Meta WhatsApp Cloud API inbound webhook.
@@ -96,26 +103,133 @@ export async function organizationForPhoneNumberId(phoneNumberId: string): Promi
 }
 
 /**
- * Where inbound Meta messages will be ingested.
+ * Turn one accepted change into inbox activity.
  *
- * Not wired yet, and saying so is the point: the Cloud API payload is a
- * different shape from OpenWA's, and normalising it into contacts,
- * conversations, acks and media is its own step. What is finished is everything
- * outside this function — signature, routing, tenancy — which is the part that
- * cannot be got wrong later without consequences.
+ * Runs inside runAsOrganization for the resolved tenant, so everything below is
+ * scoped like any request handler.
  *
- * Anything added here already runs inside runAsOrganization for the resolved
- * tenant, so ordinary prisma calls are scoped like any request handler.
+ * The shape of this function is the whole design decision: it normalises Meta's
+ * payload into the job the existing inbound pipeline already consumes, and then
+ * stops. Contact upsert, one-thread-per-contact, reopening a resolved thread,
+ * auto-replies, assignment and the socket emit are not reimplemented here —
+ * they are exercised daily by OpenWA, and a second copy for a second channel is
+ * how two channels start behaving differently for reasons nobody chose.
  */
 async function ingestChange(context: MetaChangeContext): Promise<void> {
-  const value = context.value as { messages?: unknown[]; statuses?: unknown[] };
-  logger.info('Meta webhook: change accepted (ingestion not yet wired)', {
-    organizationId: getTenantId(),
-    channelId: context.channelId,
-    field: context.field,
-    messages: Array.isArray(value?.messages) ? value.messages.length : 0,
-    statuses: Array.isArray(value?.statuses) ? value.statuses.length : 0,
+  const organizationId = getTenantId();
+  const value = context.value;
+
+  const messages = normalizeMetaMessages(value);
+  const statuses = normalizeMetaStatuses(value);
+
+  // The token is needed only to fetch media, and only if some arrived.
+  const needsMedia = messages.some((message) => message.mediaId);
+  const credential = needsMedia ? await activeMetaCredential() : null;
+  const session = metaSessionName(context.phoneNumberId);
+
+  for (const message of messages) {
+    let mediaUrl: string | undefined;
+    let mediaType: string | undefined = message.mimeType || undefined;
+
+    if (message.mediaId && credential) {
+      // Fetched now, not on view. Meta's download URLs expire in minutes, and
+      // resolving them later would put the access token on the path of anyone
+      // opening their own inbox.
+      const stored = await downloadMetaMedia(
+        organizationId,
+        message.mediaId,
+        credential.accessToken,
+        message.fileName,
+      );
+      if (stored) {
+        mediaUrl = stored.url;
+        mediaType = stored.mimeType || mediaType;
+      }
+    }
+
+    // A type this product cannot render carries its TYPE, never a sentence.
+    // A stored English or Arabic string cannot be translated afterwards, which
+    // is the defect behind Respond.io's [Deleted Workflow]; an Arabic workspace
+    // must read Arabic and a Hebrew one Hebrew, so the copy is rendered from
+    // this value rather than baked into the row.
+    if (message.placeholder) mediaType = message.metaType;
+
+    await queueIncomingMessage({
+      organizationId,
+      session,
+      phone: message.phone,
+      contactName: message.contactName,
+      body: message.body,
+      waMessageId: message.waMessageId,
+      // Placeholders are not media: leaving hasMedia false keeps the worker
+      // from writing its own bracketed caption into the body, which is the same
+      // stored-language problem one layer down.
+      hasMedia: Boolean(mediaUrl),
+      mediaUrl,
+      mediaType,
+      fromMe: false,
+    });
+  }
+
+  for (const status of statuses) {
+    await applyMetaStatus(organizationId, status.waMessageId, status.status);
+  }
+
+  if (messages.length || statuses.length) {
+    logger.info('Meta webhook: change ingested', {
+      organizationId,
+      channelId: context.channelId,
+      messages: messages.length,
+      statuses: statuses.length,
+    });
+  }
+}
+
+/**
+ * Apply a delivery receipt, forward only.
+ *
+ * Meta retries any webhook it did not see acknowledged, so the same receipt
+ * arrives more than once and not in order. advanceMessageStatus is shared with
+ * the OpenWA path so both channels obey the one invariant rather than each
+ * having its own opinion about it.
+ */
+export async function applyMetaStatus(
+  organizationId: string,
+  waMessageId: string,
+  incoming: 'SENT' | 'DELIVERED' | 'READ' | 'FAILED',
+): Promise<void> {
+  const message = await prisma.message.findUnique({
+    where: { organizationId_waMessageId: { organizationId, waMessageId } },
+    select: { id: true, conversationId: true, status: true },
   });
+  // A receipt for something this platform never sent is not an error: Meta
+  // reports on the whole number, including anything sent from elsewhere.
+  if (!message) return;
+
+  const advanced = advanceMessageStatus(message.status, incoming);
+  if (!advanced) return;
+
+  await prisma.message.update({
+    where: { id: message.id },
+    data: { status: advanced, ...(advanced === 'READ' ? { isRead: true } : {}) },
+  });
+  // The write is the fact; the emit is a courtesy to whoever is looking right
+  // now. If the socket server is not up — a worker process, a test harness, a
+  // restart mid-delivery — that must not throw away a status already recorded,
+  // and must not make Meta retry a delivery this platform actually processed.
+  try {
+    getIO().to(socketRoom.conversation(organizationId, message.conversationId)).emit(SocketEvents.MESSAGE_ACK, {
+      messageId: message.id,
+      waMessageId,
+      status: advanced,
+    });
+  } catch (error) {
+    logger.debug('Meta ack applied without a live socket to announce it on', {
+      organizationId,
+      waMessageId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**

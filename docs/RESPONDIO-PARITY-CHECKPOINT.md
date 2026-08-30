@@ -773,6 +773,36 @@ The rule this leaves behind: **a gate is green when you watched it run, not when
 a document says it was.** Before certifying any release, run all three and read
 the summary line of each.
 
+**Two known defects on the OpenWA inbound path — found 2026-08-30, not fixed.**
+Both were found while wiring the Meta inbound path, both are pre-existing, and
+neither is blocking. Recorded here so they are visible rather than rediscovered
+as a surprise.
+
+1. **Stored Arabic sentinels in `Message.body`.**
+   `workers/incoming-message.worker.ts:136` writes `[صورة]`, `[فيديو]`,
+   `[رسالة صوتية]` or `[ملف]` into the body of an uncaptioned media message.
+   That is the same stored-language defect the Meta placeholder ruling exists to
+   avoid: **an English- or Hebrew-locale workspace sees Arabic**, and no
+   translation can fix it afterwards because the language is baked into the row
+   rather than derived at render time. The Meta path deliberately does not do
+   this — it stores the type in `mediaType` and lets the existing
+   `MEDIA_LABELS` map render the copy through `t()`, which is machinery that
+   already existed. The fix for OpenWA is the same shape and small: stop writing
+   the sentinel, let `MessageMedia` render from the type it already receives.
+   The awkward part is existing rows, which keep their stored Arabic unless
+   backfilled — so this needs a decision about history, not just a code change.
+
+2. **`mediaFileName` is never populated.** The inbound worker accepts
+   `mediaUrl` and `mediaType` and writes both, but nothing sets
+   `mediaFileName` on either channel, so a customer sending `invoice-2026.pdf`
+   produces a document the agent sees as an untitled file. The column exists and
+   the UI already reads it. Meta supplies the name in
+   `document.filename` and the normaliser already carries it as `fileName`;
+   it stops at `queueIncomingMessage`, whose payload type has no field for it.
+   Fixing it means widening that payload and the worker's create — small, and
+   touching a path both channels share, which is why it was not folded into the
+   Meta work.
+
 **Mutation-test every check that guards a boundary — standing practice from
 2026-08-30.** A check that has never been seen to fail proves only that it runs.
 Before a check guarding a tenancy or policy boundary is trusted, revert the fix

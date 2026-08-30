@@ -4380,6 +4380,142 @@ async function databaseAudits() {
         await raw.team.deleteMany({ where: { id: { in: [teamA.id, teamB.id] } } });
       }
     });
+    await check('meta ingest: a status for one tenant cannot touch another tenant message', async () => {
+      const { applyMetaStatus } = require('../src/webhooks/meta.webhook');
+
+      // Meta reports on the whole phone number and keys receipts by wamid. Two
+      // organizations can hold rows carrying the SAME waMessageId - the unique
+      // constraint is per organization, deliberately - so the ack path must be
+      // scoped, not keyed on the wamid alone.
+      const convA = await raw.conversation.findFirst({
+        where: { organizationId: orgA.organizationId }, select: { id: true },
+      });
+      const convB = await raw.conversation.findFirst({
+        where: { organizationId: orgB.organizationId }, select: { id: true },
+      });
+      await raw.message.create({ data: {
+        id: 'bleed_meta_ack_a', organizationId: orgA.organizationId, conversationId: convA.id,
+        direction: 'OUTBOUND', body: 'a', waMessageId: 'wamid.shared', status: 'SENT',
+      } });
+      await raw.message.create({ data: {
+        id: 'bleed_meta_ack_b', organizationId: orgB.organizationId, conversationId: convB.id,
+        direction: 'OUTBOUND', body: 'b', waMessageId: 'wamid.shared', status: 'SENT',
+      } });
+
+      try {
+        // Applied in org B scope, with org A row created FIRST. A lookup that
+        // is not tenant-scoped returns org A deterministically, so this cannot
+        // pass by ordering luck - the first version of this check did exactly
+        // that and survived a mutation that broke the boundary.
+        await runAsOrganization(orgB.organizationId, () =>
+          applyMetaStatus(orgB.organizationId, 'wamid.shared', 'READ'));
+
+        const a = await raw.message.findUniqueOrThrow({ where: { id: 'bleed_meta_ack_a' }, select: { status: true } });
+        const b = await raw.message.findUniqueOrThrow({ where: { id: 'bleed_meta_ack_b' }, select: { status: true } });
+        assert.equal(b.status, 'READ', 'the ack must advance the message in its own organization');
+        assert.equal(a.status, 'SENT', 'an ack in org B advanced an identically-keyed message in org A');
+      } finally {
+        await raw.message.deleteMany({ where: { id: { in: ['bleed_meta_ack_a', 'bleed_meta_ack_b'] } } });
+      }
+    });
+
+    await check('meta ingest: a redelivered message cannot produce a second row', async () => {
+      // Meta retries any webhook it did not see acknowledged, so the same
+      // message arrives more than once. BullMQ deduplicates on the job id, and
+      // the database is the net under it: waMessageId is unique per
+      // organization, and NOT globally - two tenants may legitimately hold the
+      // same id, which is what the check above depends on.
+      const conv = await raw.conversation.findFirst({
+        where: { organizationId: orgA.organizationId }, select: { id: true },
+      });
+      await raw.message.create({ data: {
+        id: 'bleed_dedupe_1', organizationId: orgA.organizationId, conversationId: conv.id,
+        direction: 'INBOUND', body: 'first', waMessageId: 'wamid.retry',
+      } });
+      try {
+        await assert.rejects(
+          () => raw.message.create({ data: {
+            id: 'bleed_dedupe_2', organizationId: orgA.organizationId, conversationId: conv.id,
+            direction: 'INBOUND', body: 'retry', waMessageId: 'wamid.retry',
+          } }),
+          /Unique constraint|P2002/,
+          'a redelivered Meta message must not create a second row',
+        );
+
+        const convB = await raw.conversation.findFirst({
+          where: { organizationId: orgB.organizationId }, select: { id: true },
+        });
+        await raw.message.create({ data: {
+          id: 'bleed_dedupe_3', organizationId: orgB.organizationId, conversationId: convB.id,
+          direction: 'INBOUND', body: 'other tenant', waMessageId: 'wamid.retry',
+        } });
+        await raw.message.delete({ where: { id: 'bleed_dedupe_3' } });
+      } finally {
+        await raw.message.deleteMany({ where: { id: { in: ['bleed_dedupe_1', 'bleed_dedupe_2'] } } });
+      }
+    });
+
+    await check('meta ingest: an unrenderable message type is kept as a type, never as a sentence', async () => {
+      const { normalizeMetaMessages, normalizeMetaStatuses } = require('../src/modules/channels/meta-inbound');
+
+      const wrap = (message) => ({
+        contacts: [{ wa_id: '972500000001', profile: { name: 'Maya' } }],
+        messages: [message],
+      });
+
+      const [text] = normalizeMetaMessages(wrap({
+        id: 'wamid.t', from: '972500000001', timestamp: '1756500000', type: 'text',
+        text: { body: 'hello' },
+      }));
+      assert.equal(text.body, 'hello');
+      assert.equal(text.placeholder, false);
+      assert.equal(text.contactName, 'Maya', 'the profile name must come across from contacts[]');
+      assert.equal(text.phone, '972500000001');
+
+      const [image] = normalizeMetaMessages(wrap({
+        id: 'wamid.i', from: '+972500000001', timestamp: '1756500000', type: 'image',
+        image: { id: 'MEDIA_1', mime_type: 'image/jpeg', caption: 'look' },
+      }));
+      assert.equal(image.mediaId, 'MEDIA_1');
+      assert.equal(image.body, 'look', 'a caption is the customer word and belongs in the body');
+      assert.equal(image.phone, '972500000001', 'a leading + must be normalised away');
+
+      // The rule this check exists for: store the TYPE, never a sentence. A
+      // stored "[location]" cannot be translated afterwards, which is the
+      // defect behind Respond.io's [Deleted Workflow].
+      const [location] = normalizeMetaMessages(wrap({
+        id: 'wamid.l', from: '972500000001', timestamp: '1756500000', type: 'location',
+        location: { latitude: 31.9, longitude: 35.2 },
+      }));
+      assert.equal(location.placeholder, true);
+      assert.equal(location.metaType, 'location');
+      assert.equal(location.body, '', 'a placeholder must carry no prose at all');
+
+      const [exotic] = normalizeMetaMessages(wrap({
+        id: 'wamid.x', from: '972500000001', timestamp: '1756500000', type: 'something_new',
+      }));
+      assert.equal(exotic.placeholder, true);
+      assert.equal(exotic.metaType, 'unsupported', 'an unknown type must land on a type we have copy for');
+
+      // Nothing usable is silently dropped: a message with no id or no sender
+      // cannot be attributed, and is the one case that is skipped.
+      assert.equal(normalizeMetaMessages(wrap({ type: 'text', text: { body: 'x' } })).length, 0);
+
+      // Statuses map onto this product's vocabulary, and an unmapped one is
+      // skipped rather than guessed - the ack ladder only moves forward, so a
+      // wrong guess is not correctable.
+      const statuses = normalizeMetaStatuses({ statuses: [
+        { id: 'wamid.a', status: 'delivered' },
+        { id: 'wamid.b', status: 'read' },
+        { id: 'wamid.c', status: 'invented' },
+        { status: 'read' },
+      ] });
+      assert.deepEqual(statuses, [
+        { waMessageId: 'wamid.a', status: 'DELIVERED' },
+        { waMessageId: 'wamid.b', status: 'READ' },
+      ]);
+    });
+
     await check('messages: a delivery ack can never walk a message backwards', async () => {
       const { advanceMessageStatus } = require('../src/utils/message-status');
 

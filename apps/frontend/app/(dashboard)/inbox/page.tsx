@@ -128,12 +128,23 @@ function nowTime() {
 
 const MEDIA_ICONS: Record<string, string> = {
   image: '🖼️', sticker: '🖼️', video: '🎬', audio: '🎵', ptt: '🎤', document: '📄',
+  // Meta message types this product cannot render as a message. Nothing is
+  // fetched for them, so the icon and the label are the whole message.
+  location: '📍', contacts: '👤', interactive: '🔘', button: '🔘',
+  order: '🛒', reaction: '💬', system: 'ℹ️', unsupported: '❔',
 };
 
 /** Arabic source keys; resolved through t() like every other label. */
 const MEDIA_LABELS: Record<string, string> = {
   image: 'صورة', sticker: 'ملصق', video: 'فيديو',
   audio: 'صوت', ptt: 'رسالة صوتية', document: 'ملف',
+  // The TYPE is what gets stored; the sentence is rendered here. A stored
+  // "[location]" could never be translated afterwards — the defect behind
+  // Respond.io's [Deleted Workflow] — so an Arabic workspace reads Arabic and a
+  // Hebrew one Hebrew, from the same row.
+  location: 'موقع', contacts: 'بطاقة جهة اتصال', interactive: 'رد تفاعلي',
+  button: 'ضغطة زر', order: 'طلب', reaction: 'تفاعل على رسالة',
+  system: 'إشعار من واتساب', unsupported: 'رسالة من نوع غير مدعوم',
 };
 
 function normalizeMediaType(mediaType?: string | null): string {

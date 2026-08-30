@@ -10,6 +10,7 @@ import { startIncomingMessageWorker } from './workers/incoming-message.worker';
 import { startEscalationWorker } from './workers/escalation.worker';
 import { startUsageRollupWorker } from './workers/usage-rollup.worker';
 import logger from './lib/logger';
+import { detectMimeType } from './utils/mime';
 import { requestLoggingMiddleware } from './middleware/logging.middleware';
 
 // Routes
@@ -175,34 +176,6 @@ app.get('/api/network', verifyToken, (req, res) => {
   });
 });
 
-function detectMimeType(buf: Buffer, mediaType?: string): string {
-  const sig = buf.slice(0, 8).toString('hex');
-  // OGG / Opus — WhatsApp voice notes (ptt)
-  if (sig.startsWith('4f676753')) return 'audio/ogg; codecs=opus';
-  // MP3
-  if (buf.slice(0, 3).toString('ascii') === 'ID3' || sig.startsWith('fffb') || sig.startsWith('fff3')) return 'audio/mpeg';
-  // JPEG
-  if (sig.startsWith('ffd8ff')) return 'image/jpeg';
-  // PNG
-  if (sig.startsWith('89504e47')) return 'image/png';
-  // GIF
-  if (sig.startsWith('47494638')) return 'image/gif';
-  // WebP (RIFF....WEBP)
-  if (sig.startsWith('52494646') && buf.slice(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
-  // MP4
-  if (sig.slice(8, 16) === '66747970') return 'video/mp4';
-  // WebM
-  if (sig.startsWith('1a45dfa3')) return 'video/webm';
-  // PDF
-  if (buf.slice(0, 4).toString('ascii') === '%PDF') return 'application/pdf';
-  // Fallback to mediaType hint if available
-  const hint: Record<string, string> = {
-    ptt: 'audio/ogg; codecs=opus', audio: 'audio/mpeg',
-    image: 'image/jpeg', video: 'video/mp4',
-    document: 'application/octet-stream', sticker: 'image/webp',
-  };
-  return hint[mediaType || ''] || 'application/octet-stream';
-}
 
 async function verifyBearerTokenForRoute(req: express.Request, res: express.Response): Promise<boolean | null> {
   if (!req.headers.authorization?.startsWith('Bearer ')) return false;

@@ -4,6 +4,8 @@ import { requireAdmin } from '../../middleware/rbac.middleware';
 import { ChannelKind } from './channel.types';
 import { channelCapabilities, isChannelSendError, setActiveChannelKind } from './channel.service';
 import { verifyToken } from '../auth/auth.middleware';
+import { detectMimeType } from '../../utils/mime';
+import { readMessageMedia, verifyMessageMediaSignature } from './meta-media';
 import {
   connectMetaChannel,
   disconnectMetaChannel,
@@ -19,6 +21,35 @@ import {
  * operates from.
  */
 const router = Router();
+
+/**
+ * Serve inbound media that was downloaded from Meta at ingest.
+ *
+ * Deliberately ahead of verifyToken, and authorised by an unguessable HMAC in
+ * the URL rather than by a session — the same pattern as snippet assets, for
+ * the same reason: an <img> tag cannot send an Authorization header, and the
+ * alternative is either public files or media that does not render.
+ *
+ * The signature covers organization and storage key together, so a valid
+ * signature for one tenant's file is not a valid signature for another's, and
+ * a wrong signature is answered 404 rather than 403 — there is no reason to
+ * confirm that a file exists to someone who cannot name it correctly.
+ */
+router.get('/media/:organizationId/:storageKey', async (req, res) => {
+  const { organizationId, storageKey } = req.params;
+  if (!verifyMessageMediaSignature(organizationId, storageKey, String(req.query.sig || ''))) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const body = await readMessageMedia(organizationId, storageKey);
+  if (!body) return res.status(404).json({ error: 'Not found' });
+
+  // Sniffed rather than trusted: the stored mime type came from Meta, and
+  // echoing an attacker-influenced content type is how an image becomes script.
+  res.setHeader('Content-Type', detectMimeType(body));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  return res.send(body);
+});
 
 router.use(verifyToken);
 

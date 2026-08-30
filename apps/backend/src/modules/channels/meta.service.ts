@@ -371,6 +371,34 @@ async function persist(input: {
       },
     });
 
+    // The session row inbound conversations attach to.
+    //
+    // Created here rather than on first message because Conversation.sessionId
+    // is required: without it the very first customer message would arrive with
+    // nowhere to put it, and the failure would land in a background worker
+    // rather than in front of the admin who just connected the channel.
+    await tx.whatsappSession.upsert({
+      where: {
+        organizationId_sessionName: {
+          organizationId: input.organizationId,
+          sessionName: metaSessionName(input.phoneNumberId),
+        },
+      },
+      create: {
+        organizationId: input.organizationId,
+        sessionName: metaSessionName(input.phoneNumberId),
+        phoneNumber: input.displayPhoneNumber,
+        label: input.verifiedName || 'WhatsApp Cloud API',
+      },
+      // Meta may have changed the display number or verified name since the
+      // last connect; the session name is derived from the phone number id and
+      // never moves.
+      update: {
+        phoneNumber: input.displayPhoneNumber,
+        label: input.verifiedName || 'WhatsApp Cloud API',
+      },
+    });
+
     // Freshly connected channels are PENDING, never the sending channel, until
     // the admin switches to them - see setActiveChannelKind.
     return present(credential, channel.status === 'ACTIVE');
@@ -450,6 +478,18 @@ export async function disconnectMetaChannel(): Promise<boolean> {
     where: { organizationId: getTenantId() },
   });
   return count > 0;
+}
+
+/**
+ * The WhatsappSession name standing in for a Meta phone number.
+ *
+ * `Conversation.sessionId` is required, and team routing, inbox filters and
+ * campaigns all key off WhatsappSession. Giving the Meta channel a session row
+ * means none of that has to learn a new concept — the alternative was making
+ * sessionId nullable and teaching every consumer what a null session means.
+ */
+export function metaSessionName(phoneNumberId: string): string {
+  return `meta-${phoneNumberId}`;
 }
 
 /**

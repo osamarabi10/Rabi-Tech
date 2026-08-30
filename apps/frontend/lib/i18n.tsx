@@ -1904,6 +1904,18 @@ const D: Dict = {
   "تنقّل": { he: "ניווט", en: "navigate" },
   "إدراج": { he: "הוספה", en: "insert" },
 
+
+  // ---------- Meta message types this product cannot render ----------
+  // Stored as a type on the message row; the copy lives here so every
+  // workspace reads it in its own language.
+  "موقع": { he: "מיקום", en: "Location" },
+  "بطاقة جهة اتصال": { he: "כרטיס איש קשר", en: "Contact card" },
+  "رد تفاعلي": { he: "תגובה אינטראקטיבית", en: "Interactive reply" },
+  "ضغطة زر": { he: "לחיצת כפתור", en: "Button press" },
+  "طلب": { he: "הזמנה", en: "Order" },
+  "تفاعل على رسالة": { he: "תגובה להודעה", en: "Reaction" },
+  "إشعار من واتساب": { he: "הודעת מערכת מוואטסאפ", en: "WhatsApp system notice" },
+  "رسالة من نوع غير مدعوم": { he: "הודעה מסוג שאינו נתמך", en: "Unsupported message type" },
   // ---------- Phase 4.5: capability-driven channel copy ----------
   "This channel can only reply within 24 hours of a customer message. It cannot start a conversation, so broadcasts and first-contact messages will be refused.": { ar: "هالقناة بترد بس خلال ٢٤ ساعة من آخر رسالة من الزبون، وما بتقدر تبدأ محادثة. يعني الحملات وأول رسالة لزبون جديد رح تنرفض.", he: "ערוץ זה יכול להשיב רק בתוך 24 שעות מהודעת הלקוח האחרונה, ואינו יכול לפתוח שיחה. לכן דיוורים והודעה ראשונה ללקוח חדש יידחו.", en: "This channel can only reply within 24 hours of a customer message. It cannot start a conversation, so broadcasts and first-contact messages will be refused." },
   "Connected, but this workspace still sends through its other channel.": { ar: "مربوطة، بس مساحة العمل لسه عم تبعث من القناة التانية.", he: "מחובר, אך סביבת העבודה עדיין שולחת דרך הערוץ האחר.", en: "Connected, but this workspace still sends through its other channel." },
