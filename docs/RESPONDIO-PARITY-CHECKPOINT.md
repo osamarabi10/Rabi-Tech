@@ -75,8 +75,8 @@ Current head (2026-08-30), **migration 67 released**:
 - **`67` migrations applied.** `20260919090000_meta_credential_vault` was
   deployed 2026-08-30 10:31:58 — see §6c. Nothing is pending.
   `MetaChannelCredential` exists with 16 columns and **0 rows**.
-- The GitHub Actions gate is red and has never been green. It is not blocking
-  and it is not caused by any of the above — see §8.
+- GitHub Actions tenancy bleed gate: **success** on run `33322278068`, triggered
+  by `a77c63c9`. This is the workflow's first successful run — see §8.
 
 Both gate numbers rose because two gates were found non-functional on this
 machine and repaired — see the preconditions in §8. Neither number is
@@ -965,6 +965,15 @@ improvement for a regression.
 **zero successes** (41 failures, 2 cancelled). It was already failing on run 1,
 three days before any of the harness work in this checkpoint, so nothing here
 caused it and no local change is going to fix it by itself.
+
+> **SUPERSEDED 2026-08-30 — first successful CI run.** Commit `a77c63c9`
+> supplied the missing CI-only `CHANNEL_ENCRYPTION_KEY`. GitHub Actions run
+> `33322278068`, triggered by that commit, completed with `conclusion: success`
+> at 2026-08-30 16:23:32Z. The 43-run record above remains the historical state
+> before the fix. Together with the bounded, cleanly exiting isolation harness
+> and the installed, exercised Playwright browser matrix recorded above, all
+> three release gates are now genuinely executable for the first time in this
+> project's history.
 
 *Confirmed cause.* The workflow's `env:` block supplies four variables;
 this project's environment defines twenty-three. **`CHANNEL_ENCRYPTION_KEY` is
