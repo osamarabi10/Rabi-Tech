@@ -720,6 +720,24 @@ docker compose run --rm --no-deps backend npx prisma migrate deploy
 > migration status, and before deploying require the rebuilt image to name the
 > intended migration as pending.
 
+**Fifth stale-image occurrence — platform console visual certification,
+2026-08-31.** Item 1's source was correct: `app/platform/page.tsx` contained
+the `/platform/editions` link, and its platform pages had the visible error and
+genuine-empty states. The running frontend image was older, however. A real
+platform-owner Playwright check against `localhost:18080` found zero Editions
+links at 375, 768, and 1440 px in both Arabic and English, while the real
+backend returned `200` for the subscriber and billing requests and the Editions
+page returned all five database editions. Rebuilding only the frontend and
+bringing only that service up made the same six checks find exactly one visible
+Editions link each. Source-correct was not deployed-correct.
+
+**Sharpened visual-certification rule, 2026-08-31.** Any item that changes a
+route, link, or page must rebuild the frontend image before its real-app visual
+check can count. Then bring the rebuilt frontend up and verify the changed
+surface against the running backend. A source diff, a TypeScript build, or a
+mocked browser matrix cannot certify a stale container; if the live result
+disagrees, report the deployment finding before counting the item green.
+
 Precondition, before the first real customer Meta credential is stored.
 **`ALLOW_INSECURE_SECRETS` must be `0`.** This gate is about onboarding, not
 about shipping: Phase 4 may be built and piloted against Meta Development Mode
