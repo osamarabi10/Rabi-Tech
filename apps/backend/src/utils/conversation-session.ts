@@ -228,7 +228,7 @@ export async function maybeSendKeywordAutoReply(opts: {
   const reply = await resolveAutoReply(kind);
   if (!reply) return;
 
-  await ChannelService.sendText(session, phone, reply).catch(() => {});
+  const result = await ChannelService.sendText(session, phone, reply).catch(() => null);
   await prisma.message.create({
     data: {
       organizationId: getTenantId(),
@@ -237,6 +237,8 @@ export async function maybeSendKeywordAutoReply(opts: {
       body: reply,
       isAuto: true,
       autoType: 'keyword',
+      status: result ? 'SENT' : 'FAILED',
+      ...(result ? { waMessageId: result.providerMessageId } : {}),
     },
   });
 }

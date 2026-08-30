@@ -25,7 +25,7 @@ export async function sendStartWelcome(opts: {
   const body = await getStartWelcomeMessage();
   if (!body) return null;
 
-  await ChannelService.sendText(opts.sessionName, opts.phone, body);
+  const result = await ChannelService.sendText(opts.sessionName, opts.phone, body);
   await prisma.message.create({
     data: {
       organizationId: getTenantId(),
@@ -34,6 +34,8 @@ export async function sendStartWelcome(opts: {
       body,
       isAuto: true,
       autoType: 'welcome',
+      status: 'SENT',
+      waMessageId: result.providerMessageId,
       ...(opts.sentById ? { sentById: opts.sentById } : {}),
     },
   });

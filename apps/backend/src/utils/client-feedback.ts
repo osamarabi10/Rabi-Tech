@@ -23,7 +23,7 @@ export async function sendCsatPrompt(conversationId: string): Promise<void> {
   const prompt = await resolveAutoReply('CSAT_PROMPT');
   if (!prompt) return;
 
-  await ChannelService.sendText(conv.session.sessionName, conv.contact.phone, prompt).catch(() => {});
+  const promptResult = await ChannelService.sendText(conv.session.sessionName, conv.contact.phone, prompt).catch(() => null);
   
   await prisma.message.create({
     data: {
@@ -33,7 +33,8 @@ export async function sendCsatPrompt(conversationId: string): Promise<void> {
       body: prompt,
       isAuto: true,
       autoType: 'csat',
-      status: 'SENT',
+      status: promptResult ? 'SENT' : 'FAILED',
+      ...(promptResult ? { waMessageId: promptResult.providerMessageId } : {}),
     },
   });
 
@@ -163,7 +164,7 @@ export async function handleClientFeedback(opts: {
   // The rating is always recorded above. Acknowledging it back to the customer is
   // optional — only send if this organization configured a CSAT_THANKS reply.
   if (reply) {
-    await ChannelService.sendText(opts.session, opts.phone, reply).catch(() => {});
+    const result = await ChannelService.sendText(opts.session, opts.phone, reply).catch(() => null);
     const orgIdForMsg = getTenantId();
     await prisma.message.create({
       data: {
@@ -173,6 +174,8 @@ export async function handleClientFeedback(opts: {
         body: reply,
         isAuto: true,
         autoType: 'feedback',
+        status: result ? 'SENT' : 'FAILED',
+        ...(result ? { waMessageId: result.providerMessageId } : {}),
       },
     });
   }

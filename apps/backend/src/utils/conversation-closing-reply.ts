@@ -15,8 +15,9 @@ export async function sendConversationClosingReply(conversationId: string): Prom
   const reply = await resolveAutoReply('CONVERSATION_CLOSED');
   if (!reply) return;
 
+  let result;
   try {
-    await ChannelService.sendText(
+    result = await ChannelService.sendText(
       conversation.session.sessionName,
       conversation.contact.phone,
       reply,
@@ -36,6 +37,7 @@ export async function sendConversationClosingReply(conversationId: string): Prom
       isAuto: true,
       autoType: 'resolved',
       status: 'SENT',
+      waMessageId: result.providerMessageId,
     },
   });
 }

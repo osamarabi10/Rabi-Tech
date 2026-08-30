@@ -7,7 +7,7 @@ import { queueIncomingMessage } from '../workers/incoming-message.worker';
 import logger from '../lib/logger';
 
 import { getTenantId, runAsOrganization, runAsPlatform } from '../lib/tenant-context';
-import { advanceMessageStatus } from '../utils/message-status';
+import { advanceCampaignRecipientStatus, advanceMessageStatus } from '../utils/message-status';
 import { recordMessageUsage } from '../modules/usage/usage.service';
 import { queueGatewayAction } from '../workers/gateway-provisioning.queue';
 import { recordDelivery } from '../modules/webhooks/webhook-log.service';
@@ -258,13 +258,6 @@ router.post('/webhooks/openwa/:webhookToken', async (req, res, next) => {
   }
 });
 
-/** Ack codes that move a campaign recipient forward, in order of progress. */
-const CAMPAIGN_ACK_RANK: Record<string, number> = {
-  sent: 1,
-  delivered: 2,
-  read: 3,
-};
-
 /**
  * Advances a campaign recipient on a delivery/read ack.
  *
@@ -277,9 +270,8 @@ async function advanceCampaignRecipient(
   waMessageId: string,
   ack: number,
 ): Promise<void> {
-  if (ack < 2) return; // 0/1 add nothing beyond what the send already recorded
-
-  const next = ack === 3 ? 'read' : 'delivered';
+  const next = ack === 3 ? 'read' : ack === 2 ? 'delivered' : ack === -1 ? 'failed' : null;
+  if (!next) return;
 
   const recipient = await prisma.campaignRecipient.findFirst({
     where: { organizationId, waMessageId },
@@ -287,15 +279,16 @@ async function advanceCampaignRecipient(
   });
   if (!recipient) return;
 
-  const currentRank = CAMPAIGN_ACK_RANK[recipient.status] ?? 0;
-  if (currentRank >= CAMPAIGN_ACK_RANK[next]) return;
+  const advanced = advanceCampaignRecipientStatus(recipient.status, next);
+  if (!advanced) return;
 
   const now = new Date();
   await prisma.campaignRecipient.update({
     where: { id: recipient.id },
     data: {
-      status: next,
-      ...(next === 'delivered' ? { deliveredAt: now } : { readAt: now, deliveredAt: now }),
+      status: advanced,
+      ...(advanced === 'delivered' ? { deliveredAt: now } : {}),
+      ...(advanced === 'read' ? { readAt: now, deliveredAt: now } : {}),
     },
   });
 }

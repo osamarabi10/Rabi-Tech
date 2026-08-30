@@ -308,6 +308,16 @@ function staticAudits() {
     path.join(ROOT, 'src', 'webhooks', 'meta.webhook.ts'), 'utf8');
   const incomingWorkerSource = fs.readFileSync(
     path.join(ROOT, 'src', 'workers', 'incoming-message.worker.ts'), 'utf8');
+  const conversationSource = fs.readFileSync(
+    path.join(ROOT, 'src', 'modules', 'conversations', 'conversations.routes.ts'), 'utf8');
+  const directProviderIdWrites = conversationSource.match(
+    /waMessageId:\s*result\.providerMessageId/g,
+  ) || [];
+  record(
+    'audit: direct sends persist provider message ids for later acknowledgements',
+    directProviderIdWrites.length >= 3,
+    `found ${directProviderIdWrites.length} persisted direct-send results`,
+  );
   const filenameHandoffFailures = [];
   if (!/mediaFileName:\s*msg\.media\?\.filename/.test(openwaWebhookSource)) {
     filenameHandoffFailures.push('OpenWA media.filename is not extracted');
@@ -4427,6 +4437,32 @@ async function databaseAudits() {
         id: 'bleed_meta_ack_b', organizationId: orgB.organizationId, conversationId: convB.id,
         direction: 'OUTBOUND', body: 'b', waMessageId: 'wamid.shared', status: 'SENT',
       } });
+      await raw.campaign.create({
+        data: {
+          id: 'bleed_meta_ack_campaign_a', organizationId: orgA.organizationId,
+          title: 'Org A campaign', message: 'a', status: 'SENDING', sessionId: orgA.sessionId,
+        },
+      });
+      await raw.campaign.create({
+        data: {
+          id: 'bleed_meta_ack_campaign_b', organizationId: orgB.organizationId,
+          title: 'Org B campaign', message: 'b', status: 'SENDING', sessionId: orgB.sessionId,
+        },
+      });
+      await raw.campaignRecipient.create({
+        data: {
+          id: 'bleed_meta_ack_recipient_a', organizationId: orgA.organizationId,
+          campaignId: 'bleed_meta_ack_campaign_a', contactId: orgA.records[0].contact.id,
+          status: 'sent', waMessageId: 'wamid.campaign-shared', sentAt: new Date(),
+        },
+      });
+      await raw.campaignRecipient.create({
+        data: {
+          id: 'bleed_meta_ack_recipient_b', organizationId: orgB.organizationId,
+          campaignId: 'bleed_meta_ack_campaign_b', contactId: orgB.records[0].contact.id,
+          status: 'sent', waMessageId: 'wamid.campaign-shared', sentAt: new Date(),
+        },
+      });
 
       try {
         // Applied in org B scope, with org A row created FIRST. A lookup that
@@ -4440,7 +4476,33 @@ async function databaseAudits() {
         const b = await raw.message.findUniqueOrThrow({ where: { id: 'bleed_meta_ack_b' }, select: { status: true } });
         assert.equal(b.status, 'READ', 'the ack must advance the message in its own organization');
         assert.equal(a.status, 'SENT', 'an ack in org B advanced an identically-keyed message in org A');
+
+        // Campaign sends do not have Message rows. The Meta path must still
+        // settle the recipient, while the identical id in org B remains alone.
+        await runAsOrganization(orgA.organizationId, () =>
+          applyMetaStatus(orgA.organizationId, 'wamid.campaign-shared', 'READ'));
+        const recipientA = await raw.campaignRecipient.findUniqueOrThrow({
+          where: { id: 'bleed_meta_ack_recipient_a' }, select: { status: true },
+        });
+        const recipientB = await raw.campaignRecipient.findUniqueOrThrow({
+          where: { id: 'bleed_meta_ack_recipient_b' }, select: { status: true },
+        });
+        assert.equal(recipientA.status, 'read', 'Meta did not advance a campaign-only receipt');
+        assert.equal(recipientB.status, 'sent', 'a Meta campaign ack crossed the organization boundary');
+
+        await runAsOrganization(orgA.organizationId, () =>
+          applyMetaStatus(orgA.organizationId, 'wamid.campaign-shared', 'DELIVERED'));
+        const ordered = await raw.campaignRecipient.findUniqueOrThrow({
+          where: { id: 'bleed_meta_ack_recipient_a' }, select: { status: true },
+        });
+        assert.equal(ordered.status, 'read', 'a late Meta delivered receipt walked a campaign back from read');
       } finally {
+        await raw.campaignRecipient.deleteMany({
+          where: { id: { in: ['bleed_meta_ack_recipient_a', 'bleed_meta_ack_recipient_b'] } },
+        });
+        await raw.campaign.deleteMany({
+          where: { id: { in: ['bleed_meta_ack_campaign_a', 'bleed_meta_ack_campaign_b'] } },
+        });
         await raw.message.deleteMany({ where: { id: { in: ['bleed_meta_ack_a', 'bleed_meta_ack_b'] } } });
       }
     });

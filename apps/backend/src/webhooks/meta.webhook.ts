@@ -5,7 +5,7 @@ import { getTenantId, runAsOrganization, runAsPlatform } from '../lib/tenant-con
 import { prisma } from '../prisma';
 import { getIO, SocketEvents } from '../socket';
 import { socketRoom } from '../socket/rooms';
-import { advanceMessageStatus } from '../utils/message-status';
+import { advanceCampaignRecipientStatus, advanceMessageStatus } from '../utils/message-status';
 import { queueIncomingMessage } from '../workers/incoming-message.worker';
 import { normalizeMetaMessages, normalizeMetaStatuses } from '../modules/channels/meta-inbound';
 import { downloadMetaMedia } from '../modules/channels/meta-media';
@@ -219,34 +219,53 @@ export async function applyMetaStatus(
     where: { organizationId_waMessageId: { organizationId, waMessageId } },
     select: { id: true, conversationId: true, status: true },
   });
-  // A receipt for something this platform never sent is not an error: Meta
-  // reports on the whole number, including anything sent from elsewhere.
-  if (!message) return;
-
-  const advanced = advanceMessageStatus(message.status, incoming);
-  if (!advanced) return;
-
-  await prisma.message.update({
-    where: { id: message.id },
-    data: { status: advanced, ...(advanced === 'READ' ? { isRead: true } : {}) },
-  });
-  // The write is the fact; the emit is a courtesy to whoever is looking right
-  // now. If the socket server is not up — a worker process, a test harness, a
-  // restart mid-delivery — that must not throw away a status already recorded,
-  // and must not make Meta retry a delivery this platform actually processed.
-  try {
-    getIO().to(socketRoom.conversation(organizationId, message.conversationId)).emit(SocketEvents.MESSAGE_ACK, {
-      messageId: message.id,
-      waMessageId,
-      status: advanced,
-    });
-  } catch (error) {
-    logger.debug('Meta ack applied without a live socket to announce it on', {
-      organizationId,
-      waMessageId,
-      error: error instanceof Error ? error.message : String(error),
-    });
+  if (message) {
+    const advanced = advanceMessageStatus(message.status, incoming);
+    if (advanced) {
+      await prisma.message.update({
+        where: { id: message.id },
+        data: { status: advanced, ...(advanced === 'READ' ? { isRead: true } : {}) },
+      });
+      // The write is the fact; the emit is a courtesy to whoever is looking right
+      // now. If the socket server is not up — a worker process, a test harness, a
+      // restart mid-delivery — that must not throw away a status already recorded,
+      // and must not make Meta retry a delivery this platform actually processed.
+      try {
+        getIO().to(socketRoom.conversation(organizationId, message.conversationId)).emit(SocketEvents.MESSAGE_ACK, {
+          messageId: message.id,
+          waMessageId,
+          status: advanced,
+        });
+      } catch (error) {
+        logger.debug('Meta ack applied without a live socket to announce it on', {
+          organizationId,
+          waMessageId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
+
+  // Campaign sends are not Message rows, so their provider id has its own
+  // tenant-scoped lookup. Meta and OpenWA share the same ordering rule.
+  const recipient = await prisma.campaignRecipient.findFirst({
+    where: { organizationId, waMessageId },
+    select: { id: true, status: true },
+  });
+  if (!recipient) return;
+
+  const advancedRecipient = advanceCampaignRecipientStatus(recipient.status, incoming);
+  if (!advancedRecipient) return;
+
+  const now = new Date();
+  await prisma.campaignRecipient.update({
+    where: { id: recipient.id },
+    data: {
+      status: advancedRecipient,
+      ...(advancedRecipient === 'delivered' ? { deliveredAt: now } : {}),
+      ...(advancedRecipient === 'read' ? { readAt: now, deliveredAt: now } : {}),
+    },
+  });
 }
 
 /**

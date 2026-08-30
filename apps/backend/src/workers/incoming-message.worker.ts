@@ -185,7 +185,7 @@ async function processInboundMessage(data: {
   if (autoReplyEnabled && isNewSession && !fromMe) {
     const welcomeBody = await resolveAutoReply('WELCOME');
     if (welcomeBody) {
-      await ChannelService.sendText(session, phone, welcomeBody).catch(() => {});
+      const result = await ChannelService.sendText(session, phone, welcomeBody).catch(() => null);
       await prisma.message.create({
         data: {
           organizationId,
@@ -194,6 +194,8 @@ async function processInboundMessage(data: {
           body: welcomeBody,
           isAuto: true,
           autoType: 'welcome',
+          status: result ? 'SENT' : 'FAILED',
+          ...(result ? { waMessageId: result.providerMessageId } : {}),
         },
       });
     }
@@ -218,7 +220,7 @@ async function processInboundMessage(data: {
       const kind = consentResult.consent === 'OPTED_OUT' ? 'OPT_OUT_CONFIRM' : 'OPT_IN_CONFIRM';
       const confirmBody = await resolveAutoReply(kind as never).catch(() => null);
       if (confirmBody) {
-        await ChannelService.sendText(session, phone, confirmBody).catch(() => {});
+        const result = await ChannelService.sendText(session, phone, confirmBody).catch(() => null);
         await prisma.message.create({
           data: {
             organizationId,
@@ -227,6 +229,8 @@ async function processInboundMessage(data: {
             body: confirmBody,
             isAuto: true,
             autoType: consentResult.consent === 'OPTED_OUT' ? 'opt_out' : 'opt_in',
+            status: result ? 'SENT' : 'FAILED',
+            ...(result ? { waMessageId: result.providerMessageId } : {}),
           },
         });
       }

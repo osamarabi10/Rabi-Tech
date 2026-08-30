@@ -109,8 +109,11 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
         },
       });
       try {
-        await ChannelService.sendText(session.sessionName, phone, trimmedMsg);
-        await prisma.message.update({ where: { id: created.id }, data: { status: 'SENT' } });
+        const result = await ChannelService.sendText(session.sessionName, phone, trimmedMsg);
+        await prisma.message.update({
+          where: { id: created.id },
+          data: { status: 'SENT', waMessageId: result.providerMessageId },
+        });
         await markSuccessfulHumanOutbound(conversation.id, created.timestamp);
       } catch (openwaErr) {
         logger.error('OpenWA send failed (new conversation)', { error: String(openwaErr), messageId: created.id, requestId: (req as any).id });
@@ -457,8 +460,9 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
     let sendError: unknown = null;
     if (!isInternal) {
       try {
+        let result;
         if (mediaUrl) {
-          await ChannelService.sendMedia(
+          result = await ChannelService.sendMedia(
             conv.session.sessionName,
             conv.contact.phone,
             gatewayReachableAssetUrl(mediaUrl),
@@ -466,9 +470,12 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
             { mediaType, fileName: mediaFileName },
           );
         } else {
-          await ChannelService.sendText(conv.session.sessionName, conv.contact.phone, renderedBody);
+          result = await ChannelService.sendText(conv.session.sessionName, conv.contact.phone, renderedBody);
         }
-        await prisma.message.update({ where: { id: msg.id }, data: { status: 'SENT' } });
+        await prisma.message.update({
+          where: { id: msg.id },
+          data: { status: 'SENT', waMessageId: result.providerMessageId },
+        });
         msg.status = 'SENT';
         await markSuccessfulHumanOutbound(conv.id, msg.timestamp);
       } catch (openwaErr) {
@@ -540,9 +547,10 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
     }
 
     const { conversation } = message;
+    let result;
     try {
       if (message.mediaUrl) {
-        await ChannelService.sendMedia(
+        result = await ChannelService.sendMedia(
           conversation.session.sessionName,
           conversation.contact.phone,
           gatewayReachableAssetUrl(message.mediaUrl),
@@ -550,7 +558,7 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
           { mediaType: message.mediaType, fileName: message.mediaFileName },
         );
       } else {
-        await ChannelService.sendText(conversation.session.sessionName, conversation.contact.phone, message.body ?? '');
+        result = await ChannelService.sendText(conversation.session.sessionName, conversation.contact.phone, message.body ?? '');
       }
     } catch (retryErr) {
       const failure = describeSendFailure(retryErr);
@@ -567,7 +575,7 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
 
     const sent = await prisma.message.update({
       where: { id: message.id },
-      data: { status: 'SENT', failureReason: null },
+      data: { status: 'SENT', failureReason: null, waMessageId: result.providerMessageId },
     });
     await markSuccessfulHumanOutbound(conversation.id, new Date());
 

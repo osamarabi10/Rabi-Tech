@@ -62,7 +62,7 @@ export async function maybeSendOutOfHoursReply(
     workDays: formatWorkDays(wh.workDays),
   });
 
-  await ChannelService.sendText(session, phone, body).catch(() => {});
+  const result = await ChannelService.sendText(session, phone, body).catch(() => null);
   await prisma.message.create({
     data: {
       organizationId: getTenantId(),
@@ -71,6 +71,8 @@ export async function maybeSendOutOfHoursReply(
       body,
       isAuto: true,
       autoType: 'out_of_hours',
+      status: result ? 'SENT' : 'FAILED',
+      ...(result ? { waMessageId: result.providerMessageId } : {}),
     },
   });
   return true;

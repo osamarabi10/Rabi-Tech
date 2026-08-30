@@ -55,3 +55,25 @@ export function advanceMessageStatus(
 
   return incomingRank > currentRank ? (incoming as MessageStatus) : null;
 }
+
+const CAMPAIGN_STATUS_RANK: Record<string, number> = {
+  pending: 0,
+  sent: 1,
+  failed: 2,
+  delivered: 3,
+  read: 4,
+};
+
+/** Keep campaign receipts on the same forward-only ladder as Message rows. */
+export function advanceCampaignRecipientStatus(
+  current: string,
+  incoming: MessageStatus | string,
+): string | null {
+  const next = String(incoming).toLowerCase();
+  const incomingRank = CAMPAIGN_STATUS_RANK[next];
+  if (incomingRank === undefined) return null;
+
+  const currentRank = CAMPAIGN_STATUS_RANK[String(current).toLowerCase()];
+  if (currentRank === undefined) return next;
+  return incomingRank > currentRank ? next : null;
+}
