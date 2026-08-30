@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef } from 'react';
-import { Bell, Braces, Building2, Cable, ContactRound, FileUp, GitBranch, MessageCircleMore, MessageSquareText, Tags, Users, UserRound, Workflow } from 'lucide-react';
+import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, MessageCircleMore, MessageSquareText, Tags, Users, UserRound, Workflow } from 'lucide-react';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -28,7 +28,7 @@ const GROUPS = [
   },
   {
     label: 'التطبيقات',
-    items: [{ href: '/settings/channels', label: 'القنوات', icon: Cable }],
+    items: [{ href: '/settings/channels', label: 'القنوات', icon: Cable }, { href: '/settings/meta-templates', label: 'قوالب Meta', icon: FileText }],
   },
   {
     label: 'صندوق الوارد',

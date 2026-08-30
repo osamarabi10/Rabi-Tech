@@ -422,6 +422,7 @@ function startTestBackend(testUrl, tokenSecret) {
       DISABLE_USAGE_ROLLUP_WORKER: '1',
       DISABLE_BILLING_RECONCILIATION_WORKER: '1',
       DISABLE_WEEKLY_RECAP_WORKER: '1',
+      DISABLE_META_TEMPLATE_SYNC_WORKER: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -4818,12 +4819,31 @@ async function databaseAudits() {
       } });
       await raw.metaChannelCredential.create({ data: {
         id: 'bleed_meta_cred_a', organizationId: orgA.organizationId, channelId: channelA.id,
-        phoneNumberId: 'PN_ORG_A', wabaId: 'WABA_A', accessTokenEnc: 'v1:not:a:real-token', status: 'ACTIVE',
+        phoneNumberId: 'PN_ORG_A', wabaId: 'WABA_A', businessPortfolioId: 'PORTFOLIO_A',
+        accessTokenEnc: require('../src/lib/credential-crypto').encryptCredential('stub-token-a'), status: 'ACTIVE',
       } });
       await raw.metaChannelCredential.create({ data: {
         id: 'bleed_meta_cred_b', organizationId: orgB.organizationId, channelId: channelB.id,
-        phoneNumberId: 'PN_ORG_B', wabaId: 'WABA_B', accessTokenEnc: 'v1:not:a:real-token', status: 'ACTIVE',
+        phoneNumberId: 'PN_ORG_B', wabaId: 'WABA_B', businessPortfolioId: 'PORTFOLIO_B',
+        accessTokenEnc: require('../src/lib/credential-crypto').encryptCredential('stub-token-b'), status: 'ACTIVE',
       } });
+
+      const templateA = await raw.metaMessageTemplate.create({ data: {
+        id: 'bleed_meta_template_a', organizationId: orgA.organizationId, wabaId: 'WABA_A',
+        providerId: 'provider-template-a', name: 'order_ready', language: 'ar', category: 'UTILITY',
+        components: [{ type: 'BODY', text: 'Order ready' }], status: 'DRAFT', isSupported: true,
+      } });
+      await raw.metaMessageTemplate.create({ data: {
+        id: 'bleed_meta_template_b', organizationId: orgB.organizationId, wabaId: 'WABA_B',
+        providerId: 'provider-template-b', name: 'order_ready', language: 'ar', category: 'UTILITY',
+        components: [{ type: 'BODY', text: 'Order ready' }], status: 'DRAFT', isSupported: true,
+      } });
+      const templateOtherWaba = await raw.metaMessageTemplate.create({ data: {
+        id: 'bleed_meta_template_other_waba', organizationId: orgA.organizationId, wabaId: 'WABA_OLD',
+        name: 'old_waba_template', language: 'ar', category: 'UTILITY',
+        components: [{ type: 'BODY', text: 'Old WABA' }], status: 'DRAFT', isSupported: true,
+      } });
+      const lifecycleTemplateIds = [];
 
       try {
         const payloadFor = (phoneNumberId, wabaId) => ({
@@ -4833,6 +4853,74 @@ async function databaseAudits() {
             messages: [{ id: 'wamid.harness', from: '972500000001', type: 'text' }],
           } }] }],
         });
+
+        const { isMetaTemplateSendable, submitMetaTemplate } = require('../src/modules/meta-templates/meta-templates.service');
+        assert.equal(isMetaTemplateSendable('APPROVED'), true, 'exact APPROVED status must be sendable');
+        assert.equal(isMetaTemplateSendable('PAUSED'), false, 'PAUSED template was treated as sendable');
+        assert.equal(isMetaTemplateSendable('APPROVED', new Date()), false, 'archived template was treated as sendable');
+
+        let crossedWaba = false;
+        await assert.rejects(
+          () => runAsOrganization(orgB.organizationId, () => submitMetaTemplate(templateA.id, {
+            create: async () => { crossedWaba = true; return { id: 'must-not-be-created', status: 'PENDING' }; },
+            list: async () => ({ data: [] }),
+          })),
+          (error) => error?.code === 'META_TEMPLATE_NOT_FOUND',
+          'a template from WABA A was accepted through WABA B',
+        );
+        assert.equal(crossedWaba, false, 'the provider was called with a template from another WABA');
+        await assert.rejects(
+          () => runAsOrganization(orgA.organizationId, () => submitMetaTemplate(templateOtherWaba.id, {
+            create: async () => { crossedWaba = true; return { id: 'must-not-be-created', status: 'PENDING' }; },
+            list: async () => ({ data: [] }),
+          })),
+          (error) => error?.code === 'META_TEMPLATE_NOT_FOUND',
+          'a template from an old WABA was accepted in the same organization',
+        );
+        assert.equal(crossedWaba, false, 'the provider was called with a template from an old WABA');
+        await assert.rejects(
+          () => raw.metaChannelCredential.update({ where: { id: 'bleed_meta_cred_b' }, data: { businessPortfolioId: 'PORTFOLIO_A' } }),
+          (error) => error?.code === 'P2002',
+          'the database permitted sharing one Business Portfolio across organizations',
+        );
+
+        const { createMetaTemplateDraft, syncCurrentMetaTemplates, archiveMetaTemplate } = require('../src/modules/meta-templates/meta-templates.service');
+        const lifecycleDraft = await runAsOrganization(orgA.organizationId, () => createMetaTemplateDraft({
+          name: 'stub_lifecycle', language: 'ar', category: 'UTILITY', components: [{ type: 'BODY', text: 'Stub body' }],
+        }));
+        lifecycleTemplateIds.push(lifecycleDraft.id);
+        assert.equal(lifecycleDraft.status, 'DRAFT');
+        const lifecycleSubmitted = await runAsOrganization(orgA.organizationId, () => submitMetaTemplate(lifecycleDraft.id, {
+          create: async (wabaId, accessToken, payload) => {
+            assert.equal(wabaId, 'WABA_A');
+            assert.equal(accessToken, 'stub-token-a');
+            assert.equal(payload.category, 'UTILITY');
+            return { ...payload, id: 'provider-stub-lifecycle', status: 'PENDING' };
+          },
+          list: async () => ({ data: [] }),
+        }));
+        assert.equal(lifecycleSubmitted.providerId, 'provider-stub-lifecycle');
+        assert.equal(lifecycleSubmitted.status, 'PENDING');
+
+        let listCalls = 0;
+        const synced = await runAsOrganization(orgA.organizationId, () => syncCurrentMetaTemplates({
+          create: async () => ({ id: 'unused' }),
+          list: async (_wabaId, _accessToken, after) => {
+            listCalls += 1;
+            if (!after) return { data: [{ id: 'provider-imported', name: 'imported_template', language: 'ar', category: 'UTILITY', status: 'APPROVED', components: [{ type: 'BODY', text: 'Imported' }] }], paging: { cursors: { after: 'cursor-1' } } };
+            return { data: [{ id: 'provider-paused', name: 'paused_template', language: 'ar', category: 'MARKETING', status: 'PAUSED', components: [{ type: 'BODY', text: 'Paused' }] }] };
+          },
+        }));
+        assert.equal(listCalls, 2, 'template polling did not follow the provider cursor');
+        assert.equal(synced.pages, 2);
+        const importedTemplate = await raw.metaMessageTemplate.findFirst({ where: { providerId: 'provider-imported' } });
+        const polledPausedTemplate = await raw.metaMessageTemplate.findFirst({ where: { providerId: 'provider-paused' } });
+        lifecycleTemplateIds.push(importedTemplate.id, polledPausedTemplate.id);
+        assert.equal(importedTemplate.status, 'APPROVED');
+        assert.equal(polledPausedTemplate.status, 'PAUSED');
+        const archived = await runAsOrganization(orgA.organizationId, () => archiveMetaTemplate(lifecycleDraft.id));
+        assert.ok(archived.archivedAt, 'archive did not record archivedAt');
+        assert.equal(archived.sendable, false, 'archived template remained sendable');
 
         // Record the scope each change entered AND what it could read from
         // inside it. An organizationId passed around as a string proves nothing;
@@ -4868,6 +4956,33 @@ async function databaseAudits() {
           where: { id: channelA.id },
           data: { status: 'INACTIVE' },
         });
+        await dispatchMetaWebhookPayload({
+          object: 'whatsapp_business_account',
+          entry: [{ id: 'WABA_A', changes: [{ field: 'message_template_status_update', value: {
+            message_template_id: 'provider-template-a', event: 'PAUSED', reason: 'quality',
+          } }] }],
+        });
+        const pausedTemplate = await raw.metaMessageTemplate.findUnique({ where: { id: templateA.id } });
+        assert.equal(pausedTemplate.status, 'PAUSED', 'WABA template status webhook did not preserve PAUSED');
+        assert.equal(isMetaTemplateSendable(pausedTemplate.status), false, 'PAUSED template crossed the sendability boundary');
+
+        await dispatchMetaWebhookPayload({
+          object: 'whatsapp_business_account',
+          entry: [{ id: 'WABA_A', changes: [{ field: 'message_template_status_update', value: {
+            message_template_id: 'provider-template-a', event: 'PROVIDER_FUTURE_STATUS',
+          } }] }],
+        });
+        const unknownTemplateStatus = await raw.metaMessageTemplate.findUnique({ where: { id: templateA.id } });
+        assert.equal(unknownTemplateStatus.status, 'PROVIDER_FUTURE_STATUS', 'unknown provider status was coerced');
+
+        await dispatchMetaWebhookPayload({
+          object: 'whatsapp_business_account',
+          entry: [{ id: 'WABA_B', changes: [{ field: 'message_template_status_update', value: {
+            message_template_id: 'provider-template-a', event: 'APPROVED',
+          } }] }],
+        });
+        const crossWabaStatus = await raw.metaMessageTemplate.findUnique({ where: { id: templateA.id } });
+        assert.equal(crossWabaStatus.status, 'PROVIDER_FUTURE_STATUS', 'a WABA B event changed a WABA A template');
         entered.length = 0;
         await dispatchMetaWebhookPayload(payloadFor('PN_ORG_A', 'WABA_A'), recorder);
         assert.equal(
@@ -4953,6 +5068,9 @@ async function databaseAudits() {
         if (previousSecret === undefined) delete process.env.META_APP_SECRET;
         else process.env.META_APP_SECRET = previousSecret;
       } finally {
+        await raw.metaMessageTemplate.deleteMany({
+          where: { id: { in: ['bleed_meta_template_a', 'bleed_meta_template_b', 'bleed_meta_template_other_waba', ...lifecycleTemplateIds] } },
+        });
         await raw.metaChannelCredential.deleteMany({
           where: { id: { in: ['bleed_meta_cred_a', 'bleed_meta_cred_b'] } },
         });
@@ -5041,6 +5159,7 @@ const QUEUE_MODULES = [
   ['../src/workers/campaign.worker', 'campaignQueue'],
   ['../src/workers/escalation.worker', 'escalationQueue'],
   ['../src/workers/workflow.worker', 'workflowQueue'],
+  ['../src/workers/meta-template-sync.worker', 'metaTemplateSyncQueue'],
 ];
 
 async function closeLoadedQueues() {

@@ -173,12 +173,14 @@ function normalizeId(value: unknown): string {
 export async function connectMetaChannel(input: {
   phoneNumberId: unknown;
   wabaId: unknown;
+  businessPortfolioId?: unknown;
   accessToken: unknown;
 }): Promise<MetaConnectOutcome> {
   if (vaultLocked()) return { ok: false, problem: PROBLEMS.VAULT_LOCKED };
 
   const phoneNumberId = normalizeId(input.phoneNumberId);
   const wabaId = normalizeId(input.wabaId);
+  const businessPortfolioId = normalizeId(input.businessPortfolioId);
   const accessToken = String(input.accessToken ?? '').trim();
   if (!phoneNumberId || !wabaId || !accessToken) {
     return { ok: false, problem: PROBLEMS.MISSING_FIELDS };
@@ -273,6 +275,7 @@ export async function connectMetaChannel(input: {
       organizationId,
       phoneNumberId,
       wabaId,
+      businessPortfolioId: businessPortfolioId || null,
       accessToken,
       displayPhoneNumber: standing?.display_phone_number || phone.display_phone_number || null,
       verifiedName: standing?.verified_name || phone.verified_name || null,
@@ -296,6 +299,7 @@ async function persist(input: {
   organizationId: string;
   phoneNumberId: string;
   wabaId: string;
+  businessPortfolioId: string | null;
   accessToken: string;
   displayPhoneNumber: string | null;
   verifiedName: string | null;
@@ -346,6 +350,7 @@ async function persist(input: {
         channelId: channel.id,
         phoneNumberId: input.phoneNumberId,
         wabaId: input.wabaId,
+        businessPortfolioId: input.businessPortfolioId,
         accessTokenEnc,
         keyVersion: CURRENT_KEY_VERSION,
         status: 'ACTIVE',
@@ -359,6 +364,7 @@ async function persist(input: {
       update: {
         phoneNumberId: input.phoneNumberId,
         wabaId: input.wabaId,
+        businessPortfolioId: input.businessPortfolioId,
         accessTokenEnc,
         keyVersion: CURRENT_KEY_VERSION,
         status: 'ACTIVE',

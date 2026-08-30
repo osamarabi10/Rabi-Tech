@@ -10,6 +10,7 @@ import { queueIncomingMessage } from '../workers/incoming-message.worker';
 import { normalizeMetaMessages, normalizeMetaStatuses } from '../modules/channels/meta-inbound';
 import { downloadMetaMedia } from '../modules/channels/meta-media';
 import { activeMetaCredential, metaSessionName } from '../modules/channels/meta.service';
+import { applyMetaTemplateStatusChange } from '../modules/meta-templates/meta-templates.service';
 
 /**
  * The Meta WhatsApp Cloud API inbound webhook.
@@ -62,6 +63,7 @@ export type MetaChangeContext = {
   organizationId: string;
   channelId: string;
   phoneNumberId: string;
+  wabaId: string;
   field: string;
   value: Record<string, unknown>;
 };
@@ -117,6 +119,40 @@ export async function organizationForPhoneNumberId(phoneNumberId: string): Promi
 }
 
 /**
+ * Resolve a WABA-level event without inventing a phone number.
+ *
+ * Template status changes are delivered for the business account and may not
+ * include metadata.phone_number_id. The global WABA index is what makes this
+ * lookup as unambiguous as the phone-number lookup above.
+ */
+export async function organizationForWabaId(wabaId: string): Promise<{
+  organizationId: string;
+  channelId: string;
+  wabaId: string;
+  channelStatus: string;
+} | null> {
+  if (!wabaId) return null;
+  return runAsPlatform('meta-webhook:resolve-waba-id', async () => {
+    const credential = await prisma.metaChannelCredential.findUnique({
+      where: { wabaId },
+      select: {
+        organizationId: true,
+        channelId: true,
+        wabaId: true,
+        channel: { select: { status: true } },
+      },
+    });
+    if (!credential) return null;
+    return {
+      organizationId: credential.organizationId,
+      channelId: credential.channelId,
+      wabaId: credential.wabaId,
+      channelStatus: credential.channel.status,
+    };
+  });
+}
+
+/**
  * Turn one accepted change into inbox activity.
  *
  * Runs inside runAsOrganization for the resolved tenant, so everything below is
@@ -132,6 +168,11 @@ export async function organizationForPhoneNumberId(phoneNumberId: string): Promi
 async function ingestChange(context: MetaChangeContext): Promise<void> {
   const organizationId = getTenantId();
   const value = context.value;
+
+  if (context.field === 'message_template_status_update') {
+    await applyMetaTemplateStatusChange({ organizationId, wabaId: context.wabaId, value });
+    return;
+  }
 
   const messages = normalizeMetaMessages(value);
   const statuses = normalizeMetaStatuses(value);
@@ -287,8 +328,36 @@ export async function dispatchMetaWebhookPayload(
 
     for (const rawChange of changes) {
       const change = (rawChange || {}) as { field?: unknown; value?: unknown };
-      const value = (change.value || {}) as { metadata?: { phone_number_id?: unknown } };
+      const field = String(change.field || '');
+      const resolvedValue = (change.value || {}) as Record<string, unknown>;
+      const value = resolvedValue as { metadata?: { phone_number_id?: unknown } };
       const phoneNumberId = String(value.metadata?.phone_number_id || '');
+
+      if (field === 'message_template_status_update') {
+        const wabaId = String(entry.id || resolvedValue.waba_id || '');
+        const resolvedWaba = await organizationForWabaId(wabaId);
+        if (!resolvedWaba) {
+          logger.warn('Meta webhook: unknown WABA id for template status, payload dropped', { wabaId });
+          continue;
+        }
+        try {
+          await runAsOrganization(resolvedWaba.organizationId, () => onChange({
+            organizationId: resolvedWaba.organizationId,
+            channelId: resolvedWaba.channelId,
+            phoneNumberId: '',
+            wabaId: resolvedWaba.wabaId,
+            field,
+            value: resolvedValue,
+          }));
+        } catch (error) {
+          logger.error('Meta webhook: template status handler failed', {
+            organizationId: resolvedWaba.organizationId,
+            wabaId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        continue;
+      }
 
       const resolved = await organizationForPhoneNumberId(phoneNumberId);
       if (!resolved) {
@@ -297,7 +366,7 @@ export async function dispatchMetaWebhookPayload(
         // payload this platform will never be able to route.
         logger.warn('Meta webhook: unknown phone_number_id, payload dropped', {
           phoneNumberId,
-          field: String(change.field || ''),
+          field,
         });
         continue;
       }
@@ -321,7 +390,6 @@ export async function dispatchMetaWebhookPayload(
       // ACTIVE adapter and leave from a different number than the customer
       // wrote to. Keep only statuses in that state; Meta receives 200 for the
       // skipped customer message and therefore does not retry it.
-      const resolvedValue = (change.value || {}) as Record<string, unknown>;
       const statuses = Array.isArray(resolvedValue.statuses) ? resolvedValue.statuses : [];
       if (resolved.channelStatus !== 'ACTIVE' && statuses.length === 0) {
         logger.warn('Meta webhook: inactive channel message skipped', {
@@ -340,7 +408,8 @@ export async function dispatchMetaWebhookPayload(
           organizationId: resolved.organizationId,
           channelId: resolved.channelId,
           phoneNumberId,
-          field: String(change.field || ''),
+          wabaId: resolved.wabaId,
+          field,
           value: acceptedValue,
         }));
       } catch (error) {

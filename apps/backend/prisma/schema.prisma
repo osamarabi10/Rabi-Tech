@@ -54,6 +54,8 @@ model Organization {
   conversations           Conversation[]
   campaigns               Campaign[]
   templates               MessageTemplate[]
+  metaMessageTemplates    MetaMessageTemplate[]
+  metaTemplateSends       MetaTemplateSend[]
   snippetTopics           SnippetTopic[]
   snippetTopicAssignments SnippetTopicAssignment[]
   snippetAttachments      SnippetAttachment[]
@@ -194,8 +196,11 @@ model MetaChannelCredential {
   channelId      String
 
   /// Identifiers, not secrets. See the note above.
-  phoneNumberId String
-  wabaId        String
+  phoneNumberId       String
+  wabaId              String
+  /// Meta Business Portfolio ID. Nullable while existing connections are
+  /// repaired; globally unique so a portfolio can never be shared by tenants.
+  businessPortfolioId String?
 
   /// The credential. AES-256-GCM via lib/credential-crypto, never read back.
   accessTokenEnc String
@@ -234,6 +239,8 @@ model MetaChannelCredential {
 
   @@unique([id, organizationId])
   @@unique([phoneNumberId])
+  @@unique([wabaId])
+  @@unique([businessPortfolioId])
   @@unique([channelId, organizationId])
   @@index([organizationId, status])
 }
@@ -1006,6 +1013,7 @@ model Contact {
   organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   conversations      Conversation[]
   campaignRecipients CampaignRecipient[]
+  metaTemplateSends  MetaTemplateSend[]
   workflowExecutions WorkflowExecution[]
   csatResponses      CsatSurveyResponse[]
   assignee           User?                @relation("ContactAssignee", fields: [assigneeId, organizationId], references: [id, organizationId], onDelete: Restrict)
@@ -1289,23 +1297,29 @@ model Message {
 }
 
 model Campaign {
-  id             String         @id @default(cuid())
-  organizationId String
-  sessionId      String
-  title          String
-  message        String
-  mediaUrl       String?
-  status         CampaignStatus @default(DRAFT)
-  scheduledAt    DateTime?
-  sentAt         DateTime?
-  createdAt      DateTime       @default(now())
+  id                   String         @id @default(cuid())
+  organizationId       String
+  sessionId            String
+  title                String
+  message              String
+  mediaUrl             String?
+  status               CampaignStatus @default(DRAFT)
+  scheduledAt          DateTime?
+  sentAt               DateTime?
+  createdAt            DateTime       @default(now())
   /// ContactFilterDsl used to resolve recipients. Null = every non-archived contact.
   /// Stored so a campaign's audience stays auditable after the fact.
-  audienceFilter Json?
+  audienceFilter       Json?
+  /// Provider-owned Meta template used by a future Meta campaign sender.
+  /// This phase stores the binding only; it does not send anything.
+  metaTemplateId       String?
+  metaTemplateBindings Json?
 
-  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  session      WhatsappSession     @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  recipients   CampaignRecipient[]
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  session           WhatsappSession      @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  recipients        CampaignRecipient[]
+  metaTemplate      MetaMessageTemplate? @relation(fields: [metaTemplateId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  metaTemplateSends MetaTemplateSend[]
 
   @@unique([id, organizationId])
   @@index([organizationId])
@@ -1341,6 +1355,83 @@ model MessageTemplate {
   @@unique([organizationId, autoReplyKind])
   @@index([organizationId, category, isActive])
   @@index([organizationId, teamId, category, isActive])
+}
+
+/// A provider-owned WhatsApp template, deliberately separate from
+/// MessageTemplate. MessageTemplate is a mutable RabiTech asset; this row
+/// carries Meta's identity, approval status, WABA boundary, and immutable
+/// provider-shaped components as they were submitted or imported.
+model MetaMessageTemplate {
+  id                String    @id @default(cuid())
+  organizationId    String
+  wabaId            String
+  providerId        String?
+  name              String
+  language          String
+  category          String
+  components        Json
+  /// DRAFT locally; otherwise the exact provider status, including unknown
+  /// values. Only the exact string APPROVED is sendable in a later phase.
+  status            String    @default("DRAFT")
+  rejectionReason   String?
+  isSupported       Boolean   @default(true)
+  unsupportedReason String?
+  submittedAt       DateTime?
+  lastSyncedAt      DateTime?
+  providerUpdatedAt DateTime?
+  archivedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns    Campaign[]
+  sends        MetaTemplateSend[]
+
+  @@unique([id, organizationId])
+  /// Provider ids are only meaningful inside the WABA that owns them.
+  @@unique([wabaId, providerId])
+  @@index([organizationId, status, archivedAt])
+  @@index([organizationId, wabaId, name, language])
+}
+
+/// Reservation and delivery ledger for the future template send path.
+/// Nothing in phase 1 creates rows here; the schema is established now so
+/// approval state can be proven without redesigning the ceiling boundary later.
+model MetaTemplateSend {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  templateId           String
+  campaignId           String?
+  campaignRecipientId  String?
+  contactId            String?
+  recipientPhone       String
+  source               String    @default("MANUAL")
+  businessInitiated    Boolean   @default(true)
+  status               String    @default("RESERVED")
+  providerStatus       String?
+  providerMessageId    String?
+  reservedAt           DateTime  @default(now())
+  reservationExpiresAt DateTime?
+  sentAt               DateTime?
+  deliveredAt          DateTime?
+  readAt               DateTime?
+  releasedAt           DateTime?
+  failureReason        String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization      Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template          MetaMessageTemplate @relation(fields: [templateId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  campaign          Campaign?           @relation(fields: [campaignId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  campaignRecipient CampaignRecipient?  @relation(fields: [campaignRecipientId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  contact           Contact?            @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, providerMessageId])
+  @@index([organizationId, recipientPhone, reservedAt])
+  @@index([organizationId, status, reservedAt])
+  @@index([organizationId, templateId, reservedAt])
+  @@index([organizationId, campaignId])
 }
 
 /// A workspace-owned label used only to organize canned replies.
@@ -1433,10 +1524,12 @@ model CampaignRecipient {
   deliveredAt    DateTime?
   readAt         DateTime?
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  campaign     Campaign     @relation(fields: [campaignId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  contact      Contact      @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign          Campaign           @relation(fields: [campaignId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  contact           Contact            @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  metaTemplateSends MetaTemplateSend[]
 
+  @@unique([id, organizationId])
   @@unique([organizationId, campaignId, contactId])
   @@index([organizationId])
   // Acks are looked up by waMessageId on every delivery callback.

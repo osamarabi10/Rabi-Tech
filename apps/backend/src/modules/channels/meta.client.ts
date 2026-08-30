@@ -205,6 +205,72 @@ export async function fetchPhoneNumberStanding(
   });
 }
 
+export type MetaTemplateComponent = {
+  type: string;
+  format?: string;
+  text?: string;
+  buttons?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+};
+
+/** The provider-shaped template record used by submit, import, and polling. */
+export type MetaTemplateSnapshot = {
+  id?: string;
+  name?: string;
+  language?: string;
+  category?: string;
+  status?: string;
+  components?: MetaTemplateComponent[];
+  rejected_reason?: string | null;
+  last_updated_time?: string | null;
+};
+
+export type MetaTemplateListPage = {
+  data?: MetaTemplateSnapshot[];
+  paging?: {
+    cursors?: { after?: string | null };
+    next?: string | null;
+  };
+};
+
+/** Submit one Utility or Marketing text template to the WABA that owns it. */
+export async function createMessageTemplate(
+  wabaId: string,
+  accessToken: string,
+  payload: {
+    name: string;
+    language: string;
+    category: string;
+    components: MetaTemplateComponent[];
+  },
+): Promise<MetaTemplateSnapshot> {
+  return call<MetaTemplateSnapshot>(
+    accessToken,
+    'post',
+    `/${encodeURIComponent(wabaId)}/message_templates`,
+    undefined,
+    payload,
+  );
+}
+
+/** Read one page of WABA templates; callers own cursor progression and repair. */
+export async function listMessageTemplates(
+  wabaId: string,
+  accessToken: string,
+  after?: string,
+): Promise<MetaTemplateListPage> {
+  return call<MetaTemplateListPage>(
+    accessToken,
+    'get',
+    `/${encodeURIComponent(wabaId)}/message_templates`,
+    {
+      fields: 'id,name,language,category,status,components,rejected_reason,last_updated_time',
+      limit: '100',
+      ...(after ? { after } : {}),
+    },
+  );
+}
+
 /**
  * Meta's response to a send.
  *

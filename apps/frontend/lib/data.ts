@@ -290,6 +290,52 @@ export type Template = {
   attachments?: SnippetAttachment[];
 };
 
+export type MetaTemplateComponent = {
+  type: string;
+  format?: string;
+  text?: string;
+  buttons?: Array<{ type: string; text?: string; url?: string }>;
+  [key: string]: unknown;
+};
+
+export type MetaMessageTemplate = {
+  id: string;
+  wabaId: string;
+  providerId: string | null;
+  name: string;
+  language: string;
+  category: string;
+  components: MetaTemplateComponent[];
+  status: string;
+  rejectionReason: string | null;
+  isSupported: boolean;
+  unsupportedReason: string | null;
+  submittedAt: string | null;
+  lastSyncedAt: string | null;
+  providerUpdatedAt: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  sendable: boolean;
+};
+
+export type MetaTemplateListResponse = {
+  templates: MetaMessageTemplate[];
+  wabaId: string | null;
+  credentialStatus: string | null;
+  lastValidatedAt: string | null;
+  canManage: boolean;
+  canSync: boolean;
+};
+
+export type MetaTemplateSyncResult = {
+  pages: number;
+  imported: number;
+  updated: number;
+  skipped: number;
+  wabaId: string;
+};
+
 export type SnippetTopic = {
   id: string;
   name: string;
@@ -1178,6 +1224,36 @@ export async function createTeam(input: {
 
 export async function updateTeam(id: string, input: Partial<Team>): Promise<Team> {
   const { data } = await api.patch(`/api/system/teams/${id}`, input);
+  return data;
+}
+
+export async function fetchMetaMessageTemplates(includeArchived = false): Promise<MetaTemplateListResponse> {
+  const { data } = await api.get('/api/meta-templates', { params: includeArchived ? { archived: 'true' } : undefined });
+  return data;
+}
+
+export async function createMetaMessageTemplate(input: {
+  name: string;
+  language: string;
+  category: 'UTILITY' | 'MARKETING';
+  components: MetaTemplateComponent[];
+}): Promise<MetaMessageTemplate> {
+  const { data } = await api.post('/api/meta-templates', input);
+  return data;
+}
+
+export async function submitMetaMessageTemplate(id: string): Promise<MetaMessageTemplate> {
+  const { data } = await api.post(`/api/meta-templates/${id}/submit`);
+  return data;
+}
+
+export async function archiveMetaMessageTemplate(id: string): Promise<MetaMessageTemplate> {
+  const { data } = await api.post(`/api/meta-templates/${id}/archive`);
+  return data;
+}
+
+export async function syncMetaMessageTemplates(): Promise<MetaTemplateSyncResult> {
+  const { data } = await api.post('/api/meta-templates/sync');
   return data;
 }
 

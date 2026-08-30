@@ -63,6 +63,7 @@ router.post('/meta/connect', requireAdmin, async (req: any, res) => {
   const outcome = await connectMetaChannel({
     phoneNumberId: req.body?.phoneNumberId,
     wabaId: req.body?.wabaId,
+    businessPortfolioId: req.body?.businessPortfolioId,
     accessToken: req.body?.accessToken,
   });
 

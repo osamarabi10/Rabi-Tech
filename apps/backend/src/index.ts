@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import metaTemplateRoutes from './modules/meta-templates/meta-templates.routes';
 import http from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -50,6 +51,7 @@ import { startEditionRefresh } from './modules/billing/editions.service';
 import { startBillingReconciliationWorker } from './workers/billing-reconciliation.worker';
 import { scheduleGatewayHealthChecks, startGatewayHealthWorker } from './workers/gateway-health.worker';
 import { scheduleAnalyticsRollup, startAnalyticsRollupWorker } from './workers/analytics-rollup.worker';
+import { scheduleMetaTemplateSync, startMetaTemplateSyncWorker } from './workers/meta-template-sync.worker';
 import { startWorkflowWorker } from './workers/workflow.worker';
 import { startWeeklyRecapWorker } from './workers/weekly-recap.worker';
 import {
@@ -409,6 +411,7 @@ app.use('/api/inbox-views',    inboxViewRoutes);
 app.use('/api/lifecycle-stages', lifecycleRoutes);
 app.use('/api/workflows',      workflowRoutes);
 app.use('/api/campaigns',      campaignRoutes);
+app.use('/api/meta-templates', metaTemplateRoutes);
 app.use('/api/system',         systemRoutes);
 app.use('/api/templates',      templateRoutes);
 app.use('/api/snippets',       snippetRoutes);
@@ -587,6 +590,15 @@ httpServer.listen(Number(PORT), HOST, () => {
     startAnalyticsRollupWorker();
     scheduleAnalyticsRollup().catch((error) =>
       logger.error('Failed to schedule analytics rollup', { error: String(error) }),
+    );
+  }
+
+  if (process.env.DISABLE_META_TEMPLATE_SYNC_WORKER === '1') {
+    logger.info('Meta template sync worker disabled (DISABLE_META_TEMPLATE_SYNC_WORKER=1)');
+  } else {
+    startMetaTemplateSyncWorker();
+    scheduleMetaTemplateSync().catch((error) =>
+      logger.error('Failed to schedule Meta template sync', { error: String(error) }),
     );
   }
 });
