@@ -25,7 +25,7 @@ disagree; code and measured execution win over both.
 
 | Item | Size | Measured status | Dependencies | Hard stop |
 | --- | --- | --- | --- | --- |
-| 0. Hardcoded-value audit | S | **Next; not started** | Read-only source and runtime-value inventory | Report only. Do not replace constants or apply a migration. |
+| 0. Hardcoded-value audit | S | **Complete; audited 2026-08-31** | Read-only source and runtime-value inventory | Report only. No runtime values were changed. |
 | 1. Platform console repair | S | **Complete, `6f13e995`** | Existing `operational-state.tsx` | None beyond the serial gates. |
 | 2. Shared reporting primitives | M | **Not started** | UI contract for seven date presets, first-click opening, and export formats | Build once for Dashboard and Reports; no duplicate date/chart controls. |
 | 3. Tenant Dashboard | L | **Absent**; `/overview` redirects to `/reports`; backend summary exists | Item 2 and the summary/analytics data contract | Every card needs real loading, empty, and error states. Do not use placeholder metrics. |
@@ -60,6 +60,26 @@ a deploy. It will cover:
 
 The output must identify owner-controlled values that still have a compiled
 copy which can drift, but it must not fix them as part of the audit.
+
+### Item 0 result: hardcoded-value audit
+
+| Value | Classification | Measured reality | Deploy risk and required follow-up |
+| --- | --- | --- | --- |
+| Public pricing | **Partial** | `/api/billing/plans` reads active database `Plan` rows and `listPlans()` returns database price, currency, and limits. Public pricing still hardcodes the three-hour trial sentence and filters out `FREE` in the UI. | Price and plan limits are owner-editable without deploy. The three-hour copy is a drift defect: changing `billing.trialHours` does not update it. The `FREE` exclusion is a deliberate product rule, not a price field. |
+| `PlanCode` | **Partial** | `PlanCode` is the closed union `FREE | STANDARD | GROWTH | BUSINESS | ENTERPRISE`; `PLAN_ENTITLEMENTS` is the seed/boot fallback. Existing database rows are loaded into the edition cache after startup and used by resolution. | Editing an existing edition's supported fields is owner-editable and refreshes without restart. Adding a new code needs TypeScript, validation, seed, and likely migration/release work; an unknown database code is skipped or rejected. Making the code set data-driven is not a small audit fix. |
+| `billing.trialHours` | **Partial** | `PlatformSetting` is read and written through the platform settings API. Missing, invalid, or out-of-range values fall back to the compiled `TRIAL_HOURS_DEFAULT = 3`; the maximum is compiled as 365 days. The public pricing copy also says three hours. | Normal trial-duration changes are owner-editable without deploy. Changing the fallback, maximum, or customer-facing copy requires deploy and currently can make the public promise disagree with the actual setting. |
+| `callsAvailable` | **Hardcoded, deliberate deferral** | The backend returns `callsAvailable: false`; frontend capability fallbacks also use `false`. The sidebar omits Calls and no call provider/runtime exists. | It cannot safely become an owner toggle: setting it true without the Calls product would advertise a nonexistent capability. Enabling it requires a code, provider, permission, and compliance release. AI and Calls remain deferred by decision. |
+| Workflow trigger/action lists | **Hardcoded product contract** | `TRIGGER_TYPES` contains 5 triggers and `ACTION_TYPES` contains 11 actions. Validation and the schema endpoint consume these compiled arrays. `MAX_BRANCH_DEPTH = 3`, `MAX_ACTIONS = 20`, `MAX_CONDITIONS = 10`, and the seven-day wait bound are also compiled. | Adding or changing semantics requires deploy and runtime code. The lists are not currently owner-editable; per-edition availability is not implemented. The target 11/19/100 contract must be approved before a canvas or data-driven catalog is attempted. |
+| Edition prices, quotas, seats, workflows, and campaign pacing | **Partial** | Database `Plan` rows are the live catalogue after refresh. The owner console/API edits price, active contacts, outbound, campaign sends, custom fields, users, workflows, and campaign-rate fields. The UI does not expose every API-editable field, notably pacing. | Existing values can change without deploy. The compiled `PLAN_ENTITLEMENTS` object remains a seed and first-boot fallback, so it must stay synchronized with database rows; the harness checks this. |
+| `OrganizationConfig` quota defaults | **Hardcoded fallback** | Schema defaults are `1000` active contacts, `10000` outbound messages, and `5000` campaign sends. Signup and plan activation explicitly write plan-derived values, but a direct config creation can still receive these defaults. | Changing the schema defaults needs a migration and generated-client release, although it should not be the normal way to change a plan. The intended source is the edition catalogue plus entitlement resolution; these defaults are a drift risk and should be removed or centrally justified in a later item. |
+| Unlimited quota representation | **Hardcoded implementation detail** | Unlimited plan values are normalized to `null`, but config columns receive `1_000_000_000` and the resolver interprets values at or above that sentinel as unlimited. | It should not be owner-editable. Changing it requires deploy and possibly data handling; it must never appear as a customer-facing quota. |
+| Trial plan default | **Partial** | `billing.trialPlan` is a platform setting with a compiled `GROWTH` fallback and validation against `PlanCode`. | The normal choice is owner-editable without deploy. Adding a new plan still hits the closed `PlanCode` boundary; changing the fallback requires deploy. |
+
+**Item 0 conclusion:** the owner-controlled catalogue is substantially live for
+existing editions, but three compiled boundaries remain: the closed PlanCode
+set, invalid-setting fallbacks, and workflow/capability contracts. The clearest
+customer-facing defect is the public three-hour trial sentence. No code or
+configuration was changed in this audit.
 
 ## Dependency order
 
