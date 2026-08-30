@@ -7,6 +7,7 @@ import { queueIncomingMessage } from '../workers/incoming-message.worker';
 import logger from '../lib/logger';
 
 import { getTenantId, runAsOrganization, runAsPlatform } from '../lib/tenant-context';
+import { advanceMessageStatus } from '../utils/message-status';
 import { recordMessageUsage } from '../modules/usage/usage.service';
 import { queueGatewayAction } from '../workers/gateway-provisioning.queue';
 import { recordDelivery } from '../modules/webhooks/webhook-log.service';
@@ -178,18 +179,26 @@ router.post('/webhooks/openwa/:webhookToken', async (req, res, next) => {
           await runAsOrganization(organizationId, async () => {
             const msg = await prisma.message.findUnique({
               where: { organizationId_waMessageId: { organizationId, waMessageId: msgId } },
-              select: { id: true, conversationId: true },
+              select: { id: true, conversationId: true, status: true },
             });
             if (msg) {
-              await prisma.message.update({
-                where: { id: msg.id },
-                data: { status: newStatus as any, ...(ack === 3 ? { isRead: true } : {}) },
-              });
-              getIO().to(socketRoom.conversation(organizationId, msg.conversationId)).emit(SocketEvents.MESSAGE_ACK, {
-                messageId: msg.id,
-                waMessageId: msgId,
-                status: newStatus,
-              });
+              // Forward only. WhatsApp redelivers acks and does not order them,
+              // so without this a late `delivered` overwrites a `read` and an
+              // agent watches a message they know was read revert. The campaign
+              // recipient beside this has always been guarded; the message row
+              // was not, which made a stated invariant true of one of the two.
+              const advanced = advanceMessageStatus(msg.status, newStatus);
+              if (advanced) {
+                await prisma.message.update({
+                  where: { id: msg.id },
+                  data: { status: advanced, ...(advanced === 'READ' ? { isRead: true } : {}) },
+                });
+                getIO().to(socketRoom.conversation(organizationId, msg.conversationId)).emit(SocketEvents.MESSAGE_ACK, {
+                  messageId: msg.id,
+                  waMessageId: msgId,
+                  status: advanced,
+                });
+              }
             }
 
             // A campaign send is not necessarily a Message row, so this is a

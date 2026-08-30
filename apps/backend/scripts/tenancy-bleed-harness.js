@@ -4380,6 +4380,64 @@ async function databaseAudits() {
         await raw.team.deleteMany({ where: { id: { in: [teamA.id, teamB.id] } } });
       }
     });
+    await check('messages: a delivery ack can never walk a message backwards', async () => {
+      const { advanceMessageStatus } = require('../src/utils/message-status');
+
+      // WhatsApp redelivers acks and does not order them, and Meta retries any
+      // webhook it did not see acknowledged. Applied naively, a late 'delivered'
+      // overwrites a 'read' and an agent watches a message they know was read
+      // revert - with nothing having changed except network timing.
+      //
+      // CLAUDE.md states this invariant. Until 2026-08-30 it was enforced for
+      // campaign recipients and NOT for the Message row sitting beside them, so
+      // it held for one of the two things it was written about.
+      assert.equal(advanceMessageStatus('DELIVERED', 'READ'), 'READ', 'read must advance past delivered');
+      assert.equal(advanceMessageStatus('READ', 'DELIVERED'), null, 'a late delivered must not undo a read');
+      assert.equal(advanceMessageStatus('READ', 'SENT'), null, 'a late sent must not undo a read');
+      assert.equal(advanceMessageStatus('READ', 'READ'), null, 'a repeated ack writes nothing');
+
+      // FAILED sits between SENT and DELIVERED, which settles the awkward cases
+      // without a special branch anywhere.
+      assert.equal(advanceMessageStatus('SENT', 'FAILED'), 'FAILED', 'a send that failed must record it');
+      assert.equal(advanceMessageStatus('DELIVERED', 'FAILED'), null, 'a delivered message cannot later fail');
+      assert.equal(advanceMessageStatus('FAILED', 'DELIVERED'), 'DELIVERED', 'real delivery corrects a wrong failure');
+      assert.equal(advanceMessageStatus('FAILED', 'SENT'), null, 'sent is not evidence against a failure');
+
+      // An unknown status is not a reason to overwrite a known one.
+      assert.equal(advanceMessageStatus('READ', 'NONSENSE'), null);
+
+      // And the same rule holds against the database, not just in the helper -
+      // replaying an out-of-order ack sequence must leave the message READ.
+      const conversation = await raw.conversation.findFirst({
+        where: { organizationId: orgA.organizationId },
+        select: { id: true },
+      });
+      await raw.message.create({ data: {
+        id: 'bleed_ack_message', organizationId: orgA.organizationId,
+        conversationId: conversation.id, direction: 'OUTBOUND', body: 'ack ordering',
+        waMessageId: 'wamid.bleed_ack', status: 'SENT',
+      } });
+      try {
+        for (const incoming of ['DELIVERED', 'READ', 'DELIVERED', 'SENT', 'FAILED']) {
+          const current = await raw.message.findUniqueOrThrow({
+            where: { id: 'bleed_ack_message' }, select: { status: true },
+          });
+          const advanced = advanceMessageStatus(current.status, incoming);
+          if (advanced) {
+            await raw.message.update({ where: { id: 'bleed_ack_message' }, data: { status: advanced } });
+          }
+        }
+        const final = await raw.message.findUniqueOrThrow({
+          where: { id: 'bleed_ack_message' }, select: { status: true },
+        });
+        assert.equal(final.status, 'READ', 'an out-of-order ack replay must settle on READ');
+      } finally {
+        await raw.message.deleteMany({
+          where: { organizationId: orgA.organizationId, id: 'bleed_ack_message' },
+        });
+      }
+    });
+
     await check('channels: two ACTIVE channels are refused, never silently picked', async () => {
       const { ChannelService, setActiveChannelKind } = require('../src/modules/channels/channel.service');
 
