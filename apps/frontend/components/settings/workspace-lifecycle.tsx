@@ -34,7 +34,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RowOverflowMenu } from '@/components/ui/list-primitives';
-import { ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
+import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -389,8 +389,8 @@ function StageColumn({ kind, title, description, stages, totalCount, canManage, 
             <p className="mt-1 text-micro text-muted-foreground">{stage.contactCount} {t('contacts')}</p>
           </div>
           {canManage && <div className="flex shrink-0 items-center">
-            <Button type="button" variant="ghost" size="icon" className="size-8" disabled={index === 0 || stage.isWon || busyStageId === stage.id} onClick={() => onMove(stage, -1)} title={t('Move up')}><ArrowUp className="size-4" /></Button>
-            <Button type="button" variant="ghost" size="icon" className="size-8" disabled={downBlocked || busyStageId === stage.id} onClick={() => onMove(stage, 1)} title={t('Move down')}><ArrowDown className="size-4" /></Button>
+            <Button type="button" variant="ghost" size="icon" className="size-8" disabled={index === 0 || stage.isWon || busyStageId === stage.id} onClick={() => onMove(stage, -1)} aria-label={t('Move up')} title={t('Move up')}><ArrowUp className="size-4" /></Button>
+            <Button type="button" variant="ghost" size="icon" className="size-8" disabled={downBlocked || busyStageId === stage.id} onClick={() => onMove(stage, 1)} aria-label={t('Move down')} title={t('Move down')}><ArrowDown className="size-4" /></Button>
             <RowOverflowMenu label={t('Stage actions')} actions={[
               { label: t('Edit stage'), icon: Pencil, onSelect: () => onEdit(stage) },
               ...(stage.kind === 'ACTIVE' && !stage.isDefault && !stage.isWon ? [{ label: t('Set as default'), icon: Star, onSelect: () => onDefault(stage) }] : []),
@@ -401,7 +401,7 @@ function StageColumn({ kind, title, description, stages, totalCount, canManage, 
           </div>}
         </article>;
       })}
-      {!stages.length && <div className="px-4 py-10 text-center text-caption text-muted-foreground">{kind === 'ACTIVE' ? t('No lifecycle stages configured') : t('No lost stages configured')}</div>}
+      {!stages.length && <EmptyState icon={kind === 'ACTIVE' ? Star : CircleX} title={kind === 'ACTIVE' ? t('No lifecycle stages configured') : t('No lost stages configured')} compact />}
     </div>
   </section>;
 }

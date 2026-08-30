@@ -164,6 +164,7 @@ export function AutoRepliesCard({ isAdmin }: { isAdmin: boolean }) {
                         className="h-8 w-8"
                         disabled={busy}
                         onClick={() => handleDelete(slot)}
+                        aria-label={t('حذف')}
                         title={t('حذف')}
                       >
                         <Trash2 className="h-3.5 w-3.5" />

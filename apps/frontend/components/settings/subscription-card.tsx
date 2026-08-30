@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { CreditCard, ArrowUpCircle, AlertTriangle, ExternalLink, Users } from 'lucide-react';
+import { CreditCard, ArrowUpCircle, AlertTriangle, ExternalLink, ReceiptText, Users } from 'lucide-react';
 import { fetchBillingSummary, type BillingSummary } from '@/lib/data';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/lib/format-time';
+import { EmptyState } from '@/components/ui/operational-state';
 
 /** Highest plan needs no upsell; everyone else gets an upgrade path. */
 const TOP_PLAN = 'ENTERPRISE';
@@ -183,9 +184,7 @@ export function SubscriptionCard() {
             {t('الفواتير')}
           </p>
           {invoices.length === 0 ? (
-            <p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-caption text-muted-foreground">
-              {t('لا توجد فواتير بعد')}
-            </p>
+            <EmptyState icon={ReceiptText} title={t('لا توجد فواتير بعد')} compact className="border-y border-border" />
           ) : (
             <div className="space-y-1">
               {invoices.slice(0, 6).map((inv) => (

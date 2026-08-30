@@ -24,6 +24,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { PermissionNotice } from '@/components/permission-notice';
+import { EmptyState, NoResultsState } from '@/components/ui/operational-state';
 
 /**
  * Snippet management.
@@ -195,10 +196,12 @@ export function SnippetsCard({ isAdmin, teams }: { isAdmin: boolean; teams: Team
           <p className="py-4 text-center text-xs text-muted-foreground">{t('جاري التحميل...')}</p>
         )}
 
-        {!loading && shown.length === 0 && (
-          <p className="py-6 text-center text-xs text-muted-foreground">
-            {t('لا توجد قوالب في هذا القسم')}
-          </p>
+        {!loading && items.length === 0 && (
+          <EmptyState icon={FileText} title={t('لا توجد قوالب في هذا القسم')} compact />
+        )}
+
+        {!loading && items.length > 0 && shown.length === 0 && (
+          <NoResultsState title={t('لا توجد قوالب في هذا القسم')} clearLabel={t('الكل')} onClear={() => setFilter('ALL')} compact />
         )}
 
         {shown.map((tpl) => (

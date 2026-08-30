@@ -161,11 +161,11 @@ where the remaining work actually is.
 | No PII in `document.title` | ✅ already handled | `app/layout.tsx:18` — `` `${branding.productName} - Dashboard` ``; no contact or user data |
 | Logical properties only, never `left`/`right` | ✅ already handled | **Zero** physical-property usages across all 16 settings components |
 | `dir="ltr"` on numbers only, never containers | ✅ already handled | 28 occurrences, all on `<span>`/`<li>` carrying `font-mono` codes, prices, metrics |
-| Accessible names on icon-only controls | ⚠️ **needs attention** | 9 `size="icon"` buttons; **6 labelled, 3 not** — see below |
+| Accessible names on icon-only controls | ✅ completed 2026-08-30 | All 10 current `size="icon"` buttons have translated accessible names; the final three were fixed in `auto-replies-card.tsx` and `workspace-lifecycle.tsx` |
 | Loading affordance | ✅ effectively handled | 13 of 16 components; the 3 without are `settings-rail`, `settings-sub-navigation`, `team-routing` — navigation chrome that fetches nothing |
 | Error state | ✅ already handled | 13 of 16 components |
-| Shared operational-state primitive | ✅ available and used | `components/ui/operational-state.tsx`, used by 9 components |
-| True empty / no-results state | ⚠️ **partial** | 7 of 16 — acceptable where a list cannot be empty, worth an audit pass where it can |
+| Shared operational-state primitive | ✅ available and used | `components/ui/operational-state.tsx`, used by 11 current Settings components |
+| True empty / no-results state | ✅ pass completed 2026-08-30 | Genuine remaining collections use `operational-state.tsx`; fixed, singular, navigation, and contract-guaranteed content correctly has no empty state |
 
 **The three unlabelled icon-only controls** — the only concrete accessibility
 defect in Settings:
@@ -176,6 +176,10 @@ defect in Settings:
 
 Each needs an `aria-label` or an `sr-only` span. This is the entire
 accessibility delta for Settings — small, located, and verifiable.
+
+> **Completed 2026-08-30.** All three controls now have `aria-label` values
+> produced through `t()`. The original locations above are retained as the
+> pre-fix audit record; current line numbers have moved.
 
 **Rules carried from the reference as anti-requirements**, to be honoured
 whether or not the audit ever arrives: a tooltip is not a label; a control that
@@ -223,12 +227,25 @@ or when editions work requires a new control.
 **`/settings/lifecycle`** — built (411 lines), functional. Two unlabelled
 icon-only buttons at lines 392-393. Add accessible names. Nothing else.
 
+> **Completed 2026-08-30.** Both reorder buttons now have translated accessible
+> names. The stage-column empty rendering also uses the shared `EmptyState`.
+
 **`/settings` (auto-replies card)** — one unlabelled icon-only button at
 `auto-replies-card.tsx:162`. Add an accessible name. Nothing else.
+
+> **Completed 2026-08-30.** The delete control now has a translated accessible
+> name. Auto-reply slots are a fixed server-defined catalogue, so an empty state
+> would misrepresent a broken response as a valid empty collection.
 
 **Empty states** — a pass across the nine components lacking one, keeping only
 where a list can genuinely be empty. Use `components/ui/operational-state.tsx`;
 do not invent per-screen variants.
+
+> **Completed 2026-08-30.** The three genuine remaining collection gaps —
+> lifecycle columns, subscription invoices, and the legacy snippets collection
+> — now use `EmptyState` or `NoResultsState`. The other audited components hold
+> fixed catalogues, singular settings, navigation, routing controls, or the
+> authenticated workspace roster; none has a valid empty collection to depict.
 
 ### Blocked — built, waiting on a dependency
 
