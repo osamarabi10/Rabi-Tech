@@ -74,6 +74,16 @@ services:
       - CHANNEL_ENCRYPTION_KEY=${CHANNEL_ENCRYPTION_KEY}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=7d
+      # Meta WhatsApp Cloud API. Absent means the inbound webhook fails closed:
+      # every delivery is rejected unsigned rather than trusted. Listed here
+      # explicitly because this service enumerates its environment one line at a
+      # time - anything missing silently falls back to a default inside the
+      # container, and the default for a webhook secret is no security at all.
+      - META_APP_SECRET=${META_APP_SECRET:-}
+      - META_WEBHOOK_VERIFY_TOKEN=${META_WEBHOOK_VERIFY_TOKEN:-}
+      # Pinned Graph version. Override only to trial a newer one; the webhook
+      # parser and send path are written against the code default.
+      - META_GRAPH_VERSION=${META_GRAPH_VERSION:-}
       # Stale LAN IP removed. Set FRONTEND_URL in .env to the real origin —
       # https:// once TLS is terminated in front of these services.
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8080}

@@ -31,6 +31,7 @@ import snippetRoutes      from './modules/snippets/snippets.routes';
 import analyticsRoutes    from './modules/analytics/analytics.routes';
 import notificationRoutes from './modules/notifications/notifications.routes';
 import webhookRouter      from './webhooks/openwa.webhook';
+import { metaWebhookHandler, metaWebhookVerifyHandler } from './webhooks/meta.webhook';
 import { corsOriginCallback } from './utils/cors';
 import { getLanAddresses } from './utils/network';
 import { verifyPlatformToken, verifyToken } from './modules/auth/auth.middleware';
@@ -81,6 +82,15 @@ if (process.env.NODE_ENV === 'production') {
 }
 app.use(cors({ origin: corsOriginCallback, credentials: true }));
 app.post('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }), billingWebhookHandler);
+// Meta Cloud API webhooks are registered HERE, ahead of express.json, because
+// the X-Hub-Signature-256 check must run over the exact bytes Meta signed. A
+// parsed-then-reserialised body is a different string, so verifying against it
+// rejects legitimate requests and can accept ones Meta never signed.
+//
+// Mounted before the parser also means the /webhooks rate limiter registered
+// further down never sees these requests, so the limit is applied explicitly.
+app.get('/webhooks/meta', LIMITS.webhook, metaWebhookVerifyHandler);
+app.post('/webhooks/meta', LIMITS.webhook, express.raw({ type: '*/*', limit: '1mb' }), metaWebhookHandler);
 // WhatsApp webhooks may include large base64 media payloads
 app.use(express.json({ limit: '50mb' }));
 // Request logging and correlation IDs

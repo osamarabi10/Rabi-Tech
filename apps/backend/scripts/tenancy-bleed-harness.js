@@ -4338,6 +4338,133 @@ async function databaseAudits() {
         await raw.team.deleteMany({ where: { id: { in: [teamA.id, teamB.id] } } });
       }
     });
+    await check('meta webhook: a payload naming one tenant cannot enter another tenant scope', async () => {
+      const crypto = require('crypto');
+      const { getTenantId } = require('../src/lib/tenant-context');
+      const {
+        dispatchMetaWebhookPayload,
+        organizationForPhoneNumberId,
+        verifyMetaSignature,
+      } = require('../src/webhooks/meta.webhook');
+
+      // Meta posts every customer's messages to ONE url, so the phone number id
+      // in the body is the only thing that says whose message this is. This is
+      // the single place the system picks an organization from data the outside
+      // world supplied, and a wrong pick here delivers one business's customer
+      // conversations into another business's inbox.
+      const channelA = await raw.organizationChannel.create({ data: {
+        id: 'bleed_meta_channel_a', organizationId: orgA.organizationId, kind: 'WHATSAPP_CLOUD',
+        status: 'PENDING', baseUrl: 'https://graph.facebook.com/v21.0', apiKeyEnc: '',
+        webhookToken: 'bleed-meta-token-a',
+      } });
+      const channelB = await raw.organizationChannel.create({ data: {
+        id: 'bleed_meta_channel_b', organizationId: orgB.organizationId, kind: 'WHATSAPP_CLOUD',
+        status: 'PENDING', baseUrl: 'https://graph.facebook.com/v21.0', apiKeyEnc: '',
+        webhookToken: 'bleed-meta-token-b',
+      } });
+      await raw.metaChannelCredential.create({ data: {
+        id: 'bleed_meta_cred_a', organizationId: orgA.organizationId, channelId: channelA.id,
+        phoneNumberId: 'PN_ORG_A', wabaId: 'WABA_A', accessTokenEnc: 'v1:not:a:real-token', status: 'ACTIVE',
+      } });
+      await raw.metaChannelCredential.create({ data: {
+        id: 'bleed_meta_cred_b', organizationId: orgB.organizationId, channelId: channelB.id,
+        phoneNumberId: 'PN_ORG_B', wabaId: 'WABA_B', accessTokenEnc: 'v1:not:a:real-token', status: 'ACTIVE',
+      } });
+
+      try {
+        const payloadFor = (phoneNumberId, wabaId) => ({
+          object: 'whatsapp_business_account',
+          entry: [{ id: wabaId, changes: [{ field: 'messages', value: {
+            metadata: { phone_number_id: phoneNumberId },
+            messages: [{ id: 'wamid.harness', from: '972500000001', type: 'text' }],
+          } }] }],
+        });
+
+        // Record the scope each change entered AND what it could read from
+        // inside it. An organizationId passed around as a string proves nothing;
+        // being unable to see the other tenant is the property that matters.
+        const entered = [];
+        const recorder = async () => {
+          const visible = await scoped.metaChannelCredential.findMany({ select: { phoneNumberId: true } });
+          entered.push({ scope: getTenantId(), visible: visible.map((row) => row.phoneNumberId).sort() });
+        };
+
+        await dispatchMetaWebhookPayload(payloadFor('PN_ORG_A', 'WABA_A'), recorder);
+        assert.deepEqual(
+          entered.map((item) => item.scope),
+          [orgA.organizationId],
+          'a payload naming org A must enter org A scope, and no other',
+        );
+        assert.deepEqual(
+          entered[0].visible,
+          ['PN_ORG_A'],
+          'from inside org A scope the webhook could read another tenant credential',
+        );
+
+        entered.length = 0;
+        await dispatchMetaWebhookPayload(payloadFor('PN_ORG_B', 'WABA_B'), recorder);
+        assert.deepEqual(entered.map((item) => item.scope), [orgB.organizationId]);
+        assert.deepEqual(entered[0].visible, ['PN_ORG_B']);
+
+        // An unrecognised number is dropped, never guessed onto whichever tenant
+        // happens to be first. There is no fallback by design.
+        entered.length = 0;
+        await dispatchMetaWebhookPayload(payloadFor('PN_NOT_REGISTERED', 'WABA_X'), recorder);
+        assert.equal(entered.length, 0, 'an unrecognised phone_number_id entered a tenant scope');
+        assert.equal(await organizationForPhoneNumberId('PN_NOT_REGISTERED'), null);
+        assert.equal(await organizationForPhoneNumberId(''), null);
+
+        // Meta packs changes for several numbers into one delivery. Each must
+        // land in its own scope, and neither may see the other.
+        entered.length = 0;
+        await dispatchMetaWebhookPayload({
+          object: 'whatsapp_business_account',
+          entry: [
+            payloadFor('PN_ORG_A', 'WABA_A').entry[0],
+            payloadFor('PN_ORG_B', 'WABA_B').entry[0],
+          ],
+        }, recorder);
+        assert.deepEqual(
+          entered.map((item) => item.scope),
+          [orgA.organizationId, orgB.organizationId],
+          'a mixed-tenant delivery did not scope each change to its own organization',
+        );
+        assert.deepEqual(entered[0].visible, ['PN_ORG_A']);
+        assert.deepEqual(entered[1].visible, ['PN_ORG_B']);
+
+        // The signature gate, over raw bytes. A body that differs from the one
+        // Meta signed - by a single trailing space - must not verify.
+        const previousSecret = process.env.META_APP_SECRET;
+        process.env.META_APP_SECRET = 'harness-app-secret-value';
+        const body = Buffer.from(JSON.stringify(payloadFor('PN_ORG_A', 'WABA_A')), 'utf8');
+        const signature = 'sha256=' + crypto
+          .createHmac('sha256', 'harness-app-secret-value').update(body).digest('hex');
+        assert.equal(verifyMetaSignature(body, signature), true, 'a correctly signed body was rejected');
+        assert.equal(
+          verifyMetaSignature(Buffer.concat([body, Buffer.from(' ')]), signature),
+          false,
+          'a tampered body passed signature verification',
+        );
+        assert.equal(verifyMetaSignature(body, 'sha256=deadbeef'), false);
+        assert.equal(verifyMetaSignature(body, undefined), false);
+        delete process.env.META_APP_SECRET;
+        assert.equal(
+          verifyMetaSignature(body, signature),
+          false,
+          'the webhook verified a signature with no META_APP_SECRET configured - it must fail closed',
+        );
+        if (previousSecret === undefined) delete process.env.META_APP_SECRET;
+        else process.env.META_APP_SECRET = previousSecret;
+      } finally {
+        await raw.metaChannelCredential.deleteMany({
+          where: { id: { in: ['bleed_meta_cred_a', 'bleed_meta_cred_b'] } },
+        });
+        await raw.organizationChannel.deleteMany({
+          where: { id: { in: ['bleed_meta_channel_a', 'bleed_meta_channel_b'] } },
+        });
+      }
+    });
+
     await check('database: cross-org nested write is rejected by a composite FK', async () => {
       await assert.rejects(() =>
         runAsOrganization(orgA.organizationId, () =>
