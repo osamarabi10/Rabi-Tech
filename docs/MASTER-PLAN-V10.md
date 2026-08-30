@@ -27,7 +27,7 @@ disagree; code and measured execution win over both.
 | --- | --- | --- | --- | --- |
 | 0. Hardcoded-value audit | S | **Complete; audited 2026-08-31** | Read-only source and runtime-value inventory | Report only. No runtime values were changed. |
 | 1. Platform console repair | S | **Complete, `6f13e995`** | Existing `operational-state.tsx` | None beyond the serial gates. |
-| 2. Shared reporting primitives | M | **Not started** | UI contract for seven date presets, first-click opening, and export formats | Build once for Dashboard and Reports; no duplicate date/chart controls. |
+| 2. Shared reporting primitives | M | **Complete; measured 2026-08-31** | UI contract for seven date presets, first-click opening, and export formats | Built once for Dashboard and Reports; no duplicate date/chart controls. |
 | 3. Tenant Dashboard | L | **Absent**; `/overview` redirects to `/reports`; backend summary exists | Item 2 and the summary/analytics data contract | Every card needs real loading, empty, and error states. Do not use placeholder metrics. |
 | 4. Reports completion | L | **Partial**; six report tabs, plus an unexposed closures API | Item 2; owner approval of the eleven-report taxonomy | Propose the taxonomy and stop. Do not invent the missing destinations. |
 | 5. Broadcast completion | M | **Partial**; list, composer, scheduling, and delivery dialog exist | Existing OpenWA campaign path; Meta templates are not required for OpenWA-only work | OpenWA only. Meta business-initiated sends remain blocked. |
@@ -80,6 +80,30 @@ existing editions, but three compiled boundaries remain: the closed PlanCode
 set, invalid-setting fallbacks, and workflow/capability contracts. The clearest
 customer-facing defect is the public three-hour trial sentence. No code or
 configuration was changed in this audit.
+
+### Item 2 result: shared reporting primitives
+
+- `DateRangePicker` now owns seven presets (`today`, `yesterday`, last 7/30/90
+  days, this month, and last month), opens on its first click, and resolves
+  explicit local-day/month boundaries into the existing report range contract.
+- `ChartCard` now owns chart grouping plus SVG, PNG, and CSV export controls.
+  `LineChart` keeps its axes and date labels when the selected range has no
+  points, so empty data is not rendered as a missing chart.
+- Reports use these shared controls and expose a visible operational error
+  state with retry. Loading, empty, and error paths remain separate in the
+  report page and chart primitive.
+- The focused reporting browser check passed, and the complete matrix passed
+  **79/79** with the documented session fixture. The real stack was rebuilt
+  with `docker compose build frontend` and redeployed with `docker compose up
+  -d frontend`; backend, PostgreSQL, Redis, and OpenWA remained running.
+- The unmocked visual check at `localhost:18080/reports` passed all six
+  Arabic/English x 375/768/1440 combinations. Real platform login returned
+  200, the platform returned three subscribers, the selected workspace was
+  active, `/api/auth/me`, `/api/analytics/overview`, and
+  `/api/analytics/gateway` returned 200, and the report contained six
+  headlines and eight series points. Each viewport stayed on `/reports`, had
+  one date-range control and one export control, and had no horizontal
+  overflow. Screenshots are in `%TEMP%\\rabitech-reports-visual`.
 
 ## Dependency order
 

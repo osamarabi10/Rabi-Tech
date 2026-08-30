@@ -1,9 +1,18 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react';
+import { Download, FileImage, FileSpreadsheet, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 /**
  * Shared report primitives (M7).
@@ -107,6 +116,173 @@ export function ReportCard({
         {action}
       </header>
       <div className="p-4">{children}</div>
+    </section>
+  );
+}
+
+export type ChartExportValue = string | number | null | undefined;
+export type ChartExportRow = Record<string, ChartExportValue>;
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function chartSvgSource(svg: SVGSVGElement): string {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  const styles = getComputedStyle(document.documentElement);
+  const serialized = new XMLSerializer().serializeToString(clone);
+  return serialized.replace(/var\(--([^)]+)\)/g, (_match, name: string) => {
+    return styles.getPropertyValue(`--${name}`).trim() || '0 0% 0%';
+  });
+}
+
+function csvSource(rows: ChartExportRow[]): string {
+  const columns = rows.reduce<string[]>((all, row) => {
+    for (const key of Object.keys(row)) if (!all.includes(key)) all.push(key);
+    return all;
+  }, []);
+  const orderedColumns = columns.includes('date')
+    ? ['date', ...columns.filter((column) => column !== 'date')]
+    : columns;
+  const quote = (value: ChartExportValue) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+  return [
+    orderedColumns.map(quote).join(','),
+    ...rows.map((row) => orderedColumns.map((column) => quote(row[column])).join(',')),
+  ].join('\n');
+}
+
+/**
+ * A shared chart frame with the controls every report chart needs. The chart
+ * itself stays a child so a future Dashboard can use the same export and
+ * group-by contract without duplicating toolbar logic.
+ */
+export function ChartCard({
+  title,
+  children,
+  data,
+  filename = 'rabitech-report',
+  groupBy,
+  groupByOptions,
+  onGroupByChange,
+}: {
+  title: string;
+  children: ReactNode;
+  data: ChartExportRow[];
+  filename?: string;
+  groupBy?: string;
+  groupByOptions?: Array<{ value: string; label: string }>;
+  onGroupByChange?: (value: string) => void;
+}) {
+  const { t } = useT();
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [exporting, setExporting] = useState(false);
+
+  const withExport = async (task: () => Promise<void>) => {
+    setExporting(true);
+    try {
+      await task();
+    } catch {
+      toast.error(t('تعذر تصدير الرسم'));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const exportSvg = () => withExport(async () => {
+    const svg = chartRef.current?.querySelector('svg');
+    if (!svg) throw new Error('chart_not_found');
+    downloadBlob(new Blob([chartSvgSource(svg)], { type: 'image/svg+xml;charset=utf-8' }), `${filename}.svg`);
+  });
+
+  const exportPng = () => withExport(async () => {
+    const svg = chartRef.current?.querySelector('svg');
+    if (!svg) throw new Error('chart_not_found');
+    const source = chartSvgSource(svg);
+    const svgUrl = URL.createObjectURL(new Blob([source], { type: 'image/svg+xml;charset=utf-8' }));
+    try {
+      const image = new Image();
+      const loaded = new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error('chart_image_failed'));
+      });
+      image.src = svgUrl;
+      await loaded;
+      const rect = svg.getBoundingClientRect();
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(rect.width));
+      canvas.height = Math.max(1, Math.round(rect.height));
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('canvas_not_available');
+      context.fillStyle = getComputedStyle(chartRef.current || document.body).backgroundColor || '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('png_not_available');
+      downloadBlob(blob, `${filename}.png`);
+    } finally {
+      URL.revokeObjectURL(svgUrl);
+    }
+  });
+
+  const exportCsv = () => withExport(async () => {
+    downloadBlob(new Blob([`\uFEFF${csvSource(data)}`], { type: 'text/csv;charset=utf-8' }), `${filename}.csv`);
+  });
+
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          {groupByOptions && onGroupByChange && (
+            <select
+              value={groupBy ?? ''}
+              onChange={(event) => onGroupByChange(event.target.value)}
+              className="select-field-sm max-w-full"
+              aria-label={t('تجميع الرسم')}
+            >
+              <option value="">{t('كل السلاسل')}</option>
+              {groupByOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={exporting}
+                aria-label={t('تصدير الرسم')}
+                title={t('تصدير الرسم')}
+              >
+                <Download className="size-4" aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => void exportSvg()}>
+                <FileImage className="size-4" aria-hidden /> {t('تصدير SVG')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void exportPng()}>
+                <FileText className="size-4" aria-hidden /> {t('تصدير PNG')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void exportCsv()}>
+                <FileSpreadsheet className="size-4" aria-hidden /> {t('تصدير CSV')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+      <div ref={chartRef} className="p-4">{children}</div>
     </section>
   );
 }

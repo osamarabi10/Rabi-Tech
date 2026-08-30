@@ -5,6 +5,9 @@ import { Button } from '@/components/ui/button';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { Team } from '@/lib/data';
+import { DateRangePicker, type ReportPreset } from './date-range-picker';
+
+export { DateRangePicker, REPORT_PRESETS, resolveReportPreset, type ReportPreset } from './date-range-picker';
 
 /**
  * A channel, as the filter matches it.
@@ -33,16 +36,10 @@ export type ChannelOption = { id: string; label: string };
  */
 
 export type ReportFilters = {
-  days: number;
+  preset: ReportPreset;
   teamId: string;
   sessionId: string;
 };
-
-const RANGES = [
-  { days: 7, label: 'آخر ٧ أيام' },
-  { days: 30, label: 'آخر ٣٠ يوم' },
-  { days: 90, label: 'آخر ٩٠ يوم' },
-];
 
 export function ReportFilterBar({
   filters,
@@ -63,23 +60,7 @@ export function ReportFilterBar({
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-2">
-      <div className="flex rounded-md border border-border p-0.5">
-        {RANGES.map((range) => (
-          <button
-            key={range.days}
-            type="button"
-            onClick={() => onChange({ ...filters, days: range.days })}
-            className={cn(
-              'rounded px-2.5 py-1 text-caption font-medium transition-colors motion-micro',
-              filters.days === range.days
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-accent',
-            )}
-          >
-            {t(range.label)}
-          </button>
-        ))}
-      </div>
+      <DateRangePicker value={filters.preset} onChange={(preset) => onChange({ ...filters, preset })} disabled={loading} />
 
       <select
         value={filters.teamId}

@@ -78,8 +78,8 @@ Build or certify these before duplicating behavior in screens.
 
 - [x] P20 `ToggleCard`: title, explanation, switch, and disabled reason.
 - [x] P21 `FilterBuilder`: nested groups and context-specific save target.
-- [ ] P22 `DateRangePicker`: seven shared presets and first-click opening.
-- [ ] P23 `ChartCard`: group-by, SVG/PNG/CSV export, empty data inside intact axes.
+- [x] P22 `DateRangePicker`: seven shared presets and first-click opening.
+- [x] P23 `ChartCard`: group-by, SVG/PNG/CSV export, empty data inside intact axes.
 - [x] P24 `KpiTile`: value, labelled metric, delta arrow plus color.
 
 An existing similarly named component is not automatically checked. Certification
@@ -200,7 +200,7 @@ sub-rails or fake disabled Meta data.
 - Shared list, overlay, feedback, and composite implementations live under
   `components/ui/`; the existing global rail and report KPI implementation were
   audited against the requirements above.
-- P3-P4, P19, P22, and P23 remain open because their complete interaction
+- P3-P4 and P19 remain open because their complete interaction
   contracts are not yet present, even where a partial predecessor exists.
 
 ## Routing rules

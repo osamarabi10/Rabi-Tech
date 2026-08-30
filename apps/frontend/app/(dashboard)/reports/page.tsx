@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import {
   DistributionBars,
   EmptyNote,
+  ChartCard,
   MetricTile,
   ReportCard,
   formatDuration,
@@ -36,7 +37,13 @@ import {
 import { LineChart, type Series } from '@/components/reports/line-chart';
 import { VolumeHeatmap } from '@/components/reports/heatmap';
 import { DrilldownPanel } from '@/components/reports/drilldown-panel';
-import { ReportFilterBar, type ReportFilters } from '@/components/reports/filter-bar';
+import {
+  ReportFilterBar,
+  resolveReportPreset,
+  type ReportFilters,
+  type ReportPreset,
+} from '@/components/reports/filter-bar';
+import { ErrorState } from '@/components/ui/operational-state';
 
 /**
  * Reports.
@@ -92,20 +99,21 @@ function durationChangePct(current: number | null, previous: number | null): num
 export default function ReportsPage() {
   const { t } = useT();
   const [tab, setTab] = useState<TabKey>('overview');
-  const [filters, setFilters] = useState<ReportFilters>({ days: 30, teamId: '', sessionId: '' });
+  const [filters, setFilters] = useState<ReportFilters>({ preset: 'last_30_days', teamId: '', sessionId: '' });
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [volumeGroupBy, setVolumeGroupBy] = useState('');
   const [drilldown, setDrilldown] = useState<{ metric: DrilldownMetric; agentId?: string } | null>(
     null,
   );
   /** The campaign whose replies are open, if any. */
   const [repliesFor, setRepliesFor] = useState<string | null>(null);
 
-  const range = useMemo<ReportRange>(() => {
-    const to = new Date();
-    const from = new Date(to.getTime() - filters.days * 24 * 3600_000);
-    return { from: from.toISOString(), to: to.toISOString() };
-  }, [filters.days]);
+  const resolvedRange = useMemo(() => resolveReportPreset(filters.preset), [filters.preset]);
+  const range = useMemo<ReportRange>(
+    () => ({ from: resolvedRange.from, to: resolvedRange.to }),
+    [resolvedRange.from, resolvedRange.to],
+  );
 
   const query = useMemo(
     () => ({
@@ -179,6 +187,13 @@ export default function ReportsPage() {
     { key: 'webhooks', label: 'الويب هوك' },
   ];
 
+  const widerPreset: Partial<Record<ReportPreset, ReportPreset>> = {
+    today: 'last_7_days',
+    yesterday: 'last_7_days',
+    last_7_days: 'last_30_days',
+    last_30_days: 'last_90_days',
+  };
+
   return (
     <div className="flex-1 overflow-y-auto p-5">
       <h1 className="mb-3 text-h1 font-extrabold">{t('التقارير')}</h1>
@@ -211,7 +226,12 @@ export default function ReportsPage() {
       </nav>
 
       {failed ? (
-        <p className="py-10 text-center text-body text-destructive">{t('تعذّر جلب التقرير')}</p>
+        <ErrorState
+          title={t('تعذّر جلب التقرير')}
+          description={t('تعذّر جلب التقرير')}
+          retryLabel={t('حاول مرة أخرى')}
+          onRetry={load}
+        />
       ) : (
         <div className="space-y-4">
           {tab === 'overview' && (
@@ -219,14 +239,14 @@ export default function ReportsPage() {
               report={overview}
               loading={loading}
               onDrilldown={(metric) => setDrilldown({ metric })}
-              days={filters.days}
+              days={resolvedRange.days}
+              groupBy={volumeGroupBy}
+              onGroupByChange={setVolumeGroupBy}
               // Next range up, or null at the widest. Derived from the same
               // list the filter bar offers so the two cannot drift apart.
-              onWiden={
-                filters.days < 90
-                  ? () => setFilters((prev) => ({ ...prev, days: prev.days < 30 ? 30 : 90 }))
-                  : null
-              }
+              onWiden={widerPreset[filters.preset]
+                ? () => setFilters((prev) => ({ ...prev, preset: widerPreset[prev.preset]! }))
+                : null}
             />
           )}
           {tab === 'conversations' && <ConversationsTab report={conversations} loading={loading} />}
@@ -275,6 +295,8 @@ function OverviewTab({
   loading,
   onDrilldown,
   days,
+  groupBy,
+  onGroupByChange,
   onWiden,
 }: {
   report: OverviewReport | null;
@@ -282,6 +304,8 @@ function OverviewTab({
   onDrilldown: (metric: DrilldownMetric) => void;
   /** The window currently selected, so an empty one can name itself. */
   days: number;
+  groupBy: string;
+  onGroupByChange: (value: string) => void;
   /** Widen to the next range up. Absent once already at the widest. */
   onWiden: (() => void) | null;
 }) {
@@ -311,6 +335,16 @@ function OverviewTab({
       points: report.series.map((p) => ({ date: p.date, value: p.resolved })),
     },
   ];
+  const visibleSeries = groupBy ? series.filter((item) => item.key === groupBy) : series;
+  const values = { inbound: 'inbound', outbound: 'outbound', resolved: 'resolved' } as const;
+  const chartData = report.series.map((point) => {
+    const row: Record<string, string | number> = { date: point.date };
+    for (const item of visibleSeries) {
+      const key = values[item.key as keyof typeof values];
+      if (key) row[key] = point[key];
+    }
+    return row;
+  });
 
   /*
    * Nothing happened in this window.
@@ -379,9 +413,16 @@ function OverviewTab({
         />
       </div>
 
-      <ReportCard title={t('الحجم عبر الزمن')}>
-        <LineChart series={series} />
-      </ReportCard>
+      <ChartCard
+        title={t('الحجم عبر الزمن')}
+        filename="rabitech-message-volume"
+        data={chartData}
+        groupBy={groupBy}
+        onGroupByChange={onGroupByChange}
+        groupByOptions={series.map((item) => ({ value: item.key, label: item.label }))}
+      >
+        <LineChart series={visibleSeries} />
+      </ChartCard>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {rest.map((headline) => {

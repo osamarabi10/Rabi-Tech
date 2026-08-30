@@ -61,8 +61,6 @@ export function LineChart({ series, height = 200 }: { series: Series[]; height?:
     });
   }, [series, max]);
 
-  if (dates.length === 0) return <EmptyNote />;
-
   return (
     <div dir="ltr">
       <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -161,6 +159,12 @@ export function LineChart({ series, height = 200 }: { series: Series[]; height?:
           )}
         </svg>
 
+        {dates.length === 0 && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <EmptyNote />
+          </div>
+        )}
+
         {hover !== null && (
           <div className="pointer-events-none absolute top-0 rounded-md border border-border bg-popover px-2 py-1 text-micro shadow-md"
             style={{ insetInlineStart: `${(hover / Math.max(1, dates.length - 1)) * 100}%` }}
@@ -178,8 +182,8 @@ export function LineChart({ series, height = 200 }: { series: Series[]; height?:
       </div>
 
       <div className="mt-1 flex justify-between text-micro text-muted-foreground">
-        <span className="numeric">{dates[0]}</span>
-        <span className="numeric">{dates[dates.length - 1]}</span>
+        <span className="numeric">{dates[0] ?? '—'}</span>
+        <span className="numeric">{dates[dates.length - 1] ?? '—'}</span>
       </div>
     </div>
   );
