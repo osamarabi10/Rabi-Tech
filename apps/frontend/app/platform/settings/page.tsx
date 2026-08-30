@@ -9,6 +9,7 @@ import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ErrorState } from '@/components/ui/operational-state';
 
 /**
  * The two automations that run without a person, and the settings behind them.
@@ -28,10 +29,12 @@ export default function PlatformSettings() {
   const [trial, setTrial] = useState<Trial | null>(null);
   const [trialHours, setTrialHours] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const [dunning, trialSettings] = await Promise.all([
         api.get('/api/platform/dunning/settings'),
@@ -45,7 +48,7 @@ export default function PlatformSettings() {
         router.replace('/login');
         return;
       }
-      toast.error('Could not load settings');
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -126,6 +129,14 @@ export default function PlatformSettings() {
         <p className="mt-8 flex items-center gap-2 text-caption text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading…
         </p>
+      ) : loadError ? (
+        <ErrorState
+          className="mt-6"
+          title="Could not load settings"
+          description="The platform settings could not be loaded. Check the platform connection and try again."
+          retryLabel="Retry"
+          onRetry={load}
+        />
       ) : (
         <div className="mt-8 space-y-4">
           {/* ── the trial offer ─────────────────────────────────────────── */}

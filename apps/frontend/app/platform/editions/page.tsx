@@ -9,6 +9,7 @@ import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { EmptyState, ErrorState } from '@/components/ui/operational-state';
 
 /**
  * The edition catalogue — the product's offer, not one subscriber's deal.
@@ -64,20 +65,22 @@ export default function PlatformEditions() {
   const [editions, setEditions] = useState<Edition[]>([]);
   const [draft, setDraft] = useState<Record<string, Record<string, unknown>>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const { data } = await api.get('/api/platform/editions');
-      setEditions(data.editions);
+      setEditions(Array.isArray(data.editions) ? data.editions : []);
       setDraft({});
     } catch (error: any) {
       if ([401, 403].includes(error?.response?.status)) {
         router.replace('/login');
         return;
       }
-      toast.error('Could not load the edition catalogue');
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -137,7 +140,19 @@ export default function PlatformEditions() {
       </div>
 
       <div className="mt-8 space-y-8">
-        {editions.map((edition) => {
+        {loadError ? (
+          <ErrorState
+            title="Could not load editions"
+            description="The edition catalogue could not be loaded. Check the platform connection and try again."
+            retryLabel="Retry"
+            onRetry={load}
+          />
+        ) : editions.length === 0 ? (
+          <EmptyState
+            title="No editions configured"
+            description="The edition catalogue is empty. Add an edition through the server configuration before selling it."
+          />
+        ) : editions.map((edition) => {
           const pending = draft[edition.code] || {};
           const value = <K extends keyof Edition>(field: K): Edition[K] =>
             (pending[field as string] !== undefined ? pending[field as string] : edition[field]) as Edition[K];

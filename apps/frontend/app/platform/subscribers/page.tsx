@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { EmptyState, ErrorState } from '@/components/ui/operational-state';
 import { CommercialTermsDialog } from '@/components/platform/commercial-terms-dialog';
 import { FinanceDocumentTable } from '@/components/platform/finance-document-table';
 import { GatewayAlerts, HealthCell, useGatewayHealth } from '@/components/platform/gateway-health';
@@ -110,6 +111,7 @@ export default function SubscribersPage() {
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [usage, setUsage] = useState<Record<string, RollupUsage>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
@@ -131,6 +133,8 @@ export default function SubscribersPage() {
   const [form, setForm] = useState(EMPTY_FORM);
 
   const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
       const { data } = await api.get<Subscriber[]>('/api/platform/subscribers');
       setSubscribers(data);
@@ -139,8 +143,12 @@ export default function SubscribersPage() {
         return [subscriber.id, response.data] as const;
       }));
       setUsage(Object.fromEntries(usageRows));
-    } catch {
-      toast.error('Failed to load subscribers');
+    } catch (error: any) {
+      if ([401, 403].includes(error?.response?.status)) {
+        router.replace('/login');
+        return;
+      }
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -348,10 +356,19 @@ export default function SubscribersPage() {
             <span>Name</span><span>Slug</span><span>Billing</span><span>Users</span><span>WhatsApp</span><span>Active contacts</span><span>Outbound messages</span><span>Campaign sends</span><span>Gateway</span><span title="Left dot: status poll. Right dot: internal self-send probe.">Health</span><span className="sr-only">Actions</span>
           </div>
           {loading && <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading...</p>}
-          {!loading && subscribers.length === 0 && (
-            <p className="px-4 py-8 text-center text-sm text-muted-foreground">No subscribers</p>
+          {!loading && loadError && (
+            <ErrorState
+              compact
+              title="Could not load subscribers"
+              description="The subscriber list could not be loaded. Check the platform connection and try again."
+              retryLabel="Retry"
+              onRetry={load}
+            />
           )}
-          {subscribers.map((subscriber) => {
+          {!loading && !loadError && subscribers.length === 0 && (
+            <EmptyState compact title="No subscribers" description="Create a subscriber to see workspaces in this console." />
+          )}
+          {!loading && !loadError && subscribers.map((subscriber) => {
             const channel = subscriber.channels[0];
             return (
               <div key={subscriber.id} className="grid min-w-[1472px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_130px_140px_130px_minmax(190px,1.3fr)_92px_70px] items-center gap-3 border-b border-border px-4 py-3 text-sm last:border-0">

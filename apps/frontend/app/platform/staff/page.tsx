@@ -9,6 +9,7 @@ import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { EmptyState, ErrorState } from '@/components/ui/operational-state';
 import {
   Dialog,
   DialogContent,
@@ -54,6 +55,7 @@ export default function PlatformStaff() {
   const [catalogue, setCatalogue] = useState<Catalogue>({});
   const [suggested, setSuggested] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -63,6 +65,7 @@ export default function PlatformStaff() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const { data } = await api.get('/api/platform/staff');
       setStaff(data.staff ?? []);
@@ -73,7 +76,7 @@ export default function PlatformStaff() {
         router.replace('/login');
         return;
       }
-      toast.error('Could not load staff');
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -165,6 +168,20 @@ export default function PlatformStaff() {
         <p className="mt-8 flex items-center gap-2 text-caption text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading…
         </p>
+      ) : loadError ? (
+        <ErrorState
+          className="mt-6"
+          title="Could not load staff"
+          description="The platform staff list could not be loaded. Check the platform connection and try again."
+          retryLabel="Retry"
+          onRetry={load}
+        />
+      ) : staff.length === 0 ? (
+        <EmptyState
+          className="mt-6"
+          title="No staff accounts"
+          description="There are no platform staff accounts to display."
+        />
       ) : (
         <div className="mt-6 space-y-4">
           {staff.map((member) => {

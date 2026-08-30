@@ -8,6 +8,7 @@ import {
   Building2,
   Clock,
   CreditCard,
+  List as ListIcon,
   RefreshCw,
   Settings2,
   Users,
@@ -18,6 +19,7 @@ import { toast } from 'sonner';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { ErrorState } from '@/components/ui/operational-state';
 
 /**
  * What the platform owner sees first.
@@ -73,9 +75,11 @@ export default function PlatformHome() {
   const [subscribers, setSubscribers] = useState<Subscriber[] | null>(null);
   const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const [list, billing] = await Promise.all([
         api.get('/api/platform/subscribers'),
@@ -88,7 +92,7 @@ export default function PlatformHome() {
         router.replace('/login');
         return;
       }
-      toast.error('Could not load the console');
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -146,6 +150,12 @@ export default function PlatformHome() {
               Settings
             </Link>
           </Button>
+          <Button asChild size="sm" variant="outline">
+            <Link href="/platform/editions">
+              <ListIcon className="me-1.5 h-3.5 w-3.5" />
+              Editions
+            </Link>
+          </Button>
           <Button asChild size="sm">
             <Link href="/platform/subscribers">
               <Building2 className="me-1.5 h-3.5 w-3.5" />
@@ -155,6 +165,16 @@ export default function PlatformHome() {
         </div>
       </div>
 
+      {loadError ? (
+        <ErrorState
+          className="mt-8"
+          title="Could not load the platform console"
+          description="The platform console could not be loaded. Check the platform connection and try again."
+          retryLabel="Retry"
+          onRetry={load}
+        />
+      ) : (
+        <>
       {/*
         Money first, and the two numbers kept apart. Trial value is what this
         would be worth if every open trial converted, which is not revenue and
@@ -274,6 +294,8 @@ export default function PlatformHome() {
             ))}
           </div>
         </section>
+      )}
+        </>
       )}
     </main>
   );
