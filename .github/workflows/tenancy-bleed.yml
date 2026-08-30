@@ -40,6 +40,7 @@ jobs:
       DATABASE_URL: postgresql://admin:secret@localhost:5432/rabitech
       REDIS_URL: redis://localhost:6379
       JWT_SECRET: ci-tenancy-bleed-secret
+      CHANNEL_ENCRYPTION_KEY: ci-tenancy-bleed-encryption-key-32b
       OPENWA_WEBHOOK_SECRET: ci-webhook-secret
 
     steps:
