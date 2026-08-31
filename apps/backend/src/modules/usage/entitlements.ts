@@ -2,13 +2,14 @@ import { UsageMetric } from '@prisma/client';
 import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { getOrganizationConfig } from '../../utils/whatsapp-sessions';
-import { getTenantId } from '../../lib/tenant-context';
+import { getTenantId, runAsPlatform } from '../../lib/tenant-context';
 import {
   getMetricUsage,
   monthRange,
   recordMessageUsage,
   recordUsageEvents,
 } from './usage.service';
+import { PLAN_METRIC_FIELDS } from './metrics';
 import { resolveEntitlements, resolveMetricLimit } from '../billing/entitlements.resolver';
 
 export const ENTITLEMENTS: Record<UsageMetric, { blocksOutbound: boolean }> = {
@@ -39,6 +40,89 @@ export function isQuotaExceededError(error: unknown): error is QuotaExceededErro
   return error instanceof QuotaExceededError;
 }
 
+/**
+ * Raised when the edition does not include a capability at all.
+ *
+ * Distinct from QuotaExceededError, and the distinction is the whole point. A
+ * limit of zero was being enforced as though it were a quota, so a subscriber
+ * on an edition without broadcasts was told "monthly limit reached, resets on
+ * the 1st" — and waited for a reset that would never grant them anything. The
+ * two states need different words because they need different actions: one
+ * resolves by waiting, the other only by upgrading.
+ *
+ * 402 with PLAN_UPGRADE_REQUIRED rather than a new shape, matching
+ * SeatLimitError above and the masking refusal in system.routes.ts. There was
+ * already a working pattern for "your plan does not include this".
+ */
+export class CapabilityNotIncludedError extends Error {
+  readonly status = 402;
+  readonly code = 'PLAN_UPGRADE_REQUIRED';
+
+  constructor(
+    readonly metric: UsageMetric,
+    readonly planName: string,
+    /** Cheapest edition that would grant it, or null if none currently does. */
+    readonly requiredPlan: string | null,
+  ) {
+    super(
+      requiredPlan
+        ? `باقة ${planName} لا تشمل هذه الميزة. رقّي إلى ${requiredPlan} لتفعيلها.`
+        : `باقة ${planName} لا تشمل هذه الميزة.`,
+    );
+    this.name = 'CapabilityNotIncludedError';
+  }
+}
+
+export function isCapabilityNotIncludedError(error: unknown): error is CapabilityNotIncludedError {
+  return error instanceof CapabilityNotIncludedError;
+}
+
+export function capabilityErrorResponse(error: CapabilityNotIncludedError) {
+  return {
+    error: error.message,
+    code: error.code,
+    capability: error.metric,
+    requiredPlan: error.requiredPlan,
+  };
+}
+
+/**
+ * The cheapest active edition that grants a metric at all.
+ *
+ * Read from the catalogue, never hardcoded. A literal "requires Growth" starts
+ * lying the first time the owner moves a capability, and the console already
+ * carries one such map that will need the same treatment.
+ *
+ * Ordered by `sortOrder`, not price: ENTERPRISE is stored at zero because its
+ * price is negotiated, so ordering by price would answer "Enterprise" for
+ * everything. Ladder position is the honest ordering until pricingModel lands.
+ *
+ * Runs only when a capability has already been refused — once per rejected
+ * request, never on the send path — so the extra read costs nothing that
+ * matters.
+ */
+async function editionGranting(metric: UsageMetric): Promise<string | null> {
+  const field = (PLAN_METRIC_FIELDS as Record<string, string | undefined>)[metric];
+  if (!field) return null;
+  try {
+    const editions = await runAsPlatform('capability-required-edition', () =>
+      prisma.plan.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' } }));
+    const granting = editions.find((edition) => {
+      const value = (edition as unknown as Record<string, unknown>)[field];
+      return value === null || Number(value) > 0;
+    });
+    return granting?.name ?? null;
+  } catch (error) {
+    // The refusal stands either way. Failing to name the upgrade is a worse
+    // message, not a reason to let the request through.
+    logger.warn('Could not determine the edition granting a capability', {
+      metric,
+      error: String(error),
+    });
+    return null;
+  }
+}
+
 export function quotaErrorResponse(error: QuotaExceededError) {
   return {
     error: error.message,
@@ -61,6 +145,22 @@ export async function assertMetricAvailable(
   // honoured here or an enterprise deal is agreed and then not enforced.
   const limit = await resolveMetricLimit(organizationId, metric, reference);
   if (limit === null) return;
+
+  /*
+    Zero is not a quota. It is the catalogue saying this edition does not
+    include the capability, and it must not be reported as an exhausted
+    allowance — a subscriber told "resets on the 1st" waits for a reset that
+    grants nothing, and campaign recipients queue behind it as `pending`
+    forever because the worker treats a quota error as retryable.
+
+    Checked before usage is read, since no amount of usage is relevant to a
+    capability that was never included.
+  */
+  if (limit === BigInt(0)) {
+    const entitlements = await resolveEntitlements(organizationId, reference);
+    throw new CapabilityNotIncludedError(metric, entitlements.planName, await editionGranting(metric));
+  }
+
   const current = await getMetricUsage(metric, reference);
   if (current + BigInt(quantity) > limit) {
     throw new QuotaExceededError(metric, current, limit, monthRange(reference).end);

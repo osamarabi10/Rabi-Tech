@@ -7,6 +7,8 @@ import { getPrimarySession } from '../../utils/whatsapp-sessions';
 import { requirePermission } from '../../middleware/rbac.middleware';
 import {
   assertMetricAvailable,
+  capabilityErrorResponse,
+  isCapabilityNotIncludedError,
   isQuotaExceededError,
   quotaErrorResponse,
 } from '../usage/entitlements';
@@ -264,6 +266,11 @@ router.post('/:id/send', requirePermission('campaign:send'), async (req, res) =>
     await campaignQueue.addBulk(jobs);
     res.json({ queued: jobs.length });
   } catch (error) {
+    // Capability first: a zero broadcast allowance is not an exhausted quota,
+    // and telling this caller to wait for a reset would be false.
+    if (isCapabilityNotIncludedError(error)) {
+      return res.status(error.status).json(capabilityErrorResponse(error));
+    }
     if (isQuotaExceededError(error)) return res.status(error.status).json(quotaErrorResponse(error));
     logger.error('Campaign send queue failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });

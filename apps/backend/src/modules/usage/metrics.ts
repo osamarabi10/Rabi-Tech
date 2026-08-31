@@ -27,3 +27,21 @@ export const METRIC_LIMIT_FIELDS = {
   ai_tokens_out: 'monthlyAiTokensOutLimit',
   campaign_sends: 'monthlyCampaignSendsLimit',
 } as const satisfies Record<UsageMetric, keyof OrganizationConfig>;
+
+/**
+ * Which `Plan` column carries each metric's edition allowance.
+ *
+ * Partial on purpose, and the gaps are the point. `messages_inbound` is
+ * deliberately unmetered by edition — charging a tenant for messages their
+ * *customers* send would let anyone run up their bill — and the AI meters have
+ * no edition column yet, so both resolve from OrganizationConfig alone.
+ *
+ * Distinct from METRIC_LIMIT_FIELDS above, which names the *enforced* column on
+ * OrganizationConfig. This one answers a different question: which edition
+ * would grant this metric at all, which is what an upgrade prompt has to know.
+ */
+export const PLAN_METRIC_FIELDS = {
+  messages_outbound: 'monthlyOutboundMessagesLimit',
+  active_contacts: 'monthlyActiveContactsLimit',
+  campaign_sends: 'monthlyCampaignSendsLimit',
+} as const satisfies Partial<Record<UsageMetric, string>>;

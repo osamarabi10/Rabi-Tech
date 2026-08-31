@@ -2540,12 +2540,21 @@ async function databaseAudits() {
       });
 
       await runAsOrganization(orgA.organizationId, async () => {
+        /*
+          A limit of zero is refused as a capability the edition does not
+          include, not as an exhausted quota. This assertion used to require
+          USAGE_QUOTA_EXCEEDED and a message telling the caller to wait — which
+          is false at zero from any layer, because the reset grants zero again.
+
+          Stricter than it was: it now also asserts the message makes no promise
+          about a reset, which is the part that was actually misleading.
+        */
         await assert.rejects(
           () => prepareOutboundSend(orgA.records[0].contact.phone),
-          (error) => error.code === 'USAGE_QUOTA_EXCEEDED'
+          (error) => error.code === 'PLAN_UPGRADE_REQUIRED'
+            && error.status === 402
             && error.metric === 'messages_outbound'
-            && error.limit === 0n
-            && /Increase the plan limit/.test(error.message),
+            && !/resets|1st|wait until/i.test(error.message),
         );
         await assertMetricAvailable('messages_inbound');
         const beforeInbound = await getMetricUsage('messages_inbound');

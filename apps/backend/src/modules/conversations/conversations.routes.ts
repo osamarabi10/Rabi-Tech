@@ -16,7 +16,12 @@ import { auditConversation } from '../../lib/audit';
 import { requirePermission, requireSupervisor } from '../../middleware/rbac.middleware';
 import { sendCsatPrompt } from '../../utils/client-feedback';
 import { notifyAssigned, notifyMentioned, notifyResolved } from '../../utils/notification-service';
-import { isQuotaExceededError, quotaErrorResponse } from '../usage/entitlements';
+import {
+  capabilityErrorResponse,
+  isCapabilityNotIncludedError,
+  isQuotaExceededError,
+  quotaErrorResponse,
+} from '../usage/entitlements';
 import { describeSendFailure } from '../../utils/send-failure';
 import { signMediaUrl } from '../../utils/media-url';
 import { requireTeamId } from '../../utils/teams';
@@ -161,6 +166,9 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
     res.json(user.maskPhoneAndEmail ? maskConversationContacts(full) : full);
   } catch (err) {
     logger.error('start conversation failed', { error: String(err), requestId: (req as any).id, userId: req.user?.id });
+    if (isCapabilityNotIncludedError(err)) {
+      return res.status(err.status).json(capabilityErrorResponse(err));
+    }
     if (isQuotaExceededError(err)) return res.status(err.status).json(quotaErrorResponse(err));
     res.status(500).json({ error: 'فشل فتح المحادثة — تحقق من اتصال واتساب', requestId: (req as any).id });
   }
@@ -504,6 +512,11 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
     // Always return the persisted message so the thread renders it. A failed send is
     // surfaced via status === 'FAILED' + sendError, never by discarding the record.
     if (sendError) {
+      // Both keep the persisted message, for the same reason: the record of
+      // what the agent wrote must survive a refusal to send it.
+      if (isCapabilityNotIncludedError(sendError)) {
+        return res.status(sendError.status).json({ ...capabilityErrorResponse(sendError), message: msg });
+      }
       if (isQuotaExceededError(sendError)) {
         return res.status((sendError as any).status).json({ ...quotaErrorResponse(sendError as any), message: msg });
       }
@@ -567,6 +580,11 @@ router.post('/:id/messages/:messageId/retry', requirePermission('conversation:cr
         where: { id: message.id },
         data: { failureReason: failure.reason },
       });
+      // A retry cannot succeed later if the edition never included the
+      // capability, so this must not read as a temporary refusal.
+      if (isCapabilityNotIncludedError(retryErr)) {
+        return res.status(retryErr.status).json(capabilityErrorResponse(retryErr));
+      }
       if (isQuotaExceededError(retryErr)) {
         return res.status((retryErr as any).status).json(quotaErrorResponse(retryErr as any));
       }

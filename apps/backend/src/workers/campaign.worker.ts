@@ -4,7 +4,7 @@ import { prisma } from '../prisma';
 import { getIO, SocketEvents } from '../socket';
 import { socketRoom } from '../socket/rooms';
 import { runAsOrganization } from '../lib/tenant-context';
-import { isQuotaExceededError } from '../modules/usage/entitlements';
+import { isCapabilityNotIncludedError, isQuotaExceededError } from '../modules/usage/entitlements';
 import { resolveEntitlements } from '../modules/billing/entitlements.resolver';
 import { getEdition } from '../modules/billing/editions.service';
 import {
@@ -100,7 +100,22 @@ export async function processCampaignJob(data: any) {
         await prisma.campaignRecipient.update({
           where: { id: recipientId },
           data: {
-            status: isQuotaExceededError(err) ? 'pending' : 'failed',
+            /*
+              `pending` means "try again when the quota resets". That is only
+              true for an exhausted allowance. A capability the edition never
+              included has no reset, so recipients marked pending under one sat
+              in the queue forever, waiting on a date that would change nothing
+              — this is the state-machine half of that bug, not just a bad
+              message.
+
+              CapabilityNotIncludedError is not a QuotaExceededError, so it
+              already reaches `failed` here. Stated explicitly rather than left
+              to fall through, because the next person to add an error type to
+              this branch needs to see which way it has to go and why.
+            */
+            status: isQuotaExceededError(err) && !isCapabilityNotIncludedError(err)
+              ? 'pending'
+              : 'failed',
             error: err.message,
           },
         });

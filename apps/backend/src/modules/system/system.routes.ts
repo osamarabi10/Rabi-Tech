@@ -17,8 +17,6 @@ import {
   invalidateOrganizationConfig,
 } from '../../utils/whatsapp-sessions';
 import {
-  isQuotaExceededError,
-  quotaErrorResponse,
   assertSeatAvailable,
   isSeatLimitError,
   seatLimitResponse,
