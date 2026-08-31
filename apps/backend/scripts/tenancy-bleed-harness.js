@@ -4212,6 +4212,7 @@ async function databaseAudits() {
 
     await check('billing: Standard resolves end-to-end as messaging only', async () => {
       const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
+      const { PLAN_ENTITLEMENTS } = require('../src/modules/billing/plans');
       const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
@@ -4223,15 +4224,50 @@ async function databaseAudits() {
       assert.ok((standard.monthlyActiveContactsLimit ?? 0) > 0, 'Standard must allow contacts');
       assert.ok((standard.monthlyOutboundMessagesLimit ?? 0) > 0, 'Standard must allow outbound');
 
-      // Everything past inbound and outbound is closed. Zero, not "a few":
-      // a tier granting three workflows invites an argument about why not four.
+      // Broadcasting stays closed: it is a feature, not part of inbound and
+      // outbound, and a tier granting three sends invites an argument about
+      // why not four.
       assert.equal(standard.monthlyCampaignSendsLimit, 0, 'broadcasting is not messaging');
-      assert.equal(standard.customFieldsLimit, 0);
-      assert.equal(standard.workflowsLimit, 0);
       assert.equal(standard.whiteLabel, false);
       assert.equal(standard.customDomain, false);
       assert.equal(standard.maskContactDetails, false);
       assert.equal(standard.autoProvisionGateway, false);
+
+      /*
+        Custom fields and workflows used to be asserted at zero here, on the
+        same "zero, not a few" reasoning. That reasoning was sound in isolation
+        and wrong against the rung below: FREE grants 5 fields and 1 workflow,
+        so STANDARD at zero meant a paying customer got less than a non-paying
+        one on two axes.
+
+        Replaced by the invariant that actually matters, which is stronger than
+        the assertion it removes because it holds for every edition rather than
+        this one: no paid edition may grant less than the free one, on any
+        limit. That is the property the old zeros violated, and the one a
+        future pricing edit is most likely to violate again.
+      */
+      const free = getEdition('FREE');
+      const LIMITS = [
+        'monthlyActiveContactsLimit',
+        'monthlyOutboundMessagesLimit',
+        'monthlyCampaignSendsLimit',
+        'customFieldsLimit',
+        'usersLimit',
+        'workflowsLimit',
+      ];
+      for (const [code, edition] of Object.entries(PLAN_ENTITLEMENTS)) {
+        if (code === 'FREE') continue;
+        for (const field of LIMITS) {
+          const freeValue = free[field];
+          const paidValue = edition[field];
+          // Null is unlimited, so it can never be the lesser of the two.
+          if (paidValue === null) continue;
+          assert.ok(
+            freeValue !== null && paidValue >= freeValue,
+            `${code}.${field} (${paidValue}) grants less than FREE (${freeValue})`,
+          );
+        }
+      }
 
       // And it resolves for a real organization, not just in the catalogue.
       await setTierGoverned(orgB, 'STANDARD');

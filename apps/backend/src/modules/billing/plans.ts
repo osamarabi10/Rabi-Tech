@@ -125,10 +125,18 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
   /**
    * Messaging and nothing else: a shared inbox on the subscriber's own number.
    *
-   * Every feature limit is zero rather than small. A tier that grants "a few"
-   * workflows invites a support conversation about why three is not four; one
-   * that grants none states the boundary. Campaign sends are zero for the same
-   * reason - broadcasting is a feature, not part of inbound and outbound.
+   * Campaign sends are zero: broadcasting is a feature, not part of inbound and
+   * outbound, and a tier that grants "a few" of it invites an argument about
+   * why three is not four while one that grants none states a boundary.
+   *
+   * That rule used to apply to custom fields and workflows too, and it made
+   * STANDARD grant strictly *less* than FREE — 0 fields against 5, 0 workflows
+   * against 1 — so a paying customer got less than a non-paying one on two
+   * axes. The rule was sound in isolation and wrong against the rung below it.
+   *
+   * These two now match FREE, which is the minimum that removes the inversion
+   * rather than a considered answer to what STANDARD should offer. That answer
+   * is a pricing decision and is editable from the console.
    *
    * The entry paid tier: clearly above the Free trial's 100/100 and clearly
    * below Growth's 2,500 at ~$49. Set by the product owner, and editable from
@@ -142,9 +150,9 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyActiveContactsLimit: 500,
     monthlyOutboundMessagesLimit: 2000,
     monthlyCampaignSendsLimit: 0,
-    customFieldsLimit: 0,
+    customFieldsLimit: 5,
     usersLimit: 2,
-    workflowsLimit: 0,
+    workflowsLimit: 1,
     monthlyAiTokensInLimit: null,
     monthlyAiTokensOutLimit: null,
     campaignRateMax: 1,
