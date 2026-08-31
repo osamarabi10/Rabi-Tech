@@ -88,14 +88,27 @@ not. A tenant-scoped `GET /api/campaigns` query therefore failed with Prisma
 `P2022` until the route was repaired to use an explicit pre-migration select.
 No migration was applied during that repair.
 
-**Still unapplied as of 2026-08-31 after the invoice integrity phase.**
-`20260920090000_meta_template_lifecycle` remains written and unapplied.
-`20260921090000_invoice_reference_integrity` was applied by direct SQL and
-recorded with `prisma migrate resolve --applied`, deliberately **not** with
-`prisma migrate deploy` — deploy would have applied the meta template
-migration too, as a side effect of an unrelated phase. Anyone running
-`migrate deploy` on this database should know it will apply the meta template
-lifecycle migration first.
+**Resolved 2026-08-31, opening the Editions phase.**
+`20260920090000_meta_template_lifecycle` is now applied and
+`prisma migrate status` reports the database up to date. `migrate deploy` is
+the normal path again.
+
+Historical note, because the workaround is visible in the git history: the
+invoice integrity migration `20260921090000_invoice_reference_integrity` was
+applied by direct SQL and recorded with `prisma migrate resolve --applied`,
+deliberately **not** with `migrate deploy` — at that time deploy would have
+applied the meta template migration too, as a side effect of an unrelated
+phase. That constraint no longer applies.
+
+Applying it also closed drift wider than this section had recorded: three
+further schema/database mismatches existed, including
+`MetaChannelCredential.businessPortfolioId`, which live code in
+`meta.service.ts` **writes**, so connecting a Meta channel failed with `P2022`.
+The campaigns route's explicit pre-migration column list has been removed. See
+D-6 and D-7 in [KNOWN-DEFECTS.md](KNOWN-DEFECTS.md) — D-7 records that
+`MetaTemplateSend`'s `ON DELETE RESTRICT` foreign keys will start refusing
+contact, campaign and subscriber deletions once send rows exist, and that no
+`P2003` handling exists anywhere in the backend.
 
 ### HARD RULE — invoice and receipt numbering cannot be rolled back
 

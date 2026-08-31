@@ -75,21 +75,12 @@ const SEND_SPACING_MS = Number(process.env.CAMPAIGN_SEND_SPACING_MS || 1200);
 router.get('/', async (_req, res) => {
   try {
     const campaigns = await prisma.campaign.findMany({
-      // Keep the legacy list readable while the Meta template migration is
-      // pending. Prisma's default selection would request the new nullable
-      // Campaign columns from a database that does not have them yet.
-      select: {
-        id: true,
-        organizationId: true,
-        sessionId: true,
-        title: true,
-        message: true,
-        mediaUrl: true,
-        status: true,
-        scheduledAt: true,
-        sentAt: true,
-        createdAt: true,
-        audienceFilter: true,
+      // The explicit column list this replaces existed only because
+      // 20260920090000_meta_template_lifecycle was written but unapplied, so
+      // Prisma's default selection asked for Campaign columns the database did
+      // not have and the query failed with P2022. That migration is applied;
+      // the default selection is correct again.
+      include: {
         session: true,
         _count: { select: { recipients: true } },
       },

@@ -164,51 +164,93 @@ caught a numbering regression. Now 17/17, deterministic.
 
 ---
 
-## D-6 · A written migration is unapplied, and `migrate deploy` will apply it
+## D-6 · A written migration was unapplied — RESOLVED
 
-**Where:** `apps/backend/prisma/migrations/20260920090000_meta_template_lifecycle/`.
+**Resolved 2026-08-31.** `20260920090000_meta_template_lifecycle` is applied.
+`prisma migrate status` reports the database up to date with zero pending
+migrations, so `migrate deploy` behaves normally again and no phase after this
+one needs the direct-SQL-plus-`migrate resolve` workaround.
 
-**What is wrong:** the migration exists on disk and is **not applied** to the
-live database. `prisma migrate status` reports it as pending. Anyone running
-`prisma migrate deploy` — for any reason, in any unrelated phase — applies it,
-because deploy applies *every* pending migration in order and offers no way to
-select one.
+Kept as a record because the *shape* of the problem recurs: a migration written
+ahead of the code that needs it leaves the generated Prisma client describing a
+database that does not exist yet, and every read or write of the new fields
+fails with `P2022` until someone notices.
 
-That is the trap: the command you reach for to ship your own schema change
-also ships someone else's, silently, as a side effect. Nothing in the output
-distinguishes the two.
+**The drift was wider than originally recorded.** The checkpoint documented
+`Campaign.metaTemplateId`. Three more existed:
 
-**Why it is unapplied:** it was written ahead of the send path it supports. The
-generated Prisma client already knows the lifecycle fields, including
-`Campaign.metaTemplateId`, while the live `Campaign` table does not — a
-mismatch that made a tenant-scoped `GET /api/campaigns` fail with Prisma
-`P2022` until the route was repaired to use an explicit pre-migration select.
-That repair applied no migration. Recorded in commit `b5f6de69`
-("docs: record unapplied migration hazard") and in
-[RESPONDIO-PARITY-CHECKPOINT.md](RESPONDIO-PARITY-CHECKPOINT.md) §2.
+| Declared in `schema.prisma` | Was missing from the database |
+|---|---|
+| `MetaChannelCredential.businessPortfolioId` | yes — **and written by live code** |
+| `MetaMessageTemplate` (whole model) | yes |
+| `MetaTemplateSend` (whole model) | yes |
+| `Campaign.metaTemplateId` / `metaTemplateBindings` | yes |
 
-**What the invoice integrity phase did about it: nothing, deliberately.**
-`20260921090000_invoice_reference_integrity` was applied by piping its
-`migration.sql` straight to `psql` and then recording it with:
+The `businessPortfolioId` one was not latent: `meta.service.ts` writes it in the
+channel-connect `persist()` path, so connecting a Meta channel failed. The
+campaigns route had been repaired with an explicit pre-migration column list;
+nothing had repaired this one, because nothing had looked.
+
+**Lesson worth keeping:** when a migration is found unapplied, enumerate the
+*whole* diff between `schema.prisma` and the live database rather than fixing
+the symptom that was reported. One `P2022` being visible does not mean it is
+the only one.
+
+Pre-flight checks run before applying: `MetaChannelCredential` held zero rows,
+so the globally-unique `wabaId` and `businessPortfolioId` indexes could not
+collide. The campaigns pre-migration select has been removed.
+
+---
+
+## D-7 · `MetaTemplateSend` will start refusing deletes, and nothing handles it
+
+**Where:** the FK constraints added by
+`20260920090000_meta_template_lifecycle` on `MetaTemplateSend`.
+
+**What is wrong — not yet, but as soon as rows exist.** Four of its foreign
+keys are `ON DELETE RESTRICT`:
 
 ```
-npx prisma migrate resolve --applied 20260921090000_invoice_reference_integrity
+MetaTemplateSend.templateId          -> MetaMessageTemplate   RESTRICT
+MetaTemplateSend.campaignId          -> Campaign              RESTRICT
+MetaTemplateSend.campaignRecipientId -> CampaignRecipient     RESTRICT
+MetaTemplateSend.contactId           -> Contact               RESTRICT
 ```
 
-`migrate deploy` was avoided precisely so the meta template migration stayed
-where it was found. Applying another phase's migration as a side effect of
-this one would have been an unrequested schema change to a shared database.
+`RESTRICT` is the correct choice — a send record is evidence that a message was
+dispatched, and it must not vanish because someone tidied a contact list. The
+problem is the error path, not the constraint.
 
-**Cost:** every phase from here pays a tax — either it repeats this
-direct-SQL-plus-resolve workaround, or it applies the meta template migration
-without meaning to. The workaround is not free: it bypasses the checksum
-Prisma would otherwise record for the SQL it actually ran.
+**The table is empty today** because no send path is enabled, so nothing can
+fail yet. That is exactly why this is written down now rather than discovered
+later.
 
-**Fix — must be a deliberate decision, not a side effect.** Someone has to
-choose one:
-1. Apply it, and repair whatever the pre-migration selects were working around;
-2. Withdraw it until the send path is ready.
+**What happens once send rows exist:**
 
-**This is the opening item for the Editions phase.** Editions carries real
-schema work and will want `migrate deploy` to behave normally. It should not
-start by inheriting a command it cannot safely run.
+1. **Contact and campaign deletion.** The application currently has **no**
+   contact-delete or campaign-delete path at all — the only deletes under
+   `contacts.routes.ts` are tags, custom fields and tag unlinks. So the first
+   person to add one inherits a refusal they did not design for.
+2. **Subscriber deletion — the live exposure.** `DELETE /subscribers/:id`
+   exists and cascades from `Organization`. Both `Contact` and
+   `MetaTemplateSend` cascade from `Organization`, and there is a `RESTRICT`
+   between them. Whether the cascade succeeds depends on the order PostgreSQL
+   processes the two, which is not specified. **This is unverified and cannot
+   be verified while the table is empty.** It may be fine; it may make
+   subscriber deletion fail once a single send row exists.
+3. **There is no `P2003` handling anywhere in the backend.** A grep for
+   `P2003`, `ForeignKeyConstraint` or foreign-key error handling returns
+   nothing. A refusal therefore surfaces as an unhandled 500 with a Prisma
+   error string, not as a message explaining that the record cannot be deleted
+   because messages were sent against it.
+
+**Cost:** an operator deleting a subscriber sees a 500 and cannot tell whether
+the deletion partly happened. That is the worst version of this failure.
+
+**Fix — do it before the Meta send path ships, not after:**
+1. Decide the product answer. Is a contact with send history undeletable, or
+   soft-deletable, or does deleting it null the `contactId` on the send record?
+   All three are defensible; none is implied by the schema.
+2. Catch `P2003` and return a 409 that names what is blocking the delete.
+3. Verify the subscriber-delete cascade with at least one send row present,
+   which is only possible once the send path exists.
