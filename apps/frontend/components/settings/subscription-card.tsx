@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { CreditCard, ArrowUpCircle, AlertTriangle, ExternalLink, ReceiptText, Users } from 'lucide-react';
 import { fetchBillingSummary, type BillingSummary } from '@/lib/data';
@@ -9,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/lib/format-time';
-import { EmptyState } from '@/components/ui/operational-state';
+import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
+import { useResource } from '@/lib/async-resource';
 
 /** Highest plan needs no upsell; everyone else gets an upgrade path. */
 const TOP_PLAN = 'ENTERPRISE';
@@ -27,28 +27,61 @@ function money(cents: number, currency = 'ILS') {
  */
 export function SubscriptionCard() {
   const { t } = useT();
-  const [data, setData] = useState<BillingSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+  /*
+    The first consumer of the four-state resource hook — see
+    docs/FETCH-STATE-PATTERN.md. The rest of the app stays on the manual
+    loading/loadError pattern until migrated deliberately.
 
-  useEffect(() => {
-    fetchBillingSummary()
-      .then(setData)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+    What this fixes here: the previous version swallowed the error
+    (`.catch(() => {})`) and then returned null, so a failed load and an
+    organization with no billing summary rendered identically — nothing at all.
+    A tenant seeing a blank space where their plan should be had no way to tell
+    whether to retry or to call support.
+  */
+  const resource = useResource<BillingSummary>(() => fetchBillingSummary(), []);
 
-  if (loading) {
+  if (resource.status === 'loading') {
     return (
       <Card>
-        <CardContent className="py-6 text-center text-xs text-muted-foreground">
-          {t('جاري التحميل...')}
+        <CardContent className="py-4">
+          <LayoutSkeleton label={t('جاري التحميل...')} rows={3} />
         </CardContent>
       </Card>
     );
   }
-  if (!data) return null;
 
-  const { plan, seats, subscription, invoices, quotaDrift, organization, commercial } = data;
+  if (resource.status === 'error') {
+    return (
+      <Card>
+        <CardContent className="py-4">
+          <ErrorState
+            compact
+            title={t('تعذر تحميل الاشتراك')}
+            description={t('تعذر تحميل تفاصيل الاشتراك. تحقق من الاتصال وحاول مرة أخرى.')}
+            retryLabel={t('إعادة المحاولة')}
+            onRetry={resource.retry}
+          />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (resource.status === 'empty') {
+    return (
+      <Card>
+        <CardContent className="py-4">
+          <EmptyState
+            compact
+            icon={CreditCard}
+            title={t('لا يوجد اشتراك')}
+            description={t('لا توجد تفاصيل اشتراك لهذه المؤسسة بعد.')}
+          />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const { plan, seats, subscription, invoices, quotaDrift, organization, commercial } = resource.data;
   const canUpgrade = plan.code !== TOP_PLAN;
   const discounted = commercial.isOverridden
     && commercial.discountPercent !== null
