@@ -61,8 +61,10 @@ async function uniqueSlug(base: string): Promise<string> {
  * say why. The owner would be left believing the console does not work.
  *
  * So the constant seeds a plan that does not exist yet and never touches one
- * that does. `PLAN_ENTITLEMENTS` stays the seed source and the boot fallback;
- * once a row exists, the row is the truth.
+ * that does. `PLAN_ENTITLEMENTS` is now the seed source and **nothing else** —
+ * it is no longer a boot fallback, because editions.service.ts falls to a
+ * restricted floor rather than to the constant. Once a row exists, the row is
+ * the only truth there is.
  */
 export async function ensurePlans(): Promise<void> {
   await runAsPlatform('billing-ensure-plans', async () => {

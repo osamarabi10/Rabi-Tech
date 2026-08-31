@@ -47,7 +47,7 @@ import { verifyMediaProxyToken, verifyMediaToken } from './utils/signed-url';
 import { runAsOrganization, runAsPlatform } from './lib/tenant-context';
 import { assertKnownPaymentProvider } from './modules/billing/provider-registry';
 import { ensurePlans } from './modules/billing/billing.service';
-import { startEditionRefresh } from './modules/billing/editions.service';
+import { loadEditionCatalogueOrThrow, startEditionRefresh } from './modules/billing/editions.service';
 import { startBillingReconciliationWorker } from './workers/billing-reconciliation.worker';
 import { scheduleGatewayHealthChecks, startGatewayHealthWorker } from './workers/gateway-health.worker';
 import { scheduleAnalyticsRollup, startAnalyticsRollupWorker } from './workers/analytics-rollup.worker';
@@ -504,11 +504,36 @@ const gracefulShutdown = async (signal: string) => {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-httpServer.listen(Number(PORT), HOST, () => {
-  ensurePlans().catch((error) => logger.error('Failed to ensure billing plans', { error: String(error) }));
-  // Seed first, then load the catalogue into memory. The accessor is
-  // synchronous and falls back to the constant until this completes, so a slow
-  // first read costs correctness for a moment, not availability.
+/**
+ * What must be true before the port opens.
+ *
+ * The edition catalogue used to load inside the listen callback, so the server
+ * was already accepting traffic while it loaded and the synchronous accessor
+ * covered the gap with the compiled-in constant. The constant is no longer a
+ * fallback — reads now fall to a restricted floor — so that gap would mean
+ * denying every entitlement check to real customers while reporting healthy to
+ * a load balancer.
+ *
+ * Seed first, then load: ensurePlans writes the rows the catalogue reads.
+ */
+async function bootGate(): Promise<void> {
+  // Each step names itself. Both fail the same way when the database is down,
+  // and a log line that blames the catalogue for a seeding failure sends the
+  // reader to the wrong place.
+  try {
+    await ensurePlans();
+  } catch (error) {
+    throw new Error(
+      `Could not seed the plan catalogue: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const editions = await loadEditionCatalogueOrThrow();
+  logger.info('Edition catalogue loaded; opening the port', { editions });
+}
+
+function onListening(): void {
+  // The catalogue is already in memory. This only keeps it warm.
   startEditionRefresh();
   logger.info(`RabiTech Backend running on http://${HOST}:${PORT}`);
   if (process.env.DISABLE_CAMPAIGN_WORKER === '1') {
@@ -601,4 +626,23 @@ httpServer.listen(Number(PORT), HOST, () => {
       logger.error('Failed to schedule Meta template sync', { error: String(error) }),
     );
   }
-});
+}
+
+/**
+ * Start, or fail loudly.
+ *
+ * Exit 1 rather than retrying. A container that exits is restarted by its
+ * supervisor with the reason in the log; a process that retries silently looks
+ * alive while serving nothing, and that is the failure this gate exists to
+ * prevent. The database being unreachable is now a hard boot dependency, which
+ * it already was in practice — this only makes it say so.
+ */
+bootGate().then(
+  () => httpServer.listen(Number(PORT), HOST, onListening),
+  (error: unknown) => {
+    logger.error('Backend failed to start; the port was never opened', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exit(1);
+  },
+);

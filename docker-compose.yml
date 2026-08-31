@@ -134,6 +134,14 @@ services:
       - DISABLE_WORKFLOW_WORKER=${DISABLE_WORKFLOW_WORKER:-0}
       - WORKFLOW_CONCURRENCY=${WORKFLOW_CONCURRENCY:-4}
       - WORKFLOW_WEBHOOK_ALLOW_HTTP=${WORKFLOW_WEBHOOK_ALLOW_HTTP:-0}
+      # Edition catalogue. The backend now refuses to open its port until the
+      # catalogue loads, and falls to a deny-everything floor if it goes
+      # STALE_AFTER unrefreshed — so these two decide how long a database
+      # outage takes to become a customer-visible restriction.
+      # EDITION_REFRESH_MS was already read by the code and was never listed
+      # here, which is exactly the silent-default case this file guards against.
+      - EDITION_REFRESH_MS=${EDITION_REFRESH_MS:-30000}
+      - EDITION_STALE_AFTER_MS=${EDITION_STALE_AFTER_MS:-600000}
     networks:
       default:
         aliases:

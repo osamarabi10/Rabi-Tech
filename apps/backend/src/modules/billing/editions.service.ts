@@ -18,26 +18,102 @@ import { PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, normalizePlanCode } from
  * refresh keeps warm. The call sites change by one identifier and keep their
  * shape, which is what makes a nineteen-site migration reviewable.
  *
- * ## Why the cache never expires into the constant
+ * ## Why the cache expires into a floor, not into the constant
  *
- * A TTL that empties the cache would mean that thirty seconds after the last
- * refresh every enforcement site silently reverts to the compiled-in defaults —
- * an owner's price change would work, then stop working, then work again. The
- * cache is instead *replaced* by a periodic refresh and never emptied. The
- * constant is the fallback for exactly one situation: the window before the
- * first load completes at boot.
+ * This reasoning was inverted deliberately; the previous version of this
+ * comment argued the opposite, and it was right at the time.
+ *
+ * The old argument: a TTL that empties the cache would mean every enforcement
+ * site silently reverts to the compiled-in defaults thirty seconds after the
+ * last refresh — an owner's price change would work, then stop working, then
+ * work again. That argument was about protecting the *constant* as the
+ * fallback, and it held while the constant was the fallback.
+ *
+ * The constant is no longer a fallback, so the argument no longer applies. What
+ * replaces it is a floor: if the catalogue has not loaded successfully for
+ * longer than STALE_AFTER_MS, reads return RESTRICTED_FLOOR rather than
+ * whatever the cache last held. Serving indefinitely from a cache nobody can
+ * refresh is not availability, it is confidence without evidence — and the
+ * thing being answered is what a paying customer is allowed to do.
+ *
+ * The threshold exists so a database blip does not downgrade anyone. Missing
+ * one refresh is normal; missing twenty is a fault.
  *
  * ## What the constant is now
  *
- * Seed source and boot fallback. It is no longer the source of truth, and it
- * must not be read directly outside this file and the seeder — the harness
+ * **Seed source only.** It is not read on any resolution path. The harness
  * asserts the database matches it field for field, so the two agreeing is a
- * checked property rather than a hope.
+ * checked property rather than a hope — but at runtime the database is the
+ * only answer, and if the database cannot be reached the answer is the floor.
+ *
+ * The one remaining read of it below is `rowToEdition`'s campaign-pacing
+ * default, which fills two *nullable columns* rather than supplying an
+ * entitlement. A null pace would divide by nothing on the send path. No
+ * current row is null, so it does not fire today.
  */
 
 const REFRESH_INTERVAL_MS = Number(process.env.EDITION_REFRESH_MS || 30_000);
 
+/**
+ * How long a cache may go unrefreshed before reads fall to the floor.
+ *
+ * Ten minutes, which at the default thirty-second interval is twenty
+ * consecutive failed refreshes. The two ends of the range are what set it: too
+ * short and a database failover downgrades every customer for the length of
+ * the blip; too long and a permanently broken catalogue keeps answering
+ * confidently for hours. Twenty consecutive failures is not a blip.
+ *
+ * Overridable because the right number depends on how long a database outage
+ * lasts here, which nobody knows yet. If it is ever set in an environment,
+ * it must be listed explicitly in docker-compose.yml — the backend service
+ * enumerates its environment one line at a time, so anything missing silently
+ * takes this default inside the container.
+ */
+const STALE_AFTER_MS = Number(process.env.EDITION_STALE_AFTER_MS || 600_000);
+
+/**
+ * What every edition read returns when the catalogue is unavailable.
+ *
+ * Grants nothing and allows nothing. A zero limit is a real zero:
+ * normalizeLimit in entitlements.resolver.ts preserves it rather than treating
+ * it as falsy, so this denies rather than accidentally reading as unlimited —
+ * which is the failure mode a floor exists to prevent.
+ *
+ * This is deliberately severe. If it is ever reached, a subscriber cannot
+ * send, and that is the intended trade: after twenty consecutive failures the
+ * process does not know what anyone is entitled to, and quietly guessing in
+ * the customer's favour is how a platform gives away what it meant to sell.
+ * The threshold, not the floor, is the dial for how tolerant this is.
+ *
+ * Pacing is the slowest any edition uses, because a floor must not make the
+ * send path faster than the real catalogue would have.
+ */
+const RESTRICTED_FLOOR: PlanEntitlements = {
+  code: 'FREE' as PlanCode,
+  name: 'Unavailable',
+  monthlyPriceCents: 0,
+  monthlyActiveContactsLimit: 0,
+  monthlyOutboundMessagesLimit: 0,
+  monthlyCampaignSendsLimit: 0,
+  customFieldsLimit: 0,
+  usersLimit: 0,
+  workflowsLimit: 0,
+  campaignRateMax: 1,
+  campaignRateDurationMs: 2_000,
+  autoProvisionGateway: false,
+  customDomain: false,
+  whiteLabel: false,
+  maskContactDetails: false,
+};
+
 let cache: Map<string, PlanEntitlements> | null = null;
+/**
+ * When the catalogue last loaded successfully. Null means never — which,
+ * after the boot gate, should be unreachable in a serving process.
+ */
+let lastLoadedAt: number | null = null;
+/** Throttles the stale-cache alarm so a sustained outage logs once a minute. */
+let lastStaleWarnAt = 0;
 /**
  * When each edition was last edited.
  *
@@ -139,6 +215,11 @@ export async function refreshEditions(): Promise<number> {
     cache = next;
     editedAt = nextEditedAt;
     activeCodes = nextActive;
+    // Only a load that produced rows counts as fresh. The empty-catalogue
+    // branch above deliberately does not reach here: a Plan table that has
+    // been emptied is a fault, and letting it renew the clock would keep the
+    // process serving a cache nothing can correct.
+    lastLoadedAt = Date.now();
     return next.size;
   } catch (error) {
     logger.error('Failed to refresh edition catalogue; keeping previous values', {
@@ -148,7 +229,31 @@ export async function refreshEditions(): Promise<number> {
   }
 }
 
-/** Boot: load once, then keep warm. Idempotent. */
+/**
+ * The boot gate. Load the catalogue or refuse to start.
+ *
+ * Called before the HTTP server listens. Until this succeeds the process
+ * cannot answer what any subscriber is entitled to, and a server that accepts
+ * traffic in that state enforces the floor against paying customers while
+ * looking healthy to a load balancer.
+ *
+ * Throws rather than exiting so the caller owns the exit code and the log
+ * line. The failure must be legible: the two realistic causes are a database
+ * that is not up yet and a Plan table that is empty, and those need different
+ * responses from whoever is reading the logs.
+ */
+export async function loadEditionCatalogueOrThrow(): Promise<number> {
+  const size = await refreshEditions();
+  if (size === 0 || lastLoadedAt === null) {
+    throw new Error(
+      'Edition catalogue could not be loaded. The database is unreachable, or the Plan table is empty. ' +
+        'Refusing to start: entitlement reads would deny for every subscriber.',
+    );
+  }
+  return size;
+}
+
+/** Keep warm after the boot gate has loaded once. Idempotent. */
 export function startEditionRefresh(): void {
   if (refreshTimer) return;
   void refreshEditions();
@@ -169,7 +274,38 @@ export function stopEditionRefresh(): void {
  * code the catalogue does not carry — which the harness asserts cannot happen.
  */
 export function getEdition(code: PlanCode): PlanEntitlements {
-  return cache?.get(code) ?? PLAN_ENTITLEMENTS[code];
+  if (isCatalogueStale()) return RESTRICTED_FLOOR;
+  // An unknown code falls to the floor rather than to the constant. The
+  // constant would answer for the five codes it happens to carry and throw for
+  // any other, which is the worst of both: confident for the old editions,
+  // broken for the new ones.
+  return cache?.get(code) ?? RESTRICTED_FLOOR;
+}
+
+/**
+ * Whether reads must fall to the floor.
+ *
+ * Logs on the way, throttled, because this is the condition where the platform
+ * stops enforcing what it sold and nobody would otherwise notice — every
+ * response still returns 200.
+ */
+function isCatalogueStale(): boolean {
+  const age = lastLoadedAt === null ? Infinity : Date.now() - lastLoadedAt;
+  if (age <= STALE_AFTER_MS) return false;
+
+  const now = Date.now();
+  if (now - lastStaleWarnAt > 60_000) {
+    lastStaleWarnAt = now;
+    logger.error(
+      'Edition catalogue is stale; serving the restricted floor. Every entitlement read is now denying.',
+      {
+        lastLoadedAt: lastLoadedAt === null ? 'never' : new Date(lastLoadedAt).toISOString(),
+        staleForMs: age === Infinity ? null : age,
+        thresholdMs: STALE_AFTER_MS,
+      },
+    );
+  }
+  return true;
 }
 
 /**
@@ -180,7 +316,11 @@ export function getEdition(code: PlanCode): PlanEntitlements {
  * without changing anything for the people already paying for it.
  */
 export function getEditions(): PlanEntitlements[] {
-  if (!cache) return Object.values(PLAN_ENTITLEMENTS);
+  // Empty, not the constant. This answers "what is on sale", and a process
+  // that cannot read the catalogue does not know. Publishing the compiled-in
+  // list would advertise prices nobody has confirmed are current — the pricing
+  // page showing nothing is a visible fault; showing stale prices is not.
+  if (!cache || isCatalogueStale()) return [];
   return Array.from(cache.entries())
     .filter(([code]) => activeCodes?.has(code) ?? true)
     .map(([, edition]) => edition);
@@ -196,9 +336,11 @@ export function getEditionEditedAt(code: PlanCode): Date | null {
   return editedAt?.get(code) ?? null;
 }
 
-/** Test seam: forget everything and fall back to the constant. */
+/** Test seam: forget everything, so reads fall to the restricted floor. */
 export function resetEditionCacheForTests(): void {
   cache = null;
   editedAt = null;
   activeCodes = null;
+  lastLoadedAt = null;
+  lastStaleWarnAt = 0;
 }

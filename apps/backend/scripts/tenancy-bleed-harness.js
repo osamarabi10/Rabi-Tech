@@ -690,6 +690,19 @@ async function databaseAudits() {
     await waitForBackend(baseUrl, token, child);
     // Prime GET endpoints that intentionally mark messages as read.
     await httpSnapshot(baseUrl, token, orgA);
+    // Load the edition catalogue before any check runs, which is what the
+    // server's boot gate now does before it opens the port.
+    //
+    // Without this the harness is not testing the product. getEdition no
+    // longer falls back to PLAN_ENTITLEMENTS - an unloaded catalogue resolves
+    // to the restricted floor, which grants nothing - so every entitlement
+    // check before the first explicit refresh would assert against zeros. That
+    // is correct behaviour for a process that cannot read the catalogue, and
+    // the wrong starting state for a test suite, because the real process
+    // refuses to serve at all in that state.
+    await runAsPlatform('bleed-editions-boot', () =>
+      require('../src/modules/billing/editions.service').refreshEditions());
+
     const before = await runAsOrganization(orgA.organizationId, () => tenantSnapshot(scoped));
     const httpBefore = await httpSnapshot(baseUrl, token, orgA);
     const orgB = await seedOrganization(raw, 'b', 10);
@@ -4104,7 +4117,6 @@ async function databaseAudits() {
         data: { whiteLabel: false, customDomain: false, maskContactDetails: false },
       });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
-      resetEditionCacheForTests();
     });
 
     await check('billing: editing an edition is a new baseline, not drift', async () => {
@@ -4166,7 +4178,6 @@ async function databaseAudits() {
       });
       await raw.organization.update({ where: { id: orgA.organizationId }, data: { tier: 'FREE' } });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
-      resetEditionCacheForTests();
     });
 
     // resolveEntitlements reads override, then subscription, then tier. Earlier
@@ -4211,7 +4222,7 @@ async function databaseAudits() {
       assert.equal(effective.seatLimit, standard.usersLimit);
 
       await setTierGoverned(orgB, 'FREE');
-      resetEditionCacheForTests();
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
     await check('billing: the catalogue is platform-owned and cannot be reached by a tenant actor', async () => {
@@ -4278,7 +4289,6 @@ async function databaseAudits() {
       await setTierGoverned(orgA, 'FREE');
       await setTierGoverned(orgB, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
-      resetEditionCacheForTests();
     });
 
     await check('billing: deactivating an edition retires it without orphaning its subscribers', async () => {
@@ -4318,7 +4328,6 @@ async function databaseAudits() {
       });
       await setTierGoverned(orgA, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
-      resetEditionCacheForTests();
     });
 
     await check('billing: the edition catalogue loads on a timer, with no ambient scope', async () => {
@@ -4351,7 +4360,6 @@ async function databaseAudits() {
 
       await raw.plan.update({ where: { code: 'BUSINESS' }, data: { monthlyPriceCents: 19900 } });
       await refreshEditions();
-      resetEditionCacheForTests();
     });
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
       const { recomputeHours, floorToHour } = require('../src/modules/analytics/rollup.service');
