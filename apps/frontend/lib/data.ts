@@ -114,6 +114,7 @@ export type Campaign = {
   audience: string;
   status: string;
   recipients: number;
+  createdAt: string;
   date: string;
   scheduledAt: string | null;
 };
@@ -718,6 +719,7 @@ export async function fetchCampaigns(): Promise<Campaign[]> {
     audience: c.audienceLabel || 'كل جهات الاتصال',
     status: c.status,
     recipients: c._count?.recipients ?? 0,
+    createdAt: c.createdAt,
     date: fmtDate(c.sentAt || c.createdAt),
     scheduledAt: c.scheduledAt ?? null,
   }));

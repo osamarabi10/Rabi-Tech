@@ -133,7 +133,7 @@ sub-rails or fake disabled Meta data.
 - [ ] Inbox: rail, list, thread, and five-tab context panel.
 - [x] Contacts: toolbar, table, bulk actions, URL drawer, filters.
 - [ ] Workflows: list and canvas with 11 triggers, 19 steps, 100-step cap, named branches.
-- [ ] Broadcasts: status rail, table/calendar, URL detail, two-stage composer.
+- [x] Broadcasts: status rail, table/calendar, URL detail, two-stage composer.
 - [ ] AI Agents list/editor/test pane (infrastructure-gated).
 - [x] Access denied screen with one return action.
 
@@ -197,6 +197,13 @@ sub-rails or fake disabled Meta data.
   and teammate progress, and persisted lifecycle-guide completion after reload.
   The profile isolation gate proves that acknowledgement cannot mutate another
   organization user.
+- Broadcasts are covered by `tests/e2e/campaigns-responsive.spec.ts`: the list,
+  status rail, calendar links, URL-addressable delivery analytics, and retryable
+  error state are exercised against the campaign contract. The complete browser
+  gate is green at `83/83`. A real-stack read-only check was then run after
+  rebuilding the frontend at 375/768/1440 px in Arabic and English; the entitled
+  workspace returned `200` from `/api/campaigns` and rendered a genuine empty
+  state, distinct from the mocked scheduled/detail and error states.
 - Shared list, overlay, feedback, and composite implementations live under
   `components/ui/`; the existing global rail and report KPI implementation were
   audited against the requirements above.

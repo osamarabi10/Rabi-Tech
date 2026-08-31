@@ -1,7 +1,7 @@
 # RabiTech Respond.io Parity - Authoritative Implementation Checkpoint
 
 > Status: active implementation record.
-> Last updated: 2026-08-31 after the campaigns runtime repair and pending-migration audit.
+> Last updated: 2026-08-31 after the campaigns runtime repair, pending-migration audit, and Broadcast completion gates.
 > Purpose: this is the first document to read when work resumes after a stop, context reset, or handoff.
 
 ## 1. Product boundary
@@ -65,7 +65,7 @@ Latest release evidence:
 - Verified backup: `auto-20260829-143026.dump`, `1,109,740` bytes.
 - The backup was restored into a scratch database and counted `31` conversations, `97` messages, and `33` contacts before migrations 65 and 66 were deployed. Data is unchanged after them.
 
-Current head (2026-08-30), **migration 67 released**:
+Release record (2026-08-30), **migration 67 released**:
 
 - Isolation and usage harness: **`120/120`**, exit 0. The latest check pins
   inbound media filename persistence across both OpenWA and Meta.
@@ -572,6 +572,39 @@ carried no behaviour change; the next one will.
    number into this inbox. That gap closes only with a real credential, which
    item 1 of the previous section currently forbids — so the sequence is:
    rotate the key, set the two secrets, connect one number, then test.
+
+## 6d. Broadcast completion — measured 2026-08-31
+
+Item 5 completed the tenant Broadcast surface for the existing OpenWA campaign
+path. It adds a status rail, list/calendar views, URL-addressable delivery
+analytics, result breakdowns, failure detail, and explicit loading, genuine-empty,
+no-result, and retryable-error states. It does not add Meta business-initiated
+sends; those remain blocked until the approved-template sending phase and tier
+ceiling are shipped.
+
+### Evidence
+
+- Backend isolation harness: **`121/121`**, exit 0, run alone.
+- Frontend `check:i18n`: pass.
+- Frontend `check:mojibake`: pass.
+- Frontend production build: pass; the build included `/campaigns/[id]`.
+- Browser matrix: **`83/83`**, exit 0, run alone. The focused Broadcast checks
+  cover scheduled list → calendar → URL detail and a failure → retry transition.
+- Frontend Docker image: rebuilt and redeployed before the real-stack check.
+  Backend, database, Redis, and OpenWA were not restarted.
+- Real-stack visual check: read-only platform view-as access to the entitled
+  `ostudio` workspace, with no mocked routes, at 375/768/1440 px in Arabic and
+  English. All six combinations received `200` from `/api/campaigns`, with zero
+  campaigns in the live workspace, and rendered the genuine empty state. The
+  observed `/api/auth/me`, billing, notifications, templates, campaigns, and
+  billing-summary requests were successful; overflow checks were clear.
+  Screenshots are retained at `%TEMP%\\rabitech-broadcast-visual\\` with
+  `campaigns-{ar|en}-{375|768|1440}-{list|calendar}.png` names. The mocked
+  contract supplies the scheduled calendar and populated detail data that the
+  live workspace does not contain.
+
+This release is UI and test coverage only. No migration was applied, no backend
+campaign behavior was changed, and the live OpenWA session was left untouched.
 
 ## 7. Later roadmap
 
