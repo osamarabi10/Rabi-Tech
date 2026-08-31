@@ -115,7 +115,7 @@ requires all behavior above and viewport/theme/direction evidence.
 - [ ] Calls settings (provider/infrastructure-gated).
 - [ ] Shared files/media library.
 - [ ] Three-step contact import and history.
-- [ ] Data export.
+- [x] Permission-gated Contact export with CSV output and audit logging.
 
 ### Channel sub-rails
 
@@ -131,7 +131,7 @@ sub-rails or fake disabled Meta data.
 - [ ] Dashboard: lifecycle, contacts, team, conversations, merge suggestions, broadcasts.
 - [ ] Reports: shared chrome and eleven report destinations.
 - [ ] Inbox: rail, list, thread, and five-tab context panel.
-- [x] Contacts: toolbar, table, bulk actions, URL drawer, filters.
+- [x] Contacts: toolbar, table, bulk actions, URL drawer, filters, same-name merge suggestions, confirmation-gated merge, and audited permission-gated export.
 - [ ] Workflows: list and canvas with 11 triggers, 19 steps, 100-step cap, named branches.
 - [x] Broadcasts: status rail, table/calendar, URL detail, two-stage composer.
 - [ ] AI Agents list/editor/test pane (infrastructure-gated).
@@ -141,7 +141,8 @@ sub-rails or fake disabled Meta data.
 
 - Contacts is covered by `tests/e2e/contacts-responsive.spec.ts`: all 18
   combinations of 375/768/1440 px, Arabic/Hebrew/English, and light/dark, plus
-  reloadable drawer routing, Escape close, and bulk-toolbar replacement.
+  reloadable drawer routing, Escape close, bulk-toolbar replacement, merge
+  suggestion review and confirmation, and permission-hidden merge/export controls.
 - The same browser suite covers Notification Center scope switching,
   archive/restore/archive-all, empty state, portal layering, Escape close, and
   focus return. The backend bleed harness proves archive operations cannot
@@ -204,6 +205,14 @@ sub-rails or fake disabled Meta data.
   rebuilding the frontend at 375/768/1440 px in Arabic and English; the entitled
   workspace returned `200` from `/api/campaigns` and rendered a genuine empty
   state, distinct from the mocked scheduled/detail and error states.
+- Contacts merge/export are covered by the backend isolation harness at
+  `122/122`, including permission denial, same-tenant merge, cross-tenant
+  rejection, composite-FK enforcement, CSV tenant exclusion, and export/merge
+  audit rows. The browser matrix is green at `85/85` after the two focused
+  contacts checks. A real-stack, read-only tenant-admin check at
+  `localhost:18080/contacts` returned `200` for both contact endpoints and
+  rendered 24 live rows plus one merge suggestion in Arabic and English at
+  375/768/1440 px; screenshots are retained in `%TEMP%\\rabitech-contacts-visual-admin`.
 - Shared list, overlay, feedback, and composite implementations live under
   `components/ui/`; the existing global rail and report KPI implementation were
   audited against the requirements above.

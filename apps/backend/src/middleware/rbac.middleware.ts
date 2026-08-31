@@ -24,6 +24,7 @@ const ROLE_PERMISSIONS: Record<string, Set<Role>> = {
   'contact:update': new Set(['ADMIN', 'SUPERVISOR']),
   'contact:delete': new Set(['ADMIN']),
   'contact:read': new Set(['ADMIN', 'SUPERVISOR', 'AGENT', 'VIEWER', 'FINANCE']),
+  'contact:export': new Set(['ADMIN', 'SUPERVISOR']),
 
   // Segments — saved contact filters. Org-wide once saved, so renaming and
   // deleting sit above the role that can create one: an agent must not be able

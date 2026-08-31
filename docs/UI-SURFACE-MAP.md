@@ -21,7 +21,7 @@ wrong one.
 | `/(dashboard)` | Redirects into the default landing surface. |
 | `/(dashboard)/overview` | Workspace summary. |
 | `/(dashboard)/inbox` | The four-pane conversation workspace. The largest single file in the app. |
-| `/(dashboard)/contacts` | Contact list, filters, segments. |
+| `/(dashboard)/contacts` | Contact list, filters, segments, same-name merge suggestions, confirmation-gated merge, and audited permission-gated export. |
 | `/(dashboard)/contacts/import` | CSV import with a consent declaration step. |
 | `/(dashboard)/campaigns` | Broadcasts. Plan-gated; on Free the page renders the upgrade gate. |
 | `/(dashboard)/campaigns/[id]` | URL-addressable broadcast delivery analytics and failure detail. |
@@ -62,6 +62,7 @@ ones below either encode a decision or are easy to undo by accident.
 | `inbox/contact-context-tabs.tsx` | Details / Files / Activity. Automated events are hollow dots, not a colour difference. |
 | `reports/campaign-replies-panel.tsx` | The threads behind a campaign's reply count. Shows each customer's first message since the send — usually the requirement — and links into the conversation. Never-sent is distinguished from sent-and-ignored. |
 | `contacts/save-group-dialog.tsx` | Turns a hand-picked selection into a group: a tag for membership plus a segment saved over that tag. Not a fourth model — the segment is what makes the group appear in the campaign audience picker, which already reads segments. |
+| `contacts/merge-suggestions.tsx` | Shows tenant-visible same-name duplicate candidates with distinct loading, empty, and error states. Review opens the primary contact; the page owns the irreversible confirmation and server-enforced merge. |
 | `inbox/custom-fields-section.tsx` | The tenant's own contact fields, editable in the panel. Saves per field on blur — there is no form to submit, and one distant Save button is how edits get lost. Renders nothing when no fields are configured. |
 | `inbox/contact-conversations-tab.tsx` | Every thread this contact has had, resolved ones included — they hold the answers and the inbox default filter hides them. Status colour comes from `STATUS_CONFIG`, not invented `text-status-*` classes, which Tailwind does not generate. |
 | `inbox/consent-provenance.tsx` | Where a consent value came from. Distinguishes a recorded change, a value predating the history table, and never recorded — and renders nothing while loading, because "no source recorded" is a claim about the data. |

@@ -138,6 +138,13 @@ export type Contact = {
   customFields?: Record<string, string | null>;
 };
 
+export type ContactMergeSuggestion = {
+  key: string;
+  reason: string;
+  primary: Contact;
+  secondary: Contact;
+};
+
 /**
  * Mirror of the backend rule type. `value` is `unknown` rather than `string`
  * deliberately: numeric and date operators carry numbers and ISO strings, and a
@@ -820,6 +827,30 @@ export async function fetchContactsPage(params: {
   return { items: data.items.map(mapContact), pagination: data.pagination };
 }
 
+export async function fetchContactMergeSuggestions(): Promise<ContactMergeSuggestion[]> {
+  const { data } = await api.get('/api/contacts/merge-suggestions');
+  return (data.suggestions || []).map((suggestion: any) => ({
+    key: suggestion.key,
+    reason: suggestion.reason,
+    primary: mapContact(suggestion.primary),
+    secondary: mapContact(suggestion.secondary),
+  }));
+}
+
+export async function exportContacts(params: {
+  search?: string;
+  filter?: ContactFilterDsl;
+}): Promise<Blob> {
+  const { data } = await api.get('/api/contacts/export', {
+    params: {
+      search: params.search || undefined,
+      filter: params.filter ? JSON.stringify(params.filter) : undefined,
+    },
+    responseType: 'blob',
+  });
+  return data;
+}
+
 export async function fetchContact(ref: string): Promise<Contact> {
   const { data } = await api.get(`/api/contacts/${encodeURIComponent(ref)}`);
   return mapContact(data);
@@ -1377,6 +1408,7 @@ export type CurrentProfile = {
   isAway: boolean;
   role: string;
   organizationId: string;
+  permissions?: string[];
 };
 
 export type NotificationDelivery = 'IN_APP' | 'OFF';

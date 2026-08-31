@@ -14,11 +14,12 @@ function session(): TestSession {
   return JSON.parse(rawSession) as TestSession;
 }
 
-function profileFor(auth: TestSession, locale: 'ar' | 'he' | 'en', theme: 'light' | 'dark') {
+function profileFor(auth: TestSession, locale: 'ar' | 'he' | 'en', theme: 'light' | 'dark', permissions?: string[]) {
   return {
     ...auth.user,
     locale,
     theme,
+    permissions: permissions ?? auth.user.permissions ?? [],
     notificationNewMessage: 'IN_APP',
     notificationAssignment: 'IN_APP',
     notificationMention: 'IN_APP',
@@ -83,6 +84,12 @@ async function mockContacts(page: Page) {
   await page.route('**/api/contacts**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (request.method() === 'GET' && path === '/api/contacts/merge-suggestions') {
+      return route.fulfill({ json: { suggestions: [{ key: 'nadia-saleh', reason: 'same_name', primary: contacts[0], secondary: contacts[1] }], truncated: false } });
+    }
+    if (request.method() === 'GET' && path === '/api/contacts/export') {
+      return route.fulfill({ status: 200, contentType: 'text/csv', body: '"id","name"\n"contact-nadia","Nadia Saleh"\n' });
+    }
     if (request.method() === 'GET' && path === '/api/contacts') {
       return route.fulfill({ json: { items: contacts, pagination: { cursorId: null, hasMore: false, total: contacts.length } } });
     }
@@ -111,10 +118,10 @@ async function mockContacts(page: Page) {
 
 async function openContacts(
   page: Page,
-  options: { locale: 'ar' | 'he' | 'en'; theme: 'light' | 'dark'; width: number; height: number },
+  options: { locale: 'ar' | 'he' | 'en'; theme: 'light' | 'dark'; width: number; height: number; permissions?: string[] },
 ) {
   const auth = session();
-  const user = profileFor(auth, options.locale, options.theme);
+  const user = profileFor(auth, options.locale, options.theme, options.permissions);
   await page.setViewportSize({ width: options.width, height: options.height });
   await mockCurrentProfile(page, user);
   await mockShell(page);
@@ -187,6 +194,35 @@ test('selecting a contact replaces the list toolbar with the bulk action toolbar
   const firstCheckbox = page.locator('tbody input[type="checkbox"]').first();
   await firstCheckbox.check();
   await expect(page.getByRole('toolbar')).toBeVisible();
+});
+
+test('contact merge suggestions, confirmation, export, and permissions are explicit', async ({ page }) => {
+  await openContacts(page, {
+    locale: 'en',
+    theme: 'light',
+    width: 1440,
+    height: 900,
+    permissions: ['contact:update', 'contact:export'],
+  });
+
+  await expect(page.getByRole('heading', { name: 'Merge suggestions' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Export contacts' })).toBeVisible();
+  await page.getByRole('button', { name: 'Review merge' }).first().click();
+  await expect(page.getByRole('dialog').filter({ hasText: 'Contact details' })).toBeVisible();
+  await expect(page.getByLabel('Secondary contact')).toHaveValue('contact-omar');
+  await page.getByRole('dialog').filter({ hasText: 'Contact details' }).getByRole('button', { name: 'Review merge' }).click();
+
+  const confirmation = page.getByRole('dialog').filter({ hasText: 'Confirm contact merge' });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText('cannot be undone');
+  await confirmation.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirmation).toBeHidden();
+});
+
+test('contact merge and export controls are hidden without their permissions', async ({ page }) => {
+  await openContacts(page, { locale: 'en', theme: 'light', width: 375, height: 812, permissions: [] });
+  await expect(page.getByRole('heading', { name: 'Merge suggestions' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Export contacts' })).toHaveCount(0);
 });
 
 test('notification center switches scopes and archives without losing keyboard close', async ({ page }) => {

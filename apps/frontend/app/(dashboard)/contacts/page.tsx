@@ -4,20 +4,24 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { Tag, UserRound, Columns3, Edit3, Loader2, Merge, Save, BookmarkPlus, Upload, Users } from 'lucide-react';
+import { Tag, UserRound, Columns3, Edit3, Loader2, Merge, Save, BookmarkPlus, Upload, Users, Download } from 'lucide-react';
 import { activeFilter } from '@/lib/contact-filter';
 import { ContactAvatar } from '@/components/contact-avatar';
 import {
   bulkUpdateContacts,
   fetchContact,
+  fetchContactMergeSuggestions,
   fetchContactsPage,
   fetchCrmTags,
   fetchCustomFieldDefinitions,
+  fetchCurrentProfile,
   fetchSystemUsers,
+  exportContacts,
   mergeContacts,
   saveCrmTag,
   updateContact,
   type Contact,
+  type ContactMergeSuggestion,
   type ContactFilterDsl,
   type CrmTag,
   type CustomFieldDefinition,
@@ -49,6 +53,8 @@ import { ContactFilterBuilder } from '@/components/contacts/contact-filter-build
 import { SegmentChips } from '@/components/contacts/segment-chips';
 import { SaveGroupDialog } from '@/components/contacts/save-group-dialog';
 import { SaveSegmentDialog } from '@/components/contacts/save-segment-dialog';
+import { MergeSuggestions } from '@/components/contacts/merge-suggestions';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useT } from '@/lib/i18n';
 import { BulkActionBar, ListToolbar, Pager, RowOverflowMenu } from '@/components/ui/list-primitives';
 import { EmptyState, ErrorState, NoResultsState, SkeletonBlock } from '@/components/ui/operational-state';
@@ -98,11 +104,41 @@ export default function ContactsPage() {
   const [bulkTag, setBulkTag] = useState('');
   const [bulkAssigneeId, setBulkAssigneeId] = useState('__none__');
   const [mergeTargetId, setMergeTargetId] = useState('');
+  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
+  const [permissions, setPermissions] = useState<string[] | null>(null);
+  const [mergeSuggestions, setMergeSuggestions] = useState<ContactMergeSuggestion[]>([]);
+  const [mergeSuggestionsLoading, setMergeSuggestionsLoading] = useState(false);
+  const [mergeSuggestionsError, setMergeSuggestionsError] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Unfinished rules are stripped before every request, so a half-typed filter
   // never widens the list behind the user's back.
   const appliedFilter = useMemo(() => activeFilter(filter), [filter]);
+  const canMerge = permissions?.includes('contact:update') === true;
+  const canExport = permissions?.includes('contact:export') === true;
+
+  const loadMergeSuggestions = useCallback(async () => {
+    setMergeSuggestionsLoading(true);
+    setMergeSuggestionsError(false);
+    try {
+      setMergeSuggestions(await fetchContactMergeSuggestions());
+    } catch {
+      setMergeSuggestionsError(true);
+    } finally {
+      setMergeSuggestionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCurrentProfile()
+      .then((profile) => setPermissions(profile.permissions || []))
+      .catch(() => setPermissions([]));
+  }, []);
+
+  useEffect(() => {
+    if (canMerge) void loadMergeSuggestions();
+  }, [canMerge, loadMergeSuggestions]);
 
   const loadSegments = useCallback(() => {
     fetchSegments().then(setSegments).catch(() => setSegments([]));
@@ -222,6 +258,11 @@ export default function ContactsPage() {
     }
   };
 
+  const requestMerge = () => {
+    if (!selected || !mergeTargetId.trim()) return;
+    setMergeConfirmOpen(true);
+  };
+
   const mergeSelected = async () => {
     if (!selected || !mergeTargetId.trim()) return;
     setSaving(true);
@@ -229,9 +270,42 @@ export default function ContactsPage() {
       const merged = await mergeContacts(selected.id, mergeTargetId.trim());
       setSelected(merged);
       await load(null);
+      await loadMergeSuggestions();
       setMergeTargetId('');
+      setMergeConfirmOpen(false);
+    } catch {
+      toast.error(t('تعذّر دمج جهات الاتصال'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const reviewMergeSuggestion = async (suggestion: ContactMergeSuggestion) => {
+    try {
+      const primary = contacts.find((contact) => contact.id === suggestion.primary.id)
+        || await fetchContact(suggestion.primary.id);
+      setMergeTargetId(suggestion.secondary.id);
+      openContact(primary);
+    } catch {
+      toast.error(t('تعذّر فتح اقتراح الدمج'));
+    }
+  };
+
+  const downloadExport = async () => {
+    setExporting(true);
+    try {
+      const blob = await exportContacts({ search, filter: appliedFilter || undefined });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'contacts.csv';
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success(t('تم تصدير جهات الاتصال'));
+    } catch {
+      toast.error(t('تعذّر تصدير جهات الاتصال'));
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -239,29 +313,47 @@ export default function ContactsPage() {
     <div className="flex-1 overflow-y-auto p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-base font-extrabold">{t('جهات الاتصال')}</h1>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm">
-              <Columns3 className="h-4 w-4" />
-              Columns
+        <div className="flex flex-wrap items-center gap-2">
+          {canExport && (
+            <Button type="button" variant="outline" size="sm" onClick={() => void downloadExport()} disabled={exporting}>
+              {exporting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Download className="size-4" aria-hidden />}
+              {t('تصدير جهات الاتصال')}
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {COLUMNS.map((column) => (
-              <DropdownMenuItem key={column.id} onSelect={(event) => event.preventDefault()}>
-                <label className="flex w-full items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={visibleColumns[column.id]}
-                    onChange={(event) => setVisibleColumns((current) => ({ ...current, [column.id]: event.target.checked }))}
-                  />
-                  {t(column.label)}
-                </label>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <Columns3 className="h-4 w-4" aria-hidden />
+                {t('الأعمدة')}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {COLUMNS.map((column) => (
+                <DropdownMenuItem key={column.id} onSelect={(event) => event.preventDefault()}>
+                  <label className="flex w-full items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={visibleColumns[column.id]}
+                      onChange={(event) => setVisibleColumns((current) => ({ ...current, [column.id]: event.target.checked }))}
+                    />
+                    {t(column.label)}
+                  </label>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
+
+      {canMerge && (
+        <MergeSuggestions
+          suggestions={mergeSuggestions}
+          loading={mergeSuggestionsLoading}
+          error={mergeSuggestionsError}
+          onRetry={() => void loadMergeSuggestions()}
+          onReview={(suggestion) => void reviewMergeSuggestion(suggestion)}
+        />
+      )}
 
       <Card className="mb-4">
         <CardContent className="space-y-4 p-4">
@@ -487,16 +579,18 @@ export default function ContactsPage() {
                   ))}
                 </div>
               </div>
-              <div className="space-y-2 md:col-span-2">
-                <Label>Merge secondary contact ID into this contact</Label>
-                <div className="flex gap-2">
-                  <Input value={mergeTargetId} onChange={(e) => setMergeTargetId(e.target.value)} placeholder="secondary contact id" />
-                  <Button variant="outline" onClick={mergeSelected} disabled={saving || !mergeTargetId.trim()}>
-                    <Merge className="h-4 w-4" />
-                    Merge
-                  </Button>
+              {canMerge && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="merge-secondary-contact">{t('جهة الاتصال الثانوية')}</Label>
+                  <div className="flex gap-2">
+                    <Input id="merge-secondary-contact" value={mergeTargetId} onChange={(e) => setMergeTargetId(e.target.value)} placeholder={t('معرّف جهة الاتصال الثانوية')} />
+                    <Button type="button" variant="outline" onClick={requestMerge} disabled={saving || !mergeTargetId.trim()}>
+                      <Merge className="size-4" aria-hidden />
+                      {t('مراجعة الدمج')}
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              )}
               <div className="md:col-span-2">
                 <Button onClick={saveSelected} disabled={saving}>
                   {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -530,6 +624,17 @@ export default function ContactsPage() {
           loadSegments();
           setActiveSegmentId(segment.id);
         }}
+      />
+
+      <ConfirmDialog
+        open={mergeConfirmOpen}
+        onOpenChange={setMergeConfirmOpen}
+        title={t('تأكيد دمج جهات الاتصال')}
+        description={t('سيتم نقل محادثات جهة الاتصال الثانوية ووسومها وحقولها إلى جهة الاتصال الأساسية ثم أرشفتها. لا يمكن التراجع عن هذا الإجراء.')}
+        cancelLabel={t('إلغاء')}
+        confirmLabel={t('دمج جهات الاتصال')}
+        onConfirm={() => void mergeSelected()}
+        busy={saving}
       />
     </div>
   );

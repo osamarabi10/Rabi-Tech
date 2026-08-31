@@ -25,6 +25,7 @@ import { validateCustomFieldValue } from './custom-field-validation';
 const CONSENT_VALUES = ['UNKNOWN', 'OPTED_IN', 'OPTED_OUT'] as const;
 const CUSTOM_FIELD_TYPES = ['text', 'list', 'checkbox', 'email', 'number', 'url', 'date', 'time'] as const;
 const FIELD_VISIBILITIES = ['ALWAYS_SHOW', 'HIDE_WHEN_EMPTY', 'ALWAYS_HIDE'] as const;
+const MAX_EXPORT_ROWS = 20_000;
 const STANDARD_CONTACT_FIELDS = [
   { fieldKey: 'firstName', name: 'First Name', dataType: 'text', editable: true, defaultVisibility: 'ALWAYS_SHOW' },
   { fieldKey: 'lastName', name: 'Last Name', dataType: 'text', editable: true, defaultVisibility: 'ALWAYS_SHOW' },
@@ -85,15 +86,9 @@ function contactPayload(body: any) {
   return data;
 }
 
-async function listContacts(req: any, paginated: boolean) {
+function contactListWhere(req: any): Prisma.ContactWhereInput {
   const { search } = req.query;
-  const limit = normalizeContactLimit(req.query.limit);
-  const cursorId = normalizeCursor(req.query.cursorId);
   const dslWhere = contactWhereFromFilterDsl(parseContactFilterDsl(req.query.filter), req.user.organizationId);
-  // Search and the filter DSL are combined under AND rather than spread into one
-  // object. Spreading meant a filter carrying `$or` overwrote the search's own
-  // `OR` key, so typing a name while a filter was active silently ignored the
-  // name and returned the unsearched list — a wrong result with no error.
   const searchWhere = search
     ? {
         OR: [
@@ -107,10 +102,22 @@ async function listContacts(req: any, paginated: boolean) {
         ],
       }
     : null;
-  const where = {
+
+  return {
+    organizationId: req.user.organizationId,
     isArchived: false,
     AND: [searchWhere, dslWhere, contactAccessWhere(req.user)].filter(Boolean) as Prisma.ContactWhereInput[],
   };
+}
+
+async function listContacts(req: any, paginated: boolean) {
+  const limit = normalizeContactLimit(req.query.limit);
+  const cursorId = normalizeCursor(req.query.cursorId);
+  // Search and the filter DSL are combined under AND rather than spread into one
+  // object. Spreading meant a filter carrying `$or` overwrote the search's own
+  // `OR` key, so typing a name while a filter was active silently ignored the
+  // name and returned the unsearched list — a wrong result with no error.
+  const where = contactListWhere(req);
 
   const [contacts, total] = await Promise.all([
     prisma.contact.findMany({
@@ -177,6 +184,127 @@ router.get('/', async (req, res) => {
     res.json(await listContacts(req, paginated));
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });
+  }
+});
+
+function mergeName(contact: { name: string | null; firstName: string | null; lastName: string | null }): string {
+  return String(contact.name || [contact.firstName, contact.lastName].filter(Boolean).join(' '))
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function mergeSummary(contact: any, mask: boolean) {
+  const summary = {
+    id: contact.id,
+    name: contact.name,
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    phone: contact.phone,
+    email: contact.email,
+    createdAt: contact.createdAt,
+  };
+  return mask ? maskContact(summary) : summary;
+}
+
+router.get('/merge-suggestions', requirePermission('contact:update'), async (req, res) => {
+  try {
+    const contacts = await prisma.contact.findMany({
+      where: {
+        organizationId: req.user!.organizationId,
+        isArchived: false,
+        name: { not: null },
+        ...contactAccessWhere(req.user!),
+      },
+      select: { id: true, name: true, firstName: true, lastName: true, phone: true, email: true, createdAt: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: MAX_EXPORT_ROWS,
+    });
+    const groups = new Map<string, typeof contacts>();
+    for (const contact of contacts) {
+      const key = mergeName(contact);
+      if (key.length < 2) continue;
+      const group = groups.get(key) || [];
+      group.push(contact);
+      groups.set(key, group);
+    }
+
+    const suggestions: Array<{ key: string; reason: string; primary: any; secondary: any }> = [];
+    for (const [key, group] of groups) {
+      if (group.length < 2) continue;
+      const primary = group[0];
+      for (const secondary of group.slice(1)) {
+        suggestions.push({
+          key,
+          reason: 'same_name',
+          primary: mergeSummary(primary, !!req.user!.maskPhoneAndEmail),
+          secondary: mergeSummary(secondary, !!req.user!.maskPhoneAndEmail),
+        });
+        if (suggestions.length >= 50) break;
+      }
+      if (suggestions.length >= 50) break;
+    }
+    res.json({ suggestions, truncated: contacts.length >= MAX_EXPORT_ROWS });
+  } catch (err) {
+    logger.error('Contact merge suggestions failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+function csvCell(value: unknown): string {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+router.get('/export', requirePermission('contact:export'), async (req, res) => {
+  try {
+    const contacts = await prisma.contact.findMany({
+      where: contactListWhere(req),
+      include: CONTACT_INCLUDE,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: MAX_EXPORT_ROWS + 1,
+    });
+    if (contacts.length > MAX_EXPORT_ROWS) {
+      return res.status(413).json({ error: `Export is limited to ${MAX_EXPORT_ROWS} contacts` });
+    }
+
+    const customSlugs = [...new Set(contacts.flatMap((contact) => contact.customFieldValues.map((row) => row.fieldDefinition.slug)))].sort();
+    const headers = [
+      'id', 'name', 'firstName', 'lastName', 'phone', 'email', 'language', 'countryCode',
+      'lifecycleStage', 'assignee', 'tags', 'marketingConsent', 'consentSource',
+      'consentUpdatedAt', 'createdAt', 'updatedAt', 'notes', ...customSlugs.map((slug) => `custom:${slug}`),
+    ];
+    const rows = contacts.map((rawContact) => {
+      const contact: any = req.user!.maskPhoneAndEmail ? maskContact(rawContact) : rawContact;
+      const customValues = new Map(rawContact.customFieldValues.map((row) => [row.fieldDefinition.slug, row.value]));
+      return [
+        contact.id, contact.name, contact.firstName, contact.lastName, contact.phone, contact.email,
+        contact.language, contact.countryCode, contact.lifecycleStage, contact.assignee?.name,
+        contact.contactTags.map((row: any) => row.tag.name).join(', '), contact.marketingConsent,
+        contact.consentSource, contact.consentUpdatedAt, contact.createdAt, contact.updatedAt,
+        contact.notes, ...customSlugs.map((slug) => customValues.get(slug)),
+      ].map(csvCell).join(',');
+    });
+
+    await auditLog({
+      userId: req.user!.id,
+      action: 'contact.exported',
+      resource: 'contact-export',
+      resourceId: req.user!.organizationId,
+      changes: { after: { count: contacts.length, search: String(req.query.search || '') } },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    res.set({
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="contacts.csv"',
+      'Cache-Control': 'no-store',
+    });
+    return res.send(`\uFEFF${[headers.map(csvCell).join(','), ...rows].join('\r\n')}\r\n`);
+  } catch (err) {
+    logger.error('Contact export failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -555,7 +683,7 @@ router.post('/bulk', requirePermission('contact:update'), async (req, res) => {
   }
 });
 
-router.post('/merge', async (req, res) => {
+router.post('/merge', requirePermission('contact:update'), async (req, res) => {
   try {
     const organizationId = req.user!.organizationId;
     const { primaryContactId, secondaryContactId } = req.body || {};
@@ -608,6 +736,21 @@ router.post('/merge', async (req, res) => {
       return tx.contact.findUniqueOrThrow({ where: { id_organizationId: { id: primary.id, organizationId } }, include: CONTACT_INCLUDE });
     });
 
+    await auditLog({
+      userId: req.user!.id,
+      action: 'contact.merged',
+      resource: 'contact',
+      resourceId: merged.id,
+      changes: {
+        after: {
+          primaryContactId: merged.id,
+          secondaryContactId,
+          secondaryArchived: true,
+        },
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
     res.json(req.user!.maskPhoneAndEmail ? maskContact(merged) : merged);
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });

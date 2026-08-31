@@ -976,6 +976,116 @@ async function databaseAudits() {
       assert.equal(ownerDelete.status, 200, await ownerDelete.text());
     });
 
+    await check('contacts: merge suggestions, confirmation boundary, export permissions, and audit stay tenant-scoped', async () => {
+      const primary = await raw.contact.create({
+        data: { id: 'bleed_merge_primary_a', organizationId: orgA.organizationId, phone: '972500000201', name: 'Merge Candidate' },
+      });
+      const secondary = await raw.contact.create({
+        data: { id: 'bleed_merge_secondary_a', organizationId: orgA.organizationId, phone: '972500000202', name: ' merge   candidate ' },
+      });
+      const foreign = await raw.contact.create({
+        data: { id: 'bleed_merge_foreign_b', organizationId: orgB.organizationId, phone: '972500000203', name: 'Merge Candidate' },
+      });
+      const secondaryConversation = await raw.conversation.create({
+        data: {
+          id: 'bleed_merge_conversation_a',
+          organizationId: orgA.organizationId,
+          displayId: 2201,
+          contactId: secondary.id,
+          sessionId: orgA.sessionId,
+          status: 'OPEN',
+        },
+      });
+      const agentIdentity = await raw.identity.create({
+        data: { email: 'merge-agent@rabitech.test', passwordHash: 'not-used' },
+      });
+      const agent = await raw.user.create({
+        data: { organizationId: orgA.organizationId, identityId: agentIdentity.id, name: 'Merge Agent', role: 'AGENT' },
+      });
+      const agentToken = jwt.sign({
+        scope: 'ORGANIZATION', id: agent.id, email: agentIdentity.email, name: agent.name,
+        role: 'AGENT', organizationId: orgA.organizationId, tokenVersion: 0,
+      }, jwtSecret, { expiresIn: '10m' });
+
+      const suggestionsResponse = await fetch(`${baseUrl}/api/contacts/merge-suggestions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const suggestionsText = await suggestionsResponse.text();
+      assert.equal(suggestionsResponse.status, 200, suggestionsText);
+      const suggestions = JSON.parse(suggestionsText).suggestions;
+      const suggestion = suggestions.find((row) => (
+        row.primary.id === primary.id && row.secondary.id === secondary.id
+      ));
+      assert.ok(suggestion, 'same-name contacts did not produce a deterministic merge suggestion');
+      assert.ok(suggestions.every((row) => row.primary.id !== foreign.id && row.secondary.id !== foreign.id),
+        'org A received a merge suggestion containing an org B contact');
+
+      const agentSuggestions = await fetch(`${baseUrl}/api/contacts/merge-suggestions`, {
+        headers: { Authorization: `Bearer ${agentToken}` },
+      });
+      assert.equal(agentSuggestions.status, 403, 'an agent could inspect merge candidates without merge permission');
+      const agentExport = await fetch(`${baseUrl}/api/contacts/export`, {
+        headers: { Authorization: `Bearer ${agentToken}` },
+      });
+      assert.equal(agentExport.status, 403, 'an agent could export contacts without export permission');
+
+      const crossMerge = await fetch(`${baseUrl}/api/contacts/merge`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ primaryContactId: primary.id, secondaryContactId: foreign.id }),
+      });
+      assert.equal(crossMerge.status, 400, 'cross-tenant merge was accepted by the route');
+      const foreignAfterAttempt = await raw.contact.findUnique({ where: { id: foreign.id } });
+      assert.equal(foreignAfterAttempt.isArchived, false, 'cross-tenant merge changed org B');
+
+      // The route check is defense in depth. The composite child key is the
+      // database boundary: even a deliberately broken route cannot attach an
+      // org B contact to an org A conversation.
+      await assert.rejects(
+        () => raw.conversation.update({ where: { id: secondaryConversation.id }, data: { contactId: foreign.id } }),
+        (error) => error?.code === 'P2003',
+        'the database accepted a cross-tenant conversation/contact reference',
+      );
+
+      const exported = await fetch(`${baseUrl}/api/contacts/export`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const csv = await exported.text();
+      assert.equal(exported.status, 200, csv);
+      assert.match(csv, /Merge Candidate/);
+      assert.doesNotMatch(csv, /bleed_merge_foreign_b/);
+      const exportAudit = await raw.auditLog.findFirst({
+        where: { organizationId: orgA.organizationId, action: 'contact.exported', resourceId: orgA.organizationId },
+        orderBy: { timestamp: 'desc' },
+      });
+      assert.ok(exportAudit, 'contact export did not create an audit record');
+
+      const mergedResponse = await fetch(`${baseUrl}/api/contacts/merge`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ primaryContactId: primary.id, secondaryContactId: secondary.id }),
+      });
+      const mergedText = await mergedResponse.text();
+      assert.equal(mergedResponse.status, 200, mergedText);
+      assert.equal(JSON.parse(mergedText).id, primary.id);
+      const [secondaryAfter, conversationAfter] = await Promise.all([
+        raw.contact.findUnique({ where: { id: secondary.id } }),
+        raw.conversation.findUnique({ where: { id: secondaryConversation.id } }),
+      ]);
+      assert.equal(secondaryAfter.isArchived, true, 'the confirmed secondary contact was not archived');
+      assert.equal(conversationAfter.contactId, primary.id, 'secondary conversation was not moved to the primary contact');
+      const mergeAudit = await raw.auditLog.findFirst({
+        where: { organizationId: orgA.organizationId, action: 'contact.merged', resourceId: primary.id },
+        orderBy: { timestamp: 'desc' },
+      });
+      assert.ok(mergeAudit, 'contact merge did not create an audit record');
+
+      await raw.user.delete({ where: { id: agent.id } });
+      await raw.identity.delete({ where: { id: agentIdentity.id } });
+      await raw.conversation.delete({ where: { id: secondaryConversation.id } });
+      await raw.contact.deleteMany({ where: { id: { in: [primary.id, secondary.id, foreign.id] } } });
+    });
+
     await check('workspace settings: policy and recap recipients remain organization-scoped', async () => {
       const beforeB = await raw.organizationConfig.findUnique({ where: { organizationId: orgB.organizationId } });
       const update = await fetch(`${baseUrl}/api/system/workspace-settings`, {

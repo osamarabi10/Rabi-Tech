@@ -1,7 +1,7 @@
 # RabiTech Respond.io Parity - Authoritative Implementation Checkpoint
 
 > Status: active implementation record.
-> Last updated: 2026-08-31 after the campaigns runtime repair, pending-migration audit, and Broadcast completion gates.
+> Last updated: 2026-08-31 after the Contacts merge/export completion gates.
 > Purpose: this is the first document to read when work resumes after a stop, context reset, or handoff.
 
 ## 1. Product boundary
@@ -50,16 +50,16 @@ point at `localhost:15432` — pointing it at `5432` reaches the other stack.
 
 Live database state:
 
-- `66` Prisma migrations are applied.
-- Latest live migration: `20260918090000_plan_editions_seed` (deployed 2026-08-29 — see §6b).
+- `67` Prisma migrations are applied.
+- Latest live migration: `20260919090000_meta_credential_vault` (deployed 2026-08-30 — see §6c).
 - `/settings/snippets`, `/settings/tags`, and `/settings/contact-fields` return `200`.
 - Anonymous `/api/snippets`, `/api/contacts/tags`, and `/api/contacts/contact-fields` return `401`.
 - `/health` returns `healthy`; database, Redis, OpenWA, and queue depth are `ok`.
 
 Latest release evidence:
 
-- Backend isolation and usage harness: `109/109`.
-- Browser matrix: `75/75`.
+- Backend isolation and usage harness: `122/122`.
+- Browser matrix: `85/85`.
 - Backend production build and Prisma constructor lint: pass.
 - Frontend production build, i18n completeness, and mojibake checks: pass.
 - Verified backup: `auto-20260829-143026.dump`, `1,109,740` bytes.
@@ -605,6 +605,48 @@ ceiling are shipped.
 
 This release is UI and test coverage only. No migration was applied, no backend
 campaign behavior was changed, and the live OpenWA session was left untouched.
+
+## 6e. Contacts merge and export — measured 2026-08-31
+
+Item 6 completed the Contacts data-operations slice without a schema change.
+The existing Contact model, composite tenant foreign keys, and role permissions
+were sufficient. Merge suggestions are tenant-visible active contacts grouped
+by a normalized non-empty name; the oldest record is the primary and later
+records are offered as secondaries. The merge route moves conversations, tags,
+and custom fields transactionally, archives the secondary, and requires an
+explicit confirmation in the UI. A separate `contact:export` permission is
+required for CSV export, which is capped at 20,000 rows, respects the current
+filters and masking policy, and creates an audit record.
+
+### Evidence
+
+- Backend isolation and usage harness: **`122/122`**, exit 0, run alone. The
+  new check passed same-name normalization and deterministic pairing, Agent
+  permission denials, cross-tenant merge rejection, the composite database FK
+  boundary, tenant-excluded CSV output, and `contact.exported`/
+  `contact.merged` audit rows. Weakening the merge-suggestions permission was
+  mutation-tested: the harness failed at `200 !== 403`; the guard was restored
+  and the clean rerun returned `122/122`.
+- Frontend `check:i18n`, `check:mojibake`, and production build: pass.
+- Browser matrix: **`85/85`**, exit 0, run alone. The focused contacts checks
+  cover merge suggestion review, irreversible confirmation, export visibility,
+  and permission-hidden controls, in addition to the existing responsive
+  contacts coverage.
+- Backend and frontend images were rebuilt and only those two services were
+  redeployed before the live check. Postgres, Redis, and OpenWA were not
+  restarted.
+- Real-stack visual check: read-only tenant-admin access at
+  `http://localhost:18080/contacts`, with no mocked routes, returned `200` for
+  `/api/contacts` and `/api/contacts/merge-suggestions`, rendered 24 live
+  contact rows and one live merge suggestion, and exposed merge/export controls
+  in Arabic and English at 375/768/1440 px. The loading skeleton, genuine empty
+  state, and retryable error state remain distinct in
+  `components/contacts/merge-suggestions.tsx`; no live merge or export action
+  was clicked. Screenshots are retained in
+  `%TEMP%\\rabitech-contacts-visual-admin\\contacts-{ar|en}-{375|768|1440}.png`.
+
+This release added no migration, did not apply any migration, and left the
+live OpenWA session untouched.
 
 ## 7. Later roadmap
 
