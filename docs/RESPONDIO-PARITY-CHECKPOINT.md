@@ -196,6 +196,69 @@ Two things this procedure does **not** do, both deliberate:
 A `down.sql` is only meaningful if it was run at least once. One that has never
 been executed is an assertion about the past, not a tested path.
 
+### HARD RULE — the plan-code space cannot be closed again
+
+> Once **any** `Plan.code` or `Organization.planOverride` holds a value outside
+> `FREE`, `STANDARD`, `GROWTH`, `BUSINESS`, `ENTERPRISE`, migration
+> `20260923090000_open_plan_code_space` must not be reversed.
+>
+> Recovery past that point is **snapshot-restore or forward-fix. Never a
+> rollback that re-adds the constraint.**
+
+This is not a caution, it is a constraint on what recovery options exist.
+
+`down.sql` re-adds `Organization_planOverride_check`, and `ADD CONSTRAINT`
+validates every existing row. One `planOverride` holding a sixth code makes it
+fail — and fail **late**, after any code rollback has already happened, leaving
+a system half-reverted.
+
+The half that does not fail is worse. Nothing constrains `Plan.code`, so
+catalogue rows carrying new codes survive the reversal intact and become
+**unresolvable**: the restored closed union and membership test reject them, so
+every subscriber on one resolves to the restricted floor and is entitled to
+nothing, while the row still sits in the catalogue looking present. Losing the
+rows would be more honest than that.
+
+**Applying the migration is not the irreversible act. Creating the sixth
+edition is.** Before anyone does:
+
+1. E4 rehearsed and re-applied — done, see below.
+2. E5 landed, with a create path that sets `sortOrder` explicitly. E2's
+   `Object.keys(PLAN_ENTITLEMENTS).indexOf(code)` returns `-1` for a code the
+   constant does not carry, which would sort a new edition ahead of Free.
+3. `rowToEdition` no longer consulting `PLAN_ENTITLEMENTS` — done in E4.
+4. The silent skip replaced by a loud failure — done in E4.
+5. A fresh `pg_dump -Fc`, verified readable with `pg_restore -l`.
+
+Check before running `down.sql`; it is one query and it is the difference
+between a clean rollback and a half-reverted system:
+
+```sql
+SELECT DISTINCT "planOverride" FROM "Organization"
+WHERE "planOverride" IS NOT NULL
+  AND "planOverride" <> ALL (ARRAY['FREE','STANDARD','GROWTH','BUSINESS','ENTERPRISE']);
+```
+
+**Rehearsal, performed 2026-08-31 before any new code existed.** Applied, ran
+`down.sql`, diffed the schema against the pre-migration capture — constraints,
+migration history, plan codes, row counts and the `planOverride` values in use
+were **identical** — then re-applied and diffed against the post-apply capture,
+also identical. A verified `pg_dump` was taken immediately before.
+
+**What that rehearsal does not prove, which matters more than what it does.**
+It ran with only the original five codes present, which is the one condition
+under which rollback works at all. It exercised the reversible case to build
+confidence about a change whose risk lies entirely in the irreversible one. It
+says nothing about whether a sixth edition resolves correctly, and nothing
+about whether the floor is being silently reached. **Do not cite it as evidence
+for either.**
+
+Those two were verified separately, and directly: a well-formed unknown code
+(`TESTSIX`) was inserted and confirmed to load and resolve to its own name and
+price rather than the floor, and a malformed code (`bad-code`) was confirmed to
+fail the entire refresh at `error` level, keeping the previous cache and
+refusing to advance freshness. Both probe rows were removed afterwards.
+
 Both gate numbers rose because two gates were found non-functional on this
 machine and repaired — see the preconditions in §8. Neither number is
 comparable to the one it replaces without that context: the harness gained

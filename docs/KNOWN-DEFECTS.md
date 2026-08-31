@@ -319,3 +319,40 @@ value while P1-B and P1-D are still being referenced. **Left in place
 deliberately.** If they are dropped, `DROP SCHEMA ... CASCADE` on all three is
 the whole operation, and it should be its own change with its own dump — not
 folded into unrelated work.
+
+---
+
+## D-9 · `FREE` is reserved only because `isPaidPlan` decides by name
+
+**Where:** `isPaidPlan` in
+[`modules/billing/plans.ts`](../apps/backend/src/modules/billing/plans.ts).
+
+```ts
+export function isPaidPlan(code: PlanCode): boolean {
+  return code !== 'FREE';
+}
+```
+
+**What is wrong:** whether an edition is billable is decided by its *name*
+rather than its *price*. That was unremarkable while the five codes were fixed
+in a union. Since E4 opened the code space it is the one thing still holding it
+half-closed: `FREE` has to be listed in `RESERVED_PLAN_CODES` and cannot be
+redefined or reused, purely to stop this function changing its answer.
+
+It is also already slightly wrong. `ENTERPRISE` is stored at
+`monthlyPriceCents: 0` because its price is negotiated, so by price it looks
+free while `isPaidPlan` correctly calls it paid. Any price-derived replacement
+has to keep that distinction rather than assume zero means free.
+
+**Cost:** small today, and entirely a constraint on what comes next. An owner
+cannot create an edition named `FREE_TRIAL` without thinking about it, and
+cannot make the free tier an ordinary catalogue row.
+
+**Fix:** derive it from the catalogue instead of the code — a `Plan` column
+saying whether an edition is billable is the honest version, because "priced at
+zero" and "not sold" are different facts and the schema currently cannot tell
+them apart. Once that exists, `FREE` leaves `RESERVED_PLAN_CODES` and becomes
+an ordinary row.
+
+Deliberately not folded into E4: it is a schema change with its own migration,
+and E4's job was to open the code space, not to redefine what a paid plan is.

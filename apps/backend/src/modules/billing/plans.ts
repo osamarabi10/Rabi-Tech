@@ -1,4 +1,61 @@
-export type PlanCode = 'FREE' | 'STANDARD' | 'GROWTH' | 'BUSINESS' | 'ENTERPRISE';
+/**
+ * An edition's code.
+ *
+ * Was a closed union of the five shipped editions, which made the owner-facing
+ * catalogue a lie: the console could reprice and retire an edition, but not
+ * create one, because the set of legal codes was fixed at compile time.
+ *
+ * A bare `string` in its place would be worse than the union it replaces, so
+ * the constraint moved rather than vanished — see `normalizePlanCode`, which
+ * now checks format and membership of the **loaded catalogue** instead of
+ * membership of a compiled-in constant. The authority is the database; the
+ * gate is still real.
+ */
+export type PlanCode = string;
+
+/**
+ * What a code may look like.
+ *
+ * The upper bound and charset are not a style preference. `ensurePlans` derives
+ * a row id as `plan_${code.toLowerCase()}`, so anything outside `[A-Z0-9_]`
+ * produces an id that is not safe in a URL or a filename, and 24 characters is
+ * what the console's plan badge renders without truncating.
+ */
+export const PLAN_CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,23}$/;
+
+/**
+ * Codes that cannot be redefined or reused.
+ *
+ * Only FREE, and only because `isPaidPlan` below treats it as the single
+ * unpaid code. Until that is derived from price rather than name, redefining
+ * FREE would silently change which editions are billable.
+ *
+ * The other four originals are ordinary rows once the CHECK constraint is
+ * gone. Nothing reserves GROWTH, BUSINESS, STANDARD or ENTERPRISE.
+ */
+export const RESERVED_PLAN_CODES: ReadonlySet<string> = new Set(['FREE']);
+
+/**
+ * The codes the loaded catalogue actually carries.
+ *
+ * Published by editions.service.ts after every successful refresh, rather than
+ * imported from it — plans.ts must not depend on the service that depends on
+ * plans.ts, and a module cycle here would be resolved differently at boot than
+ * under the test harness.
+ *
+ * Null means the catalogue has not loaded yet. In a serving process that state
+ * does not survive startup: the boot gate refuses the port until it loads.
+ */
+let knownPlanCodes: Set<string> | null = null;
+
+export function publishKnownPlanCodes(codes: Iterable<string>): void {
+  knownPlanCodes = new Set(codes);
+}
+
+/** Test seam: forget the catalogue, so only format is enforced. */
+export function resetKnownPlanCodesForTests(): void {
+  knownPlanCodes = null;
+}
 
 export type PlanEntitlements = {
   code: PlanCode;
@@ -128,10 +185,31 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
   },
 };
 
+/**
+ * Canonicalise a caller-supplied code, or throw.
+ *
+ * Two gates, in order, because they fail for different reasons and the caller
+ * deserves to know which:
+ *
+ * 1. **Format.** A malformed code is a bad request and can never be valid.
+ * 2. **Membership of the loaded catalogue.** A well-formed code the catalogue
+ *    does not carry is unknown *right now* — it may be an edition that was
+ *    never created, or one this process has not loaded yet.
+ *
+ * The membership gate is skipped only while the catalogue has never loaded,
+ * which the boot gate makes unreachable in a serving process. Skipping it
+ * there is deliberate: seeding runs before the first load, and a seed that
+ * cannot name the codes it is about to create could not run at all.
+ */
 export function normalizePlanCode(value: unknown): PlanCode {
-  const code = String(value || '').trim().toUpperCase();
-  if (code in PLAN_ENTITLEMENTS) return code as PlanCode;
-  throw new Error('Unknown plan code');
+  const code = String(value ?? '').trim().toUpperCase();
+  if (!PLAN_CODE_PATTERN.test(code)) {
+    throw new Error(`Invalid plan code: ${JSON.stringify(String(value ?? ''))}`);
+  }
+  if (knownPlanCodes && !knownPlanCodes.has(code)) {
+    throw new Error(`Unknown plan code: ${code}`);
+  }
+  return code;
 }
 
 export function isPaidPlan(code: PlanCode): boolean {
@@ -151,6 +229,22 @@ export function isPaidPlan(code: PlanCode): boolean {
  * rows hold the old number.
  */
 export const UNLIMITED_SENTINEL = 1_000_000_000;
+
+/**
+ * Pacing for a catalogue row that leaves it null.
+ *
+ * `Plan.campaignRateMax` and `campaignRateDurationMs` are nullable, but pacing
+ * is not optional in behaviour: a null pace divides by nothing on the send
+ * path. These fill the gap.
+ *
+ * The slowest any shipped edition uses, deliberately. A default that sends
+ * faster than the real catalogue would have is the wrong direction to be wrong
+ * in — OpenWA drives WhatsApp Web, and blasting is how a number gets banned.
+ *
+ * Previously taken from PLAN_ENTITLEMENTS by code, which meant an edition the
+ * constant had never heard of could not be shaped at all.
+ */
+export const DEFAULT_CAMPAIGN_PACING = { max: 1, durationMs: 2_000 } as const;
 
 /**
  * The plan a subscription lands on when nothing named one.

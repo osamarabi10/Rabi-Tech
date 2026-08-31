@@ -1,7 +1,13 @@
 import { prisma } from '../../prisma';
 import { runAsPlatform } from '../../lib/tenant-context';
 import logger from '../../lib/logger';
-import { PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, normalizePlanCode } from './plans';
+import {
+  DEFAULT_CAMPAIGN_PACING,
+  PLAN_CODE_PATTERN,
+  PlanCode,
+  PlanEntitlements,
+  publishKnownPlanCodes,
+} from './plans';
 
 /**
  * The edition catalogue, read from the database and held in memory.
@@ -41,15 +47,24 @@ import { PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, normalizePlanCode } from
  *
  * ## What the constant is now
  *
- * **Seed source only.** It is not read on any resolution path. The harness
+ * **Seed source only, and this file no longer imports it at all.** The harness
  * asserts the database matches it field for field, so the two agreeing is a
  * checked property rather than a hope — but at runtime the database is the
  * only answer, and if the database cannot be reached the answer is the floor.
  *
- * The one remaining read of it below is `rowToEdition`'s campaign-pacing
- * default, which fills two *nullable columns* rather than supplying an
- * entitlement. A null pace would divide by nothing on the send path. No
- * current row is null, so it does not fire today.
+ * That last dependency was `rowToEdition` reading the constant by code for a
+ * campaign-pacing default. It had to go: an edition the constant has never
+ * heard of is exactly what the catalogue now has to be able to carry, and
+ * looking it up there would have thrown on the first edition anyone created.
+ *
+ * ## What validates a code now
+ *
+ * Format, here, and membership of this cache. After every successful refresh
+ * the loaded codes are published to `normalizePlanCode` via
+ * `publishKnownPlanCodes`, so the gate that used to test membership of the
+ * constant tests membership of the database instead. The direction of the
+ * dependency matters: plans.ts never imports this file, because a cycle
+ * between them would resolve differently at boot than under the harness.
  */
 
 const REFRESH_INTERVAL_MS = Number(process.env.EDITION_REFRESH_MS || 30_000);
@@ -152,9 +167,12 @@ function rowToEdition(row: {
   whiteLabel: boolean;
   maskContactDetails: boolean;
 }): PlanEntitlements {
-  const fallback = PLAN_ENTITLEMENTS[normalizePlanCode(row.code)];
+  const code = String(row.code ?? '').trim().toUpperCase();
+  if (!PLAN_CODE_PATTERN.test(code)) {
+    throw new Error(`Catalogue row has a malformed plan code: ${JSON.stringify(row.code)}`);
+  }
   return {
-    code: row.code as PlanCode,
+    code,
     name: row.name,
     monthlyPriceCents: row.monthlyPriceCents,
     monthlyActiveContactsLimit: row.monthlyActiveContactsLimit,
@@ -164,10 +182,11 @@ function rowToEdition(row: {
     usersLimit: row.usersLimit,
     workflowsLimit: row.workflowsLimit,
     // Rate fields are nullable in the catalogue but not optional in behaviour:
-    // a null pace would divide by nothing on the send path. Fall back to the
-    // constant's pacing rather than inventing a number here.
-    campaignRateMax: row.campaignRateMax ?? fallback.campaignRateMax,
-    campaignRateDurationMs: row.campaignRateDurationMs ?? fallback.campaignRateDurationMs,
+    // a null pace would divide by nothing on the send path. Filled from the
+    // slowest shipped pacing rather than from PLAN_ENTITLEMENTS by code, which
+    // could not shape an edition the constant had never heard of.
+    campaignRateMax: row.campaignRateMax ?? DEFAULT_CAMPAIGN_PACING.max,
+    campaignRateDurationMs: row.campaignRateDurationMs ?? DEFAULT_CAMPAIGN_PACING.durationMs,
     autoProvisionGateway: row.autoProvisionGateway,
     customDomain: row.customDomain,
     whiteLabel: row.whiteLabel,
@@ -200,17 +219,27 @@ export async function refreshEditions(): Promise<number> {
     const next = new Map<string, PlanEntitlements>();
     const nextEditedAt = new Map<string, Date>();
     const nextActive = new Set<string>();
+    /*
+      A row that cannot be loaded fails the whole refresh. It used to be
+      skipped with a warning, on the reasoning that one bad row must not take
+      the catalogue down — which was defensible while an unknown code meant a
+      typo, and became a trap the moment editions could be created.
+
+      A skipped row is an edition that exists in the database, is sellable from
+      the console, and never enters the cache. Every read of it misses, and
+      since the boot gate landed a miss returns the restricted floor: the
+      edition grants nothing at all. The only evidence was one warn line.
+
+      So this is now the loud failure. At boot the gate refuses the port. In a
+      running process the outer catch keeps the previous cache and, crucially,
+      does not advance lastLoadedAt — so the staleness clock keeps running and
+      reads fall to the floor rather than serving a catalogue known to be
+      incomplete. Both outcomes are visible without reading logs.
+    */
     for (const row of rows) {
-      try {
-        next.set(row.code, rowToEdition(row));
-        nextEditedAt.set(row.code, row.updatedAt);
-        if (row.isActive) nextActive.add(row.code);
-      } catch {
-        // An edition the code has never heard of cannot be normalized. Skip it
-        // rather than failing the whole refresh: one bad row must not take the
-        // catalogue down.
-        logger.warn('Skipping unknown edition code in catalogue', { code: row.code });
-      }
+      next.set(row.code, rowToEdition(row));
+      nextEditedAt.set(row.code, row.updatedAt);
+      if (row.isActive) nextActive.add(row.code);
     }
     cache = next;
     editedAt = nextEditedAt;
@@ -220,6 +249,10 @@ export async function refreshEditions(): Promise<number> {
     // been emptied is a fault, and letting it renew the clock would keep the
     // process serving a cache nothing can correct.
     lastLoadedAt = Date.now();
+    // normalizePlanCode validates against this rather than against the shipped
+    // constant. Published after the cache is swapped so the two can never
+    // disagree about which codes exist.
+    publishKnownPlanCodes(next.keys());
     return next.size;
   } catch (error) {
     logger.error('Failed to refresh edition catalogue; keeping previous values', {

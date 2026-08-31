@@ -1,0 +1,31 @@
+-- Open the plan-code space.
+--
+-- The edition catalogue has been database-backed since the plan_editions
+-- phase: an owner can reprice a plan, retune its limits and retire it from the
+-- console, with no deploy. What they could not do is create an edition that
+-- did not already exist, because the set of valid codes was fixed in three
+-- places at once — this CHECK constraint, a closed TypeScript union, and a
+-- membership test against the shipped PLAN_ENTITLEMENTS constant.
+--
+-- This migration removes the SQL half. The other two are removed in code
+-- alongside it; none of the three is sufficient on its own.
+--
+-- ┌──────────────────────────────────────────────────────────────────────┐
+-- │ HARD RULE — this migration stops being reversible the moment a code  │
+-- │ outside the original five is stored anywhere.                        │
+-- └──────────────────────────────────────────────────────────────────────┘
+--
+-- down.sql re-adds the constraint, and ADD CONSTRAINT validates every existing
+-- row. One Organization.planOverride holding a sixth code makes it fail — and
+-- fail late, after any code rollback has already happened, leaving a system
+-- half-reverted. Plan rows carrying new codes survive the SQL, because nothing
+-- constrains Plan.code, but become unresolvable: the restored union and
+-- membership test reject them, so every subscriber on one resolves to the
+-- restricted floor and is entitled to nothing. That is worse than losing the
+-- rows, because they still look present.
+--
+-- Applying this migration is NOT the irreversible act. Creating the sixth
+-- edition is, and nothing can create one until E5 adds the write path. See
+-- docs/RESPONDIO-PARITY-CHECKPOINT.md.
+
+ALTER TABLE "Organization" DROP CONSTRAINT "Organization_planOverride_check";
