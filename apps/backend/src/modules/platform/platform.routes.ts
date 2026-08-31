@@ -1449,6 +1449,8 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
       'customFieldsLimit',
       'usersLimit',
       'workflowsLimit',
+      'monthlyAiTokensInLimit',
+      'monthlyAiTokensOutLimit',
       'campaignRateMax',
       'campaignRateDurationMs',
     ] as const) {

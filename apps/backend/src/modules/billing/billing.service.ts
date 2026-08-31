@@ -135,6 +135,20 @@ async function applyPlanLimits(organizationId: string, planCode: PlanCode): Prom
   const activeContactsLimit = plan.monthlyActiveContactsLimit ?? UNLIMITED_SENTINEL;
   const outboundLimit = plan.monthlyOutboundMessagesLimit ?? UNLIMITED_SENTINEL;
   const campaignLimit = plan.monthlyCampaignSendsLimit ?? UNLIMITED_SENTINEL;
+  /*
+    The AI columns are nullable on OrganizationConfig, unlike the three priced
+    ones, so null is written straight through rather than via the sentinel.
+    Writing the sentinel would mean the same thing to the resolver but would
+    replace every existing null with 1,000,000,000 for no reason.
+
+    Note what this does on activation: it **overwrites** whatever the config
+    held. No organization has a negotiated AI allowance today - all six values
+    are null - so nothing is lost now. The first per-deal AI number will need
+    its own override column, the way macQuotaOverride exists for contacts;
+    until then, activating a subscription resets AI to the edition's value.
+  */
+  const aiInLimit = plan.monthlyAiTokensInLimit;
+  const aiOutLimit = plan.monthlyAiTokensOutLimit;
   await prisma.organization.update({
     where: { id: organizationId },
     data: { tier: planCode },
@@ -146,11 +160,15 @@ async function applyPlanLimits(organizationId: string, planCode: PlanCode): Prom
       monthlyActiveContactsLimit: activeContactsLimit,
       monthlyOutboundMessagesLimit: outboundLimit,
       monthlyCampaignSendsLimit: campaignLimit,
+      monthlyAiTokensInLimit: aiInLimit,
+      monthlyAiTokensOutLimit: aiOutLimit,
     },
     update: {
       monthlyActiveContactsLimit: activeContactsLimit,
       monthlyOutboundMessagesLimit: outboundLimit,
       monthlyCampaignSendsLimit: campaignLimit,
+      monthlyAiTokensInLimit: aiInLimit,
+      monthlyAiTokensOutLimit: aiOutLimit,
     },
   });
 }

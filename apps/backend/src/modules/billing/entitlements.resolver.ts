@@ -93,17 +93,24 @@ function normalizeLimit(raw: number | bigint | null | undefined): number | null 
 /**
  * Plan allowances keyed by metric.
  *
- * Only three of the six are priced. `messages_inbound` is deliberately
- * unlimited on every plan — charging a tenant for messages their *customers*
- * send would let anyone run up their bill — and AI token limits are negotiated
- * per deal rather than set per plan. Both fall through to config.
+ * Five of the six are now priced by edition. `messages_inbound` remains
+ * deliberately unlimited on every plan — charging a tenant for messages their
+ * *customers* send would let anyone run up their bill — and falls through to
+ * config alone.
+ *
+ * The AI meters joined this list rather than staying config-only. They ship
+ * null on every edition, so nothing changes until an owner sets one; what
+ * changes is that they *can* be set, which is what makes AI sellable as part of
+ * an edition rather than only negotiable into one deal.
  */
-function planLimits(plan: PlanCode): Partial<Record<UsageMetric, number | null>> {
+function planLimits(plan: PlanCode): Partial<Record<UsageMetric, number | bigint | null>> {
   const entitlements = getEdition(plan);
   return {
     messages_outbound: entitlements.monthlyOutboundMessagesLimit,
     active_contacts: entitlements.monthlyActiveContactsLimit,
     campaign_sends: entitlements.monthlyCampaignSendsLimit,
+    ai_tokens_in: entitlements.monthlyAiTokensInLimit,
+    ai_tokens_out: entitlements.monthlyAiTokensOutLimit,
   };
 }
 

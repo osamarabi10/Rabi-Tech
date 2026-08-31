@@ -31,10 +31,11 @@ export const METRIC_LIMIT_FIELDS = {
 /**
  * Which `Plan` column carries each metric's edition allowance.
  *
- * Partial on purpose, and the gaps are the point. `messages_inbound` is
+ * Partial on purpose, and the gap is the point. `messages_inbound` is
  * deliberately unmetered by edition — charging a tenant for messages their
- * *customers* send would let anyone run up their bill — and the AI meters have
- * no edition column yet, so both resolve from OrganizationConfig alone.
+ * *customers* send would let anyone run up their bill — so it resolves from
+ * OrganizationConfig alone. Every other meter, including the two AI ones, now
+ * has an edition column.
  *
  * Distinct from METRIC_LIMIT_FIELDS above, which names the *enforced* column on
  * OrganizationConfig. This one answers a different question: which edition
@@ -44,4 +45,6 @@ export const PLAN_METRIC_FIELDS = {
   messages_outbound: 'monthlyOutboundMessagesLimit',
   active_contacts: 'monthlyActiveContactsLimit',
   campaign_sends: 'monthlyCampaignSendsLimit',
+  ai_tokens_in: 'monthlyAiTokensInLimit',
+  ai_tokens_out: 'monthlyAiTokensOutLimit',
 } as const satisfies Partial<Record<UsageMetric, string>>;

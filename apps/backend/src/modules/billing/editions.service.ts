@@ -118,6 +118,8 @@ const RESTRICTED_FLOOR: PlanEntitlements = {
   customFieldsLimit: 0,
   usersLimit: 0,
   workflowsLimit: 0,
+  monthlyAiTokensInLimit: BigInt(0),
+  monthlyAiTokensOutLimit: BigInt(0),
   campaignRateMax: 1,
   campaignRateDurationMs: 2_000,
   autoProvisionGateway: false,
@@ -166,6 +168,8 @@ function rowToEdition(row: {
   customFieldsLimit: number | null;
   usersLimit: number | null;
   workflowsLimit: number | null;
+  monthlyAiTokensInLimit: bigint | null;
+  monthlyAiTokensOutLimit: bigint | null;
   campaignRateMax: number | null;
   campaignRateDurationMs: number | null;
   autoProvisionGateway: boolean;
@@ -188,6 +192,8 @@ function rowToEdition(row: {
     customFieldsLimit: row.customFieldsLimit,
     usersLimit: row.usersLimit,
     workflowsLimit: row.workflowsLimit,
+    monthlyAiTokensInLimit: row.monthlyAiTokensInLimit,
+    monthlyAiTokensOutLimit: row.monthlyAiTokensOutLimit,
     // Rate fields are nullable in the catalogue but not optional in behaviour:
     // a null pace would divide by nothing on the send path. Filled from the
     // slowest shipped pacing rather than from PLAN_ENTITLEMENTS by code, which

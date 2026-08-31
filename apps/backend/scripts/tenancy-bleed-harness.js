@@ -4043,6 +4043,8 @@ async function databaseAudits() {
         'customFieldsLimit',
         'usersLimit',
         'workflowsLimit',
+        'monthlyAiTokensInLimit',
+        'monthlyAiTokensOutLimit',
         'campaignRateMax',
         'campaignRateDurationMs',
         'autoProvisionGateway',

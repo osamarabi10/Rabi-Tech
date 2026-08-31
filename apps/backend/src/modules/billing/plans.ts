@@ -84,6 +84,9 @@ export type PlanEntitlements = {
    * enabling something they already built, which is a worse moment to be told.
    */
   workflowsLimit: number | null;
+  /** AI allowances. Null means unlimited. BigInt-backed in the database. */
+  monthlyAiTokensInLimit: bigint | null;
+  monthlyAiTokensOutLimit: bigint | null;
   campaignRateMax: number;
   campaignRateDurationMs: number;
   autoProvisionGateway: boolean;
@@ -107,6 +110,8 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     // advertised: a tier that cannot build a single workflow teaches nobody
     // what the feature is worth.
     workflowsLimit: 1,
+    monthlyAiTokensInLimit: null,
+    monthlyAiTokensOutLimit: null,
     campaignRateMax: 1,
     campaignRateDurationMs: 2_000,
     autoProvisionGateway: false,
@@ -137,6 +142,8 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customFieldsLimit: 0,
     usersLimit: 2,
     workflowsLimit: 0,
+    monthlyAiTokensInLimit: null,
+    monthlyAiTokensOutLimit: null,
     campaignRateMax: 1,
     campaignRateDurationMs: 1_500,
     autoProvisionGateway: false,
@@ -155,6 +162,8 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customFieldsLimit: 20,
     usersLimit: 5,
     workflowsLimit: 10,
+    monthlyAiTokensInLimit: null,
+    monthlyAiTokensOutLimit: null,
     campaignRateMax: 1,
     campaignRateDurationMs: 1_500,
     autoProvisionGateway: true,
@@ -173,6 +182,8 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customFieldsLimit: 50,
     usersLimit: 25,
     workflowsLimit: 50,
+    monthlyAiTokensInLimit: null,
+    monthlyAiTokensOutLimit: null,
     campaignRateMax: 1,
     campaignRateDurationMs: 1_000,
     autoProvisionGateway: true,
@@ -191,6 +202,8 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customFieldsLimit: null,
     usersLimit: null,
     workflowsLimit: null,
+    monthlyAiTokensInLimit: null,
+    monthlyAiTokensOutLimit: null,
     campaignRateMax: 2,
     campaignRateDurationMs: 1_000,
     autoProvisionGateway: true,

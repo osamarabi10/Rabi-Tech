@@ -152,6 +152,19 @@ model Plan {
   usersLimit                   Int?
   workflowsLimit               Int?
 
+  /// AI allowances. Null means unlimited, as with every limit above.
+  ///
+  /// These are the only two metered meters that had no edition column at all:
+  /// they lived solely on OrganizationConfig with no write path, so AI was
+  /// negotiated per deal or not offered, and could not be part of what an
+  /// edition sells. BigInt because token counts run to millions where the
+  /// message meters run to thousands.
+  ///
+  /// Shipped null on every edition, which is exactly what the config already
+  /// held — the lever is added without setting a policy with it.
+  monthlyAiTokensInLimit       BigInt?
+  monthlyAiTokensOutLimit      BigInt?
+
   /// Broadcast pacing. OpenWA drives WhatsApp Web, so blasting risks a ban.
   campaignRateMax        Int?
   campaignRateDurationMs Int?
