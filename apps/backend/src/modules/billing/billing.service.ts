@@ -665,9 +665,6 @@ export async function reconcileBilling(): Promise<{ checked: number; repaired: n
  * and assertSeatAvailable, because a UI gate is a courtesy, not a control.
  */
 
-
-
-
 /** Treats the "unlimited" sentinel applyPlanLimits writes as what it means. */
 function normalize(raw: number | bigint | null | undefined): number | null {
   if (raw === null || raw === undefined) return null;

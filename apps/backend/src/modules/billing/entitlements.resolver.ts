@@ -1,4 +1,4 @@
-import { OrganizationConfig, UsageMetric } from '@prisma/client';
+import { OrganizationConfig, SubscriptionStatus, UsageMetric } from '@prisma/client';
 import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { METRIC_LIMIT_FIELDS, USAGE_METRICS } from '../usage/metrics';
@@ -73,15 +73,17 @@ export type EffectiveEntitlements = {
 };
 
 /** Subscription states that may name the plan in force. */
-const LIVE_SUBSCRIPTION_STATUSES = ['ACTIVE', 'TRIALING'];
+const LIVE_SUBSCRIPTION_STATUSES: SubscriptionStatus[] = ['ACTIVE', 'TRIALING'];
 
 /**
- * `applyPlanLimits` writes this instead of NULL for an unlimited plan, because
- * the config columns for the three priced metrics are NOT NULL. Anything at or
- * above it means "no limit" and must not be shown to a user as 1,000,000,000.
+ * Reads UNLIMITED_SENTINEL back as what it means.
+ *
+ * `applyPlanLimits` writes the sentinel instead of NULL for an unlimited plan,
+ * because the config columns for the three priced metrics are NOT NULL.
+ * Anything at or above it means "no limit" and must not be shown to a user as
+ * 1,000,000,000. A zero is preserved as a real zero — the restricted floor in
+ * editions.service.ts relies on that to deny rather than read as unlimited.
  */
-
-
 function normalizeLimit(raw: number | bigint | null | undefined): number | null {
   if (raw === null || raw === undefined) return null;
   const value = Number(raw);

@@ -1,3 +1,4 @@
+import { SubscriptionStatus } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { ENTRY_PAID_PLAN_CODE, isPaidPlan, normalizePlanCode, type PlanCode } from './plans';
 
@@ -160,10 +161,10 @@ export function trialStateOf(
  * window, so anything that gates on "is this subscription live" has to accept
  * both or new signups are locked out of what they just signed up for.
  */
-export const ACCESS_GRANTING_SUBSCRIPTION_STATUSES = ['ACTIVE', 'TRIALING'];
+export const ACCESS_GRANTING_SUBSCRIPTION_STATUSES: SubscriptionStatus[] = ['ACTIVE', 'TRIALING'];
 
 /** The subscription that decides access, newest first. */
-export const TRIAL_SUBSCRIPTION_STATUSES = ['ACTIVE', 'TRIALING', 'PAST_DUE', 'MANUAL_REVIEW', 'PENDING'];
+export const TRIAL_SUBSCRIPTION_STATUSES: SubscriptionStatus[] = ['ACTIVE', 'TRIALING', 'PAST_DUE', 'MANUAL_REVIEW', 'PENDING'];
 
 export async function resolveTrial(organizationId: string, now: Date = new Date()): Promise<TrialState> {
   const subscription = await prisma.subscription.findFirst({

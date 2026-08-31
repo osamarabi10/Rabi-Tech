@@ -253,7 +253,7 @@ model Subscription {
   subscriptionRef    String?   @unique
   customerRef        String?
   externalRef        String?
-  status             String    @default("PENDING") // PENDING|ACTIVE|PAST_DUE|CANCELED|TRIALING|MANUAL_REVIEW
+  status             SubscriptionStatus @default(PENDING)
   currentPeriodStart DateTime?
   currentPeriodEnd   DateTime?
   cancelAtPeriodEnd  Boolean   @default(false)
@@ -600,6 +600,26 @@ model OrgSequence {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@id([organizationId, kind])
+}
+
+/// The states a subscription can be in.
+///
+/// Was a free String with the permitted values in a trailing comment, which is
+/// a convention rather than a constraint: nothing stopped a typo being stored,
+/// and a status nothing recognises reads as "not active" at every site that
+/// tests for ACTIVE, so a subscription could silently stop granting access
+/// without any row looking wrong.
+///
+/// MANUAL_REVIEW is not a failure state. It is what a paid activation lands in
+/// when the platform cannot confirm the plan by itself, and it still grants
+/// access — see TRIAL_SUBSCRIPTION_STATUSES in trial.service.ts.
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
+  MANUAL_REVIEW
 }
 
 enum UsageMetric {
