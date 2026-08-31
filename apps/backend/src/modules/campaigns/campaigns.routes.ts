@@ -75,14 +75,31 @@ const SEND_SPACING_MS = Number(process.env.CAMPAIGN_SEND_SPACING_MS || 1200);
 router.get('/', async (_req, res) => {
   try {
     const campaigns = await prisma.campaign.findMany({
-      include: {
+      // Keep the legacy list readable while the Meta template migration is
+      // pending. Prisma's default selection would request the new nullable
+      // Campaign columns from a database that does not have them yet.
+      select: {
+        id: true,
+        organizationId: true,
+        sessionId: true,
+        title: true,
+        message: true,
+        mediaUrl: true,
+        status: true,
+        scheduledAt: true,
+        sentAt: true,
+        createdAt: true,
+        audienceFilter: true,
         session: true,
         _count: { select: { recipients: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
     res.json(campaigns);
-  } catch {
+  } catch (err) {
+    logger.error('Campaign list failed', {
+      error: err instanceof Error ? err.stack : String(err),
+    });
     res.status(500).json({ error: 'Server error' });
   }
 });
