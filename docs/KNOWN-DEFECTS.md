@@ -146,50 +146,69 @@ month from now.
 
 ---
 
-## D-5 · The finance gate picks its fixture non-deterministically
+## D-5 · The finance gate picked its fixture non-deterministically — RESOLVED
 
-**Where:** [`apps/backend/scripts/verify-finance.js`](../apps/backend/scripts/verify-finance.js),
-the reference-format assertion.
+**Resolved in `889096e6`.** Kept as a short record because the failure mode is
+easy to reintroduce.
 
-**What is wrong:** the script chooses its test subject with
-`prisma.organization.findFirst({ select: { id: true, name: true } })` — **no
-`orderBy`**. PostgreSQL is free to return any row, so which organization the
-gate runs against changes between runs.
+`verify-finance.js` chose its subject with an unordered `findFirst`, so which
+of three organizations it tested changed between runs, and it failed whenever
+it drew the seeded `org_rabitech_0` — id tail `CH_0`, rejected by a format
+assertion of `[A-Z0-9]{4}`. CLAUDE.md recorded the gate as 16/16 while it was
+15/16 under those draws.
 
-That matters because the assertion is
+Selection is now ordered and the assertion accepts the underscore a slug id
+legitimately produces. The suite also gained a check that the issued reference
+equals the `invoiceRef` high-water mark, because format alone could never have
+caught a numbering regression. Now 17/17, deterministic.
 
-```js
-/^INV-\d{4}-[A-Z0-9]{4}-\d{4}$/
+---
+
+## D-6 · A written migration is unapplied, and `migrate deploy` will apply it
+
+**Where:** `apps/backend/prisma/migrations/20260920090000_meta_template_lifecycle/`.
+
+**What is wrong:** the migration exists on disk and is **not applied** to the
+live database. `prisma migrate status` reports it as pending. Anyone running
+`prisma migrate deploy` — for any reason, in any unrelated phase — applies it,
+because deploy applies *every* pending migration in order and offers no way to
+select one.
+
+That is the trap: the command you reach for to ship your own schema change
+also ships someone else's, silently, as a side effect. Nothing in the output
+distinguishes the two.
+
+**Why it is unapplied:** it was written ahead of the send path it supports. The
+generated Prisma client already knows the lifecycle fields, including
+`Campaign.metaTemplateId`, while the live `Campaign` table does not — a
+mismatch that made a tenant-scoped `GET /api/campaigns` fail with Prisma
+`P2022` until the route was repaired to use an explicit pre-migration select.
+That repair applied no migration. Recorded in commit `b5f6de69`
+("docs: record unapplied migration hazard") and in
+[RESPONDIO-PARITY-CHECKPOINT.md](RESPONDIO-PARITY-CHECKPOINT.md) §2.
+
+**What the invoice integrity phase did about it: nothing, deliberately.**
+`20260921090000_invoice_reference_integrity` was applied by piping its
+`migration.sql` straight to `psql` and then recording it with:
+
+```
+npx prisma migrate resolve --applied 20260921090000_invoice_reference_integrity
 ```
 
-and a reference embeds `organizationId.slice(-4).toUpperCase()`. This database
-holds three organizations:
+`migrate deploy` was avoided precisely so the meta template migration stayed
+where it was found. Applying another phase's migration as a side effect of
+this one would have been an unrequested schema change to a shared database.
 
-| id | tail | assertion |
-|---|---|---|
-| `cmt0gw8yo003fxrc8mqd22ry6` | `2RY6` | passes |
-| `cmt5kyprc0025br7e87jfii0l` | `II0L` | passes |
-| `org_rabitech_0` | `CH_0` | **fails** — `_` is not in `[A-Z0-9]` |
+**Cost:** every phase from here pays a tax — either it repeats this
+direct-SQL-plus-resolve workaround, or it applies the meta template migration
+without meaning to. The workaround is not free: it bypasses the checksum
+Prisma would otherwise record for the SQL it actually ran.
 
-Two of three pass and one fails, decided by whichever row the database hands
-back. CLAUDE.md records this gate as 16/16; it is currently 15/16 whenever the
-seeded `org_rabitech_0` is selected.
+**Fix — must be a deliberate decision, not a side effect.** Someone has to
+choose one:
+1. Apply it, and repair whatever the pre-migration selects were working around;
+2. Withdraw it until the send path is ready.
 
-**Not caused by the invoice integrity work.** The `slice(-4)` expression is
-byte-identical before and after that change, and the first invoice numbers
-`0001` under both the old count-based scheme and the new counter.
-
-**Cost:** a gate that flips between green and red on nothing is worse than one
-that is reliably red — it trains everyone to re-run it until it passes.
-
-**Fix:** two independent choices, and both are worth making.
-1. Give `findFirst` a deterministic `orderBy`, so the gate tests the same
-   subject every run.
-2. Decide what a reference may legally contain. Either the assertion widens to
-   `[A-Z0-9_]{4}`, or the reference builder sanitises the organization tail
-   before embedding it. Right now the format is whatever the id happens to be,
-   which is how the underscore arrived unnoticed.
-
-Deliberately left unfixed here: it is a pre-existing test defect and changing a
-failing assertion during an integrity phase is how a real regression gets
-waved through.
+**This is the opening item for the Editions phase.** Editions carries real
+schema work and will want `migrate deploy` to behave normally. It should not
+start by inheriting a command it cannot safely run.

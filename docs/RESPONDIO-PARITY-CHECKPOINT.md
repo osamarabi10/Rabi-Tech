@@ -134,6 +134,55 @@ against the post-migration capture — also identical. `OrgSequence` was
 unchanged throughout, which was the point of the exercise. A fresh verified
 `pg_dump` was taken immediately before the first apply.
 
+### Prisma has no down-migration — the procedure, written down before it is needed
+
+Prisma Migrate is forward-only. There is no `migrate down`, no `migrate revert`
+and no rollback command of any kind. Reversing a migration is a manual
+procedure, and the part that surprises people is the last step: undoing the SQL
+is not enough, because `_prisma_migrations` still holds a row saying the
+migration is applied. Leave that row and `migrate status` reports a database
+that is a schema ahead of what it actually is.
+
+This is the procedure actually used during the invoice integrity rehearsal.
+It is recorded here so the first person to attempt a rollback is reading it
+beforehand rather than deriving it during an incident.
+
+```bash
+# 0. Snapshot first, always. This is the only step that is not reversible
+#    by the steps that follow it.
+docker exec rabitech-postgres-1 pg_dump -U admin -d rabitech -Fc -f /tmp/pre.dump
+docker cp rabitech-postgres-1:/tmp/pre.dump ./pre.dump
+docker exec rabitech-postgres-1 pg_restore -l /tmp/pre.dump   # verify it reads
+
+# 1. Reverse the SQL. --single-transaction so a partial reversal cannot happen.
+docker exec -i rabitech-postgres-1 psql -U admin -d rabitech \
+  -v ON_ERROR_STOP=1 --single-transaction \
+  < apps/backend/prisma/migrations/<migration_name>/down.sql
+
+# 2. Remove the history row. Prisma will not do this, and without it the
+#    database claims a schema it no longer has.
+docker exec rabitech-postgres-1 psql -U admin -d rabitech -tAc \
+  "delete from _prisma_migrations where migration_name='<migration_name>';"
+
+# 3. Confirm. The migration should now read as pending again.
+cd apps/backend && npx prisma migrate status
+```
+
+Re-applying is the same shape in reverse: pipe `migration.sql` through `psql`,
+then record it with `npx prisma migrate resolve --applied <migration_name>`.
+
+Two things this procedure does **not** do, both deliberate:
+
+- **It does not use `prisma migrate deploy`.** Deploy applies every pending
+  migration, so on this database it would also apply
+  `20260920090000_meta_template_lifecycle` as a side effect. See D-6 in
+  [KNOWN-DEFECTS.md](KNOWN-DEFECTS.md).
+- **It does not touch `OrgSequence`.** See the hard rule above. Reversing
+  schema is recoverable; lowering a document counter is not.
+
+A `down.sql` is only meaningful if it was run at least once. One that has never
+been executed is an assertion about the past, not a tested path.
+
 Both gate numbers rose because two gates were found non-functional on this
 machine and repaired — see the preconditions in §8. Neither number is
 comparable to the one it replaces without that context: the harness gained
