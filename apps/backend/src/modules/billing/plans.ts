@@ -137,3 +137,35 @@ export function normalizePlanCode(value: unknown): PlanCode {
 export function isPaidPlan(code: PlanCode): boolean {
   return code !== 'FREE';
 }
+
+/**
+ * How "unlimited" is written into OrganizationConfig.
+ *
+ * The plan says unlimited with `null`; the config columns are `Int NOT NULL`
+ * and cannot, so they say it with a number large enough that no tenant reaches
+ * it. Any stored value at or above this reads back as null.
+ *
+ * It lived as a private `const` in three files, which is three chances for one
+ * of them to drift and for a limit to stop meaning unlimited in exactly one
+ * enforcement site. Changing it is a data migration, not an edit: existing
+ * rows hold the old number.
+ */
+export const UNLIMITED_SENTINEL = 1_000_000_000;
+
+/**
+ * The plan a subscription lands on when nothing named one.
+ *
+ * A commercial default, deliberately still a constant. It was written inline
+ * at three call sites — a payment event with no plan code, an owner activation
+ * with no plan code, and the trial default — so changing which plan the
+ * platform falls back to meant finding all three and hoping there was not a
+ * fourth.
+ *
+ * NOT derived from the catalogue. "Cheapest active paid edition" would compute
+ * to STANDARD here rather than GROWTH, which silently moves every trial and
+ * every unnamed activation onto a different plan. That is a pricing decision
+ * for the platform owner to make deliberately, not a side effect of tidying a
+ * literal. Change this line, or make it a PlatformSetting, when that decision
+ * is actually taken.
+ */
+export const ENTRY_PAID_PLAN_CODE: PlanCode = 'GROWTH';

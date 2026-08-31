@@ -12,7 +12,7 @@ import {
   trialDeadlineFrom,
 } from './trial.service';
 import { getPaymentProvider } from './provider-registry';
-import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements } from './plans';
+import { ENTRY_PAID_PLAN_CODE, isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
 import { getEdition, getEditions, getEditionEditedAt } from './editions.service';
 import { resolveEntitlements } from './entitlements.resolver';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
@@ -76,7 +76,11 @@ export async function ensurePlans(): Promise<void> {
           code: plan.code,
           name: plan.name,
           monthlyPriceCents: plan.monthlyPriceCents,
-          sortOrder: ['FREE', 'STANDARD', 'GROWTH', 'BUSINESS', 'ENTERPRISE'].indexOf(plan.code),
+          // Declaration order in PLAN_ENTITLEMENTS, which is already cheapest
+          // to dearest. The literal array this replaces was a second copy of
+          // that ordering, and a code absent from it seeded at -1 — sorting
+          // ahead of Free on the pricing page.
+          sortOrder: Object.keys(PLAN_ENTITLEMENTS).indexOf(plan.code),
         },
         // Empty on purpose. An existing row is owner-editable state, not a
         // copy of the constant to be refreshed. See the note above.
@@ -127,9 +131,9 @@ export async function listPlans() {
 
 async function applyPlanLimits(organizationId: string, planCode: PlanCode): Promise<void> {
   const plan = getEdition(planCode);
-  const activeContactsLimit = plan.monthlyActiveContactsLimit ?? 1_000_000_000;
-  const outboundLimit = plan.monthlyOutboundMessagesLimit ?? 1_000_000_000;
-  const campaignLimit = plan.monthlyCampaignSendsLimit ?? 1_000_000_000;
+  const activeContactsLimit = plan.monthlyActiveContactsLimit ?? UNLIMITED_SENTINEL;
+  const outboundLimit = plan.monthlyOutboundMessagesLimit ?? UNLIMITED_SENTINEL;
+  const campaignLimit = plan.monthlyCampaignSendsLimit ?? UNLIMITED_SENTINEL;
   await prisma.organization.update({
     where: { id: organizationId },
     data: { tier: planCode },
@@ -268,9 +272,9 @@ export async function createSignup(input: {
           organizationId: organization.id,
           sharedLine: false,
           // Seeded from the same plan as the tier, for the same reason.
-          monthlyActiveContactsLimit: getEdition(effectivePlanCode).monthlyActiveContactsLimit ?? 1_000_000_000,
-          monthlyOutboundMessagesLimit: getEdition(effectivePlanCode).monthlyOutboundMessagesLimit ?? 1_000_000_000,
-          monthlyCampaignSendsLimit: getEdition(effectivePlanCode).monthlyCampaignSendsLimit ?? 1_000_000_000,
+          monthlyActiveContactsLimit: getEdition(effectivePlanCode).monthlyActiveContactsLimit ?? UNLIMITED_SENTINEL,
+          monthlyOutboundMessagesLimit: getEdition(effectivePlanCode).monthlyOutboundMessagesLimit ?? UNLIMITED_SENTINEL,
+          monthlyCampaignSendsLimit: getEdition(effectivePlanCode).monthlyCampaignSendsLimit ?? UNLIMITED_SENTINEL,
         },
       });
       await tx.organizationBranding.create({ data: { organizationId: organization.id, productName: organization.name } });
@@ -538,9 +542,23 @@ export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<stri
     }
 
     switch (event.kind) {
-      case 'subscription_activated':
-        await activateManualSubscription(organizationId, String(event.planCode || payload?.planCode || 'GROWTH'));
+      case 'subscription_activated': {
+        // A provider that activates without naming a plan is telling us money
+        // moved but not what for. Activating the entry paid plan is a guess;
+        // refusing would leave a customer who has paid with nothing, which is
+        // worse. So it guesses, and says so loudly — the log is the only
+        // signal an owner has that a subscription may be on the wrong plan.
+        const namedPlan = event.planCode || payload?.planCode;
+        if (!namedPlan) {
+          logger.warn('Payment event activated a subscription without naming a plan', {
+            provider: provider.provider,
+            organizationId,
+            fallbackPlan: ENTRY_PAID_PLAN_CODE,
+          });
+        }
+        await activateManualSubscription(organizationId, String(namedPlan || ENTRY_PAID_PLAN_CODE));
         break;
+      }
       case 'payment_failed':
         await markPaymentFailed(organizationId, String(event.reason || payload?.reason || 'Payment failed'));
         break;
@@ -647,8 +665,8 @@ export async function reconcileBilling(): Promise<{ checked: number; repaired: n
  * and assertSeatAvailable, because a UI gate is a courtesy, not a control.
  */
 
-/** Config stores 'unlimited' as this sentinel; the plan stores it as null. */
-const UNLIMITED_SENTINEL = 1_000_000_000;
+
+
 
 /** Treats the "unlimited" sentinel applyPlanLimits writes as what it means. */
 function normalize(raw: number | bigint | null | undefined): number | null {

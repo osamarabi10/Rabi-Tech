@@ -2,7 +2,7 @@ import { OrganizationConfig, UsageMetric } from '@prisma/client';
 import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { METRIC_LIMIT_FIELDS, USAGE_METRICS } from '../usage/metrics';
-import { PlanCode, normalizePlanCode } from './plans';
+import { PlanCode, UNLIMITED_SENTINEL, normalizePlanCode } from './plans';
 import { getEdition } from './editions.service';
 
 /**
@@ -80,7 +80,7 @@ const LIVE_SUBSCRIPTION_STATUSES = ['ACTIVE', 'TRIALING'];
  * the config columns for the three priced metrics are NOT NULL. Anything at or
  * above it means "no limit" and must not be shown to a user as 1,000,000,000.
  */
-const UNLIMITED_SENTINEL = 1_000_000_000;
+
 
 function normalizeLimit(raw: number | bigint | null | undefined): number | null {
   if (raw === null || raw === undefined) return null;

@@ -643,7 +643,15 @@ router.get('/subscribers/:id/commercials/history', requirePlatformOwner, async (
 
 router.post('/subscribers/:id/billing/activate', requirePlatformPermission('billing:activate'), async (req, res) => {
   try {
-    const planCode = normalizePlanCode(req.body.planCode || 'GROWTH');
+    // No default. An owner activating a subscription is choosing what the
+    // subscriber will be billed for, and silently choosing Growth on their
+    // behalf is a commercial decision made by an omission. The console's three
+    // activation buttons all send a plan code, so this refuses only a caller
+    // that genuinely did not say.
+    if (!req.body?.planCode) {
+      return res.status(400).json({ error: 'planCode is required to activate a subscription' });
+    }
+    const planCode = normalizePlanCode(req.body.planCode);
     const subscription = await activateManualSubscription(req.params.id, planCode);
     res.status(202).json({ organizationId: req.params.id, subscription });
   } catch (error) {

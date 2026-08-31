@@ -1,5 +1,5 @@
 import { prisma } from '../../prisma';
-import { isPaidPlan, normalizePlanCode, type PlanCode } from './plans';
+import { ENTRY_PAID_PLAN_CODE, isPaidPlan, normalizePlanCode, type PlanCode } from './plans';
 
 /**
  * The free trial: full access for a fixed window, then a paywall.
@@ -76,7 +76,8 @@ export async function setTrialHours(hours: number, updatedBy: string | null): Pr
 }
 
 const TRIAL_PLAN_KEY = 'billing.trialPlan';
-const TRIAL_PLAN_DEFAULT: PlanCode = 'GROWTH';
+/** The shared commercial default; see ENTRY_PAID_PLAN_CODE in plans.ts. */
+const TRIAL_PLAN_DEFAULT: PlanCode = ENTRY_PAID_PLAN_CODE;
 
 /**
  * Which plan a trial actually runs on.
