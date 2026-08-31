@@ -106,8 +106,14 @@ export async function ensurePlans(): Promise<void> {
  */
 export async function listPlans() {
   return runAsPlatform('billing-list-plans', async () => {
+    // Archived editions leave the price list entirely, rather than merely being
+    // unticked. This asks the same question getEditions() answers - what is on
+    // sale - so it filters on the same two columns. Filtering on only one of
+    // them is how the pricing page and the entitlement catalogue come to
+    // disagree about which editions exist, which is the drift this function was
+    // written to end.
     const plans = await prisma.plan.findMany({
-      where: { isActive: true },
+      where: { isActive: true, archivedAt: null },
       orderBy: { sortOrder: 'asc' },
     });
 
@@ -828,6 +834,11 @@ export async function getBillingSummary(organizationId: string) {
    * for the same reason listPlans() does: the stored code and the normalized
    * one are not guaranteed to be written identically, and matching on the raw
    * string would silently find nothing.
+   *
+   * Deliberately not filtered by archivedAt, for the same reason
+   * sellableCurrencies() is not: this reports the currency of the plan already
+   * in force, so it is a resolution question. A subscriber whose edition was
+   * archived must still be shown what they are billed in, not null.
    */
   const planRows = await runAsPlatform('billing-summary:plan-currency', () =>
     prisma.plan.findMany({ where: { isActive: true }, select: { code: true, currency: true } }));

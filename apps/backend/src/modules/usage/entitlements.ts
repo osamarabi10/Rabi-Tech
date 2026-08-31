@@ -89,6 +89,13 @@ export function capabilityErrorResponse(error: CapabilityNotIncludedError) {
 /**
  * The cheapest active edition that grants a metric at all.
  *
+ * Active means both columns: not withdrawn from sale, and not archived. This
+ * names an upgrade target, so it is an offer question - the same one
+ * getEditions() answers - and an archived edition must never be advertised. If
+ * every granting edition has been archived the result is null and the refusal
+ * names no upgrade at all, which is the right outcome: better to say only what
+ * is forbidden than to point at something nobody can buy.
+ *
  * Read from the catalogue, never hardcoded. A literal "requires Growth" starts
  * lying the first time the owner moves a capability, and the console already
  * carries one such map that will need the same treatment.
@@ -106,7 +113,10 @@ async function editionGranting(metric: UsageMetric): Promise<string | null> {
   if (!field) return null;
   try {
     const editions = await runAsPlatform('capability-required-edition', () =>
-      prisma.plan.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' } }));
+      prisma.plan.findMany({
+        where: { isActive: true, archivedAt: null },
+        orderBy: { sortOrder: 'asc' },
+      }));
     const granting = editions.find((edition) => {
       const value = (edition as unknown as Record<string, unknown>)[field];
       return value === null || Number(value) > 0;

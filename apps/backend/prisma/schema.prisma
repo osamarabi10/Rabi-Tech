@@ -199,6 +199,21 @@ model Plan {
   /// capability. Narrowing an edition is now an owner decision.
   allowedChannels String[] @default(["OPENWA"])
 
+  /// Withdrawn from the console entirely. Strictly stronger than `isActive`,
+  /// which only withdraws an edition from sale.
+  ///
+  /// Three states, and all three resolve: active (sold, listed), inactive
+  /// (not sold, still listed so the owner can bring it back), archived (not
+  /// sold, not listed). A subscriber on an archived edition keeps exactly the
+  /// entitlements it grants — archiving is an editorial act on the catalogue,
+  /// never a change to what anyone already bought.
+  ///
+  /// Implemented by filtering the *published* set, never the query that loads
+  /// the cache. `refreshEditions` must keep reading every row: an archived
+  /// edition dropped from the cache resolves to RESTRICTED_FLOOR, which grants
+  /// nothing and returns 200 while doing it.
+  archivedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

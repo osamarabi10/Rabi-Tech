@@ -4385,6 +4385,118 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
+    await check('billing: archiving an edition withdraws it without orphaning its subscribers', async () => {
+      const { refreshEditions, getEdition, getEditions } = require('../src/modules/billing/editions.service');
+      const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
+      const { listPlans } = require('../src/modules/billing/billing.service');
+      const { sellableCurrencies } = require('../src/modules/billing/currency-policy');
+      const { assertMetricAvailable } = require('../src/modules/usage/entitlements');
+
+      await setTierGoverned(orgA, 'GROWTH');
+      await raw.plan.update({ where: { code: 'GROWTH' }, data: { monthlyActiveContactsLimit: 4242 } });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      const growth = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+      const campaignLimits = await raw.plan.findMany({ select: { code: true, monthlyCampaignSendsLimit: true } });
+
+      // Archived, and deliberately left isActive. Archiving has to stand on its
+      // own column: if someone ever implements it by flipping isActive instead,
+      // every assertion below would still pass, for the wrong reason.
+      await raw.plan.update({ where: { code: 'GROWTH' }, data: { archivedAt: new Date(), isActive: true } });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      // Gone from the published catalogue...
+      assert.ok(
+        !getEditions().some((edition) => edition.code === 'GROWTH'),
+        'an archived edition must leave the published catalogue',
+      );
+      // ...and from the price list, which must not disagree with it.
+      const listed = await listPlans();
+      assert.ok(
+        !listed.some((plan) => plan.code === 'GROWTH'),
+        'an archived edition must leave the price list',
+      );
+
+      // ...but still resolving, with its edited value intact. This is the
+      // silent failure the whole design guards: an archived edition dropped
+      // from the cache resolves to the restricted floor, granting nothing
+      // while every response still returns 200.
+      assert.equal(
+        getEdition('GROWTH').monthlyActiveContactsLimit,
+        4242,
+        'a subscriber on an archived edition keeps the edition they are on',
+      );
+      const stillResolves = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgA.organizationId));
+      assert.equal(stillResolves.plan, 'GROWTH');
+
+      // ...and still billable. sellableCurrencies gates what may be written
+      // onto a finance document, so dropping an archived plan's currency would
+      // refuse to invoice the subscriber who is still on it. Deliberately not
+      // filtered by archivedAt; this is the assertion that says so.
+      const currencies = await runAsPlatform('bleed-sellable-currencies', () => sellableCurrencies());
+      assert.ok(
+        currencies.includes(String(growth.currency).toUpperCase()),
+        'an archived edition must stay invoiceable in its own currency',
+      );
+
+      // The upgrade GROWTH is never offered. Every other edition is stripped of
+      // campaign_sends so GROWTH is unambiguously the only one that grants it.
+      await raw.plan.updateMany({ data: { monthlyCampaignSendsLimit: 0 } });
+      await raw.plan.update({ where: { code: 'GROWTH' }, data: { monthlyCampaignSendsLimit: 5000 } });
+      await setTierGoverned(orgA, 'FREE');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      // The enforced limit lives on OrganizationConfig, not on the plan row.
+      // effectiveLimits() reads a plan only when a live planOverride exists and
+      // otherwise takes the config column applyPlanLimits wrote, so the refusal
+      // has to be staged there - zeroing the plan alone leaves this org on
+      // whatever allowance it was last given, and nothing is refused at all.
+      const configBefore = await raw.organizationConfig.findUniqueOrThrow({
+        where: { organizationId: orgA.organizationId },
+        select: { monthlyCampaignSendsLimit: true },
+      });
+      await raw.organizationConfig.update({
+        where: { organizationId: orgA.organizationId },
+        data: { monthlyCampaignSendsLimit: 0 },
+      });
+
+      await runAsOrganization(orgA.organizationId, async () => {
+        await assert.rejects(
+          () => assertMetricAvailable('campaign_sends'),
+          (error) => error.code === 'PLAN_UPGRADE_REQUIRED' && error.requiredPlan === null,
+          'an archived edition must never be named as the upgrade to buy',
+        );
+      });
+
+      // Un-archived, the same refusal names it again - which is what makes the
+      // null above mean "archived" rather than "nothing grants this".
+      await raw.plan.update({ where: { code: 'GROWTH' }, data: { archivedAt: null } });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      await runAsOrganization(orgA.organizationId, async () => {
+        await assert.rejects(
+          () => assertMetricAvailable('campaign_sends'),
+          (error) => error.code === 'PLAN_UPGRADE_REQUIRED' && error.requiredPlan === growth.name,
+          'a published edition that grants the capability must be named',
+        );
+      });
+
+      await raw.organizationConfig.update({
+        where: { organizationId: orgA.organizationId },
+        data: { monthlyCampaignSendsLimit: configBefore.monthlyCampaignSendsLimit },
+      });
+      for (const row of campaignLimits) {
+        await raw.plan.update({
+          where: { code: row.code },
+          data: { monthlyCampaignSendsLimit: row.monthlyCampaignSendsLimit },
+        });
+      }
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: { archivedAt: null, monthlyActiveContactsLimit: 2500 },
+      });
+      await setTierGoverned(orgA, 'FREE');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+    });
+
     await check('billing: the edition catalogue loads on a timer, with no ambient scope', async () => {
       const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
 

@@ -22,7 +22,19 @@ export class CurrencyPolicyError extends Error {
   }
 }
 
-/** Distinct currencies across active plans, uppercased, sorted for stable output. */
+/**
+ * Distinct currencies across active plans, uppercased, sorted for stable output.
+ *
+ * Deliberately NOT filtered by archivedAt, unlike listPlans(). This gates what
+ * may be written onto a finance document, and a subscriber on a withdrawn
+ * edition still gets invoiced - in the currency their plan is priced in. Adding
+ * archivedAt here would refuse their renewal the moment the edition was
+ * archived, because assertSellableCurrency() fails closed by design and the
+ * archived plan's currency would no longer appear in the allowed set.
+ *
+ * "What may we still charge in" is a resolution question, not an offer one.
+ * Archiving stops the selling; it does not stop the billing.
+ */
 export async function sellableCurrencies(): Promise<string[]> {
   const rows = await prisma.plan.findMany({
     where: { isActive: true },

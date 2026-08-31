@@ -1,0 +1,25 @@
+-- Editions can be archived, not only deactivated.
+--
+-- `isActive` already withdraws an edition from sale while leaving it listed in
+-- the console, which is what an owner wants while deciding. Archiving is the
+-- stronger act: gone from the screen entirely.
+--
+-- What does NOT change is resolution. Three states, all of which resolve:
+--
+--   active                 sold,     listed,     resolves
+--   isActive = false       not sold, listed,     resolves
+--   archivedAt set         not sold, not listed, resolves
+--
+-- A subscriber on an archived edition keeps exactly what it grants. Archiving
+-- is an editorial act on the catalogue, never a change to what someone already
+-- bought — and the failure mode if that is got wrong is silent: an edition
+-- dropped from the cache resolves to the restricted floor, which grants
+-- nothing while every response still returns 200.
+--
+-- So the filter belongs on the published set, never on the query that loads
+-- the cache. refreshEditions keeps reading every row.
+--
+-- Nullable with no backfill: no edition is archived by this migration, and the
+-- catalogue still holds exactly the five shipped editions afterwards.
+
+ALTER TABLE "Plan" ADD COLUMN "archivedAt" TIMESTAMP(3);

@@ -25,6 +25,16 @@ import { getEdition, getEditions } from '../billing/editions.service';
  * Returns the cheapest edition that would allow the kind, so the refusal can
  * name what to buy rather than only what is forbidden. Read from the catalogue
  * by ladder position, never hardcoded.
+ *
+ * The two catalogue reads below are deliberately different, and archiving is
+ * what makes the difference matter. getEdition() resolves what this workspace
+ * already has and must see archived editions, or a subscriber on a withdrawn
+ * plan loses a channel they are still paying for. getEditions() names what they
+ * could buy and must not, so no archivedAt test belongs here - the published
+ * set already excludes them. If every granting edition has been archived,
+ * requiredPlan falls to null and the refusal names no upgrade at all, which is
+ * right: better to say only what is forbidden than to advertise something
+ * nobody can purchase.
  */
 async function channelRefusal(
   organizationId: string,

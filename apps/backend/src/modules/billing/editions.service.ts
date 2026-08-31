@@ -257,7 +257,11 @@ export async function refreshEditions(): Promise<number> {
     for (const row of rows) {
       next.set(row.code, rowToEdition(row));
       nextEditedAt.set(row.code, row.updatedAt);
-      if (row.isActive) nextActive.add(row.code);
+      // The published set, and only the published set. The findMany above is
+      // deliberately unfiltered — an archived edition that never enters the
+      // cache resolves to RESTRICTED_FLOOR, so its subscribers silently lose
+      // everything while every response still returns 200.
+      if (row.isActive && !row.archivedAt) nextActive.add(row.code);
     }
     cache = next;
     editedAt = nextEditedAt;
