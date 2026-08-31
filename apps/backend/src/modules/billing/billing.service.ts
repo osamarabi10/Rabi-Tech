@@ -477,7 +477,22 @@ export async function activateManualSubscription(organizationId: string, planInp
         downgradeGraceReason: overLimit ? `Current monthly active contacts (${currentMac}) exceed ${planCode} limit (${targetLimit}). Outbound is blocked until usage is reduced or plan is upgraded.` : null,
       },
     });
-    if (isPaidPlan(planCode)) await maybeProvisionGateway(organizationId, 'manual-activation');
+    /*
+      The edition's flag, not the code's name.
+
+      This read `isPaidPlan(planCode)` while the console showed and the billing
+      summary reported `autoProvisionGateway` — a flag and a hidden name-check
+      answering the same question, free to disagree. They already did, on
+      STANDARD: the flag says no, `isPaidPlan` says yes, so a STANDARD
+      subscriber would have had a gateway provisioned while the console hid the
+      control that supposedly governs it.
+
+      No organization is on STANDARD, so nothing changes today. What changes is
+      that the flag now decides, which is what the console has been claiming.
+    */
+    if (getEdition(planCode).autoProvisionGateway) {
+      await maybeProvisionGateway(organizationId, 'manual-activation');
+    }
     return subscription;
   });
 }

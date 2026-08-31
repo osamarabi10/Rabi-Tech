@@ -93,6 +93,8 @@ export type PlanEntitlements = {
   customDomain: boolean;
   whiteLabel: boolean;
   maskContactDetails: boolean;
+  /** Channel kinds this edition may connect. Matches OrganizationChannel.kind. */
+  allowedChannels: string[];
 };
 
 export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
@@ -118,6 +120,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customDomain: false,
     whiteLabel: false,
     maskContactDetails: false,
+    allowedChannels: ['OPENWA', 'WHATSAPP_CLOUD'],
   },
   /**
    * Messaging and nothing else: a shared inbox on the subscriber's own number.
@@ -150,6 +153,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customDomain: false,
     whiteLabel: false,
     maskContactDetails: false,
+    allowedChannels: ['OPENWA', 'WHATSAPP_CLOUD'],
   },
   GROWTH: {
     code: 'GROWTH',
@@ -170,6 +174,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customDomain: false,
     whiteLabel: false,
     maskContactDetails: false,
+    allowedChannels: ['OPENWA', 'WHATSAPP_CLOUD'],
   },
   BUSINESS: {
     code: 'BUSINESS',
@@ -190,6 +195,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customDomain: true,
     whiteLabel: true,
     maskContactDetails: true,
+    allowedChannels: ['OPENWA', 'WHATSAPP_CLOUD'],
   },
   ENTERPRISE: {
     code: 'ENTERPRISE',
@@ -210,6 +216,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customDomain: true,
     whiteLabel: true,
     maskContactDetails: true,
+    allowedChannels: ['OPENWA', 'WHATSAPP_CLOUD'],
   },
 };
 

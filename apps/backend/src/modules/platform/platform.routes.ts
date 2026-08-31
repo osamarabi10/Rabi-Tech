@@ -1387,13 +1387,11 @@ router.delete('/subscribers/:id', requirePlatformOwner, async (req, res) => {
  */
 router.get('/editions', requirePlatformOwner, async (_req, res) => {
   const editions = await prisma.plan.findMany({ orderBy: { sortOrder: 'asc' } });
-  res.json({
-    editions,
-    // Stated, not implied. The console greys this control and says why; a
-    // disabled thing with no reason is worse than one that is simply absent.
-    notEnforced: ['autoProvisionGateway'],
-    channelsNotEnforced: true,
-  });
+  // Both of the caveats this used to carry are gone: autoProvisionGateway now
+  // decides gateway provisioning at activation, and allowedChannels is checked
+  // when a channel is connected or activated. Every switch on this screen
+  // grants something.
+  res.json({ editions, notEnforced: [] });
 });
 
 /** A limit is a non-negative integer, or null meaning unlimited. */
@@ -1407,6 +1405,9 @@ function parseLimit(value: unknown, field: string): number | null | undefined {
   return parsed;
 }
 
+/** Channel kinds the product actually has. Mirrors ChannelKind in channels. */
+const KNOWN_CHANNEL_KINDS = ['OPENWA', 'WHATSAPP_CLOUD'] as const;
+
 function parseFlag(value: unknown): boolean | undefined {
   if (value === undefined) return undefined;
   return Boolean(value);
@@ -1417,21 +1418,30 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
     const code = normalizePlanCode(req.params.code);
     const body = (req.body || {}) as Record<string, unknown>;
 
-    // Refused rather than silently ignored. Accepting a value nothing reads
-    // would let an owner believe they had granted something; saying so is the
-    // honest failure.
-    if (body.autoProvisionGateway !== undefined) {
-      return res.status(400).json({
-        error: 'autoProvisionGateway is not enforced anywhere yet, so setting it would grant nothing. It is reported in the billing summary only.',
-      });
-    }
-    if (body.allowedChannels !== undefined) {
-      return res.status(400).json({
-        error: 'Channel policy is not enforced yet and the per-edition rule is still an open product question. Editing it here would imply a guarantee the server does not make.',
-      });
-    }
-
     const data: Record<string, unknown> = {};
+
+    // Both of these used to be refused because nothing read them. Both are now
+    // enforced — autoProvisionGateway at activation, allowedChannels when a
+    // channel is connected or activated — so setting them grants something.
+    const autoProvision = parseFlag(body.autoProvisionGateway);
+    if (autoProvision !== undefined) data.autoProvisionGateway = autoProvision;
+
+    if (body.allowedChannels !== undefined) {
+      if (!Array.isArray(body.allowedChannels)) {
+        return res.status(400).json({ error: 'allowedChannels must be a list of channel kinds' });
+      }
+      const kinds = [...new Set(body.allowedChannels.map((kind: unknown) => String(kind).trim().toUpperCase()))];
+      const unknown = kinds.filter((kind) => !KNOWN_CHANNEL_KINDS.includes(kind as (typeof KNOWN_CHANNEL_KINDS)[number]));
+      if (unknown.length) {
+        return res.status(400).json({ error: `Unknown channel kind: ${unknown.join(', ')}` });
+      }
+      // An edition allowing nothing is a subscriber who cannot message anyone,
+      // which is never a deliberate offer.
+      if (kinds.length === 0) {
+        return res.status(400).json({ error: 'An edition must allow at least one channel' });
+      }
+      data.allowedChannels = kinds;
+    }
     if (body.name !== undefined) {
       const name = String(body.name).trim();
       if (!name) return res.status(400).json({ error: 'Name is required' });

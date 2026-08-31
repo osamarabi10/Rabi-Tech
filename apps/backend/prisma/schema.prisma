@@ -176,19 +176,27 @@ model Plan {
   whiteLabel         Boolean @default(false)
   maskContactDetails Boolean @default(false)
 
-  /// NOT ENFORCED. Nothing reads this to permit or refuse gateway
-  /// provisioning; it is reported in the billing summary only. It is stored so
-  /// the catalogue is complete and the console can show it greyed with a
-  /// reason, rather than offering a switch that does nothing. Do not treat it
-  /// as a grant until an enforcement site exists.
+  /// Enforced at activation: billing.service.ts consults this before queueing a
+  /// gateway provision.
+  ///
+  /// It was previously stored and NOT read, while the actual decision was a
+  /// hidden `isPaidPlan(planCode)` name check sitting beside it. The two
+  /// disagreed on STANDARD — flag false, name check true — so a subscriber
+  /// could have had a gateway provisioned while the console hid the switch
+  /// that supposedly governed it.
   autoProvisionGateway Boolean @default(false)
 
-  /// Channel kinds this edition may use, matching OrganizationChannel.kind.
-  /// A list, not a single value, because an edition may offer a choice — and
-  /// because Meta must be able to join without a migration. Defaulted to
-  /// OPENWA, which is the only transport that exists today. Carried but NOT
-  /// enforced: no code permits or refuses a channel by edition yet, and the
-  /// policy itself is still an open product question.
+  /// Channel kinds this edition may connect, matching OrganizationChannel.kind.
+  /// A list, not a single value, because an edition may offer a choice.
+  ///
+  /// Enforced in channels.routes.ts, on both connect and activate. It shipped
+  /// identical on every edition, read by nothing, with the PATCH endpoint
+  /// refusing to set it — three separate signals that it granted nothing.
+  ///
+  /// Widened to both kinds when enforcement landed: the Meta kind is
+  /// WHATSAPP_CLOUD and no edition listed it, so checking the shipped {OPENWA}
+  /// would have withdrawn Meta from every subscriber rather than adding a
+  /// capability. Narrowing an edition is now an owner decision.
   allowedChannels String[] @default(["OPENWA"])
 
   createdAt DateTime @default(now())

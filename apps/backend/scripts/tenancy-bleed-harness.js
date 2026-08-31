@@ -4051,6 +4051,7 @@ async function databaseAudits() {
         'customDomain',
         'whiteLabel',
         'maskContactDetails',
+        'allowedChannels',
       ];
 
       for (const [code, expected] of Object.entries(PLAN_ENTITLEMENTS)) {
@@ -4063,8 +4064,6 @@ async function databaseAudits() {
             `${code}.${field}: database has ${JSON.stringify(row[field])}, constant has ${JSON.stringify(expected[field])}`,
           );
         }
-        // Not in the constant - the settled default, carried unenforced.
-        assert.deepEqual(row.allowedChannels, ['OPENWA'], `${code}.allowedChannels`);
       }
 
       // A row the constant does not know about would resolve to nothing at the
@@ -4115,16 +4114,20 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
       assert.equal(getEdition('GROWTH').maskContactDetails, true);
 
-      // autoProvisionGateway is stored but deliberately NOT enforced. Asserting
-      // that keeps the claim honest: if someone later wires it, this fails and
-      // the schema comment and console copy have to be corrected with it.
-      const provisioningReads = fs
-        .readFileSync(path.join(ROOT, 'src/modules/billing/billing.service.ts'), 'utf8')
-        .split(/\r?\n/)
-        .filter((line) => line.includes('autoProvisionGateway'));
+      // autoProvisionGateway IS enforced now. This assertion used to require
+      // the opposite, as a tripwire that would fire the day someone wired it —
+      // which is what happened. Inverted rather than deleted, so it still fails
+      // if the gate is ever quietly removed and the flag goes back to being a
+      // switch that grants nothing.
+      //
+      // The specific defect it guards against: provisioning was gated on
+      // isPaidPlan(planCode), a hidden name-check running beside a flag the
+      // console displayed. They disagreed on STANDARD.
+      const billingSource = fs
+        .readFileSync(path.join(ROOT, 'src/modules/billing/billing.service.ts'), 'utf8');
       assert.ok(
-        provisioningReads.every((line) => line.includes('entitlements.autoProvisionGateway')),
-        'autoProvisionGateway may only be reported, never used to permit or refuse',
+        billingSource.includes('getEdition(planCode).autoProvisionGateway'),
+        'gateway provisioning must be gated on the edition flag, not on a plan-code name check',
       );
 
       // Restore the seeded values so later checks see the catalogue as shipped.

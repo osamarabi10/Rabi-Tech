@@ -11,6 +11,30 @@ import {
   disconnectMetaChannel,
   getMetaChannel,
 } from './meta.service';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { getEdition, getEditions } from '../billing/editions.service';
+
+/**
+ * Whether this workspace's edition may connect a channel kind.
+ *
+ * `allowedChannels` shipped identical on all five editions, unread by anything,
+ * with the PATCH endpoint refusing to set it — a toggle that granted nothing.
+ * This is the enforcement point that makes it mean something, and a Meta-only
+ * edition possible.
+ *
+ * Returns the cheapest edition that would allow the kind, so the refusal can
+ * name what to buy rather than only what is forbidden. Read from the catalogue
+ * by ladder position, never hardcoded.
+ */
+async function channelRefusal(
+  organizationId: string,
+  kind: ChannelKind,
+): Promise<{ planName: string; requiredPlan: string | null } | null> {
+  const effective = await resolveEntitlements(organizationId);
+  if (getEdition(effective.plan).allowedChannels.includes(kind)) return null;
+  const granting = getEditions().find((edition) => edition.allowedChannels.includes(kind));
+  return { planName: effective.planName, requiredPlan: granting?.name ?? null };
+}
 
 /**
  * Tenant-facing channel configuration.
@@ -60,6 +84,18 @@ router.get('/meta', requireAdmin, async (_req, res) => {
 });
 
 router.post('/meta/connect', requireAdmin, async (req: any, res) => {
+  const refused = await channelRefusal(req.user!.organizationId, 'WHATSAPP_CLOUD');
+  if (refused) {
+    return res.status(402).json({
+      error: refused.requiredPlan
+        ? `باقة ${refused.planName} لا تشمل قناة واتساب الرسمية. رقّي إلى ${refused.requiredPlan} لتفعيلها.`
+        : `باقة ${refused.planName} لا تشمل قناة واتساب الرسمية.`,
+      code: 'PLAN_UPGRADE_REQUIRED',
+      capability: 'WHATSAPP_CLOUD',
+      requiredPlan: refused.requiredPlan,
+    });
+  }
+
   const outcome = await connectMetaChannel({
     phoneNumberId: req.body?.phoneNumberId,
     wabaId: req.body?.wabaId,
@@ -162,6 +198,21 @@ router.post('/active', requireAdmin, async (req: any, res) => {
   const kind = String(req.body?.kind || '') as ChannelKind;
   if (kind !== 'OPENWA' && kind !== 'WHATSAPP_CLOUD') {
     return res.status(400).json({ error: 'نوع القناة غير معروف.', code: 'CHANNEL_KIND_UNKNOWN' });
+  }
+
+  // Activating a channel is the same grant as connecting one, so it is the
+  // same gate. Checking only /meta/connect would leave a tenant able to switch
+  // to a channel their edition does not include.
+  const refused = await channelRefusal(req.user!.organizationId, kind);
+  if (refused) {
+    return res.status(402).json({
+      error: refused.requiredPlan
+        ? `باقة ${refused.planName} لا تشمل هذه القناة. رقّي إلى ${refused.requiredPlan} لتفعيلها.`
+        : `باقة ${refused.planName} لا تشمل هذه القناة.`,
+      code: 'PLAN_UPGRADE_REQUIRED',
+      capability: kind,
+      requiredPlan: refused.requiredPlan,
+    });
   }
 
   try {

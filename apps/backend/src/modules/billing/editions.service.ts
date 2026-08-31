@@ -126,6 +126,9 @@ const RESTRICTED_FLOOR: PlanEntitlements = {
   customDomain: false,
   whiteLabel: false,
   maskContactDetails: false,
+  // Empty, not OPENWA. The floor grants nothing, and a channel the process
+  // cannot confirm an edition allows is one it must not let a tenant connect.
+  allowedChannels: [],
 };
 
 let cache: Map<string, PlanEntitlements> | null = null;
@@ -176,6 +179,7 @@ function rowToEdition(row: {
   customDomain: boolean;
   whiteLabel: boolean;
   maskContactDetails: boolean;
+  allowedChannels: string[];
 }): PlanEntitlements {
   const code = String(row.code ?? '').trim().toUpperCase();
   if (!PLAN_CODE_PATTERN.test(code)) {
@@ -204,6 +208,7 @@ function rowToEdition(row: {
     customDomain: row.customDomain,
     whiteLabel: row.whiteLabel,
     maskContactDetails: row.maskContactDetails,
+    allowedChannels: row.allowedChannels,
   };
 }
 
