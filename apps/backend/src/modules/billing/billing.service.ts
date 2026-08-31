@@ -76,6 +76,7 @@ export async function ensurePlans(): Promise<void> {
           code: plan.code,
           name: plan.name,
           monthlyPriceCents: plan.monthlyPriceCents,
+          pricingModel: plan.pricingModel,
           // Declaration order in PLAN_ENTITLEMENTS, which is already cheapest
           // to dearest. The literal array this replaces was a second copy of
           // that ordering, and a code absent from it seeded at -1 — sorting

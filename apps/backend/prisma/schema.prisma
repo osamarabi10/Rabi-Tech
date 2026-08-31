@@ -118,11 +118,28 @@ model Organization {
 /// Every entitlement column is nullable or defaulted, so the rows that already
 /// exist stay valid and the seed can fill them in a separate, reviewable step.
 /// A null limit means unlimited, matching the constant it replaces.
+/// How an edition is priced, which `monthlyPriceCents` alone cannot say.
+///
+/// FREE and NEGOTIATED were both stored as 0, so "costs nothing" and "price is
+/// agreed per deal and not published" were indistinguishable — and `isPaidPlan`
+/// had to decide by *name* instead, which is why FREE was a reserved code.
+///
+/// FREE        price is 0 and that is the offer.
+/// FIXED       price is published and self-serve.
+/// NEGOTIATED  price is agreed per deal; the stored number means nothing.
+enum PricingModel {
+  FREE
+  FIXED
+  NEGOTIATED
+}
+
 model Plan {
   id                String  @id @default(cuid())
   code              String  @unique
   name              String
   monthlyPriceCents Int
+  /// Read this before the price. See PricingModel.
+  pricingModel      PricingModel @default(FIXED)
   currency          String  @default("USD")
   isActive          Boolean @default(true)
   sortOrder         Int     @default(0)

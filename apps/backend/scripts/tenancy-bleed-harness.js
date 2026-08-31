@@ -4036,6 +4036,7 @@ async function databaseAudits() {
       const fields = [
         'name',
         'monthlyPriceCents',
+        'pricingModel',
         'monthlyActiveContactsLimit',
         'monthlyOutboundMessagesLimit',
         'monthlyCampaignSendsLimit',

@@ -7,6 +7,7 @@ import {
   PlanCode,
   PlanEntitlements,
   publishKnownPlanCodes,
+  publishPlanPricingModels,
 } from './plans';
 
 /**
@@ -107,6 +108,10 @@ const RESTRICTED_FLOOR: PlanEntitlements = {
   code: 'FREE' as PlanCode,
   name: 'Unavailable',
   monthlyPriceCents: 0,
+  // Consistent with the rest of the floor: grants nothing. isPaidPlan reads the
+  // published map by code rather than this object, so the value here decides
+  // nothing — it is set only because the shape requires it.
+  pricingModel: 'FREE',
   monthlyActiveContactsLimit: 0,
   monthlyOutboundMessagesLimit: 0,
   monthlyCampaignSendsLimit: 0,
@@ -154,6 +159,7 @@ function rowToEdition(row: {
   code: string;
   name: string;
   monthlyPriceCents: number;
+  pricingModel: PlanEntitlements['pricingModel'];
   monthlyActiveContactsLimit: number | null;
   monthlyOutboundMessagesLimit: number | null;
   monthlyCampaignSendsLimit: number | null;
@@ -175,6 +181,7 @@ function rowToEdition(row: {
     code,
     name: row.name,
     monthlyPriceCents: row.monthlyPriceCents,
+    pricingModel: row.pricingModel,
     monthlyActiveContactsLimit: row.monthlyActiveContactsLimit,
     monthlyOutboundMessagesLimit: row.monthlyOutboundMessagesLimit,
     monthlyCampaignSendsLimit: row.monthlyCampaignSendsLimit,
@@ -253,6 +260,11 @@ export async function refreshEditions(): Promise<number> {
     // constant. Published after the cache is swapped so the two can never
     // disagree about which codes exist.
     publishKnownPlanCodes(next.keys());
+    // isPaidPlan reads this rather than testing the code name, so it must be
+    // published from the same swap or the two can disagree about one edition.
+    publishPlanPricingModels(
+      Array.from(next.entries()).map(([code, edition]) => [code, edition.pricingModel] as const),
+    );
     return next.size;
   } catch (error) {
     logger.error('Failed to refresh edition catalogue; keeping previous values', {

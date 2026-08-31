@@ -1,3 +1,5 @@
+import { PricingModel } from '@prisma/client';
+
 /**
  * An edition's code.
  *
@@ -26,9 +28,14 @@ export const PLAN_CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,23}$/;
 /**
  * Codes that cannot be redefined or reused.
  *
- * Only FREE, and only because `isPaidPlan` below treats it as the single
- * unpaid code. Until that is derived from price rather than name, redefining
- * FREE would silently change which editions are billable.
+ * Only FREE, and the reason is now much narrower than it was. `isPaidPlan`
+ * derives from `pricingModel`, so the name no longer decides what is billable —
+ * except in one window: seeding runs before the catalogue loads, so no pricing
+ * model is published yet and the fallback still tests the name.
+ *
+ * FREE therefore stays reserved until seeding no longer needs that fallback.
+ * Redefining it today would only be wrong during boot, which is precisely when
+ * nobody would notice.
  *
  * The other four originals are ordinary rows once the CHECK constraint is
  * gone. Nothing reserves GROWTH, BUSINESS, STANDARD or ENTERPRISE.
@@ -55,12 +62,15 @@ export function publishKnownPlanCodes(codes: Iterable<string>): void {
 /** Test seam: forget the catalogue, so only format is enforced. */
 export function resetKnownPlanCodesForTests(): void {
   knownPlanCodes = null;
+  planPricingModels = null;
 }
 
 export type PlanEntitlements = {
   code: PlanCode;
   name: string;
   monthlyPriceCents: number;
+  /** Read this before the price; see the PricingModel enum in schema.prisma. */
+  pricingModel: PricingModel;
   monthlyActiveContactsLimit: number | null;
   monthlyOutboundMessagesLimit: number | null;
   monthlyCampaignSendsLimit: number | null;
@@ -87,6 +97,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'FREE',
     name: 'Free',
     monthlyPriceCents: 0,
+    pricingModel: 'FREE',
     monthlyActiveContactsLimit: 100,
     monthlyOutboundMessagesLimit: 100,
     monthlyCampaignSendsLimit: 0,
@@ -119,6 +130,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'STANDARD',
     name: 'Standard',
     monthlyPriceCents: 1900,
+    pricingModel: 'FIXED',
     monthlyActiveContactsLimit: 500,
     monthlyOutboundMessagesLimit: 2000,
     monthlyCampaignSendsLimit: 0,
@@ -136,6 +148,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'GROWTH',
     name: 'Growth',
     monthlyPriceCents: 4900,
+    pricingModel: 'FIXED',
     monthlyActiveContactsLimit: 2500,
     monthlyOutboundMessagesLimit: 10000,
     monthlyCampaignSendsLimit: 5000,
@@ -153,6 +166,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'BUSINESS',
     name: 'Business',
     monthlyPriceCents: 19900,
+    pricingModel: 'FIXED',
     monthlyActiveContactsLimit: 10000,
     monthlyOutboundMessagesLimit: 50000,
     monthlyCampaignSendsLimit: 25000,
@@ -170,6 +184,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'ENTERPRISE',
     name: 'Enterprise',
     monthlyPriceCents: 0,
+    pricingModel: 'NEGOTIATED',
     monthlyActiveContactsLimit: null,
     monthlyOutboundMessagesLimit: null,
     monthlyCampaignSendsLimit: null,
@@ -212,7 +227,32 @@ export function normalizePlanCode(value: unknown): PlanCode {
   return code;
 }
 
+/**
+ * Pricing model per code, published by editions.service.ts alongside the codes.
+ *
+ * Same seam and same reason as knownPlanCodes: plans.ts must not import the
+ * service that imports plans.ts.
+ */
+let planPricingModels: Map<string, PricingModel> | null = null;
+
+export function publishPlanPricingModels(entries: Iterable<[string, PricingModel]>): void {
+  planPricingModels = new Map(entries);
+}
+
+/**
+ * Whether an edition is billable.
+ *
+ * Derived from the pricing model, not the code name. The name check this
+ * replaces was the only reason FREE had to be a reserved code, and it could not
+ * tell a genuinely free edition from a negotiated one — both are priced at zero.
+ *
+ * The name fallback survives for exactly one window: seeding, which runs before
+ * the catalogue has loaded and therefore before any pricing model is published.
+ * A serving process never reaches it, because the boot gate loads first.
+ */
 export function isPaidPlan(code: PlanCode): boolean {
+  const model = planPricingModels?.get(code);
+  if (model) return model !== 'FREE';
   return code !== 'FREE';
 }
 
