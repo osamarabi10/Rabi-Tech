@@ -14,6 +14,18 @@
  * first. Importing the TypeScript sources directly would need a second toolchain
  * in a repo that already has one, and would test code the server does not run.
  */
+const path = require('path');
+
+// Before anything that touches prisma, and from the repo root rather than
+// apps/backend — the same loader the tenancy harness carries, for the same
+// reason. Without it this gate reads DATABASE_URL out of whatever happens to be
+// in the shell: it fails with "Environment variable not found" in a clean one
+// and passes in a warmed one, so its result reports the environment rather than
+// the code. See D-12. There is one .env for this project and it lives at the
+// top; a second copy under apps/backend once drifted and pointed a gate at a
+// different Postgres entirely.
+require('dotenv').config({ path: path.join(__dirname, '..', '..', '..', '.env') });
+
 const { runAsPlatform } = require('../dist/lib/tenant-context');
 const { prisma } = require('../dist/prisma');
 const {
