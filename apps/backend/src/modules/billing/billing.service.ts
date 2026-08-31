@@ -112,9 +112,12 @@ export async function listPlans() {
     // them is how the pricing page and the entitlement catalogue come to
     // disagree about which editions exist, which is the drift this function was
     // written to end.
+    // sortOrder is not unique and defaults to 0, so two editions can share a
+    // position. code breaks the tie so the price list cannot reorder itself
+    // between requests for reasons no one can see.
     const plans = await prisma.plan.findMany({
       where: { isActive: true, archivedAt: null },
-      orderBy: { sortOrder: 'asc' },
+      orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
     });
 
     return plans.map((plan) => {

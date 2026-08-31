@@ -4497,6 +4497,147 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
+    await check('billing: the edition ladder is ordered, and ties resolve the same way every time', async () => {
+      const { refreshEditions, getEditions } = require('../src/modules/billing/editions.service');
+
+      const before = await raw.plan.findMany({ select: { code: true, sortOrder: true } });
+
+      // A deliberate tie. sortOrder is not unique and defaults to 0, so this is
+      // a state the catalogue can genuinely reach - two editions created
+      // without an explicit position, or an owner moving one onto another.
+      await raw.plan.update({ where: { code: 'BUSINESS' }, data: { sortOrder: 2 } });
+      await raw.plan.update({ where: { code: 'GROWTH' }, data: { sortOrder: 2 } });
+
+      const orders = [];
+      for (let i = 0; i < 3; i += 1) {
+        await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+        orders.push(getEditions().map((edition) => edition.code).join(','));
+      }
+      assert.equal(new Set(orders).size, 1, 'a tied ladder must not reorder between refreshes');
+
+      const published = getEditions().map((edition) => edition.code);
+      assert.ok(
+        published.indexOf('BUSINESS') < published.indexOf('GROWTH'),
+        'a tie must be broken by code rather than by row layout',
+      );
+
+      // The published catalogue is in ladder order, not row order. This is what
+      // channelRefusal depends on when it takes the first match and calls it
+      // the cheapest edition that would allow a channel.
+      const ladder = await raw.plan.findMany({
+        where: { isActive: true, archivedAt: null },
+        orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+        select: { code: true },
+      });
+      assert.deepEqual(
+        published,
+        ladder.map((row) => row.code),
+        'the published catalogue must be in ladder order',
+      );
+
+      for (const row of before) {
+        await raw.plan.update({ where: { code: row.code }, data: { sortOrder: row.sortOrder } });
+      }
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+    });
+
+    await check('billing: an edition can be created, and the code space stays shut', async () => {
+      const { refreshEditions } = require('../src/modules/billing/editions.service');
+      const owner = await raw.identity.create({
+        data: {
+          email: `owner-editions-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const ownerToken = mintPlatformToken(owner);
+      const asOwner = (method, path, body) =>
+        fetch(`${baseUrl}${path}`, {
+          method,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+
+      // The door is shut. A well-formed, legal, novel code is refused by
+      // policy, and the refusal says which policy rather than implying the
+      // caller mistyped something they could fix by retyping it.
+      const sixth = await asOwner('POST', '/api/platform/editions', {
+        code: 'TESTSIX',
+        name: 'Test Six',
+        monthlyPriceCents: 1000,
+      });
+      assert.equal(sixth.status, 409, 'a sixth edition must be refused while the code space is closed');
+      assert.equal((await sixth.json()).code, 'PLAN_CODE_SPACE_CLOSED');
+      assert.equal(
+        await raw.plan.count({ where: { code: 'TESTSIX' } }),
+        0,
+        'a refused create must write nothing',
+      );
+
+      // Malformed is a different answer from forbidden, and stays different.
+      const malformed = await asOwner('POST', '/api/platform/editions', {
+        code: 'bad-code',
+        name: 'Bad',
+        monthlyPriceCents: 0,
+      });
+      assert.equal(malformed.status, 400, 'a malformed code is a client error, not a policy refusal');
+
+      const duplicate = await asOwner('POST', '/api/platform/editions', {
+        code: 'GROWTH',
+        name: 'Growth Again',
+        monthlyPriceCents: 100,
+      });
+      assert.equal(duplicate.status, 409);
+      assert.equal((await duplicate.json()).code, 'PLAN_EXISTS');
+
+      /*
+        Now exercise creation for real, without opening the door.
+
+        STANDARD is one of the five creatable codes and nothing is subscribed to
+        it, so it can be removed and rebuilt through the endpoint. A create path
+        that only ever refuses is a create path nobody has ever run, and the
+        first person to widen CREATABLE_PLAN_CODES would be the first person to
+        execute it - on the one action this system cannot take back.
+      */
+      const subscribed = await raw.subscription.count({ where: { planCode: 'STANDARD' } });
+      assert.equal(subscribed, 0, 'STANDARD must have no subscribers for this check to be safe to run');
+
+      const original = await raw.plan.findUniqueOrThrow({ where: { code: 'STANDARD' } });
+      await raw.plan.delete({ where: { code: 'STANDARD' } });
+
+      const created = await asOwner('POST', '/api/platform/editions', {
+        code: 'STANDARD',
+        name: original.name,
+        monthlyPriceCents: original.monthlyPriceCents,
+      });
+      assert.equal(created.status, 201, 'a creatable code must actually create');
+
+      const row = await raw.plan.findUniqueOrThrow({ where: { code: 'STANDARD' } });
+      assert.equal(row.id, 'plan_standard', 'the id shape must match the one ensurePlans derives');
+
+      // Appended, not left at the column default. Zero would place a new
+      // edition level with FREE and ahead of the ladder - the position every
+      // refusal reads as the cheapest upgrade to recommend.
+      const others = await raw.plan.findMany({
+        where: { code: { not: 'STANDARD' } },
+        select: { sortOrder: true },
+      });
+      assert.ok(
+        row.sortOrder > Math.max(...others.map((other) => other.sortOrder)),
+        'a created edition must be appended past the ladder, not left at the default 0',
+      );
+
+      const audited = await raw.platformAuditLog.findFirst({
+        where: { action: 'platform.edition.created' },
+        orderBy: { timestamp: 'desc' },
+      });
+      assert.ok(audited, 'creating an edition must be written to the platform audit log');
+
+      await raw.plan.delete({ where: { code: 'STANDARD' } });
+      await raw.plan.create({ data: original });
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+    });
+
     await check('billing: the edition catalogue loads on a timer, with no ambient scope', async () => {
       const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
 

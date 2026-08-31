@@ -228,8 +228,15 @@ export async function refreshEditions(): Promise<number> {
     //
     // Every edition, not only the active ones. isActive decides what is
     // offered; resolution must still work for subscribers on a retired plan.
+    //
+    // Ordered, because the cache preserves this order and getEditions() hands
+    // it straight to callers that read position as the ladder - channelRefusal
+    // names "the cheapest edition that would allow the kind" by taking the
+    // first match. Unordered, findMany returns whatever the planner happens to
+    // give, so that claim was being decided by row layout. Still every row:
+    // ordering is not filtering.
     const rows = await runAsPlatform('refresh-edition-catalogue', () =>
-      prisma.plan.findMany());
+      prisma.plan.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }));
     if (rows.length === 0) {
       logger.warn('Edition catalogue is empty; keeping previous values');
       return cache?.size ?? 0;

@@ -12,7 +12,7 @@ import {
   cancelCurrentSubscription,
   markPaymentFailed,
 } from '../billing/billing.service';
-import { normalizePlanCode } from '../billing/plans';
+import { PLAN_CODE_PATTERN, normalizePlanCode } from '../billing/plans';
 import { getEdition, refreshEditions } from '../billing/editions.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { probeOrganization } from '../gateway/health-monitor';
@@ -1386,7 +1386,7 @@ router.delete('/subscribers/:id', requirePlatformOwner, async (req, res) => {
  * the catalogue out of a TypeScript constant.
  */
 router.get('/editions', requirePlatformOwner, async (_req, res) => {
-  const editions = await prisma.plan.findMany({ orderBy: { sortOrder: 'asc' } });
+  const editions = await prisma.plan.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] });
   // Both of the caveats this used to carry are gone: autoProvisionGateway now
   // decides gateway provisioning at activation, and allowedChannels is checked
   // when a channel is connected or activated. Every switch on this screen
@@ -1413,66 +1413,88 @@ function parseFlag(value: unknown): boolean | undefined {
   return Boolean(value);
 }
 
+/**
+ * Parse the editable edition fields out of a request body into a Prisma `data`
+ * object, leaving anything the caller did not send untouched.
+ *
+ * Shared by PATCH and POST so the two cannot drift. Two copies of these rules
+ * would eventually disagree, and the shape that disagreement takes is a field
+ * that can be set when an edition is created and never corrected afterwards, or
+ * the reverse — both of which get discovered by an owner, in production.
+ *
+ * Throws with a `status` instead of writing a response, so both callers report
+ * it through the same catch.
+ */
+function applyEditionFields(body: Record<string, unknown>, data: Record<string, unknown>): void {
+  const bad = (message: string) => Object.assign(new Error(message), { status: 400 });
+
+  // Both of these used to be refused because nothing read them. Both are now
+  // enforced — autoProvisionGateway at activation, allowedChannels when a
+  // channel is connected or activated — so setting them grants something.
+  const autoProvision = parseFlag(body.autoProvisionGateway);
+  if (autoProvision !== undefined) data.autoProvisionGateway = autoProvision;
+
+  if (body.allowedChannels !== undefined) {
+    if (!Array.isArray(body.allowedChannels)) throw bad('allowedChannels must be a list of channel kinds');
+    const kinds = [...new Set(body.allowedChannels.map((kind: unknown) => String(kind).trim().toUpperCase()))];
+    const unknown = kinds.filter((kind) => !KNOWN_CHANNEL_KINDS.includes(kind as (typeof KNOWN_CHANNEL_KINDS)[number]));
+    if (unknown.length) throw bad(`Unknown channel kind: ${unknown.join(', ')}`);
+    // An edition allowing nothing is a subscriber who cannot message anyone,
+    // which is never a deliberate offer.
+    if (kinds.length === 0) throw bad('An edition must allow at least one channel');
+    data.allowedChannels = kinds;
+  }
+  if (body.name !== undefined) {
+    const name = String(body.name).trim();
+    if (!name) throw bad('Name is required');
+    data.name = name;
+  }
+  const price = parseLimit(body.monthlyPriceCents, 'Monthly price');
+  if (price !== undefined) {
+    if (price === null) throw bad('Monthly price is required; use 0 for a free or negotiated edition');
+    data.monthlyPriceCents = price;
+  }
+  for (const field of [
+    'monthlyActiveContactsLimit',
+    'monthlyOutboundMessagesLimit',
+    'monthlyCampaignSendsLimit',
+    'customFieldsLimit',
+    'usersLimit',
+    'workflowsLimit',
+    'monthlyAiTokensInLimit',
+    'monthlyAiTokensOutLimit',
+    'campaignRateMax',
+    'campaignRateDurationMs',
+  ] as const) {
+    const parsed = parseLimit(body[field], field);
+    if (parsed !== undefined) data[field] = parsed;
+  }
+  for (const flag of ['customDomain', 'whiteLabel', 'maskContactDetails'] as const) {
+    const parsed = parseFlag(body[flag]);
+    if (parsed !== undefined) data[flag] = parsed;
+  }
+  const isActive = parseFlag(body.isActive);
+  if (isActive !== undefined) data.isActive = isActive;
+
+  // Ladder position is editable, because it is read as one. editionGranting and
+  // channelRefusal both name an upgrade by taking the first edition that grants
+  // a thing, so without this an edition created at the end of the ladder could
+  // never be moved into the middle of it — and the owner would be told to buy
+  // the dearest edition that happens to qualify.
+  if (body.sortOrder !== undefined) {
+    const parsed = Number(body.sortOrder);
+    if (!Number.isInteger(parsed) || parsed < 0) throw bad('sortOrder must be a non-negative whole number');
+    data.sortOrder = parsed;
+  }
+}
+
 router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
   try {
     const code = normalizePlanCode(req.params.code);
     const body = (req.body || {}) as Record<string, unknown>;
 
     const data: Record<string, unknown> = {};
-
-    // Both of these used to be refused because nothing read them. Both are now
-    // enforced — autoProvisionGateway at activation, allowedChannels when a
-    // channel is connected or activated — so setting them grants something.
-    const autoProvision = parseFlag(body.autoProvisionGateway);
-    if (autoProvision !== undefined) data.autoProvisionGateway = autoProvision;
-
-    if (body.allowedChannels !== undefined) {
-      if (!Array.isArray(body.allowedChannels)) {
-        return res.status(400).json({ error: 'allowedChannels must be a list of channel kinds' });
-      }
-      const kinds = [...new Set(body.allowedChannels.map((kind: unknown) => String(kind).trim().toUpperCase()))];
-      const unknown = kinds.filter((kind) => !KNOWN_CHANNEL_KINDS.includes(kind as (typeof KNOWN_CHANNEL_KINDS)[number]));
-      if (unknown.length) {
-        return res.status(400).json({ error: `Unknown channel kind: ${unknown.join(', ')}` });
-      }
-      // An edition allowing nothing is a subscriber who cannot message anyone,
-      // which is never a deliberate offer.
-      if (kinds.length === 0) {
-        return res.status(400).json({ error: 'An edition must allow at least one channel' });
-      }
-      data.allowedChannels = kinds;
-    }
-    if (body.name !== undefined) {
-      const name = String(body.name).trim();
-      if (!name) return res.status(400).json({ error: 'Name is required' });
-      data.name = name;
-    }
-    const price = parseLimit(body.monthlyPriceCents, 'Monthly price');
-    if (price !== undefined) {
-      if (price === null) return res.status(400).json({ error: 'Monthly price is required; use 0 for a free or negotiated edition' });
-      data.monthlyPriceCents = price;
-    }
-    for (const field of [
-      'monthlyActiveContactsLimit',
-      'monthlyOutboundMessagesLimit',
-      'monthlyCampaignSendsLimit',
-      'customFieldsLimit',
-      'usersLimit',
-      'workflowsLimit',
-      'monthlyAiTokensInLimit',
-      'monthlyAiTokensOutLimit',
-      'campaignRateMax',
-      'campaignRateDurationMs',
-    ] as const) {
-      const parsed = parseLimit(body[field], field);
-      if (parsed !== undefined) data[field] = parsed;
-    }
-    for (const flag of ['customDomain', 'whiteLabel', 'maskContactDetails'] as const) {
-      const parsed = parseFlag(body[flag]);
-      if (parsed !== undefined) data[flag] = parsed;
-    }
-    const isActive = parseFlag(body.isActive);
-    if (isActive !== undefined) data.isActive = isActive;
+    applyEditionFields(body, data);
 
     if (!Object.keys(data).length) {
       return res.status(400).json({ error: 'No editable fields supplied' });
@@ -1507,4 +1529,133 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
     res.status(status).json({ error: (error as Error).message || 'Failed to update edition' });
   }
 });
+
+/**
+ * The codes this endpoint is allowed to create.
+ *
+ * **It ships closed, and that is the feature.** Every code listed here already
+ * exists as a row, so every create refuses today. The path is built, wired,
+ * audited and exercised by the harness; what it is not yet permitted to do is
+ * bring an edition into existence that the original five do not name.
+ *
+ * **Widening this set is the irreversible act.** Migration
+ * `20260923090000_open_plan_code_space` dropped the CHECK constraint on
+ * `Organization.planOverride`, and the HARD RULE in
+ * docs/RESPONDIO-PARITY-CHECKPOINT.md says that migration must never be
+ * reversed once any code outside the original five exists anywhere: `down.sql`
+ * re-adds the constraint, `ADD CONSTRAINT` validates every existing row, and a
+ * sixth code makes it fail *late* — after any code rollback has already
+ * happened. The half that does not fail is worse: nothing constrains
+ * `Plan.code`, so catalogue rows carrying new codes survive the reversal and
+ * become unresolvable, and every subscriber on one is entitled to nothing while
+ * the row still sits there looking present. Recovery past that point is
+ * snapshot-restore or forward-fix, never a rollback.
+ *
+ * So the gate is one constant, in one place, and opening it is a decision
+ * someone makes on purpose having read that rule. Applying the migration was
+ * never the one-way door. Creating the sixth edition is.
+ */
+const CREATABLE_PLAN_CODES: ReadonlySet<string> = new Set([
+  'FREE',
+  'STANDARD',
+  'GROWTH',
+  'BUSINESS',
+  'ENTERPRISE',
+]);
+
+/**
+ * Create an edition.
+ *
+ * Owner-only, like the rest of the catalogue: this changes the menu everyone is
+ * sold from rather than one workspace's deal.
+ */
+router.post('/editions', requirePlatformOwner, async (req, res) => {
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const code = String(body.code ?? '').trim().toUpperCase();
+
+    // Format is checked directly rather than through normalizePlanCode, which
+    // validates membership of the *loaded catalogue* — so it rejects every code
+    // that does not already exist, which is every code a create could be for.
+    if (!PLAN_CODE_PATTERN.test(code)) {
+      return res.status(400).json({
+        error: 'code must start with a letter and be 2-24 characters of A-Z, 0-9 or underscore',
+      });
+    }
+
+    if (!CREATABLE_PLAN_CODES.has(code)) {
+      // 409 rather than 400. The request is well-formed and the code is legal;
+      // what refuses it is policy. A 400 would tell the caller they mistyped
+      // something, and they can retype it all day without getting through.
+      return res.status(409).json({
+        error: `The edition code space is closed. ${code} is outside the five original editions, and opening it is a deliberate and irreversible step — see CREATABLE_PLAN_CODES in platform.routes.ts.`,
+        code: 'PLAN_CODE_SPACE_CLOSED',
+      });
+    }
+
+    const existing = await prisma.plan.findUnique({ where: { code } });
+    if (existing) {
+      return res.status(409).json({ error: `Edition ${code} already exists`, code: 'PLAN_EXISTS' });
+    }
+
+    const data: Record<string, unknown> = {};
+    applyEditionFields(body, data);
+
+    // The two the schema has no default for. Everything else may be omitted and
+    // take its column default, which is what makes a minimal create legible.
+    if (data.name === undefined) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    if (data.monthlyPriceCents === undefined) {
+      return res.status(400).json({ error: 'Monthly price is required; use 0 for a free or negotiated edition' });
+    }
+
+    if (data.sortOrder === undefined) {
+      // Appended past the current end of the ladder, explicitly. The column
+      // defaults to 0, which would place a new edition level with FREE and
+      // ahead of everything else — precisely the position that reads as
+      // "cheapest" to editionGranting and channelRefusal, so a brand new
+      // edition would become the upgrade every refusal recommends. Last rung
+      // until an owner moves it, which PATCH now allows.
+      const highest = await prisma.plan.aggregate({ _max: { sortOrder: true } });
+      data.sortOrder = (highest._max.sortOrder ?? -1) + 1;
+    }
+
+    const created = await prisma.plan.create({
+      data: {
+        ...data,
+        // Same id shape as ensurePlans. This is what PLAN_CODE_PATTERN's
+        // charset exists to keep safe: the id has to be usable in a URL and a
+        // filename.
+        id: `plan_${code.toLowerCase()}`,
+        code,
+        name: data.name as string,
+        monthlyPriceCents: data.monthlyPriceCents as number,
+      } as Parameters<typeof prisma.plan.create>[0]['data'],
+    });
+
+    // Live in this process at once rather than at the next scheduled refresh,
+    // the same as an edit. Other processes pick it up within their interval.
+    await refreshEditions();
+
+    // Platform audit, not tenant audit: this changes the offer, not one
+    // workspace. No beforeState, because there was no edition before this.
+    await prisma.platformAuditLog.create({
+      data: {
+        reason: `edition ${code} created`,
+        action: 'platform.edition.created',
+        actorIdentityId: req.platformUser!.id,
+        actorEmail: req.platformUser!.email,
+        afterState: created as never,
+        ipAddress: req.ip,
+      },
+    });
+
+    res.status(201).json({ edition: created });
+  } catch (error) {
+    const status = (error as { status?: number }).status || 400;
+    res.status(status).json({ error: (error as Error).message || 'Failed to create edition' });
+  }
+});
+
 export default router;

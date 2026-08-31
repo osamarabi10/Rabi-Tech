@@ -115,7 +115,11 @@ async function editionGranting(metric: UsageMetric): Promise<string | null> {
     const editions = await runAsPlatform('capability-required-edition', () =>
       prisma.plan.findMany({
         where: { isActive: true, archivedAt: null },
-        orderBy: { sortOrder: 'asc' },
+        // Tie-broken by code. Two editions at the same sortOrder would
+        // otherwise make "the cheapest edition that grants this" answer
+        // differently between runs, which is a refusal message that changes
+        // its advice at random.
+        orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
       }));
     const granting = editions.find((edition) => {
       const value = (edition as unknown as Record<string, unknown>)[field];
