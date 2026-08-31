@@ -1,7 +1,7 @@
 # RabiTech Respond.io Parity - Authoritative Implementation Checkpoint
 
 > Status: active implementation record.
-> Last updated: 2026-08-26 after work stopped during the Conversation Operations implementation.
+> Last updated: 2026-08-31 after the campaigns runtime repair and pending-migration audit.
 > Purpose: this is the first document to read when work resumes after a stop, context reset, or handoff.
 
 ## 1. Product boundary
@@ -78,6 +78,15 @@ Current head (2026-08-30), **migration 67 released**:
   `MetaChannelCredential` exists with 16 columns and **0 rows**.
 - GitHub Actions tenancy bleed gate: **success** on run `33322278068`, triggered
   by `a77c63c9`. This is the workflow's first successful run — see §8.
+
+**Measured current state (2026-08-31).** The 2026-08-30 release block above is
+historical evidence, not the present migration state. The live database still
+has 67 applied migrations, but `20260920090000_meta_template_lifecycle` is
+written and unapplied. The generated Prisma client knows about the lifecycle
+fields, including `Campaign.metaTemplateId`; the live `Campaign` table does
+not. A tenant-scoped `GET /api/campaigns` query therefore failed with Prisma
+`P2022` until the route was repaired to use an explicit pre-migration select.
+No migration was applied during that repair.
 
 Both gate numbers rose because two gates were found non-functional on this
 machine and repaired — see the preconditions in §8. Neither number is
@@ -737,6 +746,17 @@ check can count. Then bring the rebuilt frontend up and verify the changed
 surface against the running backend. A source diff, a TypeScript build, or a
 mocked browser matrix cannot certify a stale container; if the live result
 disagrees, report the deployment finding before counting the item green.
+
+**Unapplied-migration hazard, 2026-08-31.** When a migration is written but
+unapplied, the generated Prisma client is ahead of the database. Any query that
+selects a column added by that migration can fail at runtime with `P2022`.
+This is the opposite direction of the stale-image trap: a stale image carries
+an older client behind the migrations on disk, while this state has a current
+client ahead of the live schema. Rebuilding an image does not apply a migration.
+Before certifying or using a new-column path against the live stack, rebuild
+the relevant image, confirm the intended migration is named as pending, and
+follow the gated release sequence before deployment. Item 14 will add more
+unapplied migrations, so this check is required again there.
 
 Precondition, before the first real customer Meta credential is stored.
 **`ALLOW_INSECURE_SECRETS` must be `0`.** This gate is about onboarding, not
