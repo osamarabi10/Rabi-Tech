@@ -390,3 +390,47 @@ the result from an exit code at all.
 
 **The rule, short enough to remember: a task's exit code is not the harness's
 exit code unless nothing runs after it.**
+
+---
+
+## D-11 · Deactivating an edition can block invoicing the subscribers on it
+
+**Where:** `sellableCurrencies()` in
+[`currency-policy.ts`](../apps/backend/src/modules/billing/currency-policy.ts),
+and the `billing-summary:plan-currency` read in
+[`billing.service.ts`](../apps/backend/src/modules/billing/billing.service.ts).
+Both filter `isActive: true`.
+
+**What is wrong:** the same failure shape as the archival invariant, one layer
+up — and unlike that one, this is in the code today.
+
+`sellableCurrencies` derives the currencies the platform may write onto a
+finance document from the *active* plans, so deactivating an edition removes its
+currency from the allowlist. If no other live edition is priced in that
+currency, `assertSellableCurrency` — which fails closed by design — refuses it,
+and the owner cannot issue an invoice to a subscriber who is still on that
+edition and still being billed for it. Retiring an edition from the price list
+is not supposed to be a billing action.
+
+The billing-summary read carries the same filter and the milder version of the
+consequence: a subscriber on a deactivated edition is shown `planCurrency: null`
+rather than the currency they are actually charged in.
+
+E5f-1 settled the *archived* case deliberately — `sellableCurrencies` is not
+filtered by `archivedAt`, because archiving stops the selling and not the
+billing — and left `isActive` exactly as it was, because narrowing it further
+would have been the same mistake and widening it is a separate change. Measured
+against the rule in
+[RESPONDIO-PARITY-CHECKPOINT.md](RESPONDIO-PARITY-CHECKPOINT.md), **these two
+reads are resolution questions wearing an offer question's filter.**
+
+**Cost:** nothing today, and entirely conditional. All five editions are priced
+in USD, so removing one edition's currency removes nothing — the allowlist is
+`['USD']` either way. The defect arms the moment a second currency exists *and*
+the edition carrying it is deactivated, and it presents as a 400 about currency
+on an owner's invoice for a subscriber whose plan is perfectly valid.
+
+**Fix:** drop the `isActive` filter from both reads so they answer over every
+edition, the way `getEdition` does. Deliberately not fixed alongside archiving:
+it widens what may be written onto a finance document, which deserves its own
+change and its own assertion rather than riding along with an unrelated one.
