@@ -227,7 +227,7 @@ export type OverviewReport = {
   firstResponsePreviousMinutes: number | null;
   resolutionMedianMinutes: number | null;
   resolutionPreviousMinutes: number | null;
-  series: { date: string; inbound: number; outbound: number; resolved: number }[];
+  series: { date: string; inbound: number; outbound: number; conversationsStarted: number; resolved: number }[];
 };
 
 export async function overview(
@@ -292,10 +292,10 @@ export async function dailySeries(
   period: Period,
   filters: ReportFilters = {},
   organizationId = '',
-): Promise<{ date: string; inbound: number; outbound: number; resolved: number }[]> {
-  const byDay = new Map<string, { inbound: number; outbound: number; resolved: number }>();
-  const bump = (date: string, key: keyof { inbound: 0; outbound: 0; resolved: 0 }) => {
-    const day = byDay.get(date) ?? { inbound: 0, outbound: 0, resolved: 0 };
+): Promise<{ date: string; inbound: number; outbound: number; conversationsStarted: number; resolved: number }[]> {
+  const byDay = new Map<string, { inbound: number; outbound: number; conversationsStarted: number; resolved: number }>();
+  const bump = (date: string, key: keyof { inbound: 0; outbound: 0; conversationsStarted: 0; resolved: 0 }) => {
+    const day = byDay.get(date) ?? { inbound: 0, outbound: 0, conversationsStarted: 0, resolved: 0 };
     day[key] += 1;
     byDay.set(date, day);
   };
@@ -305,14 +305,15 @@ export async function dailySeries(
     // need one here. A 90-day range is ~2,160 small rows instead of a scan.
     const rows = await prisma.analyticsHourly.findMany({
       where: { hourStart: within(period) },
-      select: { hourStart: true, inbound: true, outbound: true, conversationsResolved: true },
+      select: { hourStart: true, inbound: true, outbound: true, conversationsCreated: true, conversationsResolved: true },
       orderBy: { hourStart: 'asc' },
     });
     for (const row of rows) {
       const date = row.hourStart.toISOString().slice(0, 10);
-      const day = byDay.get(date) ?? { inbound: 0, outbound: 0, resolved: 0 };
+      const day = byDay.get(date) ?? { inbound: 0, outbound: 0, conversationsStarted: 0, resolved: 0 };
       day.inbound += row.inbound;
       day.outbound += row.outbound;
+      day.conversationsStarted += row.conversationsCreated;
       day.resolved += row.conversationsResolved;
       byDay.set(date, day);
     }
@@ -322,7 +323,7 @@ export async function dailySeries(
   // Filtered: the rollup cannot answer this, so the days are built from the
   // rows themselves. Bounded by the cap rather than the period, and only ever
   // reached when a team or channel is actually selected.
-  const [messages, resolved] = await Promise.all([
+  const [messages, started, resolved] = await Promise.all([
     prisma.message.findMany({
       where: {
         timestamp: within(period),
@@ -332,6 +333,12 @@ export async function dailySeries(
       select: { timestamp: true, direction: true },
       take: MAX_SERIES_SAMPLE,
       orderBy: { timestamp: 'asc' },
+    }),
+    prisma.conversation.findMany({
+      where: { createdAt: within(period), ...conversationFilter(filters) },
+      select: { createdAt: true },
+      take: MAX_SERIES_SAMPLE,
+      orderBy: { createdAt: 'asc' },
     }),
     prisma.conversation.findMany({
       where: { resolvedAt: within(period), ...conversationFilter(filters) },
@@ -346,6 +353,9 @@ export async function dailySeries(
       message.timestamp.toISOString().slice(0, 10),
       message.direction === 'INBOUND' ? 'inbound' : 'outbound',
     );
+  }
+  for (const conversation of started) {
+    bump(conversation.createdAt.toISOString().slice(0, 10), 'conversationsStarted');
   }
   for (const conversation of resolved) {
     bump(conversation.resolvedAt!.toISOString().slice(0, 10), 'resolved');

@@ -115,6 +115,7 @@ export type Campaign = {
   status: string;
   recipients: number;
   date: string;
+  scheduledAt: string | null;
 };
 
 export type Contact = {
@@ -718,6 +719,7 @@ export async function fetchCampaigns(): Promise<Campaign[]> {
     status: c.status,
     recipients: c._count?.recipients ?? 0,
     date: fmtDate(c.sentAt || c.createdAt),
+    scheduledAt: c.scheduledAt ?? null,
   }));
 }
 
@@ -877,6 +879,19 @@ export async function mergeContacts(primaryContactId: string, secondaryContactId
 // ---------- system ----------
 export async function fetchStats(): Promise<Stats> {
   const { data } = await api.get('/api/system/stats');
+  return data;
+}
+
+export type DashboardSummary = {
+  openConversations: number;
+  resolvedThisWeek: number;
+  totalContacts: number;
+  activeSessions: number;
+  timestamp: string;
+};
+
+export async function fetchDashboardSummary(): Promise<DashboardSummary> {
+  const { data } = await api.get('/api/analytics/summary');
   return data;
 }
 
@@ -1854,7 +1869,7 @@ export type Headline = {
   changePct: number | null;
 };
 
-export type DaySeriesPoint = { date: string; inbound: number; outbound: number; resolved: number };
+export type DaySeriesPoint = { date: string; inbound: number; outbound: number; conversationsStarted: number; resolved: number };
 
 export type OverviewReport = {
   headlines: Headline[];
