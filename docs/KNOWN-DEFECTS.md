@@ -7,6 +7,39 @@ be made again by the next person.
 
 ---
 
+## A pattern · Gates that report on their environment, not on the code
+
+Three entries below are one defect wearing different clothes. It is worth
+naming, because the fourth instance will not look like the first three.
+
+- **D-5** — `verify-finance.js` chose its subject with an unordered `findFirst`,
+  so which organization it tested changed between runs, and it failed only on
+  the draws that happened to pick a seeded id.
+- **D-10** — a gate's exit code was replaced by a trailing `echo`, so a harness
+  that exited 1 at 122/123 was reported as having passed.
+- **D-12** — gate scripts read `DATABASE_URL` from whatever was already in the
+  shell, so identical code fails in a clean terminal and passes in a warmed one.
+
+In each case the gate answered a question about its own surroundings — which row
+it drew, which command exited last, which variables were already exported — and
+the answer was read as a statement about the code. A green of that kind is not
+weak evidence; it is *no* evidence, and it is worse than a red, because a red
+gets investigated and a green stops anyone looking.
+
+**All three were found by running the gates in a clean state rather than in the
+state they happened to work in.** None would have surfaced by reading the code,
+and none had surfaced through ordinary use — ordinary use kept reproducing the
+very conditions that made them pass.
+
+Hence the standing rule this repository works by: **a gate is green only when it
+was watched to run.** Not because it was green last time, not because an exit
+code was zero, and not because a summary from a previous session said so. Read
+the summary line the gate itself prints, prefer a clean shell to a convenient
+one, and treat any gate whose result you did not watch being produced as
+unknown rather than as passing.
+
+---
+
 ## D-1 · The manual fetch pattern has no unmount or stale-response guard
 
 **Where:** the 29 files using the manual `loading` / `loadError` pattern
@@ -434,3 +467,141 @@ on an owner's invoice for a subscriber whose plan is perfectly valid.
 edition, the way `getEdition` does. Deliberately not fixed alongside archiving:
 it widens what may be written onto a finance document, which deserves its own
 change and its own assertion rather than riding along with an unrelated one.
+
+---
+
+## D-12 · Gate scripts read `DATABASE_URL` from the ambient shell — PARTLY FIXED
+
+**Fixed in `verify-finance.js` (2026-09-01).** Five sibling gates still carry
+it. See [the pattern above](#a-pattern--gates-that-report-on-their-environment-not-on-the-code).
+
+**Where:** `apps/backend/scripts/` — `inbox-views-check.js`,
+`verify-snooze-wake.js`, `verify-campaign-replies.js`, `verify-dunning.js`,
+`verify-media-url.js`. None of them calls `dotenv.config()`.
+
+**What is wrong:** the tenancy harness loads the repository-root `.env`
+explicitly before requiring anything that reaches Prisma. These do not, so they
+inherit `DATABASE_URL` from whichever shell invoked them. In a clean terminal
+the run dies with `Environment variable not found: DATABASE_URL`, raised from
+inside `auditPlatformScope` — which reads like a code fault rather than a
+missing variable, and sends the reader into the audit path looking for a bug
+that is not there. In a terminal where something exported it earlier, the same
+code passes.
+
+Observed 2026-09-01: `npm run test:finance` failed in a clean shell and passed
+17/17, entirely unchanged, with the variable exported.
+
+**Cost:** the gate reports on the environment in both directions — a spurious
+red that invites debugging code that is fine, and a green that only means
+someone's shell happened to be warm. The harness's own loader comment records
+the worse case: a stray `apps/backend/.env` once pointed a gate at
+`localhost:5432`, a different Postgres entirely, where it "would have created
+its disposable schema and proved nothing about isolation." Ambient resolution
+can aim a gate at the wrong database as easily as at none, and that failure is
+silent.
+
+**Fix:** the one-line loader, before any require that reaches Prisma:
+
+```js
+require('dotenv').config({ path: path.join(__dirname, '..', '..', '..', '.env') });
+```
+
+Applied to `verify-finance.js` and verified by running that gate in a shell with
+`DATABASE_URL` explicitly unset. Deliberately not applied to the other five in
+the same change: they were not among this phase's gates, so the edit would be
+unverified, and an unverified change to a gate is how a working gate quietly
+becomes a broken one.
+
+---
+
+## D-13 · Upgrading off OpenWA takes the customer's channel away
+
+**Where:** the interaction between `allowedChannels` enforcement in
+[`channels.routes.ts`](../apps/backend/src/modules/channels/channels.routes.ts)
+and any path that moves an organization onto an edition not allowing `OPENWA`.
+
+**What is wrong:** a FREE or STANDARD customer connected through OpenWA who
+upgrades to GROWTH loses their channel. Their number stops working. The more
+expensive tier takes something away, which is the one thing an upgrade must
+never do.
+
+**Cost:** none today — and the reason is not the obvious one. It is **not** that
+no organization sits on a Meta-only tier: `ostudio` is on ENTERPRISE, by tier,
+by `planOverride` and by a live ACTIVE subscription, holding an ACTIVE OpenWA
+channel. It is harmless only because E5d widened every edition to allow both
+channel kinds, so there is currently no Meta-only tier to upgrade *into*. **The
+defect arms the moment the channel narrowing lands**, and `ostudio` is the row
+that makes that narrowing a decision rather than a data correction.
+
+**Three options, none chosen here:**
+
+1. **Block the upgrade** until a Meta channel is connected. Safest, and the most
+   obstructive — it makes the customer do work before they can give you money.
+2. **Warn loudly at upgrade time**, naming the channel that will stop working.
+   Cheapest, and depends entirely on someone reading it.
+3. **Grandfather existing OpenWA connections** — the edition forbids new ones
+   while an existing one keeps working. Kindest to the customer and the most
+   state to carry, because "allowed" stops being a function of the edition
+   alone and becomes a fact about each connection.
+
+This is precisely what E7's consequence preview exists for. The general problem
+is that an edition change silently alters what a subscriber can do; a
+disconnected channel is only its loudest instance.
+
+**Fix:** deliberately not built. Recording it before the narrowing lands is the
+point — the narrowing is what makes it real.
+
+---
+
+## D-14 · A catalogue edit does not reach existing subscribers' metered limits
+
+**Where:** `applyPlanLimits` in
+[`billing.service.ts`](../apps/backend/src/modules/billing/billing.service.ts)
+and `effectiveLimits` in
+[`entitlements.resolver.ts`](../apps/backend/src/modules/billing/entitlements.resolver.ts).
+
+**What is wrong:** editing an edition in the console reaches existing
+subscribers for most of what it grants, and does not reach them for the five
+metered usage limits.
+
+`applyPlanLimits` copies an edition's numbers into `OrganizationConfig` when a
+tier is set. `effectiveLimits` then reads those config columns — it consults a
+plan only when a live `planOverride` exists. So for an ordinary subscriber the
+enforced quota is a **snapshot taken at their last activation**, not the current
+catalogue. Raise GROWTH's contact allowance and every organization already on
+GROWTH keeps the old number, indefinitely, until something activates them again.
+
+The split is worth stating exactly, because it is not intuitive:
+
+| Reaches existing subscribers on refresh | Frozen until next activation |
+|---|---|
+| name, `monthlyPriceCents`, `usersLimit` (seats) | `monthlyActiveContactsLimit` |
+| `allowedChannels`, `autoProvisionGateway` | `monthlyOutboundMessagesLimit` |
+| `customDomain`, `whiteLabel`, `maskContactDetails` | `monthlyCampaignSendsLimit` |
+| campaign pacing | `monthlyAiTokensInLimit`, `monthlyAiTokensOutLimit` |
+
+Seats are live and quotas are not, which is the asymmetry most likely to
+surprise: both look like limits on the editions screen.
+
+**This is detected, and deliberately suppressed.** `detectQuotaDrift` compares
+config against the plan of record and would fire here — but it treats an edition
+edit as a *new baseline* rather than drift, suppressing divergence whose config
+predates the edition's `updatedAt`. That suppression is correct on its own
+terms: without it, raising GROWTH's allowance would report every organization on
+GROWTH as drifted, and "a detector that always fires is a detector nobody
+reads." Re-applying limits on edit was considered and rejected, because it would
+stomp per-subscriber overrides.
+
+So the honest statement is not "nothing detects it" — it is that the one thing
+which sees it is required to stay quiet about it, and there is no other signal.
+
+**Cost:** an owner changes a published limit, sees the pricing page update, and
+reasonably concludes the change took effect. For anyone already subscribed it
+did not. Nothing in the console distinguishes "this edition grants 5,000" from
+"this edition grants 5,000 to people who subscribe from now on."
+
+**Fix:** this is the gap E6 is for. Effective dates and revision history make
+the question answerable — which numbers applied to whom, from when — where
+today there is one mutable row and an `updatedAt`. A narrower stopgap would be
+to surface the pre-baseline set in the console: not drift, but "N subscribers
+are still on the previous numbers," which at least makes the snapshot visible.

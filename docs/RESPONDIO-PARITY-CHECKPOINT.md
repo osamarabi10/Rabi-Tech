@@ -839,6 +839,121 @@ filters and masking policy, and creates an audit record.
 This release added no migration, did not apply any migration, and left the
 live OpenWA session untouched.
 
+## 6f. Editions phase — closed 2026-09-01
+
+### What moved, in plain language
+
+Before this phase the product's commercial shape was a TypeScript constant. The
+five editions, their prices and every limit they granted were compiled in, so
+changing what a customer got for their money meant an edit, a review, a build
+and a deploy.
+
+It is now a database table the owner edits from `/platform/editions`, and four
+things follow from that which did not before:
+
+- **Prices and limits are owner-editable without a rebuild.** The catalogue is
+  read from the database into a cache that refreshes on a timer; a change is
+  live in the editing process at once and everywhere else within the refresh
+  interval. Nobody has to restart anything.
+- **A refusal now says which kind of refusal it is.** A capability an edition
+  does not include answers "not included, upgrade to X" rather than "monthly
+  limit reached, resets on the 1st" — a message that told a subscriber to wait
+  for a reset that would never grant them anything. Capability and quota are
+  different states needing different actions, and they are finally distinct.
+- **An archived edition still resolves for the subscribers on it.** Retiring an
+  edition removes it from the price list and from every upgrade prompt, and
+  changes nothing at all for the people already paying for it. That property is
+  the phase's central invariant and the thing most easily broken by accident:
+  an edition dropped from the cache resolves to the restricted floor, which
+  grants nothing while every response still returns 200.
+- **The catalogue can be extended.** Editions can be created through an
+  owner-only endpoint that is built, audited and exercised — and shipped
+  closed. See below.
+
+Also landed along the way: pricing has an explicit model (`FIXED`, `FREE`,
+`NEGOTIATED`) so `ENTERPRISE` at zero cents is not mistaken for free; AI token
+allowances became an edition lever rather than a per-deal-only field; and
+`allowedChannels` and `autoProvisionGateway` became switches that grant
+something instead of decoration.
+
+### Rules this phase established
+
+Stated once here so they are inherited rather than rediscovered.
+
+1. **Offer versus resolution.** A read asking *what may we sell* filters on
+   `isActive` and `archivedAt`. A read asking *what does this subscriber have*
+   filters on neither. Getting it backwards fails silently in both directions.
+   The long form is in §2 above.
+2. **The constant and the rows change in the same commit.** `PLAN_ENTITLEMENTS`
+   seeds and the harness asserts the two match field for field, so a migration
+   that moves a row without moving the constant fails the gate — which is the
+   point, not an inconvenience.
+3. **A gate is green only when it was watched to run.** Not because it was green
+   last time, not because an exit code was zero. Three separate defects (D-5,
+   D-10, D-12) were gates reporting on their own environment rather than on the
+   code, and all three were found by running them in a clean state rather than
+   the state they happened to work in.
+
+### What is deliberately not done
+
+- **E6 — billing interval, effective dates, revision history.** There is one
+  mutable row per edition and an `updatedAt`. **Editing a live edition today
+  changes what existing subscribers get, with no record of what it granted
+  before, when the change took effect, or who it applied to.** For most fields
+  the change reaches them immediately; for the five metered usage limits it does
+  not reach them at all until their next activation (D-14). Neither behaviour is
+  written down anywhere a subscriber or an auditor could consult.
+- **E7 — consequence preview.** Nothing tells an owner what an edit will do
+  before they make it. Narrowing `allowedChannels` can disconnect a live
+  channel; lowering a limit can put a subscriber instantly over quota. D-13 is
+  the loudest instance, not the only one.
+- **E8 — frontend dynamic lists, and the hardcoded `REQUIRES` map moved
+  server-side.** The console still carries a compiled-in map of which capability
+  needs which edition, which is the same defect this phase spent its length
+  removing from the backend, one layer up.
+
+Together E6 and E7 close the same gap from two ends: E6 makes what an edition
+granted a matter of record, E7 makes what a change will cost visible before it
+is made.
+
+### Not landed: the channel narrowing
+
+The product story is that STANDARD is the tier for customers without a Meta
+WhatsApp Business Account, and that everything above it is Meta-only. The data
+does not say that — E5d widened every edition to both channel kinds so that
+turning enforcement on would not withdraw Meta from existing subscribers.
+
+Narrowing GROWTH, BUSINESS and ENTERPRISE to `WHATSAPP_CLOUD` was prepared and
+**not applied.** The pre-flight count is not zero: `ostudio` is on ENTERPRISE by
+tier, by `planOverride` and by a live ACTIVE subscription, and holds an ACTIVE
+OpenWA channel. Applying the narrowing would stop a working channel for a live
+subscriber, which is an owner's decision and not a data correction. See D-13.
+
+### The door is still closed
+
+`CREATABLE_PLAN_CODES` in `platform.routes.ts` holds exactly the original five
+codes, so every create refuses today. The create path is complete and exercised
+against a real create — the harness deletes `STANDARD`, rebuilds it through the
+endpoint and restores it — so widening the set is not shipping untested code.
+
+**Before it is opened, all of these must be true:**
+
+1. A fresh `pg_dump -Fc`, verified readable with `pg_restore -l`. Recovery past
+   the first sixth edition is snapshot-restore or forward-fix; there is no
+   rollback, because `down.sql` re-adds a CHECK constraint that a sixth code
+   makes fail late, leaving a half-reverted system.
+2. The HARD RULE in §2 read and understood, not merely present in the file.
+3. `sortOrder` set deliberately for the new edition — the create appends past
+   the ladder, which is safe but is rarely where a new edition belongs.
+4. A decision on D-9: `FREE` is still reserved, so the free tier cannot become
+   an ordinary catalogue row until `isPaidPlan` no longer needs the name during
+   the boot window.
+5. E7, or an accepted equivalent. A sixth edition is the first catalogue change
+   whose consequences nobody can preview, and it is the least reversible one.
+
+**Applying E4's migration was never the one-way door. Creating the sixth edition
+is.**
+
 ## 7. Later roadmap
 
 Execute in this dependency order after Conversation Operations.
