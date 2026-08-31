@@ -137,9 +137,59 @@ will refuse them — the exact thing app-sidebar.tsx argues against
 (*"a menu is a list of places you can go, and one that leads nowhere is a worse
 answer than its absence"*).
 
-**Fix:** once existing SUPPORT sessions have cycled, flip this to fail closed —
+**Fix (D-4):** once existing SUPPORT sessions have cycled, flip this to fail closed —
 drop the `Array.isArray(...)` escape hatch in `canSee()` so a missing
 permissions array denies rather than permits. **This default must not outlive
 the reason for it.** JWTs expire on `JWT_EXPIRES_IN` (7d by default), so the
 window is short and knowable; there is no reason for this to still be here a
 month from now.
+
+---
+
+## D-5 · The finance gate picks its fixture non-deterministically
+
+**Where:** [`apps/backend/scripts/verify-finance.js`](../apps/backend/scripts/verify-finance.js),
+the reference-format assertion.
+
+**What is wrong:** the script chooses its test subject with
+`prisma.organization.findFirst({ select: { id: true, name: true } })` — **no
+`orderBy`**. PostgreSQL is free to return any row, so which organization the
+gate runs against changes between runs.
+
+That matters because the assertion is
+
+```js
+/^INV-\d{4}-[A-Z0-9]{4}-\d{4}$/
+```
+
+and a reference embeds `organizationId.slice(-4).toUpperCase()`. This database
+holds three organizations:
+
+| id | tail | assertion |
+|---|---|---|
+| `cmt0gw8yo003fxrc8mqd22ry6` | `2RY6` | passes |
+| `cmt5kyprc0025br7e87jfii0l` | `II0L` | passes |
+| `org_rabitech_0` | `CH_0` | **fails** — `_` is not in `[A-Z0-9]` |
+
+Two of three pass and one fails, decided by whichever row the database hands
+back. CLAUDE.md records this gate as 16/16; it is currently 15/16 whenever the
+seeded `org_rabitech_0` is selected.
+
+**Not caused by the invoice integrity work.** The `slice(-4)` expression is
+byte-identical before and after that change, and the first invoice numbers
+`0001` under both the old count-based scheme and the new counter.
+
+**Cost:** a gate that flips between green and red on nothing is worse than one
+that is reliably red — it trains everyone to re-run it until it passes.
+
+**Fix:** two independent choices, and both are worth making.
+1. Give `findFirst` a deterministic `orderBy`, so the gate tests the same
+   subject every run.
+2. Decide what a reference may legally contain. Either the assertion widens to
+   `[A-Z0-9_]{4}`, or the reference builder sanitises the organization tail
+   before embedding it. Right now the format is whatever the id happens to be,
+   which is how the underscore arrived unnoticed.
+
+Deliberately left unfixed here: it is a pre-existing test defect and changing a
+failing assertion during an integrity phase is how a real regression gets
+waved through.

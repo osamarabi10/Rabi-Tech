@@ -88,6 +88,52 @@ not. A tenant-scoped `GET /api/campaigns` query therefore failed with Prisma
 `P2022` until the route was repaired to use an explicit pre-migration select.
 No migration was applied during that repair.
 
+**Still unapplied as of 2026-08-31 after the invoice integrity phase.**
+`20260920090000_meta_template_lifecycle` remains written and unapplied.
+`20260921090000_invoice_reference_integrity` was applied by direct SQL and
+recorded with `prisma migrate resolve --applied`, deliberately **not** with
+`prisma migrate deploy` — deploy would have applied the meta template
+migration too, as a side effect of an unrelated phase. Anyone running
+`migrate deploy` on this database should know it will apply the meta template
+lifecycle migration first.
+
+### HARD RULE — invoice and receipt numbering cannot be rolled back
+
+> Once **any** invoice or receipt row exists, migration
+> `20260921090000_invoice_reference_integrity` must not be reversed, and the
+> `invoiceRef` and `receiptRef` rows in `OrgSequence` must never be reset,
+> lowered, or deleted.
+>
+> Recovery past that point is **snapshot-restore or forward-fix. Never a
+> rollback that touches the sequence.**
+
+This is not a caution, it is a constraint on what recovery options exist.
+
+Numbering used to be `count(rows) + 1`. It is now a high-water mark held in
+`OrgSequence`, which only ever increases. Those two schemes disagree in exactly
+one place, and it is the place that matters: after a document is removed or
+voided, the count goes down and the high-water mark does not.
+
+So reverting the code while resetting the counter — or restoring a database
+snapshot taken before the counter advanced, while keeping documents issued
+after it — lets the old scheme reissue a number that a real document already
+carries. Two different amounts answering to one reference is not a display
+bug; it is discovered by the customer being billed, and it is not detectable
+from the row itself, because both rows look correct in isolation.
+
+`down.sql` ships alongside the migration and was exercised (see below), but it
+deliberately does not touch `OrgSequence`, and its header says plainly that it
+is useless once real documents exist. It is a rehearsal artifact, not a
+recovery plan.
+
+**Rollback rehearsal, performed 2026-08-31 while both tables were empty.**
+Applied the migration, ran `down.sql`, captured the schema, and diffed it
+against the pre-migration capture — migration history, column definitions,
+unique indexes and row counts were **identical**. Re-applied and diffed again
+against the post-migration capture — also identical. `OrgSequence` was
+unchanged throughout, which was the point of the exercise. A fresh verified
+`pg_dump` was taken immediately before the first apply.
+
 Both gate numbers rose because two gates were found non-functional on this
 machine and repaired — see the preconditions in §8. Neither number is
 comparable to the one it replaces without that context: the harness gained
