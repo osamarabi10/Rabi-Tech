@@ -1,4 +1,5 @@
 import { prisma } from '../../prisma';
+import { nextOrgSequence } from '../../utils/org-sequence';
 
 /**
  * Platform finance documents: what a subscriber owes, and what they have paid.
@@ -38,24 +39,40 @@ export function formatMoney(cents: number, currency: string): string {
   return `${amount} ${currency}`;
 }
 
+/** OrgSequence keys backing the two document references. */
+const SEQUENCE_KIND = { INV: 'invoiceRef', RCPT: 'receiptRef' } as const;
+
 /**
  * Reference for a new document.
  *
  * Sequential *per organization and kind*, which is what makes it useful to
  * quote back — and explicitly not a fiscal sequence: the platform makes no
- * claim that these are gapless, immutable, or acceptable to any tax authority.
- * A gap here means a draft was abandoned, nothing more.
+ * claim that these are acceptable to any tax authority, and there is no VAT
+ * breakdown or jurisdiction behind them.
+ *
+ * Numbers are never reused. They used to be: the sequence was
+ * `count(rows) + 1`, so anything that reduced the count — a deleted invoice, a
+ * cascade from a removed subscriber — handed the next document a number an
+ * earlier one already carried. Two different amounts answering to one
+ * reference is the kind of ledger error that is only discovered by the person
+ * being billed.
+ *
+ * A high-water mark in OrgSequence replaces the count. It only ever increases,
+ * so a document that is voided or removed leaves a gap rather than an
+ * opening — gaps are fine and always were, reuse never was.
+ *
+ * Takes the caller's transaction so the number and the row that carries it are
+ * written together. Allocating outside the transaction, as this used to, means
+ * a rolled-back insert silently consumes a number.
  */
 async function nextReference(
+  tx: Parameters<typeof nextOrgSequence>[0],
   kind: 'INV' | 'RCPT',
   organizationId: string,
 ): Promise<string> {
   const year = new Date().getFullYear();
-  const count =
-    kind === 'INV'
-      ? await prisma.invoice.count({ where: { organizationId } })
-      : await prisma.paymentReceipt.count({ where: { organizationId } });
-  const seq = String(count + 1).padStart(4, '0');
+  const value = await nextOrgSequence(tx, organizationId, SEQUENCE_KIND[kind]);
+  const seq = String(value).padStart(4, '0');
   // The org id tail keeps references from colliding across subscribers, which
   // a per-org counter alone would not prevent in a shared table.
   return `${kind}-${year}-${organizationId.slice(-4).toUpperCase()}-${seq}`;
@@ -109,18 +126,56 @@ export async function createInvoice(input: {
   dueAt: Date | null;
   subscriptionId: string | null;
 }) {
-  return prisma.invoice.create({
-    data: {
-      organizationId: input.organizationId,
-      subscriptionId: input.subscriptionId,
-      provider: 'manual',
-      invoiceRef: await nextReference('INV', input.organizationId),
-      status: 'OPEN',
-      amountDueCents: input.amountCents,
-      amountPaidCents: 0,
-      currency: input.currency,
-      dueAt: input.dueAt,
-    },
+  // One transaction: the reference is allocated and the row that carries it is
+  // written together, so a failed insert releases nothing and consumes nothing.
+  return prisma.$transaction(async (tx) =>
+    tx.invoice.create({
+      data: {
+        organizationId: input.organizationId,
+        subscriptionId: input.subscriptionId,
+        provider: 'manual',
+        invoiceRef: await nextReference(tx, 'INV', input.organizationId),
+        status: 'OPEN',
+        amountDueCents: input.amountCents,
+        amountPaidCents: 0,
+        currency: input.currency,
+        dueAt: input.dueAt,
+      },
+    }),
+  );
+}
+
+/**
+ * Withdraw an invoice that should not have been issued.
+ *
+ * Voiding, never deleting. A deleted invoice takes its reference out of the
+ * record while the numbers around it keep implying it existed, so the ledger
+ * reads as though a document were hidden rather than withdrawn — and under the
+ * old count-based numbering, the next invoice would silently reclaim the freed
+ * number. There is deliberately no delete path in this module; this is it.
+ *
+ * A settled invoice cannot be voided. Money has already moved, and the receipt
+ * recording it would be left pointing at a document claiming nothing was owed.
+ */
+export async function voidInvoice(input: {
+  organizationId: string;
+  invoiceId: string;
+}) {
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: input.invoiceId, organizationId: input.organizationId },
+  });
+  if (!invoice) throw new PaymentError('Invoice not found for this subscriber', 404);
+  if (invoice.status === 'VOID') throw new PaymentError('This invoice is already void', 409);
+  if (invoice.amountPaidCents > 0) {
+    throw new PaymentError(
+      'This invoice has payments recorded against it and cannot be voided',
+      409,
+    );
+  }
+
+  return prisma.invoice.update({
+    where: { id: invoice.id },
+    data: { status: 'VOID' },
   });
 }
 
@@ -170,11 +225,18 @@ export async function recordPayment(input: {
     );
   }
 
-  const reference = await nextReference('RCPT', input.organizationId);
+  if (invoice.status === 'VOID') {
+    throw new PaymentError('This invoice is void and cannot take a payment', 409);
+  }
+
   const amountPaidCents = invoice.amountPaidCents + input.amountCents;
   const fullySettled = amountPaidCents >= invoice.amountDueCents;
 
   return prisma.$transaction(async (tx) => {
+    // Allocated inside the transaction, with the receipt. Outside it, a
+    // rollback would burn the number and leave a gap nobody can account for.
+    const reference = await nextReference(tx, 'RCPT', input.organizationId);
+
     const receipt = await tx.paymentReceipt.create({
       data: {
         organizationId: input.organizationId,
@@ -216,7 +278,14 @@ export async function recordPayment(input: {
  */
 export async function hasOverdueBalance(organizationId: string, now = new Date()): Promise<boolean> {
   const overdue = await prisma.invoice.findMany({
-    where: { organizationId, status: { not: 'PAID' }, dueAt: { not: null, lt: now } },
+    // VOID is excluded alongside PAID: a withdrawn invoice is not a debt, and
+    // counting one would put a subscriber into dunning over an amount the
+    // platform has already said it is not owed.
+    where: {
+      organizationId,
+      status: { notIn: ['PAID', 'VOID'] },
+      dueAt: { not: null, lt: now },
+    },
     select: { amountDueCents: true, amountPaidCents: true },
   });
   return overdue.some((invoice) => invoice.amountDueCents - invoice.amountPaidCents > 0);

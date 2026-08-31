@@ -279,8 +279,11 @@ model Invoice {
   organizationId   String
   subscriptionId   String?
   provider         String    @default("manual")
-  invoiceRef       String?
+  /// Allocated from OrgSequence("invoiceRef") inside the transaction that
+  /// creates the invoice. Never reused; see finance.service.ts.
+  invoiceRef       String
   customerRef      String?
+  /// OPEN | PAID | VOID. Invoices are voided, never deleted.
   status           String    @default("OPEN")
   amountDueCents   Int       @default(0)
   amountPaidCents  Int       @default(0)
@@ -296,7 +299,10 @@ model Invoice {
   receipts     PaymentReceipt[]
 
   @@unique([id, organizationId])
-  @@unique([provider, invoiceRef])
+  /// On invoiceRef alone. The old (provider, invoiceRef) pair let the same
+  /// reference exist twice under two providers, which is exactly the collision
+  /// a reference is supposed to rule out.
+  @@unique([invoiceRef])
   @@index([organizationId, createdAt])
   @@index([provider, customerRef])
 }

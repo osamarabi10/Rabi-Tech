@@ -24,7 +24,9 @@ import {
   formatMoney,
   listFinanceDocuments,
   recordPayment,
+  voidInvoice,
 } from './finance.service';
+import { CurrencyPolicyError, assertSellableCurrency } from '../billing/currency-policy';
 import { renderFinanceCsv, renderFinanceDocument } from './finance.document';
 import { hasOverdueBalance } from './finance.service';
 import {
@@ -1044,7 +1046,11 @@ router.post('/subscribers/:id/invoices', requirePlatformOwner, async (req, res) 
     if (!Number.isInteger(amountCents) || amountCents <= 0) {
       return res.status(400).json({ error: 'amountCents must be a positive whole number of cents' });
     }
-    const currency = String(req.body?.currency || 'USD').toUpperCase().slice(0, 3);
+    // No default. An invoice silently issued in USD because the caller omitted
+    // a currency is wrong by the exchange rate, and nothing downstream can
+    // detect it — the amount is a well-formed number either way. The allowlist
+    // comes from the active plans, so it cannot drift from what is sold.
+    const currency = await assertSellableCurrency(req.body?.currency);
     const dueAt = req.body?.dueAt ? new Date(req.body.dueAt) : null;
     if (dueAt && Number.isNaN(dueAt.getTime())) {
       return res.status(400).json({ error: 'dueAt is not a valid date' });
@@ -1079,7 +1085,52 @@ router.post('/subscribers/:id/invoices', requirePlatformOwner, async (req, res) 
 
     res.status(201).json(invoice);
   } catch (err) {
+    // A refused currency is the caller's mistake, not a server fault, and the
+    // message names the currencies that would have worked. Logging it at error
+    // and returning 500 would tell the operator nothing they can act on.
+    if (err instanceof CurrencyPolicyError) {
+      return res.status(err.status).json({ error: err.message });
+    }
     logger.error('Invoice issue failed', { organizationId: req.params.id, error: String(err) });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/**
+ * Withdraw an invoice. There is deliberately no DELETE counterpart.
+ *
+ * An invoice that is deleted takes its reference out of the record while the
+ * numbers either side of it keep implying it existed. Voiding leaves the
+ * document, its number and the decision to withdraw it all visible, which is
+ * what anyone auditing the ledger later actually needs.
+ */
+router.post('/subscribers/:id/invoices/:invoiceId/void', requirePlatformOwner, async (req, res) => {
+  try {
+    const subscriber = await subscriberOr404(req.params.id);
+    if (!subscriber) return res.status(404).json({ error: 'Subscriber not found' });
+
+    const invoice = await voidInvoice({
+      organizationId: subscriber.id,
+      invoiceId: req.params.invoiceId,
+    });
+
+    await auditPlatformScope(
+      'invoice ' + invoice.invoiceRef + ' voided',
+      {
+        action: 'platform.invoice.voided',
+        actorIdentityId: req.platformUser!.id,
+        actorEmail: req.platformUser!.email,
+        targetOrgId: subscriber.id,
+        targetOrgName: subscriber.name,
+        afterState: invoice,
+        ipAddress: req.ip,
+      },
+    );
+
+    res.json(invoice);
+  } catch (err) {
+    if (err instanceof PaymentError) return res.status(err.status).json({ error: err.message });
+    logger.error('Invoice void failed', { organizationId: req.params.id, error: String(err) });
     res.status(500).json({ error: 'Server error' });
   }
 });

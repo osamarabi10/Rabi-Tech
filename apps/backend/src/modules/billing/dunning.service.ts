@@ -88,7 +88,10 @@ export type DunningResult = {
 async function organizationsWithOverdueInvoices(now: Date): Promise<Set<string>> {
   const overdue = await prisma.invoice.findMany({
     where: {
-      status: { not: 'PAID' },
+      // VOID alongside PAID: a withdrawn invoice is not a debt. Suspending a
+      // subscriber over an invoice the platform has already cancelled would be
+      // the worst kind of dunning error — correct-looking and indefensible.
+      status: { notIn: ['PAID', 'VOID'] },
       dueAt: { not: null, lt: now },
     },
     select: { organizationId: true, amountDueCents: true, amountPaidCents: true },

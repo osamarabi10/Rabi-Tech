@@ -769,6 +769,20 @@ export async function getBillingSummary(organizationId: string) {
 
   const seatLimit = effective.seatLimit;
 
+  /**
+   * The currency of the plan in force.
+   *
+   * Read from the Plan rows rather than the entitlements, because entitlements
+   * describe allowances and carry no price. Matched through normalizePlanCode
+   * for the same reason listPlans() does: the stored code and the normalized
+   * one are not guaranteed to be written identically, and matching on the raw
+   * string would silently find nothing.
+   */
+  const planRows = await runAsPlatform('billing-summary:plan-currency', () =>
+    prisma.plan.findMany({ where: { isActive: true }, select: { code: true, currency: true } }));
+  const planCurrency =
+    planRows.find((row) => normalizePlanCode(row.code) === effective.plan)?.currency ?? null;
+
   return {
     plan: {
       code: plan.code,
@@ -802,6 +816,15 @@ export async function getBillingSummary(organizationId: string) {
       listPriceCents: effective.listPriceCents,
       effectivePriceCents: effective.effectivePriceCents,
       creditCents: effective.override.creditCents,
+      /**
+       * The currency these amounts are in.
+       *
+       * Sent because the client had no way to know it and was formatting all
+       * three as ILS by default — a price rendered in the wrong currency is
+       * wrong by the exchange rate and looks entirely correct. The server
+       * knows the answer; it just was not saying it.
+       */
+      currency: planCurrency,
     },
     /** Non-empty means enforced quotas no longer match the named plan. */
     quotaDrift: detectQuotaDrift(
