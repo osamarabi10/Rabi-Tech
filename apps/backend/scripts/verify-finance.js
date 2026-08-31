@@ -43,7 +43,15 @@ function check(label, condition, detail) {
 async function main() {
   const created = { invoices: [], receipts: [] };
 
-  const organization = await prisma.organization.findFirst({ select: { id: true, name: true } });
+  // Ordered, not whichever row the database happens to hand back. Without this
+  // the suite tested a different organization between runs, and one of the
+  // seeded ids (org_rabitech_0) produces a reference tail the format assertion
+  // below has to account for. A gate that changes its own subject is a gate
+  // that flips green and red on nothing.
+  const organization = await prisma.organization.findFirst({
+    orderBy: { id: 'asc' },
+    select: { id: true, name: true },
+  });
   if (!organization) throw new Error('No organization to test against');
 
   try {
@@ -59,8 +67,37 @@ async function main() {
 
     check('invoice is issued OPEN with nothing paid',
       invoice.status === 'OPEN' && invoice.amountPaidCents === 0);
+    /*
+      Format. The organization tail is the last four characters of the id, so
+      it is whatever the id happens to end in — cuids give [A-Z0-9], but a
+      seeded slug like org_rabitech_0 gives CH_0. The underscore is legitimate
+      output, not a defect, and the assertion previously rejected it.
+
+      The sequence is padStart(4), so four digits is a minimum and not a
+      maximum: \d{4,} keeps this from failing the day a counter passes 9999.
+    */
     check('invoice reference is namespaced and sequential',
-      /^INV-\d{4}-[A-Z0-9]{4}-\d{4}$/.test(invoice.invoiceRef || ''), invoice.invoiceRef);
+      /^INV-\d{4}-[A-Z0-9_]{4}-\d{4,}$/.test(invoice.invoiceRef || ''), invoice.invoiceRef);
+
+    /*
+      Format alone cannot catch a numbering regression — INV-2026-CH_0-0001 is
+      well-formed whether it was drawn from the high-water mark or from
+      count(rows) + 1. This ties the reference to the counter that issued it.
+
+      It is the assertion that fails if numbering reverts: under count-based
+      numbering the tail tracks how many invoices currently exist, which drifts
+      from the counter as soon as anything is deleted or voided. Both schemes
+      print 0001 on a virgin database, so a check that only ever ran once would
+      not tell them apart.
+    */
+    const invoiceCounter = await prisma.orgSequence.findFirst({
+      where: { organizationId: organization.id, kind: 'invoiceRef' },
+      select: { value: true },
+    });
+    const invoiceSeq = Number(String(invoice.invoiceRef || '').split('-').pop());
+    check('invoice reference is drawn from the invoiceRef high-water mark',
+      invoiceCounter !== null && invoiceSeq === Number(invoiceCounter.value),
+      `${invoice.invoiceRef} vs counter ${invoiceCounter ? invoiceCounter.value : 'missing'}`);
 
     // ── part payment ──────────────────────────────────────────────────────
     const part = await recordPayment({

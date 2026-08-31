@@ -86,10 +86,24 @@ The gate uses a disposable PostgreSQL schema and must stay **green (67/67)**. Tr
 cd apps/backend && npm run test:finance
 ```
 
-Exercises the platform ledger against the real database (16/16): reference
+Exercises the platform ledger against the real database (17/17): reference
 numbering, receipt-and-invoice-in-one-transaction, part payments, overpayment
 refusal, HTML escaping, CSV quoting. Builds first because it runs the compiled
 output the server actually runs, and deletes everything it creates.
+
+It was previously recorded here as 16/16 and was not: the suite picked its
+subject with an unordered `findFirst`, so it drew a different organization
+between runs and failed whenever it drew `org_rabitech_0`, whose id tail
+`CH_0` the format assertion rejected. The selection is now ordered and the
+assertion accepts the underscore that a slug id legitimately produces.
+
+**References are drawn from `OrgSequence`, not from a row count.** The suite
+asserts the issued reference matches the `invoiceRef` high-water mark, which
+is what fails if numbering ever reverts to `count(rows) + 1`. The counter
+survives the suite's own cleanup by design, so the sequence number rises
+between runs — that is the non-reuse guarantee working, not a leak. Never
+reset those counters to make a test read `0001` again; see
+`docs/RESPONDIO-PARITY-CHECKPOINT.md`.
 
 **Finance documents are not tax documents.** No fiscal numbering, no VAT, no
 `חשבונית מס` / `فاتورة ضريبية` labelling. Do not add any without a real
