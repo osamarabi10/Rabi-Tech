@@ -84,6 +84,11 @@ async function completeIdentityLogin(identity: Identity) {
           email: identity.email,
           name: 'RabiTech',
           platformRole: identity.platformRole,
+          // For rendering only — the console shell filters its navigation with
+          // this so a support user is not shown destinations that will refuse
+          // them. Authorization stays server-side in platform.routes.ts, which
+          // re-reads permissions from the database on every request.
+          platformPermissions: identity.platformPermissions,
           scope: 'PLATFORM',
         },
       },
@@ -465,6 +470,8 @@ router.get('/me', verifyToken, async (req, res) => {
         role: 'VIEWER',
         permissions: permissionsForRole('VIEWER'),
         platformRole: req.platformUser.platformRole,
+        // See the login payload: navigation rendering only, never the boundary.
+        platformPermissions: req.platformUser.platformPermissions,
         scope: 'PLATFORM',
         viewingOrganizationId: req.user!.organizationId,
         readOnly: true,
