@@ -26,7 +26,6 @@ services:
       # Loopback only, both families. Redis has no password: an exposed port
       # is the whole security boundary.
       - "127.0.0.1:6379:6379"
-      - "[::1]:6379:6379"
 
   openwa:
     image: ghcr.io/rmyndharis/openwa:latest

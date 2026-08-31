@@ -1086,6 +1086,21 @@ async function databaseAudits() {
       await raw.contact.deleteMany({ where: { id: { in: [primary.id, secondary.id, foreign.id] } } });
     });
 
+    await check('growth QR accepts WhatsApp targets and rejects other destinations', async () => {
+      const validTarget = 'https://wa.me/972500000201?text=Hello%20from%20RabiTech';
+      const valid = await fetch(`${baseUrl}/api/growth/qr?target=${encodeURIComponent(validTarget)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const validBody = await valid.json();
+      assert.equal(valid.status, 200, JSON.stringify(validBody));
+      assert.match(validBody.dataUrl, /^data:image\//);
+
+      const invalid = await fetch(`${baseUrl}/api/growth/qr?target=${encodeURIComponent('https://example.com/contact')}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(invalid.status, 400, await invalid.text());
+    });
+
     await check('workspace settings: policy and recap recipients remain organization-scoped', async () => {
       const beforeB = await raw.organizationConfig.findUnique({ where: { organizationId: orgB.organizationId } });
       const update = await fetch(`${baseUrl}/api/system/workspace-settings`, {

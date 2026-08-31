@@ -15,6 +15,7 @@ import {
   Settings,
   Sun,
   SunMedium,
+  TrendingUp,
   Users,
   Building2,
   Workflow,
@@ -70,6 +71,7 @@ const NAV_ITEMS = [
   { href: '/campaigns', icon: Megaphone, label: 'البث', requires: 'campaign:read' },
   { href: '/automations', icon: Workflow, label: 'الأتمتة', requires: 'workflow:view' },
   { href: '/reports', icon: LayoutDashboard, label: 'التقارير', requires: 'analytics:read' },
+  { href: '/growth', icon: TrendingUp, label: 'النمو', requires: 'contact:read' },
   // No permission gate. Settings is the one destination every role has some
   // business in — an agent reads the templates and the auto-replies there —
   // and the page already hides the admin-only sections from its own

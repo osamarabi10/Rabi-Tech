@@ -42,6 +42,7 @@ import usageRoutes        from './modules/usage/usage.routes';
 import brandingRoutes     from './modules/branding/branding.routes';
 import billingRoutes      from './modules/billing/billing.routes';
 import channelRoutes      from './modules/channels/channels.routes';
+import growthRoutes       from './modules/growth/growth.routes';
 import { billingWebhookHandler } from './modules/billing/billing.webhook';
 import { verifyMediaProxyToken, verifyMediaToken } from './utils/signed-url';
 import { runAsOrganization, runAsPlatform } from './lib/tenant-context';
@@ -422,6 +423,7 @@ app.use('/api/usage',          usageRoutes);
 app.use('/api/branding',       brandingRoutes);
 app.use('/api/billing',        billingRoutes);
 app.use('/api/channels',       channelRoutes);
+app.use('/api/growth',         growthRoutes);
 
 // 404
 app.use((req: any, res) => {

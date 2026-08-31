@@ -1078,6 +1078,11 @@ export async function fetchSessionQR(sessionName: string): Promise<SessionQR> {
   return data;
 }
 
+export async function fetchGrowthQr(target: string): Promise<string> {
+  const { data } = await api.get('/api/growth/qr', { params: { target } });
+  return data.dataUrl;
+}
+
 /**
  * Signs WhatsApp out of this session so a different number can be paired.
  * Conversation history stays — it belongs to the organization, not the phone.
