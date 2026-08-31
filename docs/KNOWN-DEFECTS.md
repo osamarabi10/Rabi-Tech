@@ -254,3 +254,68 @@ the deletion partly happened. That is the worst version of this failure.
 2. Catch `P2003` and return a 409 that names what is blocking the delete.
 3. Verify the subscriber-delete cascade with at least one send row present,
    which is only possible once the send path exists.
+
+---
+
+## D-8 · Three pre-tenancy shadow schemas are still in the database
+
+**Where:** the `rabitech` database holds four non-system schemas —
+`public`, plus `rabitech_diff_shadow`, `rabitech_p1b_shadow` and
+`rabitech_p1d_debug`.
+
+**What they are.** Snapshots of the schema *as it was before multi-tenancy*,
+left behind by the P1-B and P1-D phase work — the names match
+[P1-B-COMPOSITE-FOREIGN-KEYS.md](P1-B-COMPOSITE-FOREIGN-KEYS.md) and
+[P1-D-ORGANIZATION-CONFIGURATION.md](P1-D-ORGANIZATION-CONFIGURATION.md).
+
+Each holds 22 tables against `public`'s 63, and the difference dates them
+precisely. They still carry models this product no longer has:
+
+| Present in the shadows | Status in `public` |
+|---|---|
+| `Zone`, and `Campaign.zoneId` | removed |
+| `GroupMessage` | dropped — groups are not supported |
+| `Sequence` | dropped by `20260820000000_add_organization_configuration`, replaced by `OrgSequence` |
+| `Ticket`, `TicketNote`, `Lead` | legacy, gone |
+
+Each contains a single `Organization` row of pre-tenancy demo data.
+
+**They already caused one wrong answer.** A schema-drift check during the
+Editions phase queried `information_schema.columns` filtered by `table_name`
+without `table_schema='public'`. Every column came back three or four times
+over, and `Campaign.zoneId` appeared as a live column that `schema.prisma` did
+not declare — a drift finding that did not exist. The correct query is scoped:
+
+```sql
+select column_name from information_schema.columns
+where table_schema = 'public' and table_name = 'Campaign';
+```
+
+**Two existing documents disagree about these**, which is worth knowing before
+trusting either:
+
+- The header comment in `scripts/tenancy-bleed-harness.js` lists them beside
+  `rabitech_bleed_*` as evidence the isolation gate had hung unnoticed.
+- [RESPONDIO-PARITY-CHECKPOINT.md](RESPONDIO-PARITY-CHECKPOINT.md) says they do
+  **not** match the harness's `rabitech_bleed_<pid>_<timestamp>` naming and
+  come from other tooling.
+
+The checkpoint is right, and the table above is why: harness corpses would
+carry the current schema, and these carry a schema that predates tenancy by
+dozens of migrations. The harness comment has been corrected.
+
+**Are they safe to drop?** On the evidence, yes — but this is recorded rather
+than acted on:
+
+- No code, migration, `prisma` config or compose file references them. There is
+  no `shadowDatabaseUrl` configured, so Prisma is not using them for migration
+  diffing.
+- They describe a schema no migration can reach any more.
+- They are small, and cost nothing but confusion.
+
+The argument against dropping them is that they are the only surviving record
+on this machine of what the schema looked like before tenancy, which has some
+value while P1-B and P1-D are still being referenced. **Left in place
+deliberately.** If they are dropped, `DROP SCHEMA ... CASCADE` on all three is
+the whole operation, and it should be its own change with its own dump — not
+folded into unrelated work.

@@ -53,10 +53,14 @@ function tailLines(text, lines = 20) {
  * hypothetical: on 2026-08-29 a degraded Docker host port proxy left
  * `prisma migrate deploy` waiting on a half-open socket, and the gate sat
  * silent for 33 minutes until it was killed by hand. Orphaned
- * `rabitech_bleed_*`, `rabitech_diff_shadow`, `rabitech_p1b_shadow` and
- * `rabitech_p1d_debug` schemas show it had happened at least three times
- * before, unnoticed. A release blocker that can hang indefinitely without
- * output is not a safety net — it is a coin flip nobody is watching.
+ * `rabitech_bleed_*` schemas show it had happened before, unnoticed. A release
+ * blocker that can hang indefinitely without output is not a safety net — it
+ * is a coin flip nobody is watching.
+ *
+ * `rabitech_diff_shadow`, `rabitech_p1b_shadow` and `rabitech_p1d_debug` were
+ * listed here too, and are not this. They carry a pre-tenancy schema — `Zone`,
+ * `Sequence`, `GroupMessage` — so they cannot be corpses of a gate that only
+ * ever ran against the current one. See D-8 in docs/KNOWN-DEFECTS.md.
  *
  * So: bound every child, and report the tail of what it said. A gate may fail.
  * It may not hang.

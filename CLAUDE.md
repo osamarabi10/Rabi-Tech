@@ -79,7 +79,20 @@ cd apps/backend && npx tsc --noEmit -p .
 cd apps/backend && npm run test:tenancy
 ```
 
-The gate uses a disposable PostgreSQL schema and must stay **green (67/67)**. Treat a red gate as a release blocker, not a known issue.
+The gate uses a disposable PostgreSQL schema and must stay **green (122/122)**. Treat a red gate as a release blocker, not a known issue.
+
+It was recorded here as 67/67 for a long time and is not: the count grew as the
+harness gained coverage rather than because anything was double-counted.
+Conversation-lifecycle and closure-reporting checks arrived with the
+Conversation Operations release, and edition coverage with the owner-controlled
+edition ladder. Two gates were also found non-functional on this machine and
+repaired, so the number that replaced 67 is not comparable to it without that
+context — see §8 of `docs/RESPONDIO-PARITY-CHECKPOINT.md`.
+
+**The catalogue must be loaded before the checks run.** The harness performs
+the same load the server's boot gate does, because `getEdition` no longer falls
+back to `PLAN_ENTITLEMENTS` — an unloaded catalogue resolves to a
+deny-everything floor, and every entitlement assertion would run against zeros.
 
 ### Platform finance check
 ```bash
