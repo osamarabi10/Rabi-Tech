@@ -1596,6 +1596,8 @@ export type BillingSummary = {
     listPriceCents: number;
     effectivePriceCents: number;
     creditCents: number;
+    /** Null means the server could not name one — never infer a substitute. */
+    currency: string | null;
   };
   /** Non-empty means enforced quotas no longer match the plan of record. */
   quotaDrift: Array<{

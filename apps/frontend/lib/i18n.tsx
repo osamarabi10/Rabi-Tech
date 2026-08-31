@@ -1777,6 +1777,7 @@ const D: Dict = {
   "تعذر تحميل تفاصيل الاشتراك. تحقق من الاتصال وحاول مرة أخرى.": { he: "לא ניתן לטעון את פרטי המנוי. בדקו את החיבור ונסו שוב.", en: "The subscription details could not be loaded. Check the connection and try again." },
   "لا يوجد اشتراك": { he: "אין מנוי", en: "No subscription" },
   "لا توجد تفاصيل اشتراك لهذه المؤسسة بعد.": { he: "עדיין אין פרטי מנוי לארגון הזה.", en: "There are no subscription details for this workspace yet." },
+  "العملة غير متوفرة": { he: "המטבע אינו זמין", en: "Currency unavailable" },
   "جديد": { he: "חדש", en: "New" },
   "ليس لديك صلاحية للوصول": { he: "אין לך הרשאה לגשת", en: "You do not have access" },
   "اطلب من مدير المؤسسة منحك الصلاحية المطلوبة": { he: "בקשו ממנהל הארגון להעניק לכם את ההרשאה הנדרשת", en: "Ask your workspace administrator for the required permission." },

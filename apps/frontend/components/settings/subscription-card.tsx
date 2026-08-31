@@ -14,7 +14,21 @@ import { useResource } from '@/lib/async-resource';
 /** Highest plan needs no upsell; everyone else gets an upgrade path. */
 const TOP_PLAN = 'ENTERPRISE';
 
-function money(cents: number, currency = 'ILS') {
+/**
+ * Cents to a display string, or null when the currency is unknown.
+ *
+ * There is deliberately no default. There used to be one — ILS — applied to
+ * every amount whose currency the payload did not carry, which was three of
+ * the four amounts on this card. A subscriber priced in USD saw a shekel sign
+ * and nothing indicating a problem.
+ *
+ * A number in the wrong currency is not a smaller error than no number. It is
+ * a larger one, because it is believable: the figure is well-formed, the
+ * symbol is real, and only the exchange rate is missing. Callers render the
+ * unavailable state instead.
+ */
+function money(cents: number, currency: string | null | undefined): string | null {
+  if (!currency) return null;
   return new Intl.NumberFormat('en', { style: 'currency', currency, maximumFractionDigits: 0 })
     .format(cents / 100);
 }
@@ -89,6 +103,11 @@ export function SubscriptionCard() {
   const periodEnd = subscription?.currentPeriodEnd
     ? formatDate(subscription.currentPeriodEnd)
     : null;
+  // Null when the server did not name a currency. Every amount below is
+  // suppressed in that case rather than shown in a guessed one.
+  const listPrice = money(commercial.listPriceCents, commercial.currency);
+  const effectivePrice = money(commercial.effectivePriceCents, commercial.currency);
+  const credit = money(commercial.creditCents, commercial.currency);
 
   return (
     <Card>
@@ -124,16 +143,16 @@ export function SubscriptionCard() {
             <p className="mt-1 text-xs text-muted-foreground">
               {commercial.effectivePriceCents === 0
                 ? t('مجاني')
-                : (
-                  <>
-                    {discounted && (
-                      <span className="me-1 line-through opacity-60">
-                        {money(commercial.listPriceCents)}
-                      </span>
-                    )}
-                    {`${money(commercial.effectivePriceCents)} / ${t('شهرياً')}`}
-                  </>
-                )}
+                : effectivePrice === null
+                  ? t('العملة غير متوفرة')
+                  : (
+                    <>
+                      {discounted && listPrice && (
+                        <span className="me-1 line-through opacity-60">{listPrice}</span>
+                      )}
+                      {`${effectivePrice} / ${t('شهرياً')}`}
+                    </>
+                  )}
               {periodEnd && ` · ${t('يتجدد')} ${periodEnd}`}
             </p>
             {discounted && (
@@ -157,8 +176,11 @@ export function SubscriptionCard() {
         {commercial.creditCents > 0 && (
           <div className="flex items-center justify-between rounded-md border border-success-vivid/30 bg-success-vivid/10 px-3 py-2 text-xs">
             <span className="font-medium">{t('رصيد متاح')}</span>
-            <span className="numeric font-mono font-semibold" dir="ltr">
-              {money(commercial.creditCents)}
+            <span
+              className={cn('font-semibold', credit && 'numeric font-mono')}
+              dir={credit ? 'ltr' : undefined}
+            >
+              {credit ?? t('العملة غير متوفرة')}
             </span>
           </div>
         )}
@@ -228,8 +250,11 @@ export function SubscriptionCard() {
                   <span className="font-mono text-muted-foreground" dir="ltr">
                     {new Date(inv.createdAt).toISOString().slice(0, 10)}
                   </span>
-                  <span className="font-semibold" dir="ltr">
-                    {money(inv.amountDueCents, inv.currency)}
+                  <span
+                    className="font-semibold"
+                    dir={inv.currency ? 'ltr' : undefined}
+                  >
+                    {money(inv.amountDueCents, inv.currency) ?? t('العملة غير متوفرة')}
                   </span>
                   <span className={cn(
                     'rounded-full px-2 py-0.5 text-micro',
