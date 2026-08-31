@@ -107,3 +107,39 @@ docker inspect rabitech-postgres-1 --format '{{index .Config.Labels "com.docker.
 
 **Fix:** give the old checkout a distinct `name:` and drop its pinned volume
 names, so the two stacks can never address each other's data.
+
+---
+
+## D-4 · The console sidebar fails open on absent permissions
+
+**Where:** `canSee()` in
+[`components/platform/platform-shell.tsx`](../apps/frontend/components/platform/platform-shell.tsx).
+
+**What is wrong:** absent `platformPermissions` is treated as *show all
+non-owner items* rather than failing closed.
+
+This is deliberate and temporary. `platformPermissions` only started reaching
+the client alongside the shell, so a SUPPORT session stored in `localStorage`
+before that change carries no array. Failing closed would give those users an
+empty sidebar — a console that looks broken — until they happened to sign out
+and back in.
+
+**Why it is safe right now:** only because the server fails closed
+independently. `requirePlatformOwner` and `hasPlatformPermission` in
+`platform.routes.ts` re-read permissions from the database on every request and
+deny on anything they do not recognise. The sidebar decides what is *shown*; it
+has never been what is *allowed*. The e2e gate in
+[`tests/e2e/platform-console.spec.ts`](../apps/frontend/tests/e2e/platform-console.spec.ts)
+asserts that a support token still gets 403 from the owner-only staff endpoint.
+
+**Cost:** a SUPPORT user on a pre-change session is shown destinations that
+will refuse them — the exact thing app-sidebar.tsx argues against
+(*"a menu is a list of places you can go, and one that leads nowhere is a worse
+answer than its absence"*).
+
+**Fix:** once existing SUPPORT sessions have cycled, flip this to fail closed —
+drop the `Array.isArray(...)` escape hatch in `canSee()` so a missing
+permissions array denies rather than permits. **This default must not outlive
+the reason for it.** JWTs expire on `JWT_EXPIRES_IN` (7d by default), so the
+window is short and knowable; there is no reason for this to still be here a
+month from now.

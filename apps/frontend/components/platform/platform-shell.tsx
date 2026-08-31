@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
@@ -11,12 +11,14 @@ import {
   FileText,
   HelpCircle,
   LayoutDashboard,
+  LogOut,
   Menu,
   Settings,
   Shield,
   Users,
   Wrench,
 } from 'lucide-react';
+import { setViewAsOrg } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 /**
@@ -86,8 +88,27 @@ function canSee(item: NavItem, session: PlatformSession | null) {
 
 export function PlatformShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [session, setSession] = useState<PlatformSession | null>(null);
   const [navOpen, setNavOpen] = useState(false);
+
+  /**
+   * Leaving the console.
+   *
+   * Clears the view-as selection along with the session. A platform user who
+   * was viewing a subscriber and then signs out must not leave that subscriber
+   * selected for whoever signs in next — the console would open scoped to
+   * someone else's workspace with no indication why.
+   *
+   * Lives here rather than on a page because the sidebar is on every console
+   * screen, and a way out that exists on exactly one of them is not a way out.
+   */
+  const signOut = () => {
+    localStorage.removeItem('rabitech_token');
+    localStorage.removeItem('rabitech_user');
+    setViewAsOrg(null);
+    router.push('/login');
+  };
 
   // Read after mount, not during render: localStorage does not exist on the
   // server, and reading it in the component body makes the first client render
@@ -163,13 +184,21 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           </div>
         </nav>
 
-        {session?.platformRole && (
-          <div className="border-t border-border p-3">
-            <p className="px-3 text-caption text-muted-foreground">
+        <div className="border-t border-border p-3">
+          {session?.platformRole && (
+            <p className="mb-1 px-3 text-caption text-muted-foreground">
               {session.platformRole === 'OWNER' ? 'Owner access' : 'Support access'}
             </p>
-          </div>
-        )}
+          )}
+          <button
+            type="button"
+            onClick={signOut}
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-small text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <LogOut className="h-4 w-4 shrink-0" aria-hidden />
+            Sign out
+          </button>
+        </div>
       </aside>
 
       {navOpen && (

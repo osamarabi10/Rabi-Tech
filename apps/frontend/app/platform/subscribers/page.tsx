@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Building2, LogOut, MessageCircle, MoreHorizontal, Pause, Play,
+  Building2, MessageCircle, MoreHorizontal, Pause, Play,
   Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock, Clock, Plug, ArrowLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -295,13 +295,6 @@ export default function SubscribersPage() {
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('rabitech_token');
-    localStorage.removeItem('rabitech_user');
-    setViewAsOrg(null); // don't leave a subscriber selected for the next sign-in
-    router.push('/login');
-  };
-
   const usageValue = (subscriberId: string, metric: string) => {
     const item = usage[subscriberId]?.items.find((candidate) => candidate.metric === metric);
     if (!item) return '-';
@@ -331,9 +324,6 @@ export default function SubscribersPage() {
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => setOpen(true)}>
               <Plus className="h-4 w-4" /> New subscriber
-            </Button>
-            <Button size="icon" variant="ghost" onClick={logout} title="Sign out">
-              <LogOut className="h-4 w-4" />
             </Button>
           </div>
         </div>
