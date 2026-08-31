@@ -4398,11 +4398,47 @@ async function databaseAudits() {
       const growth = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
       const campaignLimits = await raw.plan.findMany({ select: { code: true, monthlyCampaignSendsLimit: true } });
 
-      // Archived, and deliberately left isActive. Archiving has to stand on its
-      // own column: if someone ever implements it by flipping isActive instead,
-      // every assertion below would still pass, for the wrong reason.
-      await raw.plan.update({ where: { code: 'GROWTH' }, data: { archivedAt: new Date(), isActive: true } });
+      const owner = await raw.identity.create({
+        data: {
+          email: `owner-archive-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const ownerToken = mintPlatformToken(owner);
+      const asOwner = (method, path, body) =>
+        fetch(`${baseUrl}${path}`, {
+          method,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+
+      /*
+        Archived through the console's own path rather than by writing the
+        column, because the two are only the same if the endpoint does what the
+        direct mutation did — and the property below is precisely that it might
+        not. Archiving has to stand on its own column: isActive is asserted
+        still true after the PATCH, so an implementation that archives by
+        flipping isActive instead fails here, rather than passing every
+        assertion downstream for the wrong reason.
+      */
+      const archiveResponse = await asOwner('PATCH', '/api/platform/editions/GROWTH', { archived: true });
+      assert.equal(archiveResponse.status, 200, 'the owner must be able to archive an edition');
+      const archivedRow = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+      assert.ok(archivedRow.archivedAt, 'PATCH archived:true must stamp archivedAt');
+      assert.equal(archivedRow.isActive, true, 'archiving must not silently flip isActive');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      // Re-archiving is not a second withdrawal. The timestamp records when the
+      // edition was withdrawn, so a repeated PATCH must leave it where it is.
+      const restamp = await asOwner('PATCH', '/api/platform/editions/GROWTH', { archived: true });
+      assert.equal(restamp.status, 200);
+      const restamped = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+      assert.equal(
+        restamped.archivedAt.getTime(),
+        archivedRow.archivedAt.getTime(),
+        're-archiving must not move the archivedAt timestamp',
+      );
 
       // Gone from the published catalogue...
       assert.ok(
@@ -4467,10 +4503,24 @@ async function databaseAudits() {
         );
       });
 
-      // Un-archived, the same refusal names it again - which is what makes the
-      // null above mean "archived" rather than "nothing grants this".
-      await raw.plan.update({ where: { code: 'GROWTH' }, data: { archivedAt: null } });
+      /*
+        Un-archived through the same path, and in one action.
+
+        Clearing archivedAt restores the edition to whatever isActive already
+        said. It was left true, so this is a single PATCH back to being on sale
+        - and the refusal names GROWTH again, which is what makes the null above
+        mean "archived" rather than "nothing grants this".
+      */
+      const restore = await asOwner('PATCH', '/api/platform/editions/GROWTH', { archived: false });
+      assert.equal(restore.status, 200);
+      const restoredRow = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+      assert.equal(restoredRow.archivedAt, null, 'PATCH archived:false must clear archivedAt');
+      assert.equal(restoredRow.isActive, true, 'un-archiving must leave isActive as the owner set it');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      assert.ok(
+        getEditions().some((edition) => edition.code === 'GROWTH'),
+        'an un-archived edition must return to the published catalogue in one action',
+      );
       await runAsOrganization(orgA.organizationId, async () => {
         await assert.rejects(
           () => assertMetricAvailable('campaign_sends'),
@@ -4589,6 +4639,21 @@ async function databaseAudits() {
       });
       assert.equal(duplicate.status, 409);
       assert.equal((await duplicate.json()).code, 'PLAN_EXISTS');
+
+      // Reserved is refused for being reserved, not for happening to exist.
+      // FREE is both, and before the explicit guard the one that fired was the
+      // accidental one - which held only because ensurePlans always seeds FREE.
+      const reserved = await asOwner('POST', '/api/platform/editions', {
+        code: 'FREE',
+        name: 'Free Again',
+        monthlyPriceCents: 0,
+      });
+      assert.equal(reserved.status, 409);
+      assert.equal(
+        (await reserved.json()).code,
+        'PLAN_CODE_RESERVED',
+        'a reserved code must be refused for being reserved, not for already existing',
+      );
 
       /*
         Now exercise creation for real, without opening the door.

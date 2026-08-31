@@ -12,7 +12,7 @@ import {
   cancelCurrentSubscription,
   markPaymentFailed,
 } from '../billing/billing.service';
-import { PLAN_CODE_PATTERN, normalizePlanCode } from '../billing/plans';
+import { PLAN_CODE_PATTERN, RESERVED_PLAN_CODES, normalizePlanCode } from '../billing/plans';
 import { getEdition, refreshEditions } from '../billing/editions.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { probeOrganization } from '../gateway/health-monitor';
@@ -1476,6 +1476,29 @@ function applyEditionFields(body: Record<string, unknown>, data: Record<string, 
   const isActive = parseFlag(body.isActive);
   if (isActive !== undefined) data.isActive = isActive;
 
+  /*
+    Archiving is a separate decision from withdrawing from sale, and stays one.
+
+    `archivedAt` is strictly stronger than `isActive` in *effect*: the published
+    set is `isActive && !archivedAt`, so an archived edition is already unsold
+    and unlisted whatever `isActive` holds. Precisely because the filter already
+    does that, forcing `isActive` false here would add no behaviour at all — and
+    it would destroy something, namely the owner's separate decision about
+    whether this edition was on sale before it was archived. Un-archiving could
+    then only guess at it, and would guess wrong for every edition that was
+    deliberately deactivated first.
+
+    So the two columns move independently. Clearing `archivedAt` restores the
+    edition to whatever `isActive` already said: back on sale in one action if
+    it was active, back to "not sold, still listed" if the owner had also
+    deactivated it — which is the state they chose and the state they get back.
+
+    A boolean rather than a timestamp, because *when* an edition was withdrawn
+    is a fact the server records, not a value a caller supplies.
+  */
+  const archived = parseFlag(body.archived);
+  if (archived !== undefined) data.archivedAt = archived ? new Date() : null;
+
   // Ladder position is editable, because it is read as one. editionGranting and
   // channelRefusal both name an upgrade by taking the first edition that grants
   // a thing, so without this an edition created at the end of the ladder could
@@ -1501,6 +1524,15 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
     }
 
     const before = await prisma.plan.findUnique({ where: { code } });
+
+    // Archiving stamps the moment it happened, and only when it actually
+    // happens. Re-archiving an already-archived edition must not move the
+    // timestamp: when an edition was withdrawn is a fact about the past, and a
+    // second PATCH saying the same thing is not a second withdrawal.
+    if (data.archivedAt instanceof Date && before?.archivedAt) {
+      delete data.archivedAt;
+    }
+
     const updated = await prisma.plan.update({ where: { code }, data });
 
     // Make the change live in this process immediately rather than waiting for
@@ -1590,6 +1622,31 @@ router.post('/editions', requirePlatformOwner, async (req, res) => {
       return res.status(409).json({
         error: `The edition code space is closed. ${code} is outside the five original editions, and opening it is a deliberate and irreversible step — see CREATABLE_PLAN_CODES in platform.routes.ts.`,
         code: 'PLAN_CODE_SPACE_CLOSED',
+      });
+    }
+
+    /*
+      Reserved before existing, so the refusal states the real reason.
+
+      FREE is reserved and also happens to exist, so a create for it was already
+      refused — as PLAN_EXISTS, which is the wrong reason and only accidentally
+      the right outcome. That guard is load-bearing by coincidence: it holds
+      only because ensurePlans always seeds FREE, and it fails silently the day
+      anything changes that. Two overlapping guards where one is accidental
+      break the day the accidental one moves.
+
+      Distinct from PLAN_EXISTS because the remedy is different, and that is the
+      whole reason to spend a second code on it. PLAN_EXISTS is a statement
+      about current state — delete the row and the same create would succeed.
+      PLAN_CODE_RESERVED is a statement about the code itself: deleting FREE
+      would not make creating FREE legal. Both are 409 rather than 400 because
+      both requests are well formed and legal in shape, and what refuses them is
+      the server's state or policy, not anything the caller can retype.
+    */
+    if (RESERVED_PLAN_CODES.has(code)) {
+      return res.status(409).json({
+        error: `${code} is a reserved edition code and cannot be created or redefined.`,
+        code: 'PLAN_CODE_RESERVED',
       });
     }
 
