@@ -356,3 +356,37 @@ an ordinary row.
 
 Deliberately not folded into E4: it is a schema change with its own migration,
 and E4's job was to open the code space, not to redefine what a paid plan is.
+
+---
+
+## D-10 · A gate's exit code can be masked by whatever runs after it
+
+**Where:** any invocation of the form `npm run <gate> ; <anything>`, and every
+report derived from one.
+
+**What is wrong:** a command list exits with the status of its *last* command.
+Appending anything after a gate — an `echo`, a `tail`, a cleanup — replaces the
+gate's exit code with that command's. The gate can fail while the invocation
+reports success.
+
+Observed 2026-08-31 running the tenancy harness as
+`npm run test:tenancy > log 2>&1; echo "EXIT=$?"`. The harness exited 1 at
+122/123; the `echo` exited 0; the run was reported as passing. The failure was
+caught only by reading the log, and only because the log was read at all.
+
+This is the same class as D-5, from the other side: D-5 was a gate that passed
+while testing the wrong subject, this is a gate that failed while reporting the
+right one. Both produce a green that is not evidence.
+
+**Cost:** every green downstream of a masked run is meaningless, and the cost is
+paid later — a masked failure is indistinguishable from a pass in any summary
+derived from it, including the gate numbers in CLAUDE.md.
+
+**Fix:** put nothing after a gate in the same invocation. Redirect its output
+and let its own exit code stand, then read the log separately. Where a trailing
+command is unavoidable, capture the status first (`rc=$?`) and exit on it. And
+where the harness prints a summary line, read the summary rather than inferring
+the result from an exit code at all.
+
+**The rule, short enough to remember: a task's exit code is not the harness's
+exit code unless nothing runs after it.**

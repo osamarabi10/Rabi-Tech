@@ -270,6 +270,26 @@ Known local deployment warnings, not introduced by the current parity work:
 - `ALLOW_INSECURE_SECRETS` permits weak local database and OpenWA credentials. Do not carry this into an internet-facing deployment.
 - Mail uses the non-delivering `log` provider. Email flows are structurally implemented but real delivery is not enabled.
 
+### RULE — reading `Plan`: offer questions filter, resolution questions do not
+
+> Every read of `Plan` answers one of two questions. **What is on sale** filters
+> on `isActive` *and* `archivedAt`. **What a subscriber already has** filters on
+> neither.
+
+Offer: `getEditions`, `listPlans`, `editionGranting`, and the upgrade target in
+`channelRefusal`, which inherits the rule by reading `getEditions` rather than
+the table. Resolution: `getEdition`, `sellableCurrencies`, and the
+billing-summary plan-currency read — a subscriber on a withdrawn edition is
+still entitled to it and still invoiced for it. The query that loads the cache
+(`refreshEditions`) filters on neither and must not: the filter belongs on the
+published set, never on the read that populates it.
+
+Getting it backwards fails silently in both directions. Filtering a resolution
+read drops a paying subscriber to the restricted floor or refuses their invoice;
+not filtering an offer read advertises an edition nobody can buy. Settled
+per-site in E5f-1 — this is the general form, so the next `Plan` query does not
+have to rediscover it.
+
 ## 3. Completed platform foundation
 
 ### Tenant and security boundary
