@@ -24,6 +24,7 @@ wrong one.
 | `/(dashboard)/contacts` | Contact list, filters, segments. |
 | `/(dashboard)/contacts/import` | CSV import with a consent declaration step. |
 | `/(dashboard)/campaigns` | Broadcasts. Plan-gated; on Free the page renders the upgrade gate. |
+| `/(dashboard)/campaigns/[id]` | URL-addressable broadcast delivery analytics and failure detail. |
 | `/(dashboard)/automations` | Workflow list and builder. |
 | `/(dashboard)/templates` | Message templates. |
 | `/(dashboard)/reports` | Analytics, with drill-down into the conversations behind a number. |
@@ -74,6 +75,14 @@ ones below either encode a decision or are easy to undo by accident.
 | `permission-notice.tsx` | What a control looks like when you are not allowed to use it. Replaces rendering nothing, which is indistinguishable from an empty card or an ungranted feature. Grants nothing: the server enforces the same rule regardless. |
 | `status-badge.tsx`, `color-pill.tsx` | Chips in a colour the palette does not own. Both go through `lib/tint.ts`. |
 | `upgrade-gate.tsx` | The plan wall. |
+
+### Broadcasts
+
+| File | The rule |
+|---|---|
+| `app/(dashboard)/campaigns/page.tsx` | List and calendar views share the same campaign data, status rail, and operational loading/empty/no-result/error states. The composer remains the existing OpenWA path; Meta business-initiated sends are not implied. |
+| `app/(dashboard)/campaigns/[id]/page.tsx` | Delivery analytics are a route, not a dialog, so a report can be refreshed, linked, and revisited directly. |
+| `components/campaigns/campaign-status.ts` | Status labels and colours have one mapping; unknown provider/runtime statuses remain visibly unknown rather than becoming a plausible known state. |
 
 ### Platform console
 
