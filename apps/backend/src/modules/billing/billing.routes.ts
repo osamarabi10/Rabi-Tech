@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import logger from '../../lib/logger';
 import {
   cancelCurrentSubscription,
   createSignup,
@@ -20,6 +21,9 @@ function clientIp(req: any): string {
 }
 
 function handleRouteError(res: any, error: unknown) {
+  logger.error('Billing request failed', {
+    error: error instanceof Error ? error.stack : String(error),
+  });
   const status = typeof (error as any)?.status === 'number' ? (error as any).status : 500;
   res.status(status).json({ error: status >= 500 ? 'Billing request failed' : (error as Error).message });
 }
@@ -155,4 +159,3 @@ router.post('/cancel', async (req, res) => {
 });
 
 export default router;
-

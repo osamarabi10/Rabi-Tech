@@ -18,6 +18,7 @@ import {
   verifyBrandingAssetSignature,
 } from './branding.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
+import logger from '../../lib/logger';
 
 const router = Router();
 
@@ -58,7 +59,8 @@ router.get('/current', async (req, res) => {
       include: { organization: { select: { tier: true } } },
     });
     res.json(row ? editableBranding(row) : { ...publicBranding(null), customDomain: null, customFooter: null });
-  } catch {
+  } catch (error) {
+    logger.error('Branding load failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to load branding' });
   }
 });
@@ -131,7 +133,8 @@ router.get('/current/domain-verification', requireAdmin, async (req, res) => {
         : null,
       status: row.customDomainVerifiedAt ? 'verified' : 'pending_dns',
     });
-  } catch {
+  } catch (error) {
+    logger.error('Domain verification load failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to load domain verification' });
   }
 });

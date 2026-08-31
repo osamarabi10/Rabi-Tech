@@ -180,7 +180,8 @@ router.get('/:id/report', async (req, res) => {
       },
       failures,
     });
-  } catch {
+  } catch (error) {
+    logger.error('Campaign report failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -219,7 +220,8 @@ router.post('/', requirePermission('campaign:create'), async (req, res) => {
     });
 
     res.json({ ...campaign, recipientCount: contacts.length });
-  } catch {
+  } catch (error) {
+    logger.error('Campaign creation failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -272,6 +274,7 @@ router.post('/:id/send', requirePermission('campaign:send'), async (req, res) =>
     res.json({ queued: jobs.length });
   } catch (error) {
     if (isQuotaExceededError(error)) return res.status(error.status).json(quotaErrorResponse(error));
+    logger.error('Campaign send queue failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -517,6 +517,7 @@ router.get('/me', verifyToken, async (req, res) => {
       permissions: permissionsForUser(user.role, user),
     });
   } catch (err) {
+    logger.error('Current user fetch failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
@@ -731,6 +732,7 @@ router.patch('/me/away', verifyToken, async (req, res) => {
 
     res.json({ isAway: away });
   } catch (err) {
+    logger.error('Away status update failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'فشل تحديث حالة الغياب' });
   }
 });
@@ -752,6 +754,7 @@ router.post('/logout-all', verifyToken, async (req, res) => {
 
     res.json({ message: 'All sessions logged out' });
   } catch (err) {
+    logger.error('Logout-all failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to logout from all sessions' });
   }
 });

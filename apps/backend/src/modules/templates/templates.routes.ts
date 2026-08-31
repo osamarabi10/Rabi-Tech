@@ -4,6 +4,7 @@ import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
 import { requireAdmin, requireSupervisor } from '../../middleware/rbac.middleware';
 import { invalidateAutoReplyCache } from '../../utils/auto-reply';
+import logger from '../../lib/logger';
 
 const router = Router();
 router.use(verifyToken);
@@ -26,7 +27,7 @@ const AUTO_REPLY_KINDS: AutoReplyKind[] = [
  * Every auto-reply kind with the organization's configured row (or null).
  * A null row, or isActive === false, means that auto-reply is never sent.
  */
-router.get('/auto-replies', async (_req, res) => {
+router.get('/auto-replies', async (req, res) => {
   try {
     const rows = await prisma.messageTemplate.findMany({
       where: { autoReplyKind: { not: null } },
@@ -40,7 +41,8 @@ router.get('/auto-replies', async (_req, res) => {
         template: byKind.get(kind) ?? null,
       })),
     );
-  } catch {
+  } catch (error) {
+    logger.error('Auto-reply list failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -91,7 +93,8 @@ router.put('/auto-replies/:kind', requireAdmin, async (req, res) => {
 
     invalidateAutoReplyCache(kind);
     res.json(saved);
-  } catch {
+  } catch (error) {
+    logger.error('Auto-reply update failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -110,7 +113,8 @@ router.delete('/auto-replies/:kind', requireAdmin, async (req, res) => {
     if (existing) await prisma.messageTemplate.delete({ where: { id: existing.id } });
     invalidateAutoReplyCache(kind);
     res.json({ ok: true });
-  } catch {
+  } catch (error) {
+    logger.error('Auto-reply delete failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -136,7 +140,8 @@ router.get('/', async (req, res) => {
       orderBy: [{ sortOrder: 'asc' }, { title: 'asc' }],
     });
     res.json(templates);
-  } catch {
+  } catch (error) {
+    logger.error('Template list failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -163,6 +168,7 @@ router.post('/', requireSupervisor, async (req, res) => {
     res.status(201).json(template);
   } catch (err: any) {
     if (err?.code === 'P2002') return res.status(409).json({ error: 'هذا الرمز المختصر مستخدم بالفعل' });
+    logger.error('Template creation failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -186,6 +192,7 @@ router.patch('/:id', requireSupervisor, async (req, res) => {
     res.json(template);
   } catch (err: any) {
     if (err?.code === 'P2002') return res.status(409).json({ error: 'هذا الرمز المختصر مستخدم بالفعل' });
+    logger.error('Template update failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -195,7 +202,8 @@ router.delete('/:id', requireSupervisor, async (req, res) => {
   try {
     await prisma.messageTemplate.delete({ where: { id: req.params.id } });
     res.sendStatus(204);
-  } catch {
+  } catch (error) {
+    logger.error('Template delete failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -217,7 +217,7 @@ router.patch('/staff/:id', requirePlatformOwner, async (req, res) => {
   }
 });
 
-router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (_req, res) => {
+router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (req, res) => {
   try {
     const subscribers = await prisma.organization.findMany({
       select: {
@@ -299,11 +299,12 @@ router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (
     });
     res.json(subscribers);
   } catch (err) {
+    logger.error('Subscriber list failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to list subscribers' });
   }
 });
 
-router.get('/billing/summary', requirePlatformPermission('billing:view'), async (_req, res) => {
+router.get('/billing/summary', requirePlatformPermission('billing:view'), async (req, res) => {
   try {
     /*
      * MRR counts ACTIVE only.
@@ -347,7 +348,8 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
         return acc;
       }, {}),
     });
-  } catch {
+  } catch (error) {
+    logger.error('Platform billing summary failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to load billing summary' });
   }
 });
@@ -368,7 +370,8 @@ router.get('/subscribers/:id/usage', requirePlatformPermission('subscriber:read'
       return res.status(400).json({ error: 'Invalid month' });
     }
     res.json(await getPlatformMonthlyRollupUsage(organization.id, reference));
-  } catch {
+  } catch (error) {
+    logger.error('Subscriber usage failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to load subscriber usage' });
   }
 });
@@ -483,6 +486,7 @@ router.post('/subscribers', requirePlatformOwner, async (req, res) => {
 
     res.status(201).json(subscriber);
   } catch (err) {
+    logger.error('Subscriber creation failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to create subscriber' });
   }
 });
@@ -701,6 +705,7 @@ router.post('/subscribers/:id/billing/extend-trial', requirePlatformPermission('
     });
     res.json({ organizationId: req.params.id, trialEndsAt: trialEndsAt.toISOString() });
   } catch (error) {
+    logger.error('Trial extension failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to extend the trial' });
   }
 });
@@ -709,7 +714,8 @@ router.post('/subscribers/:id/billing/mark-failed', requirePlatformOwner, async 
   try {
     await markPaymentFailed(req.params.id, String(req.body.reason || 'Manual payment failure'));
     res.status(202).json({ organizationId: req.params.id, status: 'PAST_DUE' });
-  } catch {
+  } catch (error) {
+    logger.error('Payment failure marking failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(503).json({ error: 'Failed to mark payment failed' });
   }
 });
@@ -718,7 +724,8 @@ router.post('/subscribers/:id/billing/cancel', requirePlatformOwner, async (req,
   try {
     await cancelCurrentSubscription(req.params.id);
     res.status(202).json({ organizationId: req.params.id, status: 'CANCELED' });
-  } catch {
+  } catch (error) {
+    logger.error('Subscription cancellation failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(503).json({ error: 'Failed to cancel subscription' });
   }
 });
@@ -866,7 +873,8 @@ router.post('/subscribers/:id/gateway/retry', requirePlatformPermission('gateway
         : 'provision';
     await queueGatewayAction(req.params.id, action);
     res.status(202).json({ organizationId: req.params.id, action });
-  } catch {
+  } catch (error) {
+    logger.error('Gateway retry queue failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(503).json({ error: 'Failed to queue gateway retry' });
   }
 });
@@ -874,7 +882,8 @@ router.post('/subscribers/:id/gateway/retry', requirePlatformPermission('gateway
 router.post('/subscribers/:id/gateway/suspend', requirePlatformPermission('gateway:suspend'), async (req, res) => {
   try {
     await queueOwnerAction(req, res, 'suspend');
-  } catch {
+  } catch (error) {
+    logger.error('Gateway suspension queue failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(503).json({ error: 'Failed to queue gateway suspension' });
   }
 });
@@ -882,7 +891,8 @@ router.post('/subscribers/:id/gateway/suspend', requirePlatformPermission('gatew
 router.post('/subscribers/:id/gateway/resume', requirePlatformPermission('gateway:operate'), async (req, res) => {
   try {
     await queueOwnerAction(req, res, 'resume');
-  } catch {
+  } catch (error) {
+    logger.error('Gateway resume queue failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(503).json({ error: 'Failed to queue gateway resume' });
   }
 });
@@ -890,7 +900,8 @@ router.post('/subscribers/:id/gateway/resume', requirePlatformPermission('gatewa
 router.post('/subscribers/:id/gateway/restart', requirePlatformPermission('gateway:operate'), async (req, res) => {
   try {
     await queueOwnerAction(req, res, 'restart');
-  } catch {
+  } catch (error) {
+    logger.error('Gateway restart queue failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(503).json({ error: 'Failed to queue gateway restart' });
   }
 });
@@ -1300,7 +1311,8 @@ router.delete('/subscribers/:id', requirePlatformOwner, async (req, res) => {
     });
     await queueGatewayAction(req.params.id, 'destroy');
     res.status(202).json({ organizationId: req.params.id, action: 'destroy' });
-  } catch {
+  } catch (error) {
+    logger.error('Subscriber destruction queue failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(503).json({ error: 'Failed to queue subscriber destruction' });
   }
 });

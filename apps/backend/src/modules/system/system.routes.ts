@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
 import { OpenWAPairingProvider, OpenWAService } from '../whatsapp/openwa.service';
@@ -23,7 +24,6 @@ import {
   seatLimitResponse,
 } from '../usage/entitlements';
 import { resolveTeamId } from '../../utils/teams';
-import logger from '../../lib/logger';
 import { auditLog } from '../../lib/audit';
 import { getTenantId } from '../../lib/tenant-context';
 import { issueUserInvitation } from './user-invitations.service';
@@ -147,7 +147,8 @@ router.get('/teams', async (_req, res) => {
       ...team,
       memberIds: members.map((member) => member.userId),
     })));
-  } catch {
+  } catch (error) {
+    logger.error('Team list failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'فشل تحميل الفرق' });
   }
 });
@@ -218,6 +219,7 @@ router.post('/teams', requireAdmin, async (req, res) => {
     res.status(201).json(team);
   } catch (err: any) {
     if (err?.code === 'P2002') return res.status(409).json({ error: 'رابط الفريق مستخدم' });
+    logger.error('Team creation failed', { error: err instanceof Error ? err.stack : String(err) });
     res.status(500).json({ error: 'فشل إنشاء الفريق' });
   }
 });
@@ -314,6 +316,7 @@ router.patch('/teams/:id', requireAdmin, async (req, res) => {
   } catch (err: any) {
     if (err?.code === 'P2025') return res.status(404).json({ error: 'الفريق غير موجود' });
     if (err?.code === 'P2002') return res.status(409).json({ error: 'رابط الفريق مستخدم' });
+    logger.error('Team update failed', { error: err instanceof Error ? err.stack : String(err) });
     res.status(500).json({ error: 'فشل تحديث الفريق' });
   }
 });
@@ -435,7 +438,8 @@ router.delete('/teams/:id', requireAdmin, async (req, res) => {
       userAgent: req.headers['user-agent'],
     });
     res.json({ ok: true });
-  } catch {
+  } catch (error) {
+    logger.error('Team deletion failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'فشل حذف الفريق' });
   }
 });
@@ -464,7 +468,8 @@ router.get('/stats', async (_req, res) => {
         campaignsSent,
       },
     });
-  } catch {
+  } catch (error) {
+    logger.error('System stats failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -529,7 +534,8 @@ router.get('/users', async (req, res) => {
         callsAvailable: false,
       },
     });
-  } catch {
+  } catch (error) {
+    logger.error('User list failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -691,6 +697,7 @@ router.post('/users', requireAdmin, async (req, res) => {
     if (isSeatLimitError(error)) {
       return res.status(error.status).json(seatLimitResponse(error));
     }
+    logger.error('User creation failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'فشل إنشاء المستخدم' });
   }
 });
@@ -813,7 +820,8 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
       email: user.identity.email,
       identity: undefined,
     });
-  } catch {
+  } catch (error) {
+    logger.error('User update failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'فشل تحديث المستخدم' });
   }
 });
@@ -837,7 +845,8 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
       .in(socketRoom.user(req.user!.organizationId, req.params.id))
       .disconnectSockets(true);
     res.json({ ok: true });
-  } catch {
+  } catch (error) {
+    logger.error('User deactivation failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'فشل تعطيل المستخدم' });
   }
 });
@@ -1036,7 +1045,8 @@ router.get('/sessions', async (_req, res) => {
       })
     );
     res.json(withStatus);
-  } catch {
+  } catch (error) {
+    logger.error('Session list failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1182,7 +1192,8 @@ router.get('/sessions/:name/qr', requireAdmin, async (req, res) => {
       state: status || 'unknown',
       reconnecting: status === 'initializing',
     });
-  } catch {
+  } catch (error) {
+    logger.error('Session QR request failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1194,7 +1205,8 @@ router.get('/working-hours', async (_req, res) => {
   try {
     const row = await getWorkingHoursConfig();
     res.json({ ...row, isOpenNow: isWithinWorkingHours(row) });
-  } catch {
+  } catch (error) {
+    logger.error('Working hours load failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1223,7 +1235,8 @@ router.patch('/working-hours', async (req, res) => {
       include: WH_INCLUDE,
     });
     res.json({ ...row, isOpenNow: isWithinWorkingHours(row) });
-  } catch {
+  } catch (error) {
+    logger.error('Working hours update failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1233,7 +1246,8 @@ router.get('/keywords', async (_req, res) => {
   try {
     const rows = await prisma.keyword.findMany({ orderBy: { createdAt: 'asc' } });
     res.json({ categories: KEYWORD_CATEGORIES, keywords: rows });
-  } catch {
+  } catch (error) {
+    logger.error('Keyword list failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'فشل جلب الكلمات المفتاحية' });
   }
 });
@@ -1256,6 +1270,7 @@ router.post('/keywords', requireSupervisor, async (req, res) => {
     res.status(201).json(row);
   } catch (err: any) {
     if (err?.code === 'P2002') return res.status(409).json({ error: 'الكلمة موجودة بالفعل' });
+    logger.error('Keyword creation failed', { error: err instanceof Error ? err.stack : String(err) });
     res.status(500).json({ error: 'فشل إضافة الكلمة' });
   }
 });

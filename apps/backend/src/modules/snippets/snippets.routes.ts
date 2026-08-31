@@ -5,6 +5,7 @@ import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
 import { requireSupervisor } from '../../middleware/rbac.middleware';
 import { auditLog } from '../../lib/audit';
+import logger from '../../lib/logger';
 import { runAsOrganization } from '../../lib/tenant-context';
 import {
   MAX_SNIPPET_FILES,
@@ -96,14 +97,15 @@ router.get('/assets/:organizationId/:storageKey', async (req, res) => {
 
 router.use(verifyToken);
 
-router.get('/topics', async (_req, res) => {
+router.get('/topics', async (req, res) => {
   try {
     const topics = await prisma.snippetTopic.findMany({
       include: { _count: { select: { snippets: true } } },
       orderBy: { name: 'asc' },
     });
     res.json(topics.map((topic) => ({ ...topic, snippetCount: topic._count.snippets, _count: undefined })));
-  } catch {
+  } catch (error) {
+    logger.error('Snippet topic list failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to load Snippet topics' });
   }
 });
@@ -127,7 +129,8 @@ router.delete('/topics/:id', requireSupervisor, async (req, res) => {
     await prisma.snippetTopic.delete({ where: { id: topic.id } });
     await auditLog({ userId: req.user!.id, action: 'snippet.topic.deleted', resource: 'snippet-topic', resourceId: topic.id, changes: { before: topic }, ipAddress: req.ip, userAgent: req.get('user-agent') });
     res.sendStatus(204);
-  } catch {
+  } catch (error) {
+    logger.error('Snippet topic delete failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to delete Snippet topic' });
   }
 });
@@ -153,7 +156,8 @@ router.get('/', async (req, res) => {
       take: 5000,
     });
     res.json(rows.map(present));
-  } catch {
+  } catch (error) {
+    logger.error('Snippet list failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to load Snippets' });
   }
 });
@@ -230,7 +234,8 @@ router.delete('/:id', requireSupervisor, async (req, res) => {
     await Promise.all(existing.attachments.map((file) => removeSnippetAsset(file.organizationId, file.storageKey)));
     await auditLog({ userId: req.user!.id, action: 'snippet.deleted', resource: 'snippet', resourceId: existing.id, changes: { before: present(existing) }, ipAddress: req.ip, userAgent: req.get('user-agent') });
     res.sendStatus(204);
-  } catch {
+  } catch (error) {
+    logger.error('Snippet delete failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to delete Snippet' });
   }
 });
@@ -277,7 +282,8 @@ router.delete('/:id/attachments/:attachmentId', requireSupervisor, async (req, r
     await removeSnippetAsset(attachment.organizationId, attachment.storageKey);
     await auditLog({ userId: req.user!.id, action: 'snippet.file.removed', resource: 'snippet', resourceId: snippet.id, description: attachment.fileName, ipAddress: req.ip, userAgent: req.get('user-agent') });
     res.sendStatus(204);
-  } catch {
+  } catch (error) {
+    logger.error('Snippet file removal failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to remove Snippet file' });
   }
 });

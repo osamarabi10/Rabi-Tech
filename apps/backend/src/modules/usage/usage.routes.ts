@@ -3,13 +3,15 @@ import { getCurrentUsage } from './usage.service';
 import { prisma } from '../../prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
+import logger from '../../lib/logger';
 
 const router = Router();
 
-router.get('/current', async (_req, res) => {
+router.get('/current', async (req, res) => {
   try {
     res.json(await getCurrentUsage());
-  } catch {
+  } catch (error) {
+    logger.error('Current usage load failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to load usage' });
   }
 });
@@ -20,7 +22,7 @@ router.get('/current', async (_req, res) => {
  * Surfaced so an admin sees the ceiling while adding people, rather than
  * discovering it only when a creation is refused.
  */
-router.get('/seats', async (_req, res) => {
+router.get('/seats', async (req, res) => {
   try {
     const organizationId = getTenantId();
     // Resolver, not raw tier: this endpoint must agree with assertSeatAvailable,
@@ -38,7 +40,8 @@ router.get('/seats', async (_req, res) => {
       atLimit: limit !== null && used >= limit,
       isOverridden: entitlements.isOverridden,
     });
-  } catch {
+  } catch (error) {
+    logger.error('Seat usage load failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to load seats' });
   }
 });
