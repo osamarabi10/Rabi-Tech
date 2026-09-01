@@ -21,6 +21,8 @@ export type WorkflowJob = {
   fromStep: number;
   depth: number;
   payload: Record<string, unknown>;
+  /** Only on an `answer-timeout` job: what the ASK_QUESTION step asked for. */
+  onTimeout?: 'STOP' | 'CONTINUE';
 };
 
 export const workflowQueue = new Queue('workflow-queue', {
@@ -86,11 +88,52 @@ export function startWorkflowWorker(): Worker | null {
       return runAsOrganization(data.organizationId, async () => {
         const execution = await prisma.workflowExecution.findUnique({
           where: { id: data.executionId },
-          select: { id: true, status: true, contactId: true, conversationId: true, depth: true },
+          select: { id: true, status: true, contactId: true, conversationId: true, depth: true, awaitingUntil: true },
         });
         if (!execution) return { skipped: 'execution missing' };
         if (execution.status === 'COMPLETED' || execution.status === 'FAILED') {
           return { skipped: `already ${execution.status}` };
+        }
+
+        /*
+          A question's deadline reached the front of the queue.
+
+          It is a no-op unless the run is *still* waiting: the ordinary outcome
+          is that the contact answered hours ago, the run moved on, and this job
+          is a leftover. Checking `awaitingUntil` as well as status matters
+          because a workflow with two questions passes through AWAITING_REPLY
+          twice — without the timestamp this job would abandon the *second*
+          question using the first one's deadline.
+        */
+        if (job.name === 'answer-timeout') {
+          if (execution.status !== 'AWAITING_REPLY') {
+            return { skipped: 'answered before the deadline' };
+          }
+          if (execution.awaitingUntil && execution.awaitingUntil.getTime() > Date.now() + 1_000) {
+            return { skipped: 'a later question is waiting; this deadline is stale' };
+          }
+          if (data.onTimeout !== 'CONTINUE') {
+            await prisma.workflowExecution.update({
+              where: { id: data.executionId },
+              data: { status: 'TIMED_OUT', awaitingUntil: null, error: 'the contact did not answer in time' },
+            });
+            logger.info('Workflow question timed out', {
+              executionId: data.executionId,
+              workflowId: data.workflowId,
+            });
+            return { skipped: 'no answer, run stopped' };
+          }
+          // CONTINUE: fall through and run the remaining steps with the field
+          // left unset, which the author opted into and can branch on.
+          await prisma.workflowExecution.update({
+            where: { id: data.executionId },
+            data: { status: 'RUNNING', awaitingUntil: null },
+          });
+        } else if (execution.status === 'AWAITING_REPLY') {
+          // An ordinary run job for a waiting execution is a duplicate — the
+          // resume path sets RUNNING before enqueuing. Continuing here would
+          // skip the question and carry on as though it had been answered.
+          return { skipped: 'awaiting a reply' };
         }
 
         const workflow = await prisma.workflow.findUnique({
@@ -146,6 +189,30 @@ export function startWorkflowWorker(): Worker | null {
             { ...data, fromStep: result.resumeAtStep } satisfies WorkflowJob,
             {
               jobId: `wf--${data.executionId}--${result.resumeAtStep}`,
+              delay: result.delayMs,
+            },
+          );
+        }
+
+        /*
+          A question's deadline, scheduled the same way a delay is.
+
+          It is not a resume. When it fires, the contact has not answered, and
+          the job's whole purpose is to stop waiting. Reusing the delayed-job
+          mechanism means an unanswered question costs nothing while it waits —
+          no sweep, no polling — which is the same property WAIT_DELAY has.
+
+          The job id carries `timeout` so it cannot collide with the resume job
+          the inbound path enqueues for the same step. Two jobs sharing an id
+          means BullMQ keeps one, and which one it keeps decides whether the
+          customer's answer is processed or discarded.
+        */
+        if (result.status === 'AWAITING_REPLY' && result.resumeAtStep !== undefined) {
+          await workflowQueue.add(
+            'answer-timeout',
+            { ...data, fromStep: result.resumeAtStep, onTimeout: result.onTimeout } satisfies WorkflowJob,
+            {
+              jobId: `wf--${data.executionId}--timeout--${result.resumeAtStep}`,
               delay: result.delayMs,
             },
           );

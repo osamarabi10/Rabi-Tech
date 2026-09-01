@@ -9,6 +9,7 @@ import { closeConversation } from '../conversations/conversation-lifecycle.servi
 import { OpenWAService } from '../whatsapp/openwa.service';
 import { assertSafeWebhookUrl, BlockedUrlError } from './outbound-url';
 import { recordDelivery, webhookIdentity } from '../webhooks/webhook-log.service';
+import { DEFAULT_ANSWER_TIMEOUT_MINUTES } from './workflow-schema';
 import type { WorkflowAction, WorkflowCondition, WorkflowConfig } from './workflow-schema';
 
 /**
@@ -77,6 +78,29 @@ export class WorkflowPaused extends Error {
   constructor(readonly resumeAtStep: number, readonly delayMs: number) {
     super('workflow paused');
     this.name = 'WorkflowPaused';
+  }
+}
+
+/**
+ * Signals the run is waiting for the contact to answer a question.
+ *
+ * Distinct from `WorkflowPaused` because the two are woken by different things.
+ * A delay is woken only by its own delayed job. This one is woken by an inbound
+ * message, and its delayed job is a *deadline* rather than a resume — it fires
+ * to give up, and no-ops if the answer already arrived.
+ *
+ * Sharing one signal would mean the timeout job could not tell which it was,
+ * and would resume a still-unanswered question as though the customer had
+ * replied — writing nothing to the field and continuing as if it had.
+ */
+export class WorkflowAwaitingReply extends Error {
+  constructor(
+    readonly resumeAtStep: number,
+    readonly timeoutMs: number,
+    readonly onTimeout: 'STOP' | 'CONTINUE',
+  ) {
+    super('workflow awaiting reply');
+    this.name = 'WorkflowAwaitingReply';
   }
 }
 
@@ -188,7 +212,16 @@ function interpolate(text: string, vars: Record<string, unknown>): string {
   });
 }
 
-async function sendToContact(context: ExecutionContext, body: string): Promise<string> {
+/**
+ * Exported so the answer-resume path re-asks through the same send.
+ *
+ * A second implementation would have to re-derive consent, session resolution,
+ * interpolation and metering — and the first thing it would miss is Rule 1,
+ * because nothing about "re-ask the question" suggests consent is involved.
+ * It is: an opted-out contact must not be messaged by a workflow, including by
+ * one that is only repeating itself.
+ */
+export async function sendToContact(context: ExecutionContext, body: string): Promise<string> {
   if (!context.contactId) return 'skipped: no contact';
 
   const contact = await prisma.contact.findUnique({
@@ -293,6 +326,30 @@ async function runAction(
     case 'SEND_MESSAGE': {
       const outcome = await sendToContact(context, String(action.body));
       return entry(stepIndex, action.type, outcome === 'sent' ? 'ok' : 'skipped', outcome);
+    }
+
+    case 'ASK_QUESTION': {
+      /*
+        Send the question, then stop and wait for the person to answer.
+
+        The send is checked before pausing. A question the contact never
+        received would otherwise leave the run waiting for an answer to
+        something nobody was asked — silent for a day, then a timeout that
+        reads like the customer ignored us. Failing to send is skipped instead,
+        and the run carries on to whatever follows.
+      */
+      const outcome = await sendToContact(context, String(action.prompt));
+      if (outcome !== 'sent') {
+        return entry(stepIndex, action.type, 'skipped', `question not sent: ${outcome}`);
+      }
+      const timeoutMinutes = action.timeoutMinutes === undefined
+        ? DEFAULT_ANSWER_TIMEOUT_MINUTES
+        : Number(action.timeoutMinutes);
+      throw new WorkflowAwaitingReply(
+        stepIndex + 1,
+        timeoutMinutes * 60_000,
+        action.onTimeout === 'CONTINUE' ? 'CONTINUE' : 'STOP',
+      );
     }
 
     case 'SEND_TEMPLATE': {
@@ -572,13 +629,21 @@ async function appendLog(executionId: string, entries: LogEntry[]): Promise<void
 /**
  * Run a workflow's actions from `fromStep`.
  *
- * Returns `'paused'` when a WAIT_DELAY was hit; the caller schedules the resume.
+ * Returns `WAITING` when a `WAIT_DELAY` was hit — the caller schedules the
+ * resume — and `AWAITING_REPLY` when an `ASK_QUESTION` is waiting on the
+ * contact. Both hand back a `delayMs`, but they mean opposite things: for
+ * `WAITING` it is when to continue, for `AWAITING_REPLY` it is when to give up.
  */
 export async function runWorkflowActions(
   config: WorkflowConfig,
   context: ExecutionContext,
   fromStep = 0,
-): Promise<{ status: 'COMPLETED' | 'WAITING' | 'FAILED'; resumeAtStep?: number; delayMs?: number }> {
+): Promise<{
+  status: 'COMPLETED' | 'WAITING' | 'AWAITING_REPLY' | 'FAILED';
+  resumeAtStep?: number;
+  delayMs?: number;
+  onTimeout?: 'STOP' | 'CONTINUE';
+}> {
   const actions = config.actions || [];
   const entries: LogEntry[] = [];
 
@@ -595,6 +660,30 @@ export async function runWorkflowActions(
           data: { status: 'WAITING', currentStepIndex: error.resumeAtStep },
         });
         return { status: 'WAITING', resumeAtStep: error.resumeAtStep, delayMs: error.delayMs };
+      }
+
+      if (error instanceof WorkflowAwaitingReply) {
+        const until = new Date(Date.now() + error.timeoutMs);
+        entries.push(entry(index, 'ASK_QUESTION', 'ok', `awaiting reply until ${until.toISOString()}`));
+        await appendLog(context.executionId, entries);
+        await prisma.workflowExecution.update({
+          where: { id: context.executionId },
+          data: {
+            status: 'AWAITING_REPLY',
+            currentStepIndex: error.resumeAtStep,
+            awaitingUntil: until,
+            // Reset per question, not per run: two questions in one workflow
+            // each get their own allowance, and a contact who fumbled the first
+            // does not arrive at the second with none left.
+            awaitingAttempts: 0,
+          },
+        });
+        return {
+          status: 'AWAITING_REPLY',
+          resumeAtStep: error.resumeAtStep,
+          delayMs: error.timeoutMs,
+          onTimeout: error.onTimeout,
+        };
       }
 
       // One failing action stops the run. Continuing would apply the second half

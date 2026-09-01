@@ -20,6 +20,7 @@ import { recordMessageUsage } from '../modules/usage/usage.service';
 import { scheduleConversationEscalation } from './escalation.worker';
 import { autoAssignConversation } from '../modules/routing/assignment.service';
 import { dispatchWorkflowEvent } from './workflow.worker';
+import { resumeAwaitingWorkflows } from '../modules/workflows/answer-resume.service';
 import { coordinationKey, withFifoRedisLock } from '../lib/redis-coordination';
 
 // Redis connection config (same as campaign worker)
@@ -320,6 +321,31 @@ async function processInboundMessage(data: {
       `#${conversation.displayId}`,
       new Date(),
     ).catch(() => {});
+  }
+
+  /*
+    An answer to a question a workflow already asked.
+
+    Checked before the triggers below, and separately from them, because it is
+    not a trigger: it continues an existing run from the step after the
+    question, carrying that run's log and depth. Dispatching it as a trigger
+    would start a second run and let a workflow answer its own question.
+
+    Never allowed to break the pipeline. A customer's message has to be stored,
+    routed and shown whatever the automation does — the same rule the triggers
+    below already follow.
+  */
+  if (!fromMe && messageBody) {
+    await resumeAwaitingWorkflows({
+      organizationId,
+      contactId: contact.id,
+      body: messageBody,
+    }).catch((error) =>
+      logger.error('Workflow answer resume failed', {
+        contactId: contact.id,
+        error: String(error),
+      }),
+    );
   }
 
   // Workflow triggers. Dispatched last so an automation that reassigns or tags

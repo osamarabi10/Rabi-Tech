@@ -38,6 +38,21 @@ export const ACTION_TYPES = [
   'UPDATE_CONTACT_FIELD',
   'HTTP_WEBHOOK',
   'WAIT_DELAY',
+  /**
+   * Ask the contact something, wait for their answer, write it to a field.
+   *
+   * The second pause this engine has, and a different kind from `WAIT_DELAY`.
+   * A delay is woken by a clock; this is woken by the contact replying, so the
+   * run has to be findable from an inbound message and has to give up
+   * eventually if no answer ever comes. The give-up is a delayed job on the
+   * same queue a delay uses, so an unanswered question costs nothing while it
+   * waits.
+   *
+   * Cannot appear inside an `IF_ELSE` branch, for the reason `WAIT_DELAY`
+   * cannot: resuming addresses a top-level step index, which cannot name a
+   * position inside a branch, so the rest of that branch would be skipped.
+   */
+  'ASK_QUESTION',
   'CLOSE_CONVERSATION',
   /**
    * The only action that contains other actions.
@@ -100,6 +115,64 @@ export const MAX_DELAY_MINUTES = 60 * 24 * 7;
 
 export type ConfigValidation = { valid: boolean; errors: string[] };
 
+/**
+ * What an `ASK_QUESTION` step will accept as an answer.
+ *
+ * `text` accepts anything non-empty, which is the right default: most questions
+ * are open ("what is your address?"), and validating an open answer would
+ * reject correct ones. The typed kinds exist so a workflow can rely on the
+ * value it stored — a `number` field the filter DSL later compares numerically
+ * must not contain "about fifty".
+ */
+export const ANSWER_KINDS = ['text', 'email', 'phone', 'number'] as const;
+export type AnswerKind = (typeof ANSWER_KINDS)[number];
+
+/** A working day. Long enough for someone who saw it in the evening. */
+export const DEFAULT_ANSWER_TIMEOUT_MINUTES = 1440;
+/** Ask once, then re-ask once. A third attempt reads as harassment. */
+export const DEFAULT_ANSWER_ATTEMPTS = 2;
+
+/**
+ * Whether the answer is usable, and what to store.
+ *
+ * Returns the **normalised** value, not a boolean, because the stored form
+ * matters as much as the accept/reject: a phone number written `+972 54-123
+ * 4567` has to land in the same shape the inbound path produces, or the contact
+ * will not match their own next message.
+ */
+export function parseAnswer(kind: AnswerKind, raw: string): { ok: true; value: string } | { ok: false } {
+  const text = raw.trim();
+  if (!text) return { ok: false };
+
+  switch (kind) {
+    case 'text':
+      return { ok: true, value: text.slice(0, 2000) };
+
+    case 'email': {
+      const value = text.toLowerCase();
+      return /^\S+@\S+\.\S+$/.test(value) ? { ok: true, value } : { ok: false };
+    }
+
+    case 'phone': {
+      // Digits only, no leading +, matching how the inbound worker normalises a
+      // WhatsApp address. Storing E.164 here would mean an imported-looking
+      // contact that never matches their own incoming message — the same trap
+      // the CSV import documented and avoided.
+      const digits = text.replace(/[^\d]/g, '').replace(/^00/, '');
+      return digits.length >= 8 && digits.length <= 15 ? { ok: true, value: digits } : { ok: false };
+    }
+
+    case 'number': {
+      // Arabic-Indic and Eastern Arabic-Indic digits normalise to ASCII first:
+      // a customer typing ٤٢ on an Arabic keyboard has answered the question.
+      const ascii = text.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+                        .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+                        .replace(/[,\s]/g, '');
+      return /^-?\d+(\.\d+)?$/.test(ascii) ? { ok: true, value: ascii } : { ok: false };
+    }
+  }
+}
+
 function requireText(value: unknown, label: string, errors: string[], path: string): void {
   if (typeof value !== 'string' || !value.trim()) {
     errors.push(`${path}: ${label} is required`);
@@ -159,6 +232,36 @@ function validateAction(
     case 'UPDATE_CONTACT_FIELD':
       requireText(action.field, 'a field', errors, path);
       break;
+
+    case 'ASK_QUESTION': {
+      if (depth > 0) {
+        // Identical reasoning to WAIT_DELAY: resuming addresses a top-level
+        // step index, which cannot name a position inside a branch, so the rest
+        // of that branch would be skipped on resume. Refused here rather than
+        // half-supported at runtime.
+        errors.push(`${path}: a question cannot sit inside a branch`);
+      }
+      requireText(action.prompt, 'a question to send', errors, path);
+      requireText(action.field, 'a field to store the answer in', errors, path);
+      if (!ANSWER_KINDS.includes(action.expects as AnswerKind)) {
+        errors.push(`${path}: expects must be one of ${ANSWER_KINDS.join(', ')}`);
+      }
+      // Bounded on both sides. A minute is too short for a person to read and
+      // reply; a fortnight means a customer answering a question they no longer
+      // remember being asked, and a run held open the whole time.
+      const timeout = action.timeoutMinutes === undefined ? DEFAULT_ANSWER_TIMEOUT_MINUTES : Number(action.timeoutMinutes);
+      if (!Number.isFinite(timeout) || timeout < 5 || timeout > 10080) {
+        errors.push(`${path}: the answer window must be between 5 minutes and 7 days`);
+      }
+      const attempts = action.maxAttempts === undefined ? DEFAULT_ANSWER_ATTEMPTS : Number(action.maxAttempts);
+      if (!Number.isInteger(attempts) || attempts < 1 || attempts > 3) {
+        errors.push(`${path}: re-ask at most 3 times`);
+      }
+      if (action.onTimeout !== undefined && !['STOP', 'CONTINUE'].includes(String(action.onTimeout))) {
+        errors.push(`${path}: onTimeout must be STOP or CONTINUE`);
+      }
+      break;
+    }
 
     case 'HTTP_WEBHOOK': {
       requireText(action.url, 'a URL', errors, path);
@@ -340,11 +443,20 @@ export function workflowVocabulary() {
     conditions: CONDITION_TYPES,
     actions: ACTION_TYPES,
     httpMethods: HTTP_METHODS,
+    // Served rather than mirrored in the client, for the same reason the rest of
+    // this vocabulary is: the server is the only thing that can reject an
+    // unknown value, so a client copy drifts into offering choices that 400.
+    answerKinds: ANSWER_KINDS,
     limits: {
       maxActions: MAX_ACTIONS,
       maxConditions: MAX_CONDITIONS,
       maxDelayMinutes: MAX_DELAY_MINUTES,
       maxBranchDepth: MAX_BRANCH_DEPTH,
+      defaultAnswerTimeoutMinutes: DEFAULT_ANSWER_TIMEOUT_MINUTES,
+      defaultAnswerAttempts: DEFAULT_ANSWER_ATTEMPTS,
+      maxAnswerAttempts: 3,
+      minAnswerTimeoutMinutes: 5,
+      maxAnswerTimeoutMinutes: 10080,
     },
   };
 }

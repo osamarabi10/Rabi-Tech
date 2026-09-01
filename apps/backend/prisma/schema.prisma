@@ -1870,6 +1870,18 @@ model WorkflowExecution {
   error            String?
   /// Loop guard: an action that re-fires its own trigger increments this.
   depth            Int      @default(0)
+  /// When an `ASK_QUESTION` step stops waiting for the contact to answer.
+  ///
+  /// Set only while `status` is `AWAITING_REPLY`. The deadline is enforced by a
+  /// delayed BullMQ job — the same mechanism `WAIT_DELAY` already uses — rather
+  /// than by a sweep, so an unanswered question costs nothing while it waits.
+  /// The column exists so the job can tell "the answer never came" from "the
+  /// answer came and this job is a stale duplicate", which it cannot do from
+  /// status alone once the run has moved on and paused again.
+  awaitingUntil    DateTime?
+  /// How many times an `ASK_QUESTION` step has re-asked after an unusable answer.
+  /// Separate from `depth`, which guards trigger loops and must not be spent here.
+  awaitingAttempts Int      @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -1884,6 +1896,10 @@ model WorkflowExecution {
   @@index([organizationId, workflowId, createdAt])
   @@index([organizationId, workflowId, contactId, createdAt])
   @@index([createdAt])
+  // Read on every inbound message from a contact who has any workflow history,
+  // to find a run waiting on their answer. Leads with contactId because status
+  // is low-cardinality and would not narrow anything.
+  @@index([organizationId, contactId, status])
 }
 
 /// Hourly message and conversation counts, per organization.
