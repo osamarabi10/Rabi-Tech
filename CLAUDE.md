@@ -157,6 +157,21 @@ type-checker cannot tell you, since the Dockerfile installs, generates the
 Prisma client and compiles inside the container. That is worth knowing before
 anything ships. It is worth knowing **once per batch**, not once per commit.
 
+**If the image build reports a wall of `TS1127: Invalid character`, all at line
+1, the source is fine — the build context is stale.** Do not edit the file.
+
+Seen on 2026-09-01: 28,559 `TS1127` errors across three files, every one at
+line 1, while `tsc --noEmit` on the host was clean and `git status` showed no
+change. The container was reading **25 KB of null bytes** — correct file size,
+zeroed data — because the daemon had died mid-`COPY` and BuildKit had cached
+the corrupted snapshot. `--no-cache` on the affected service fixes it in one
+command. Rewriting the file does not, because the file was never wrong.
+
+The tell is that every error is at line 1: a file with no readable line
+terminators is one enormous line, which is what a block of nulls looks like to
+a compiler. The three files implicated will be whichever were written most
+recently before the crash.
+
 ### Check migration status
 ```bash
 docker compose exec backend npx prisma migrate status
