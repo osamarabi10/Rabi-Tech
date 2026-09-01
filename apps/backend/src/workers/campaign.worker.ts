@@ -4,6 +4,8 @@ import { prisma } from '../prisma';
 import { getIO, SocketEvents } from '../socket';
 import { socketRoom } from '../socket/rooms';
 import { runAsOrganization } from '../lib/tenant-context';
+import logger from '../lib/logger';
+import { quietWindow, resolveContactTimezone } from '../utils/contact-timezone';
 import { isCapabilityNotIncludedError, isQuotaExceededError } from '../modules/usage/entitlements';
 import { resolveEntitlements } from '../modules/billing/entitlements.resolver';
 import { getEdition } from '../modules/billing/editions.service';
@@ -37,6 +39,60 @@ export const campaignQueue = new Queue('campaign-send', {
   },
 });
 
+/**
+ * Whether this recipient is inside their own quiet window, and for how long.
+ *
+ * Returns null when quiet hours are off, when the window is malformed, or when
+ * the recipient is awake. Every failure resolves to "send now": a broadcast
+ * that stops working because a timezone lookup threw would be a far worse
+ * outcome than one message arriving at an awkward hour, and the caller is a
+ * worker with nobody watching it.
+ *
+ * Call inside the organization scope — it reads `OrganizationConfig`.
+ */
+async function quietHoursHold(
+  phone: string,
+  recipientId: string | undefined,
+): Promise<{ msUntilOver: number } | null> {
+  try {
+    const config = await prisma.organizationConfig.findFirst({
+      select: { quietHoursEnabled: true, quietHoursStart: true, quietHoursEnd: true, timezone: true },
+    });
+    if (!config?.quietHoursEnabled) return null;
+
+    // The recipient row carries the contact; the contact carries the asserted
+    // country. Falling back to the phone prefix, then to the organization's own
+    // timezone — see resolveContactTimezone for why that default is usually
+    // right rather than merely safe.
+    const recipient = recipientId
+      ? await prisma.campaignRecipient.findUnique({
+          where: { id: recipientId },
+          select: { contact: { select: { countryCode: true, phone: true } } },
+        })
+      : null;
+
+    const { timezone } = resolveContactTimezone({
+      countryCode: recipient?.contact?.countryCode ?? null,
+      phone: recipient?.contact?.phone ?? phone,
+      organizationTimezone: config.timezone,
+    });
+
+    const window = quietWindow({
+      at: new Date(),
+      timezone,
+      start: config.quietHoursStart,
+      end: config.quietHoursEnd,
+    });
+    return window.quiet ? { msUntilOver: window.msUntilOver } : null;
+  } catch (error) {
+    logger.error('Quiet-hours check failed; sending rather than holding', {
+      error: String(error),
+      recipientId,
+    });
+    return null;
+  }
+}
+
 export async function processCampaignJob(data: any) {
   const { organizationId } = data;
   if (!organizationId) throw new Error('Campaign job missing organizationId');
@@ -46,6 +102,33 @@ export async function processCampaignJob(data: any) {
     const { campaignId, recipientId, phone, message, mediaUrl, session } = data;
 
     try {
+      /*
+        Quiet hours, in the recipient's local time.
+
+        A broadcast is the one thing this platform does that reaches somebody
+        who is not currently talking to it — everything else is a reply. So it
+        is the only thing that can wake a person at 03:00, and the only place a
+        time-of-day guard earns its complexity.
+
+        The recipient is **deferred, never dropped**. Skipping would mean a
+        contact silently missing a campaign their neighbours received, which
+        looks like a delivery failure and is impossible to distinguish from one
+        afterwards. Re-queueing with a delay until the window ends sends it
+        late, which is the intent.
+
+        Checked before the rate limiter on purpose: waiting on the gateway
+        token and then discovering it is 02:00 for this recipient would spend a
+        send slot to do nothing, and the FIFO lock is held for the duration.
+      */
+      const hold = await quietHoursHold(phone, recipientId);
+      if (hold) {
+        await campaignQueue.add('send', data, {
+          jobId: `campaign--${campaignId}--${recipientId}--held--${Date.now()}`,
+          delay: hold.msUntilOver,
+        });
+        return { deferred: true, minutes: Math.round(hold.msUntilOver / 60_000) };
+      }
+
       const effective = await resolveEntitlements(organizationId);
       const planRate = getEdition(effective.plan);
       const hardMax = positiveInteger(process.env.CAMPAIGN_RATE_HARD_MAX);

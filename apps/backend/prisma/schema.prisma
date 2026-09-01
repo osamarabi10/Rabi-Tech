@@ -615,6 +615,19 @@ model OrganizationConfig {
   monthlyAiTokensInLimit       BigInt?
   monthlyAiTokensOutLimit      BigInt?
   timezone                     String          @default("Asia/Jerusalem")
+  /// Broadcasts hold outside these hours, in the *recipient's* local time.
+  ///
+  /// Off by default, and deliberately so: switching it on for existing
+  /// subscribers would silently delay sends they have already scheduled, which
+  /// is a behaviour change arriving as a surprise.
+  ///
+  /// The window is stored as local wall-clock strings rather than as UTC
+  /// offsets because that is what an owner means. "No messages after nine"
+  /// stays nine o'clock across a daylight-saving change; a stored offset would
+  /// drift by an hour twice a year and nobody would connect the two.
+  quietHoursEnabled            Boolean         @default(false)
+  quietHoursStart              String          @default("21:00")
+  quietHoursEnd                String          @default("08:00")
   userInactivityTimeoutMinutes Int             @default(20)
   weeklyRecapEnabled           Boolean         @default(false)
   autoCloseEnabled             Boolean         @default(false)

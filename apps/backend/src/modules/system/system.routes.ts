@@ -27,6 +27,7 @@ import { getTenantId } from '../../lib/tenant-context';
 import { issueUserInvitation } from './user-invitations.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { getEdition } from '../billing/editions.service';
+import { channelGrantRefusal } from '../channels/channel-entitlement';
 
 const router = Router();
 router.use(verifyToken);
@@ -55,6 +56,9 @@ async function workspaceSettings(organizationId: string) {
         timezone: true,
         userInactivityTimeoutMinutes: true,
         weeklyRecapEnabled: true,
+        quietHoursEnabled: true,
+        quietHoursStart: true,
+        quietHoursEnd: true,
       },
     }),
     prisma.user.findMany({
@@ -80,6 +84,9 @@ async function workspaceSettings(organizationId: string) {
     timezone: config?.timezone ?? 'Asia/Jerusalem',
     userInactivityTimeoutMinutes: config?.userInactivityTimeoutMinutes ?? 20,
     weeklyRecapEnabled: config?.weeklyRecapEnabled ?? false,
+    quietHoursEnabled: config?.quietHoursEnabled ?? false,
+    quietHoursStart: config?.quietHoursStart ?? '21:00',
+    quietHoursEnd: config?.quietHoursEnd ?? '08:00',
     weeklyRecapRecipientIds: recipients.map((recipient) => recipient.userId),
     eligibleRecipients: users.map((user) => ({
       id: user.id,
@@ -862,9 +869,37 @@ router.get('/workspace-settings', requireAdmin, async (req, res) => {
 
 router.patch('/workspace-settings', requireAdmin, async (req, res) => {
   const organizationId = req.user!.organizationId;
-  const supplied = ['name', 'timezone', 'userInactivityTimeoutMinutes', 'weeklyRecapEnabled', 'weeklyRecapRecipientIds']
-    .some((field) => req.body?.[field] !== undefined);
+  const supplied = [
+    'name', 'timezone', 'userInactivityTimeoutMinutes', 'weeklyRecapEnabled', 'weeklyRecapRecipientIds',
+    'quietHoursEnabled', 'quietHoursStart', 'quietHoursEnd',
+  ].some((field) => req.body?.[field] !== undefined);
   if (!supplied) return res.status(400).json({ error: 'No workspace settings supplied' });
+
+  /*
+    Quiet hours (M8.4). Validated here as well as by a CHECK constraint, and
+    both are wanted: the constraint protects the worker, which reads these
+    columns with nobody in front of it and would otherwise parse a malformed
+    value to minute zero — a silently wrong window rather than a loud failure.
+    This gives the admin a sentence instead of a 500.
+  */
+  const timePattern = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+  const quietEnabled = req.body.quietHoursEnabled === undefined ? undefined : req.body.quietHoursEnabled;
+  if (quietEnabled !== undefined && typeof quietEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'quietHoursEnabled must be a boolean' });
+  }
+  const quietStart = req.body.quietHoursStart === undefined ? undefined : String(req.body.quietHoursStart).trim();
+  const quietEnd = req.body.quietHoursEnd === undefined ? undefined : String(req.body.quietHoursEnd).trim();
+  for (const [label, value] of [['start', quietStart], ['end', quietEnd]] as const) {
+    if (value !== undefined && !timePattern.test(value)) {
+      return res.status(400).json({ error: `Quiet hours ${label} must be a 24-hour time like 21:00` });
+    }
+  }
+  // A zero-width window is refused rather than accepted and ignored. Saving
+  // 21:00–21:00 and being told nothing would read as "quiet hours are on",
+  // while the worker treats it as no window at all and sends through the night.
+  if (quietStart !== undefined && quietEnd !== undefined && quietStart === quietEnd) {
+    return res.status(400).json({ error: 'Quiet hours start and end cannot be the same time' });
+  }
 
   const name = req.body.name === undefined ? undefined : String(req.body.name).trim();
   if (name !== undefined && (name.length < 2 || name.length > 120)) {
@@ -918,7 +953,8 @@ router.patch('/workspace-settings', requireAdmin, async (req, res) => {
       await tx.organization.update({ where: { id: organizationId }, data: { name } });
     }
 
-    if (timezone !== undefined || timeout !== undefined || weeklyRecapEnabled !== undefined) {
+    if (timezone !== undefined || timeout !== undefined || weeklyRecapEnabled !== undefined
+        || quietEnabled !== undefined || quietStart !== undefined || quietEnd !== undefined) {
       await tx.organizationConfig.upsert({
         where: { organizationId },
         create: {
@@ -1076,6 +1112,37 @@ router.post('/sessions/:name/disconnect', requireAdmin, async (req, res) => {
       },
     });
     if (!known) return res.status(404).json({ error: 'Unknown session' });
+
+    /*
+      The edition has to permit OpenWA before a number can be paired to it.
+
+      This endpoint is the front door and was unguarded. allowedChannels was
+      enforced at /channels/meta/connect and /channels/active only, so a
+      workspace on a Meta-only edition could not *switch* to OpenWA but could
+      pair one here and send through it - resolveChannelKind() returns whichever
+      row is ACTIVE and asks nothing about the edition. That is why trials
+      worked while Meta was unconfigured. See D-27.
+
+      Refused before any OpenWA call, including the createSession below: a
+      session created for a workspace that may not use it is a resource nobody
+      can pair and nothing will clean up.
+
+      Grandfathered on an ACTIVE channel, so a live workspace on a Meta-only
+      edition keeps its working number. The send path is deliberately still
+      unguarded for the same reason - see channel-entitlement.ts.
+    */
+    const refused = await channelGrantRefusal(req.user!.organizationId, 'OPENWA');
+    if (refused) {
+      return res.status(402).json({
+        error: refused.requiredPlan
+          ? `باقة ${refused.planName} لا تشمل قناة واتساب عبر مسح QR. رقّي إلى ${refused.requiredPlan} لتفعيلها.`
+          : `باقة ${refused.planName} لا تشمل قناة واتساب عبر مسح QR.`,
+        code: 'PLAN_UPGRADE_REQUIRED',
+        capability: 'OPENWA',
+        requiredPlan: refused.requiredPlan,
+      });
+    }
+
 
     // Two modes:
     //   default  — stop only. WhatsApp keeps the pairing and the SAME number
