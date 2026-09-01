@@ -113,6 +113,21 @@ services:
       # rejected as unsigned, so activation never happens.
       - PAYMENT_PROVIDER=${PAYMENT_PROVIDER:-manual}
       - PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET}
+      # Stripe, test mode. Deliberately no `:-` defaults: a missing secret must
+      # be visible as a failure, not papered over with an empty string that
+      # rejects every webhook as unsigned and looks like a Stripe outage.
+      # Listed one per line because anything absent from this block silently
+      # takes its own default inside the container — see CLAUDE.md.
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      # Our plan code to a Stripe price id, one per sellable edition. Stripe
+      # price ids are per-environment, so a test-mode id is not the live one and
+      # neither belongs in the repository. An edition with no entry here refuses
+      # at checkout rather than being charged against another edition's price.
+      - STRIPE_PRICE_STANDARD=${STRIPE_PRICE_STANDARD}
+      - STRIPE_PRICE_GROWTH=${STRIPE_PRICE_GROWTH}
+      - STRIPE_PRICE_BUSINESS=${STRIPE_PRICE_BUSINESS}
+      - STRIPE_PRICE_ENTERPRISE=${STRIPE_PRICE_ENTERPRISE}
       - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
       - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-http://localhost:8080}
       # Broadcast pacing. OpenWA drives WhatsApp Web, so blasting risks a ban.
