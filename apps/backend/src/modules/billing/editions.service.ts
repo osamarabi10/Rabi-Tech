@@ -1,6 +1,8 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { runAsPlatform } from '../../lib/tenant-context';
 import logger from '../../lib/logger';
+import { auditPlatformScope } from '../../lib/audit';
 import {
   DEFAULT_CAMPAIGN_PACING,
   PLAN_CODE_PATTERN,
@@ -222,8 +224,127 @@ function rowToEdition(row: {
  * the previous cache in place rather than emptying it, because serving slightly
  * stale limits beats serving none.
  */
+/**
+ * Columns a schedule is allowed to write.
+ *
+ * The stored payload was validated by the same code the immediate PATCH uses,
+ * so its values are already sound. This is a narrower question: which columns a
+ * dated change may touch at all. It is a policy list rather than a second copy
+ * of the validation — `code` and `archivedAt` are absent because scheduling an
+ * edition's identity or its withdrawal are different acts with different
+ * consequences, and neither should arrive through a price change's back door.
+ */
+const SCHEDULABLE_COLUMNS = new Set([
+  'name', 'monthlyPriceCents', 'pricingModel', 'billingInterval', 'currency',
+  'monthlyActiveContactsLimit', 'monthlyOutboundMessagesLimit', 'monthlyCampaignSendsLimit',
+  'customFieldsLimit', 'usersLimit', 'workflowsLimit',
+  'monthlyAiTokensInLimit', 'monthlyAiTokensOutLimit',
+  'campaignRateMax', 'campaignRateDurationMs',
+  'autoProvisionGateway', 'customDomain', 'whiteLabel', 'maskContactDetails',
+  'allowedChannels', 'isActive', 'sortOrder',
+]);
+
+/**
+ * Apply any schedule whose time has passed, writing the values into the row.
+ *
+ * Runs at the top of every refresh rather than on a scheduler of its own: this
+ * is already the thing that runs on a timer and already owns the catalogue, and
+ * a second timer would be a second thing to notice had stopped.
+ *
+ * **Concurrency matters here.** Every process refreshes on its own interval, so
+ * several can reach a due schedule at the same moment. The write is a
+ * conditional updateMany still guarded on `scheduledFrom` being set: whichever
+ * process gets there first clears it, and every other one matches zero rows and
+ * does nothing. Only the winner writes the audit entry, so a dated change
+ * leaves exactly one record however many processes are running.
+ *
+ * A dated change produces the same durable record as an immediate one - the
+ * point of E6 is that the catalogue's history is readable, and a change that
+ * applied itself while nobody was looking is the one most in need of a record.
+ */
+async function applyDueSchedules(now: Date): Promise<number> {
+  const due = await prisma.plan.findMany({
+    where: { scheduledFrom: { not: null, lte: now } },
+    select: { code: true, scheduledChanges: true, scheduledFrom: true },
+  });
+  if (due.length === 0) return 0;
+
+  let applied = 0;
+  for (const row of due) {
+    const raw = (row.scheduledChanges ?? {}) as Record<string, unknown>;
+    const data: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (SCHEDULABLE_COLUMNS.has(key)) data[key] = value;
+    }
+
+    const before = await prisma.plan.findUnique({ where: { code: row.code } });
+
+    const result = await prisma.plan.updateMany({
+      // Still guarded on scheduledFrom: this is what makes the race safe.
+      where: { code: row.code, scheduledFrom: { not: null, lte: now } },
+      data: { ...data, scheduledChanges: Prisma.DbNull, scheduledFrom: null },
+    });
+    if (result.count === 0) continue;
+
+    applied += 1;
+    const after = await prisma.plan.findUnique({ where: { code: row.code } });
+    /*
+      Through lib/audit.ts rather than touching platformAuditLog directly. The
+      tenancy harness enforces that boundary: PlatformAuditLog is in the
+      extension's PLATFORM_MODELS, so under ORGANIZATION scope nothing is
+      injected and a tenant-scoped read would return every subscriber's
+      commercial history. billing/ is not platform code, and the check is right
+      to say so.
+
+      No actor: nobody was present. The person who *scheduled* it is on the
+      platform.edition.scheduled row; naming them here would put a name against
+      an action they did not take.
+    */
+    await auditPlatformScope(`edition ${row.code} scheduled change applied`, {
+      action: 'platform.edition.scheduled_applied',
+      targetEditionCode: row.code,
+      beforeState: before,
+      afterState: after,
+    });
+    logger.info('Applied a scheduled edition change', {
+      code: row.code, scheduledFrom: row.scheduledFrom?.toISOString(), fields: Object.keys(data),
+    });
+  }
+  return applied;
+}
+
 export async function refreshEditions(): Promise<number> {
   try {
+    /*
+      Before the catalogue is read, not after: a schedule due five seconds ago
+      must be in the rows this refresh loads, or the cache serves the old values
+      for another whole interval and the change appears to have been ignored.
+
+      Its own try/catch. A schedule that cannot be applied must not take the
+      catalogue refresh down with it - serving the current values is always
+      better than serving none, and the floor is what a failed refresh falls to.
+    */
+    try {
+      /*
+        Platform scope, explicitly, for the same reason the catalogue read below
+        needs it: this runs on a timer owned by no request, and the tenancy
+        extension is fail-closed on a query with no scope at all. Without the
+        wrapper every scheduled change would throw on the tick that should have
+        applied it, the catch below would turn that into one log line, and the
+        change would simply never happen.
+
+        This is the second time that mistake has been made in this file — the
+        original refresh had it, and its comment says so. It was caught here by
+        the harness rather than in production, and only because the harness
+        checks the boundary statically: my own probe wrapped the call itself and
+        so proved nothing about how the timer invokes it.
+      */
+      await runAsPlatform('apply-scheduled-editions', () => applyDueSchedules(new Date()));
+    } catch (error) {
+      logger.error('Failed to apply scheduled edition changes; serving current values', {
+        error: String(error),
+      });
+    }
     // Platform scope, explicitly. Plan is in PLATFORM_MODELS so no
     // organizationId is injected, but the extension is fail-closed on a query
     // with NO scope at all - and the background refresh runs on a timer, owned

@@ -1010,6 +1010,54 @@ the first of a month part of the fixture fell outside the window. It failed at
 day before. Fixed and recorded as D-16 — the fourth instance of the pattern this
 phase named, and the cleanest specimen of it.
 
+### HARD RULE — edition history is not reconstructible
+
+> Once an edition's terms have changed, the previous terms exist **only** in the
+> `PlatformAuditLog` revision record. The `Plan` row holds the current values and
+> nothing else; `updatedAt` says a change happened and never what it was.
+>
+> **The point of no return is the first change anybody relies on reading back.**
+> Before that, the audit rows are a convenience. After it, they are the record —
+> and there is no second copy to rebuild them from.
+
+Recovery past that point is snapshot-restore or forward-fix, never a rollback
+that discards the trail. The two E6 migrations are reversible *because neither
+touches applied history*:
+
+- `20261001090000_plan_billing_interval` — `down.sql` drops `billingInterval`.
+  Every yearly edition silently becomes monthly: the price stays the same number
+  and starts being charged twelve times as often. **Check first:**
+  `SELECT code, "monthlyPriceCents", "billingInterval" FROM "Plan" WHERE "billingInterval" <> 'MONTHLY';`
+- `20261002090000_plan_scheduled_changes` — `down.sql` drops the two schedule
+  columns, **discarding every pending change silently**. A price rise dated to
+  next month simply never happens and the edition still looks correct. **Check
+  first:** `SELECT code, "scheduledFrom", "scheduledChanges" FROM "Plan" WHERE "scheduledFrom" IS NOT NULL;`
+  Each row is a decision somebody made about a future date.
+
+### What "in force" means, and who a change reaches
+
+Written here because it is the single most surprising thing about the
+catalogue, and effective dating does not change it — it changes *when* the
+catalogue moves, not *who* the move reaches.
+
+| Reaches existing subscribers at the next cache refresh | Does not reach them until their next activation |
+|---|---|
+| name, price, seats (`usersLimit`) | `monthlyActiveContactsLimit` |
+| `allowedChannels`, `autoProvisionGateway` | `monthlyOutboundMessagesLimit` |
+| `customDomain`, `whiteLabel`, `maskContactDetails` | `monthlyCampaignSendsLimit` |
+| campaign pacing, `pricingModel`, `billingInterval` | `monthlyAiTokensInLimit`, `monthlyAiTokensOutLimit` |
+
+The right-hand column is D-14: `applyPlanLimits` copied those five values into
+`OrganizationConfig` at activation, and enforcement reads that copy rather than
+the plan. Raising GROWTH's contact allowance changes nothing for anyone already
+on GROWTH. Seats being live while quotas are frozen is the asymmetry most likely
+to catch someone out, because both read as limits on the same screen.
+
+A scheduled change lands up to one refresh interval (30s) after its time,
+because `refreshEditions` resolves what is in force rather than `getEdition()`
+doing it per call — that accessor is synchronous and nineteen call sites depend
+on it, two of them on the send path.
+
 ### The door is still closed
 
 `CREATABLE_PLAN_CODES` in `platform.routes.ts` holds exactly the original five

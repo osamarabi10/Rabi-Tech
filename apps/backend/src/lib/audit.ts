@@ -28,6 +28,14 @@ export interface PlatformAuditDetail {
   /** The organization acted on, plus a name snapshot that outlives it. */
   targetOrgId?: string;
   targetOrgName?: string;
+  /**
+   * The edition acted on, for catalogue changes.
+   *
+   * Separate from targetOrgId rather than reusing it: a catalogue change acts
+   * on the offer, not on a subscriber, and borrowing the per-org column would
+   * make that trail claim a workspace was touched when none was.
+   */
+  targetEditionCode?: string;
   beforeState?: unknown;
   afterState?: unknown;
   ipAddress?: string;
@@ -53,6 +61,7 @@ export async function auditPlatformScope(
       actorEmail: detail.actorEmail,
       targetOrgId: detail.targetOrgId,
       targetOrgName: detail.targetOrgName,
+      targetEditionCode: detail.targetEditionCode,
       beforeState: (detail.beforeState ?? undefined) as never,
       afterState: (detail.afterState ?? undefined) as never,
       ipAddress: detail.ipAddress,

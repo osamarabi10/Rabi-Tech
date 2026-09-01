@@ -230,6 +230,17 @@ model Plan {
   /// nothing and returns 200 while doing it.
   archivedAt DateTime?
 
+  /// A pending edit, in the shape of a PATCH body, applied by refreshEditions
+  /// once scheduledFrom has passed and cleared when it is.
+  ///
+  /// Two columns rather than a revision table because getEdition() is
+  /// synchronous and nineteen call sites depend on that. The refresh resolves
+  /// what is in force; the accessor stays a map lookup. A schedule therefore
+  /// lands up to one refresh interval late, which is the right trade for a
+  /// change dated to a day.
+  scheduledChanges Json?
+  scheduledFrom    DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

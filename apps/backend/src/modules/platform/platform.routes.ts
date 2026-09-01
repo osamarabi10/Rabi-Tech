@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { encryptCredential } from '../../lib/credential-crypto';
 import logger from '../../lib/logger';
@@ -1738,6 +1739,112 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
   } catch (error) {
     const status = (error as { status?: number }).status || 400;
     res.status(status).json({ error: (error as Error).message || 'Failed to update edition' });
+  }
+});
+
+/**
+ * Schedule an edition change for a date instead of applying it now.
+ *
+ * Validated by exactly the same code the immediate PATCH uses, so a schedule
+ * cannot store something the immediate path would have refused — the failure
+ * arrives when the operator submits it rather than silently, weeks later, at
+ * the moment it was supposed to take effect.
+ *
+ * The stored payload is the validated Prisma data object, not the raw body.
+ * refreshEditions applies it and filters it again through its own list of
+ * schedulable columns, so a change of shape here cannot widen what a dated edit
+ * may touch.
+ *
+ * One pending schedule per edition. A second call replaces the first, which is
+ * what an operator correcting a date expects; queueing them would let two
+ * changes to the same field apply in an order nobody chose.
+ */
+router.post('/editions/:code/schedule', requirePlatformOwner, async (req, res) => {
+  try {
+    const code = normalizePlanCode(req.params.code);
+    const body = (req.body || {}) as Record<string, unknown>;
+
+    const effectiveFrom = new Date(String(body.effectiveFrom ?? ''));
+    if (Number.isNaN(effectiveFrom.getTime())) {
+      return res.status(400).json({ error: 'effectiveFrom must be a valid date' });
+    }
+    if (effectiveFrom.getTime() <= Date.now()) {
+      // A schedule in the past would be applied by the very next refresh, which
+      // is an immediate change wearing a date. If that is what is wanted, the
+      // PATCH says so honestly.
+      return res.status(400).json({
+        error: 'effectiveFrom must be in the future. To change an edition now, use PATCH.',
+      });
+    }
+
+    const changes = (body.changes || {}) as Record<string, unknown>;
+    const data: Record<string, unknown> = {};
+    applyEditionFields(changes, data);
+    if (data.pricingModel !== undefined || data.monthlyPriceCents !== undefined) {
+      const current = await prisma.plan.findUnique({
+        where: { code },
+        select: { pricingModel: true, monthlyPriceCents: true },
+      });
+      applyPricingInvariant(data, current);
+    }
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'No editable fields supplied to schedule' });
+    }
+
+    const before = await prisma.plan.findUnique({ where: { code } });
+    const updated = await prisma.plan.update({
+      where: { code },
+      data: { scheduledChanges: data as never, scheduledFrom: effectiveFrom },
+    });
+
+    await prisma.platformAuditLog.create({
+      data: {
+        reason: `edition ${code} change scheduled for ${effectiveFrom.toISOString()}`,
+        action: 'platform.edition.scheduled',
+        targetEditionCode: code,
+        actorIdentityId: req.platformUser!.id,
+        actorEmail: req.platformUser!.email,
+        beforeState: before as never,
+        afterState: updated as never,
+        ipAddress: req.ip,
+      },
+    });
+
+    res.status(202).json({ code, effectiveFrom: effectiveFrom.toISOString(), changes: data });
+  } catch (error) {
+    const status = (error as { status?: number }).status || 400;
+    res.status(status).json({ error: (error as Error).message || 'Failed to schedule edition change' });
+  }
+});
+
+/** Cancel a pending schedule. Applied changes are history and cannot be undone here. */
+router.delete('/editions/:code/schedule', requirePlatformOwner, async (req, res) => {
+  try {
+    const code = normalizePlanCode(req.params.code);
+    const before = await prisma.plan.findUnique({ where: { code } });
+    if (!before?.scheduledFrom) {
+      return res.status(404).json({ error: 'No pending schedule for this edition' });
+    }
+    const updated = await prisma.plan.update({
+      where: { code },
+      data: { scheduledChanges: Prisma.DbNull, scheduledFrom: null },
+    });
+    await prisma.platformAuditLog.create({
+      data: {
+        reason: `edition ${code} scheduled change cancelled`,
+        action: 'platform.edition.schedule_cancelled',
+        targetEditionCode: code,
+        actorIdentityId: req.platformUser!.id,
+        actorEmail: req.platformUser!.email,
+        beforeState: before as never,
+        afterState: updated as never,
+        ipAddress: req.ip,
+      },
+    });
+    res.json({ cancelled: true });
+  } catch (error) {
+    const status = (error as { status?: number }).status || 400;
+    res.status(status).json({ error: (error as Error).message || 'Failed to cancel schedule' });
   }
 });
 
