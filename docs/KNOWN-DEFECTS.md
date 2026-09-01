@@ -939,3 +939,170 @@ before it costs access, what the subscriber is told and when — then map the
 event to that policy. Mapping first and deciding grace afterwards means choosing
 a policy by accident, in an adapter, which is exactly the decision an adapter
 should not be making.
+
+---
+
+## D-24 · The Meta recipient ceiling is modelled, surfaced, and enforced by nothing
+
+**Read this before adding template sending. It is the reason that change is not
+a one-file change.**
+
+`meta.adapter.ts` reports a real number:
+
+```ts
+maxUniqueRecipientsPer24h: ceilingForTier(credential.messagingTier),
+```
+
+Meta caps business-initiated conversations per rolling 24 hours by messaging
+tier — 250 for an unverified business, rising with verification and quality.
+The value is read from the credential, published through `ChannelCapabilities`,
+and rendered in the UI. **Nothing counts against it and nothing refuses a send
+because of it.**
+
+That is currently safe, and the reason it is safe is the trap:
+
+> With no template support, every out-of-window send is already refused, so no
+> business-initiated conversation can start and the ceiling is unreachable.
+
+The guard is not the ceiling. The guard is `supportsTemplates: false`.
+`canInitiateConversations: false` follows from it, `channel.service.ts` refuses
+every send outside the 24-hour window, and a ceiling on conversations that
+cannot be started needs no enforcement.
+
+**Landing template sending removes that guard.** The commit that makes
+`sendTemplate` work is the commit that makes business-initiated conversations
+possible for the first time, which is the same commit that makes the ceiling
+reachable for the first time. The dependency runs the wrong way round for
+safety: the feature arrives, and the limit it needs does not, and nothing fails
+until a customer's number is rate-limited or quality-rated down by Meta — on
+their own WABA, not ours, which is the part that makes it expensive.
+
+**Cost if missed:** a customer's number exceeds its tier, Meta throttles or
+blocks it, and their quality rating falls. Quality rating governs the tier, so
+the punishment compounds: a number pushed over its ceiling gets a lower ceiling.
+The failure surfaces on the customer's business account, days later, as reduced
+deliverability with no error in this system pointing at the cause.
+
+**Fix — and it is not optional work that can follow:**
+
+1. A rolling 24-hour count of **unique recipients of business-initiated**
+   messages per channel. Unique recipients, not messages: many messages to one
+   recipient is one conversation, and counting sends would refuse traffic Meta
+   permits.
+2. Refuse in `channel.service.ts`, beside the service-window check, before Meta
+   is called — for the reason `service-window.ts` already states: a rejected
+   send is not free, and spending the customer's quality rating on requests we
+   know Meta will refuse degrades their own number.
+3. Only then flip `supportsTemplates` and `canInitiateConversations`.
+
+**The ordering is the defect.** Steps 1 and 2 must land in the same commit as
+step 3 or before it. `channel.types.ts` already says so, in the
+`canInitiateConversations` docblock — "the tier ceiling starts being enforceable
+in that same step because that is when business-initiated sends first exist" —
+and a docblock is not a gate. There is no harness check for this, because there
+is nothing yet to check; the first check to write is the one that fails when
+`supportsTemplates` is true and no counter exists.
+
+---
+
+## D-25 · Editions were sellable whose only channel the platform could not operate
+
+**Fixed 2026-09-01 by the derived viability gate; recorded because the shape
+recurs and the fix is easy to undo by accident.**
+
+The E5g channel narrowing gave GROWTH, BUSINESS and ENTERPRISE
+`allowedChannels: ['WHATSAPP_CLOUD']`. `META_APP_SECRET` was unset, so
+`verifyMetaSignature` failed closed, every webhook delivery was rejected, no
+INBOUND `Message` row was ever written, `serviceWindowFor` returned
+`{open: false, lastInboundAt: null}` for every contact, and `channel.service.ts`
+refused every outbound send.
+
+All three tiers stayed purchasable through a working Stripe checkout that
+activates automatically. A customer could pay, be activated with no human
+involved, get a provisioned workspace, and find that the one channel their plan
+permitted could neither send nor receive. **Worse than a blocked sale**, and
+reachable only because two correct changes — the narrowing, and automatic
+activation — met.
+
+The blast radius was wider than the paid tiers. `TRIAL_PLAN_DEFAULT` is
+`ENTRY_PAID_PLAN_CODE`, which is `GROWTH`, and no `billing.trialPlan` setting
+row exists — so **every trial signup**, including one that named no plan at all,
+was being placed on the Meta-only edition.
+
+**The fix is derived, never a flag** — `channel-viability.ts`. An edition is
+offerable when the platform can operate at least one channel it permits. The
+block therefore exists *because* Meta is unconfigured and disappears *because*
+Meta is configured, with no migration, no row to change back, and nothing to
+remember. Setting `META_APP_SECRET` and `META_WEBHOOK_VERIFY_TOKEN` restores all
+three tiers on the next request.
+
+**Do not "simplify" this to `isActive: false` on the three rows.** That was
+considered and rejected: it fails in both directions — forgotten, and the tiers
+sit invisible for months after Meta works; or cleared by someone next week who
+never learned why they were stopped. It also does not stop the trial path, which
+never consults `isActive`.
+
+**What must stay true:** an unofferable edition still *resolves*. Offer and
+resolution are different questions, and a subscriber already on ENTERPRISE keeps
+every entitlement it grants. The harness pins both halves together for exactly
+this reason — an implementation that withdrew an edition by making it stop
+resolving would strand every existing subscriber, which is the more expensive
+bug of the two.
+
+---
+
+## D-26 · Every trial signup is placed on an edition the platform cannot operate
+
+**Open. Needs a commercial decision, not a code change — which is why D-25's fix
+deliberately stops short of it.**
+
+`TRIAL_PLAN_DEFAULT` is `ENTRY_PAID_PLAN_CODE`, which is `GROWTH`. No
+`billing.trialPlan` `PlatformSetting` row exists, so that default is live. A
+signup naming no plan — the ordinary free-trial path — is therefore placed on
+GROWTH, which the E5g narrowing made `allowedChannels: ['WHATSAPP_CLOUD']`, which
+this platform cannot currently operate (D-25).
+
+`getTrialPlanCode()`'s own docblock is the argument that this is wrong:
+
+> Not FREE. Free grants no gateway, one user and no broadcasts — so a trial on
+> Free would be a trial of a product the tenant cannot connect a WhatsApp number
+> to, which is the one thing the trial exists to demonstrate.
+
+E5g made GROWTH fail that same test, by a different route. The reasoning was not
+revisited when the channel list changed under it.
+
+**Why D-25's fix does not close this.** The paid path is refused because a caller
+*named* an inoperable edition. A trial names nothing, so there is no choice to
+refuse, and the two candidate fixes are both worse than the disease:
+
+- **Refuse the signup.** Closes self-serve registration entirely — a much larger
+  outage than the one being fixed.
+- **Substitute an operable plan.** The only offerable editions are FREE and
+  STANDARD, and **`autoProvisionGateway` is `false` on both**. A substituted
+  trial would grant no WhatsApp gateway at all, demonstrating strictly less than
+  the broken one, and it silently converts the trial into a dashboard-only
+  product — a commercial decision an adapter must not make. It also gives
+  STANDARD subscribers, which breaks the precondition the edition-create check
+  relies on to delete and rebuild that row safely.
+
+So the signup path **logs and proceeds**. No money changes hands on a trial,
+which is what separates this from D-25: a paid signup for an inoperable edition
+is refused; a free trial on one is recorded and allowed.
+
+**There is a second, independent defect visible here.** GROWTH has
+`autoProvisionGateway: true` but does **not** permit `OPENWA`, while
+`createSignup` provisions an `OrganizationChannel` of kind `OPENWA`
+unconditionally. So a GROWTH workspace has an OpenWA gateway provisioned for it
+that its own edition forbids it from activating. E5g narrowed `allowedChannels`
+without revisiting `autoProvisionGateway`, and the two now disagree.
+
+**Fix — one of these, and it is the owner's call:**
+
+1. Set `billing.trialPlan` to an edition that is both operable and grants a
+   gateway. **None exists today**, which is the real finding here.
+2. Give STANDARD `autoProvisionGateway: true`, making it a coherent trial
+   target. That is a pricing change, not a bug fix.
+3. Return OPENWA to GROWTH's `allowedChannels`, reversing part of E5g.
+4. Configure Meta, at which point GROWTH becomes operable and the question
+   disappears — but the `autoProvisionGateway`/`allowedChannels` disagreement
+   above survives it and still wants fixing.

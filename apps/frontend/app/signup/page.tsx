@@ -85,10 +85,23 @@ function SignupFlow() {
       const { data } = await api.post('/api/billing/signup', { ...form, planCode });
       setResult(data);
     } catch (err: any) {
-      // The server's message names the actual problem — an email already in
-      // use, a password too short, a throttled network. "Signup failed" would
-      // throw away the only part that tells them what to change.
-      setError(err?.response?.data?.error ?? t('تعذّر إنشاء الحساب'));
+      /*
+        A machine code wins over the server's prose when there is one.
+
+        The server answers in English so it does not compose a sentence in one
+        of three languages; PLAN_CHANNEL_UNAVAILABLE is the case where the
+        edition asked for needs a channel this platform cannot operate yet, and
+        it is rendered here where the reader's language is known. Everything
+        else keeps the server's message, which names the actual problem - an
+        email already in use, a throttled network - and is the only part that
+        tells them what to change.
+      */
+      const code = err?.response?.data?.code;
+      setError(
+        code === 'PLAN_CHANNEL_UNAVAILABLE'
+          ? t('هاي الباقة بتشتغل على قناة واتساب الرسمية، وهي لسا مش متاحة عندنا. جرّب باقة تانية أو احكي معنا.')
+          : err?.response?.data?.error ?? t('تعذّر إنشاء الحساب'),
+      );
     } finally {
       setSaving(false);
     }

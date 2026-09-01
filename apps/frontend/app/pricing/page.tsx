@@ -34,6 +34,13 @@ type Plan = {
   autoProvisionGateway?: boolean;
   customDomain?: boolean;
   whiteLabel?: boolean;
+  /**
+   * Whether the platform can actually operate this edition right now, derived
+   * server-side from the channels it permits. Separate from pricingModel: that
+   * says how it is sold, this says whether it can be sold today.
+   */
+  offerable?: boolean;
+  unavailableReason?: 'CHANNEL_SECRETS_MISSING' | 'NO_CHANNELS_PERMITTED' | null;
 };
 
 /**
@@ -210,9 +217,30 @@ export default function PricingPage() {
                   {plan.whiteLabel && <Row label={t('علامتك بدون ذكرنا')} value="✓" />}
                 </ul>
 
-                <Button asChild className="mt-5 w-full">
-                  <Link href={`/signup?plan=${plan.code}`}>{ctaFor(plan, t)}</Link>
-                </Button>
+                {/*
+                  An edition the platform cannot currently operate is shown and
+                  marked, never hidden and never purchasable. Hiding it would
+                  leave someone who read about the tier wondering where it
+                  went; leaving the button live sells a workspace whose only
+                  channel cannot carry a message.
+
+                  The copy states the cause, not a date. "Coming soon" is a
+                  promise about time that nobody has made.
+                */}
+                {plan.offerable === false ? (
+                  <>
+                    <p className="mt-5 rounded-md border border-warning/30 bg-warning/10 p-3 text-caption leading-6 text-warning">
+                      {t('هاي الباقة بتشتغل على قناة واتساب الرسمية، وهي لسا مش متاحة عندنا. احكي معنا وبنعلمك أول ما تفتح.')}
+                    </p>
+                    <Button className="mt-3 w-full" disabled>
+                      {t('غير متاحة حالياً')}
+                    </Button>
+                  </>
+                ) : (
+                  <Button asChild className="mt-5 w-full">
+                    <Link href={`/signup?plan=${plan.code}`}>{ctaFor(plan, t)}</Link>
+                  </Button>
+                )}
               </div>
             ))}
           </div>
