@@ -55,17 +55,24 @@ never everything.
 |---|---|
 | `contacts:read` | Read and list contacts |
 | `contacts:write` | Create and update contacts |
+| `contacts:delete` | **Erase** a contact and their entire history |
 | `conversations:read` | List and read conversations |
-| `conversations:write` | Assign, close, reopen *(not yet implemented)* |
+| `conversations:write` | Assign, close, reopen, label |
 | `messages:read` | Read the messages in a conversation |
-| `messages:send` | Send messages *(not yet implemented)* |
+| `messages:send` | Send a message to a contact or into a thread |
 | `tags:read` | Read tags |
 | `tags:write` | Apply and remove tags |
 | `workspace:read` | `GET /me` |
 
-`contacts:write` does **not** carry `tags:write`. Tagging is a separate grant
-because a sync job that writes contact fields rarely needs to reshape the
-workspace's tag vocabulary.
+`contacts:write` does **not** carry `tags:write`, and it does **not** carry
+`contacts:delete`. A sync job that writes contact fields rarely needs to reshape
+the tag vocabulary, and almost none of them need to destroy a person's entire
+conversation history — bundling those would mean every integration ever given
+write access could delete, and the day one has a bug the workspace discovers what
+"cascade" means.
+
+`contacts:delete` is also a *new* scope, so no token issued before it existed can
+hold it.
 
 ---
 
@@ -231,6 +238,90 @@ team has no business reading what customers wrote in them.
   "sentBy": null, "failureReason": null, "timestamp": "..." }
 ```
 
+### `POST /contacts/:identifier/messages` · `messages:send`
+
+Send to a person. `{ "text": "Your order has shipped." }`
+
+Resolves the thread through the same function the inbound webhook uses, so the
+message lands in the thread the agent is already reading, reopens a resolved one
+rather than starting a parallel history, and obeys the one-thread-per-contact
+rule the product is built on. It then goes through the same send path as the
+console's reply box: it persists, stamps analytics, restarts the auto-close
+clock, and appears live in the agent's inbox. An integration whose messages are
+invisible in the inbox is how an agent ends up answering a customer who was
+already answered.
+
+### `POST /conversations/:id/messages` · `messages:send`
+
+The same, addressed to a thread instead of a person.
+
+**Three refusals the console does not make (403):**
+
+| `error` | Why |
+|---|---|
+| `contact_opted_out` | `OPTED_OUT` is a marketing opt-out and the API cannot know whether a given message is marketing. The workflow engine takes the same line — *a workflow is not an exemption from consent* — and an integration is the same kind of actor. |
+| `contact_blocked` | Blocking exists because a number will not stop writing, or there is a dispute. Outbound stays open in the console so an operator can send a final message; nothing in that reasoning extends to a script. |
+| `contact_archived` | The contact was deliberately taken out of circulation. |
+
+In all three an agent can still reply from the inbox, where the judgement is
+being made by someone accountable for it.
+
+`isInternal` is **not accepted**. A note is addressed to colleagues by name and a
+token has no name to sign it with; a note from "nobody" is worse than no note.
+
+**Status codes.** `201` sent. `202` recorded but the gateway refused — the message
+row exists, is visible in the inbox as FAILED with a reason, and can be retried
+there, so this is deliberately not a 5xx that would send a well-behaved client
+into a retry loop delivering duplicates. `402` the workspace plan or quota does
+not currently allow the send.
+
+### `PATCH /conversations/:id` · `conversations:write`
+
+`{ "status": "RESOLVED", "assigneeId": "...", "labels": ["urgent"],
+   "closingCategoryId": "...", "closingSummary": "..." }`
+
+Closing goes through the lifecycle service, never a status column: it writes an
+immutable closure row, applies the workspace's closing-notes policy, and cancels
+the auto-close job. A bare status write would close the thread in the list while
+every report that reads closures still believed it open. The closure is recorded
+with source `API`, so a supervisor can separate threads an integration closed
+from ones an agent did.
+
+Reopening advances the thread's `openedAt` and starts a new episode, preserving
+the earlier closure rows.
+
+If the workspace requires a closing category or summary, that policy applies to
+the API too — you get a `400` naming it rather than a closure the reports cannot
+categorise.
+
+### `DELETE /contacts/:identifier` · `contacts:delete`
+
+Erasure. Deletes the contact, **their conversations, and every message in them.**
+
+Three guards, each closing a different way this goes wrong:
+
+1. **Its own scope**, never part of `contacts:write`.
+2. **A dry run by default.** Without `confirmConversations`, nothing is deleted —
+   you get `409` and a `willDelete` block with the counts. You learn the cost by
+   asking, not by paying it.
+3. **The number must match.** `confirmConversations` has to equal the current
+   count. If a conversation opened since your dry run, the delete is refused with
+   the new number, so nobody erases more than they looked at.
+
+```
+DELETE /api/v1/contacts/phone:+972501234567
+→ 409 { "error": "confirmation_required",
+        "willDelete": { "conversations": 3, "messages": 214 } }
+
+DELETE /api/v1/contacts/phone:+972501234567   { "confirmConversations": 3 }
+→ 200 { "deleted": { "conversations": 3, "messages": 214 } }
+```
+
+There is no soft delete: `archived` already means "hidden but retained", and a
+second, softer delete would leave a workspace unable to answer *is this person's
+data gone* with a yes. The erasure is logged — the one record that outlives the
+contact, so "did we honour that request" stays answerable.
+
 ---
 
 ## The contact object
@@ -304,14 +395,9 @@ most callers want.
 
 **No `total` on list responses.** See above.
 
-**No message sending yet.** Sending is not "a write to this resource": it goes
-through a gateway, costs the subscriber money, counts against a quota, must
-respect marketing consent, has to persist *before* it sends so a transport error
-cannot lose what was written, and has to reach the agent's inbox live over a
-socket. The console's reply route does all of that. The right way to expose it
-is to lift that path into a service both callers share, not to write a second
-one that drifts from it — so it is its own change rather than a rushed
-appendix to this one.
+**No internal notes through the API.** See the messaging section.
+
+**No soft delete.** See `DELETE` above.
 
 ---
 
@@ -321,7 +407,7 @@ appendix to this one.
 cd apps/backend && npm run test:public-api
 ```
 
-75 checks over HTTP against the running server, because everything that makes
+103 checks over HTTP against the running server, because everything that makes
 this surface safe lives in the middleware chain rather than in the handlers.
 Mutation-proved three times: leaking `organizationId` from the serializer,
 unscoping the id lookup, and including internal notes by default each take it
@@ -331,6 +417,6 @@ red.
 
 ## Roadmap
 
-P1c's remaining half adds message sending; P1d adds outbound webhooks with
+P1d adds outbound webhooks with
 HMAC-SHA256 signatures and a delivery log. See
 [RESPONDIO-PARITY-ROADMAP.md](RESPONDIO-PARITY-ROADMAP.md).

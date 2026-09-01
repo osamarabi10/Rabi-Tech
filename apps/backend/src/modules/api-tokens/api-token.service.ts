@@ -35,6 +35,16 @@ import { getTenantId, runAsPlatform } from '../../lib/tenant-context';
 export const API_SCOPES = [
   'contacts:read',
   'contacts:write',
+  /*
+    Erasure is its own grant, never part of contacts:write.
+
+    A sync job needs to write contact fields; almost none of them need to
+    destroy a person's entire conversation history. Bundling the two would mean
+    every integration ever given write access could delete, and the day one has
+    a bug the workspace discovers what "cascade" means. Being a new scope also
+    means no token issued before it existed can hold it.
+  */
+  'contacts:delete',
   'conversations:read',
   'conversations:write',
   'messages:read',

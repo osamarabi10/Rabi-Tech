@@ -314,7 +314,24 @@ function staticAudits() {
     path.join(ROOT, 'src', 'workers', 'incoming-message.worker.ts'), 'utf8');
   const conversationSource = fs.readFileSync(
     path.join(ROOT, 'src', 'modules', 'conversations', 'conversations.routes.ts'), 'utf8');
-  const directProviderIdWrites = conversationSource.match(
+  /*
+    Both files, because the reply path moved.
+
+    This audit asserts that every direct send persists the provider's message
+    id — without it a delivery acknowledgement arriving later has no row to
+    match, and the message never leaves "sent". It used to read
+    conversations.routes.ts alone, which was true while every direct send lived
+    there. The reply path now goes through outbound-message.service.ts, shared
+    with the public API, so reading one file counted 2 and failed a behaviour
+    that was entirely intact.
+
+    The lesson belongs to the audit rather than the refactor: a check that greps
+    one path asserts where code lives, not what it does. Scanning both keeps it
+    asserting the property.
+  */
+  const outboundServiceSource = fs.readFileSync(
+    path.join(ROOT, 'src', 'modules', 'conversations', 'outbound-message.service.ts'), 'utf8');
+  const directProviderIdWrites = (conversationSource + outboundServiceSource).match(
     /waMessageId:\s*result\.providerMessageId/g,
   ) || [];
   record(

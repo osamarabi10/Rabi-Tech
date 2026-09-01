@@ -219,7 +219,7 @@ call that legitimately has no tenant yet.
 cd apps/backend && npm run test:public-api
 ```
 
-**75/75.** Boots the compiled server on port 4199 and drives `/api/v1` with real
+**103/103.** Boots the compiled server on port 4199 and drives `/api/v1` with real
 tokens, because everything that makes this surface safe lives in the *chain* —
 the `/v1` exemption from the session-JWT gate, `apiTokenAuth`, the scope check,
 `runAsOrganization`, the limiter — and calling a handler directly proves only the

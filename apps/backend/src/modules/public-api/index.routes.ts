@@ -5,6 +5,7 @@ import { apiTokenAuth, requireScope } from '../api-tokens/api-token.middleware';
 import { API_SCOPES } from '../api-tokens/api-token.service';
 import contactRoutes from './contacts.routes';
 import conversationRoutes from './conversations.routes';
+import messagingRoutes from './messaging.routes';
 
 /**
  * `/api/v1` — the public API.
@@ -31,6 +32,10 @@ router.use(apiTokenAuth);
 // Sub-resources mount after the auth middleware, so no router below can be
 // reached without a resolved token and an established tenant scope.
 router.use('/contacts', contactRoutes);
+// Messaging mounts at the root because it hangs off two different parents —
+// /contacts/:identifier/messages and /conversations/:id/messages — and one
+// router owning both keeps the send rules in a single file.
+router.use(messagingRoutes);
 router.use('/conversations', conversationRoutes);
 
 /**

@@ -3,20 +3,18 @@ import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { requireScope } from '../api-tokens/api-token.middleware';
 import { serializeContact, CONTACT_INCLUDE } from './serialize';
+import {
+  closeConversation,
+  ConversationLifecycleError,
+  reopenConversation,
+} from '../conversations/conversation-lifecycle.service';
 
 /**
  * `/api/v1/conversations` — reading threads and their messages.
  *
- * ## Read-only, for now, and that is a boundary rather than an omission
- *
- * Sending a message is not "a write to this resource". It goes through a
- * gateway, costs the subscriber money, counts against a quota, must respect
- * marketing consent, has to persist *before* it sends so a transport error
- * cannot lose what was written, and has to reach the agent's inbox live over a
- * socket. The console's reply route does all of that, and the correct way to
- * expose it is to lift that path into a service both callers share — not to
- * write a second one here that drifts from it. That is P1c's send half, and it
- * is deliberately a separate change.
+ * Reading threads and their messages, and moving a thread through its
+ * lifecycle. Sending lives in `messaging.routes.ts`, because it hangs off both
+ * a conversation and a contact.
  *
  * ## What a conversation looks like from outside
  *
@@ -211,6 +209,102 @@ router.get('/:id/messages', requireScope('conversations:read'), requireScope('me
       },
     });
   } catch (err) { return fail(res, req, err, 'GET /conversations/:id/messages'); }
+});
+
+/**
+ * `PATCH /conversations/:id` — status, assignee, labels.
+ *
+ * ## Closing goes through the lifecycle service, not a status column
+ *
+ * `closeConversation` writes an immutable `ConversationClosure` row, applies the
+ * workspace's closing-notes policy, cancels the auto-close job and optionally
+ * sends the closing reply. Setting `status = 'RESOLVED'` directly would do none
+ * of that, and the thread would be closed in the list while every report that
+ * reads closures believed it was still open.
+ *
+ * The closing source is `API`, which the schema's enum already anticipated, so
+ * closure reporting can separate threads an integration closed from ones an
+ * agent did — a distinction a supervisor asks about the first time the numbers
+ * look wrong.
+ *
+ * ## Reopening is not "set it back to OPEN"
+ *
+ * `reopenConversation` advances `openedAt`, which starts a new episode while
+ * preserving the earlier closure rows. A bare status write would leave the
+ * thread reporting a resolution that no longer describes it.
+ */
+router.patch('/:id', requireScope('conversations:write'), async (req, res) => {
+  try {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: String(req.params.id) },
+      select: { id: true, status: true },
+    });
+    if (!conversation) {
+      return res.status(404).json({ error: 'not_found', message: 'No conversation with that id.' });
+    }
+
+    const status = req.body?.status !== undefined ? String(req.body.status).toUpperCase() : undefined;
+    if (status !== undefined && !(STATUSES as readonly string[]).includes(status)) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        message: `status must be one of ${STATUSES.join(', ')}.`,
+      });
+    }
+
+    // Assignee is validated rather than trusted. The composite foreign key would
+    // refuse a user from another workspace anyway, but a 400 naming the problem
+    // beats a 500 carrying a constraint name to somebody's log.
+    if (req.body?.assigneeId !== undefined && req.body.assigneeId !== null) {
+      const assignee = await prisma.user.findFirst({
+        where: { id: String(req.body.assigneeId) },
+        select: { id: true },
+      });
+      if (!assignee) {
+        return res.status(400).json({ error: 'invalid_request', message: 'No user in this workspace has that id.' });
+      }
+    }
+
+    try {
+      if (status === 'RESOLVED' && conversation.status !== 'RESOLVED') {
+        await closeConversation({
+          conversationId: conversation.id,
+          source: 'API',
+          categoryId: req.body?.closingCategoryId ?? null,
+          summary: req.body?.closingSummary ?? null,
+          // The workspace's closing-notes policy applies to an integration the
+          // same as to an agent. A caller that skips a required category is
+          // told so, rather than quietly producing a closure the reports
+          // cannot categorise.
+          enforceManualPolicy: true,
+        });
+      } else if (status && status !== 'RESOLVED' && conversation.status === 'RESOLVED') {
+        await reopenConversation(conversation.id);
+      }
+    } catch (err) {
+      if (err instanceof ConversationLifecycleError) {
+        return res.status(err.status).json({ error: err.code.toLowerCase(), message: err.message });
+      }
+      throw err;
+    }
+
+    const data: any = {};
+    // A status that is neither of the two transitions above is a plain move
+    // between OPEN and PENDING, which carries no lifecycle consequences.
+    if (status && status !== 'RESOLVED' && conversation.status !== 'RESOLVED') data.status = status;
+    if (req.body?.assigneeId !== undefined) data.assignedToId = req.body.assigneeId || null;
+    if (Array.isArray(req.body?.labels)) {
+      data.labels = [...new Set(req.body.labels.map((l: unknown) => String(l).trim()).filter(Boolean))].slice(0, 10);
+    }
+    if (Object.keys(data).length) {
+      await prisma.conversation.update({ where: { id: conversation.id }, data });
+    }
+
+    const updated = await prisma.conversation.findFirst({
+      where: { id: conversation.id },
+      include: CONVERSATION_INCLUDE,
+    });
+    return res.json(serializeConversation(updated, req.apiToken!.maskContactDetails));
+  } catch (err) { return fail(res, req, err, 'PATCH /conversations/:id'); }
 });
 
 export default router;

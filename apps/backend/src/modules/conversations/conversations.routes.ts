@@ -11,7 +11,6 @@ import { sendStartWelcome } from '../../utils/welcome';
 import { getSessionForTeam } from '../../utils/whatsapp-sessions';
 import { validateBody, createConversationSchema, resolveConversationSchema } from '../../lib/validation';
 import logger from '../../lib/logger';
-import { stampFirstResponse } from '../analytics/response-time';
 import { auditConversation } from '../../lib/audit';
 import { requirePermission, requireSupervisor } from '../../middleware/rbac.middleware';
 import { sendCsatPrompt } from '../../utils/client-feedback';
@@ -26,7 +25,6 @@ import { describeSendFailure } from '../../utils/send-failure';
 import { signMediaUrl } from '../../utils/media-url';
 import { requireTeamId } from '../../utils/teams';
 import { conversationAccessWhere, maskConversationContacts } from '../../lib/user-access';
-import { renderDynamicVariables } from '../../utils/template';
 import { gatewayReachableAssetUrl } from '../snippets/snippet-storage';
 import {
   closeConversation,
@@ -36,6 +34,7 @@ import {
   reopenConversation,
   rescheduleConversationAutoClose,
 } from './conversation-lifecycle.service';
+import { OutboundSendError, sendOutboundMessage } from './outbound-message.service';
 
 const router = Router();
 router.use(verifyToken);
@@ -421,41 +420,38 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
       return res.status(404).json({ error: 'محادثة غير موجودة' });
     }
 
-    // Persist FIRST, then send. Previously the OpenWA call ran before message.create,
-    // so a transport error (timeout/reset) AFTER successful delivery returned 503 and
-    // discarded the message: the customer received it, the agent saw nothing, and
-    // re-sending duplicated it. Never lose a message to a provider error again.
-    const timezone = body?.includes('$system.')
-      ? (await prisma.organizationConfig.findUnique({ where: { organizationId: req.user!.organizationId }, select: { timezone: true } }))?.timezone
-      : undefined;
-    const renderedBody = renderDynamicVariables(String(body || '').trim(), {
-      contact: {
-        ...conv.contact,
-        customFields: Object.fromEntries(conv.contact.customFieldValues.map((entry) => [entry.fieldDefinition.slug, entry.value])),
-      },
-      assignee: conv.assignee,
-      timezone,
-    });
+    /*
+      One send path, shared with the public API.
 
-    const msg = await prisma.message.create({
-      data: {
-        organizationId: req.user!.organizationId,
-        conversationId: conv.id,
-        direction: 'OUTBOUND',
-        body: renderedBody || null,
-        mediaUrl: isInternal ? null : mediaUrl,
-        mediaType: isInternal ? null : mediaType,
-        mediaFileName: isInternal ? null : mediaFileName,
-        sentById: req.user!.id,
-        status: isInternal ? 'SENT' : 'PENDING',
+      This block used to be written out here in full. It now lives in
+      `sendOutboundMessage`, because the API needed the same behaviour and a
+      second copy drifts: the next fix to retry behaviour, failure text or the
+      auto-close clock would land in one and not the other, and the divergence
+      is invisible until a subscriber reports that messages from their
+      integration never close their threads.
+
+      What stays here is what is genuinely the console's — mentions, the audit
+      entry naming a user, and the entitlement error shapes the UI renders.
+    */
+    let msg: any;
+    let sendError: unknown = null;
+    try {
+      const outcome = await sendOutboundMessage({
+        conversation: conv as any,
+        body,
+        mediaUrl,
+        mediaType,
+        mediaFileName,
         isInternal: !!isInternal,
-      },
-    });
-
-    // An internal note is not a response to the customer, so it must not stop
-    // the response clock. Fire-and-forget: reporting metadata never delays a send.
-    if (!isInternal) {
-      stampFirstResponse(conv.id, msg.timestamp).catch(() => {});
+        sender: { kind: 'user', id: req.user!.id },
+      });
+      msg = outcome.message;
+      sendError = outcome.sendError;
+    } catch (err) {
+      if (err instanceof OutboundSendError) {
+        return res.status(err.status).json({ error: err.message });
+      }
+      throw err;
     }
 
     // Mentions only exist on internal notes. A customer-facing reply carrying
@@ -465,49 +461,8 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
       notifyMentioned(conv.id, mentionedUserIds, req.user!.id, req.user!.name).catch(() => {});
     }
 
-    let sendError: unknown = null;
-    if (!isInternal) {
-      try {
-        let result;
-        if (mediaUrl) {
-          result = await ChannelService.sendMedia(
-            conv.session.sessionName,
-            conv.contact.phone,
-            gatewayReachableAssetUrl(mediaUrl),
-            renderedBody || undefined,
-            { mediaType, fileName: mediaFileName },
-          );
-        } else {
-          result = await ChannelService.sendText(conv.session.sessionName, conv.contact.phone, renderedBody);
-        }
-        await prisma.message.update({
-          where: { id: msg.id },
-          data: { status: 'SENT', waMessageId: result.providerMessageId },
-        });
-        msg.status = 'SENT';
-        await markSuccessfulHumanOutbound(conv.id, msg.timestamp);
-      } catch (openwaErr) {
-        sendError = openwaErr;
-        const failure = describeSendFailure(openwaErr);
-        logger.error('OpenWA send failed', { error: String(openwaErr), code: failure.code, messageId: msg.id, sessionName: conv.session.sessionName, requestId: (req as any).id });
-        await prisma.message.update({
-          where: { id: msg.id },
-          data: { status: 'FAILED', failureReason: failure.reason },
-        });
-        msg.status = 'FAILED';
-        msg.failureReason = failure.reason;
-      }
-    }
-
-    await prisma.conversation.update({
-      where: { id: conv.id },
-      data: { lastMessageAt: new Date() },
-    });
-
     // Audit log
     await auditConversation(req.user!.id, conv.id, 'opened', req.ip, req.get('user-agent'));
-
-    getIO().to(socketRoom.conversation(req.user!.organizationId, conv.id)).emit(SocketEvents.NEW_MESSAGE, { conversationId: conv.id, message: msg });
 
     // Always return the persisted message so the thread renders it. A failed send is
     // surfaced via status === 'FAILED' + sendError, never by discarding the record.

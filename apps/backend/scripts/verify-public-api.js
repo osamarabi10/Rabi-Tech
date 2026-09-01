@@ -446,6 +446,182 @@ async function main() {
     check('another workspace cannot read the messages either', crossMsgs.status === 403 || crossMsgs.status === 404,
       crossMsgs.status);
 
+    // ── sending ─────────────────────────────────────────────────────────────
+    /*
+      Sends are exercised through the *conversation* endpoint, never the
+      contact-addressed one.
+
+      The conversation carries this gate's own session — a fake, inactive one —
+      so the gateway call cannot reach anything real. The contact-addressed
+      endpoint resolves the workspace's primary session instead, which on a
+      machine with a live WhatsApp connection is a live session, and a test
+      suite must not be one accidental ordering away from messaging a stranger.
+      So that endpoint is tested on its refusal paths, which return before any
+      session is resolved.
+
+      The send is expected to FAIL at the gateway, and that is the point: it
+      proves persist-before-send. The row must exist, marked FAILED with a
+      reason, rather than vanishing with the transport error — the defect that
+      once had customers receiving messages agents could not see.
+    */
+    const sendToken = await mint(orgA.id, ['messages:send', 'conversations:read', 'messages:read']);
+    tokens.send = sendToken;
+
+    /*
+      Consent is reset to OPTED_IN first.
+
+      The consent assertions above left this contact OPTED_OUT, and the first
+      run of this section returned 403 on every send because of it — the refusal
+      working exactly as intended, on a fixture that had been changed out from
+      under it. Stating the precondition rather than inheriting it is what keeps
+      a later reordering from turning a real failure into a green run, or the
+      reverse.
+    */
+    await runAsPlatform('verify-public-api:setup', () =>
+      prisma.contact.update({ where: { id: contactId }, data: { marketingConsent: 'OPTED_IN' } }),
+    );
+
+    const sent = await call(sendToken.token, 'POST', `/api/v1/conversations/${thread.id}/messages`, {
+      text: 'gate: outbound probe',
+    });
+    check('a send is accepted and reported, not 500', [201, 202, 402].includes(sent.status), sent.status);
+    check('  …and returns the message id', typeof sent.body?.id === 'string');
+
+    const persisted = await runAsPlatform('verify-public-api:check', () =>
+      prisma.message.findFirst({ where: { id: sent.body?.id } }),
+    );
+    check('persist-before-send: the row exists even though the gateway refused',
+      persisted !== null);
+    check('  …attributed to no user, because a token is not a person',
+      persisted && persisted.sentById === null);
+    check('  …outbound and not internal', persisted && persisted.direction === 'OUTBOUND' && persisted.isInternal === false);
+    if (sent.status === 202) {
+      check('  …marked FAILED with a reason rather than discarded',
+        persisted && persisted.status === 'FAILED' && !!persisted.failureReason,
+        persisted && persisted.status);
+    }
+
+    const noSendScope = await call(RW2, 'POST', `/api/v1/conversations/${thread.id}/messages`, { text: 'no' });
+    check('sending requires messages:send', noSendScope.status === 403, noSendScope.status);
+
+    const internalAttempt = await call(sendToken.token, 'POST', `/api/v1/conversations/${thread.id}/messages`, {
+      text: 'note', isInternal: true,
+    });
+    // A note is addressed to colleagues by name and a token has no name to sign
+    // it with. A note from "nobody" is worse than no note.
+    check('an internal note cannot be sent through the API', internalAttempt.status === 400);
+
+    const emptySend = await call(sendToken.token, 'POST', `/api/v1/conversations/${thread.id}/messages`, { text: '   ' });
+    check('an empty message is refused', emptySend.status === 400);
+
+    const crossSend = await call(tokens.otherOrg.token, 'POST', `/api/v1/conversations/${thread.id}/messages`, { text: 'x' });
+    check('another workspace cannot send into this thread', [403, 404].includes(crossSend.status), crossSend.status);
+
+    /*
+      Refusals the console deliberately does not make.
+
+      An agent messaging a blocked or opted-out contact is a human exercising
+      judgement in front of the thread. A script is not, so the API refuses
+      where the inbox permits.
+    */
+    await runAsPlatform('verify-public-api:setup', () =>
+      prisma.contact.update({ where: { id: contactId }, data: { blockedAt: new Date() } }),
+    );
+    const blockedSend = await call(sendToken.token, 'POST', `/api/v1/contacts/id:${contactId}/messages`, { text: 'x' });
+    check('the API refuses to message a blocked contact', blockedSend.status === 403, blockedSend.status);
+    check('  …and names the reason', blockedSend.body?.error === 'contact_blocked');
+
+    await runAsPlatform('verify-public-api:setup', () =>
+      prisma.contact.update({ where: { id: contactId }, data: { blockedAt: null, marketingConsent: 'OPTED_OUT' } }),
+    );
+    const optedOutSend = await call(sendToken.token, 'POST', `/api/v1/contacts/id:${contactId}/messages`, { text: 'x' });
+    check('the API refuses to message an opted-out contact', optedOutSend.status === 403);
+    check('  …and names that reason instead', optedOutSend.body?.error === 'contact_opted_out',
+      optedOutSend.body?.error);
+
+    // ── conversation lifecycle ──────────────────────────────────────────────
+    const lifecycle = await mint(orgA.id, ['conversations:read', 'conversations:write']);
+    tokens.lifecycle = lifecycle;
+
+    const noWrite = await call(RW2, 'PATCH', '/api/v1/conversations/' + thread.id, { status: 'PENDING' });
+    check('changing a thread requires conversations:write', noWrite.status === 403);
+
+    const toPending = await call(lifecycle.token, 'PATCH', '/api/v1/conversations/' + thread.id, { status: 'PENDING' });
+    check('a thread can be moved to PENDING', toPending.status === 200 && toPending.body?.status === 'PENDING',
+      JSON.stringify(toPending.body?.status));
+
+    const labelled = await call(lifecycle.token, 'PATCH', '/api/v1/conversations/' + thread.id, {
+      labels: ['gate-label', 'gate-label', 'other'],
+    });
+    check('labels are de-duplicated', (labelled.body?.labels || []).filter((l) => l === 'gate-label').length === 1);
+
+    const badAssignee = await call(lifecycle.token, 'PATCH', '/api/v1/conversations/' + thread.id, {
+      assigneeId: 'not-a-real-user',
+    });
+    check('an unknown assignee is a 400, not a constraint error in a log', badAssignee.status === 400);
+
+    /*
+      Closing goes through the lifecycle service, not a status column.
+
+      A bare `status = 'RESOLVED'` would close the thread in the list while
+      every report that reads ConversationClosure still believed it open. The
+      closure row is the assertion that the real path ran.
+    */
+    const closed = await call(lifecycle.token, 'PATCH', '/api/v1/conversations/' + thread.id, { status: 'RESOLVED' });
+    check('a thread can be resolved', [200, 400].includes(closed.status), closed.status);
+    if (closed.status === 200) {
+      check('  …and reports RESOLVED', closed.body?.status === 'RESOLVED');
+      const closure = await runAsPlatform('verify-public-api:check', () =>
+        prisma.conversationClosure.findFirst({ where: { conversationId: thread.id } }),
+      );
+      check('  …writing a closure row, not just a status column', closure !== null);
+      check('  …attributed to source API so reports can separate it from an agent',
+        closure && closure.source === 'API', closure && closure.source);
+
+      const reopened = await call(lifecycle.token, 'PATCH', '/api/v1/conversations/' + thread.id, { status: 'OPEN' });
+      check('a resolved thread can be reopened', reopened.status === 200 && reopened.body?.status !== 'RESOLVED',
+        reopened.body?.status);
+    } else {
+      // The workspace requires a closing category or summary. That policy
+      // applying to an integration is the correct behaviour, so assert it
+      // rather than treating a 400 as noise.
+      check('  …or the workspace closing-notes policy is enforced on the API too',
+        /categor|summary/i.test(closed.body?.error || closed.body?.message || ''),
+        JSON.stringify(closed.body));
+    }
+
+    // ── erasure ─────────────────────────────────────────────────────────────
+    const deleter = await mint(orgA.id, ['contacts:delete']);
+    tokens.deleter = deleter;
+
+    const writeCannotDelete = await call(RW, 'DELETE', '/api/v1/contacts/phone:' + PHONE_C);
+    check('contacts:write does not carry the power to erase', writeCannotDelete.status === 403,
+      writeCannotDelete.status);
+
+    const dryRun = await call(deleter.token, 'DELETE', '/api/v1/contacts/phone:' + PHONE_C);
+    check('DELETE without confirmation deletes nothing', dryRun.status === 409, dryRun.status);
+    check('  …and states the blast radius', typeof dryRun.body?.willDelete?.conversations === 'number');
+    const survived = await runAsPlatform('verify-public-api:check', () =>
+      prisma.contact.findFirst({ where: { phone: PHONE_C } }),
+    );
+    check('  …and the contact really is still there', survived !== null);
+
+    const wrongCount = await call(deleter.token, 'DELETE', '/api/v1/contacts/phone:' + PHONE_C, {
+      confirmConversations: 999,
+    });
+    check('a mismatched confirmation is refused', wrongCount.status === 409);
+    check('  …so nobody erases more than they looked at',
+      (await runAsPlatform('verify-public-api:check', () =>
+        prisma.contact.findFirst({ where: { phone: PHONE_C } }))) !== null);
+
+    const erased = await call(deleter.token, 'DELETE', '/api/v1/contacts/phone:' + PHONE_C, {
+      confirmConversations: dryRun.body?.willDelete?.conversations ?? 0,
+    });
+    check('a confirmed erasure succeeds', erased.status === 200, JSON.stringify(erased.body));
+    check('  …and the contact is gone',
+      (await runAsPlatform('verify-public-api:check', () =>
+        prisma.contact.findFirst({ where: { phone: PHONE_C } }))) === null);
+
     // ── the console is still guarded ────────────────────────────────────────
     // The /v1 exemption is from the session-JWT middleware only. If it ever
     // widened, this is where it shows.

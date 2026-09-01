@@ -27,15 +27,15 @@ import { CONTACT_INCLUDE, serializeContact } from './serialize';
  * a sync job that means "add if new" and gets upsert semantics silently
  * overwrites every field it left blank.
  *
- * ## There is no DELETE, deliberately
+ * ## DELETE exists, but it declares its blast radius
  *
- * The console has no contact deletion either — `contact:delete` exists in the
- * permission table and no route uses it. Deleting a contact cascades to their
- * conversations and every message in them, which is usually the entire record
- * of why the contact mattered. Defining those semantics for the first time in
- * a *public API*, where the caller is somebody else's script and the blast
- * radius is a workspace's history, is the wrong place to define them. Archiving
- * is available through `PATCH` and is what most callers actually want.
+ * Erasure is a lawful request a subscriber must be able to honour, so refusing
+ * to build it was not an answer. What is dangerous is *undeclared* deletion —
+ * a `DELETE` that silently takes the conversations and every message with it,
+ * called by a script whose author was thinking about one row. So it carries its
+ * own scope, dry-runs by default, and requires the conversation count back. See
+ * the handler at the bottom of this file. Archiving via `PATCH` remains the
+ * right call for most callers.
  *
  * ## Consent is not a field here either
  *
@@ -403,6 +403,93 @@ router.delete('/:identifier/tags/:tag', requireScope('tags:write'), async (req, 
     const updated = await prisma.contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });
     return send(res, req, updated);
   } catch (err) { return fail(res, req, err, 'DELETE /contacts/:identifier/tags/:tag'); }
+});
+
+/**
+ * `DELETE /contacts/:identifier` — erasure, with the blast radius stated first.
+ *
+ * ## Why this exists despite the reservations
+ *
+ * A person asking to be erased is a real, lawful request a subscriber has to be
+ * able to honour, and "archive them instead" is not an answer to it. What was
+ * wrong was not deletion — it was *undeclared* deletion: a `DELETE` that quietly
+ * takes the conversations and every message with it, called by a script whose
+ * author was thinking about a contact row.
+ *
+ * So the cascade is not hidden. It is counted, returned, and has to be
+ * acknowledged.
+ *
+ * ## Three guards, each closing a different way this goes wrong
+ *
+ * 1. **Its own scope.** `contacts:delete` is never part of `contacts:write`, and
+ *    it is a *new* scope, so no token issued before today can hold it. An
+ *    integration that syncs names cannot destroy history because of a bug.
+ * 2. **A dry run by default.** Without `confirmConversations`, nothing is
+ *    deleted: the response says what *would* go. A caller learns the cost by
+ *    asking, not by paying it.
+ * 3. **The number must match.** `confirmConversations` has to equal the actual
+ *    count. If it drifted since the dry run — a conversation opened in between —
+ *    the delete is refused with the new number, so nobody erases more than they
+ *    looked at. The console's tag deletion uses this same pattern.
+ *
+ * There is no soft delete here on purpose. `isArchived` already means "hidden
+ * but retained"; a second, softer delete would leave a workspace unable to
+ * answer "is this person's data gone" with a yes.
+ */
+router.delete('/:identifier', requireScope('contacts:delete'), async (req, res) => {
+  try {
+    const { contact } = await findByRef(req.params.identifier, req);
+    if (!contact) return res.status(404).json({ error: 'not_found', message: 'No contact matches that identifier.' });
+
+    const [conversations, messages] = await Promise.all([
+      prisma.conversation.count({ where: { contactId: contact.id } }),
+      prisma.message.count({ where: { conversation: { contactId: contact.id } } }),
+    ]);
+
+    const confirmed = req.body?.confirmConversations;
+    if (confirmed === undefined || confirmed === null) {
+      return res.status(409).json({
+        error: 'confirmation_required',
+        message: 'Deleting this contact also deletes their conversations and every message in them. Send "confirmConversations" with the number below to proceed. Nothing has been deleted.',
+        willDelete: { contactId: contact.id, conversations, messages },
+      });
+    }
+    if (Number(confirmed) !== conversations) {
+      return res.status(409).json({
+        error: 'confirmation_mismatch',
+        message: 'The conversation count has changed since you checked. Nothing has been deleted.',
+        willDelete: { contactId: contact.id, conversations, messages },
+      });
+    }
+
+    /*
+      Deleted through Prisma so the tenancy extension scopes it, and in one
+      transaction so a contact cannot survive with its conversations already
+      gone. Messages first: the composite foreign keys cascade, but relying on a
+      cascade to order a multi-table delete leaves the order to the database
+      rather than to the person reading this.
+    */
+    await prisma.$transaction([
+      prisma.message.deleteMany({ where: { conversation: { contactId: contact.id } } }),
+      prisma.conversation.deleteMany({ where: { contactId: contact.id } }),
+      prisma.contactTag.deleteMany({ where: { contactId: contact.id } }),
+      prisma.customFieldValue.deleteMany({ where: { contactId: contact.id } }),
+      prisma.contact.deleteMany({ where: { id: contact.id } }),
+    ]);
+
+    // The one record that outlives the contact, deliberately: the fact that an
+    // erasure happened, when, and by which credential. A workspace asked "did
+    // we honour that request" has nothing else to read.
+    logger.warn('public-api contact deleted', {
+      contactId: contact.id,
+      conversations,
+      messages,
+      tokenId: req.apiToken!.id,
+      requestId: (req as any).id,
+    });
+
+    return res.json({ deleted: { contactId: contact.id, conversations, messages } });
+  } catch (err) { return fail(res, req, err, 'DELETE /contacts/:identifier'); }
 });
 
 export default router;
