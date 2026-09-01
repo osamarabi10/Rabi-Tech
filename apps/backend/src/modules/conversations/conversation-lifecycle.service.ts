@@ -202,6 +202,44 @@ export async function reopenConversation(
   if (conversation.status !== 'RESOLVED') return { conversation, changed: false };
 
   const openedAt = new Date();
+
+  /*
+    Keep the assignee only while they could still be given the conversation.
+
+    Continuity is the default and it is right: a customer who writes again
+    reaches the agent who already knows their history, and `autoAssignConversation`
+    deliberately leaves an assigned thread alone so a reply does not bounce it
+    between people.
+
+    But a thread can be resolved for months. `eligibleAgents` requires
+    `isActive`, `not isAway`, and membership of the conversation's team — and a
+    reopen bypassed all three, because it changed status without reconsidering
+    who was holding it. So a thread reopening to somebody who has since been
+    deactivated or moved teams was assigned to a person who cannot see it, and
+    auto-assignment would never rescue it: it skips assigned conversations, and
+    from its point of view this one is assigned.
+
+    The result is a live customer message in nobody's inbox that still looks
+    handled on every screen that shows an assignee. Clearing the assignment is
+    what puts it back in the queue.
+
+    Only the ineligible case is cleared. Away is deliberately included — an
+    agent on holiday should not be the reason a returning customer waits — and
+    is also why this is not a `deletedAt`-style check: the test is exactly the
+    one the router itself applies, so the two cannot disagree.
+  */
+  const assigneeStillEligible = conversation.assignedToId
+    ? Boolean(await prisma.user.findFirst({
+        where: {
+          id: conversation.assignedToId,
+          isActive: true,
+          isAway: false,
+          ...(conversation.teamId ? { teams: { some: { teamId: conversation.teamId } } } : {}),
+        },
+        select: { id: true },
+      }))
+    : true;
+
   const updated = await prisma.conversation.update({
     where: { id: conversation.id },
     data: {
@@ -214,6 +252,7 @@ export async function reopenConversation(
       autoCloseAt: null,
       snoozedUntil: null,
       snoozedByName: null,
+      ...(assigneeStillEligible ? {} : { assignedToId: null }),
     },
   });
 
@@ -222,7 +261,18 @@ export async function reopenConversation(
     action: 'conversation.reopened',
     resource: 'conversation',
     resourceId: conversation.id,
-    changes: { before: { status: 'RESOLVED' }, after: { status: 'OPEN', openedAt } },
+    // The cleared assignment is recorded explicitly. Otherwise a supervisor
+    // asking why a thread they were watching left an agent's queue finds a
+    // reopen event and no explanation, and the honest answer — the agent was no
+    // longer eligible to hold it — is not recoverable from the row afterwards.
+    changes: {
+      before: { status: 'RESOLVED', assignedToId: conversation.assignedToId },
+      after: {
+        status: 'OPEN',
+        openedAt,
+        ...(assigneeStillEligible ? {} : { assignedToId: null, unassignedReason: 'assignee no longer eligible' }),
+      },
+    },
     ipAddress: actor?.ipAddress,
     userAgent: actor?.userAgent,
   });

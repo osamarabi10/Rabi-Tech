@@ -1169,14 +1169,56 @@ gaps are deliberate.
   created and no auto-reply is sent, then unblock and confirm the next message
   lands in the existing thread rather than a new one
 
-- [ ] **M9.2 Unassign after a conversation closes** · ~0.5 day
-  Observed in the live workspace as a workflow. Without it, closed threads keep
-  counting against an agent's open-conversation load, which is the input to
-  least-open auto-assignment — so the router quietly gets worse the longer
-  someone works. An organization-level setting rather than a workflow node, so
-  it holds for closures from every source (manual, auto-close, workflow).
-  — verify: close a conversation, confirm `assignedToId` clears and the agent's
-  least-open count drops by one
+- [x] **M9.2 Unassign after a conversation closes** — **withdrawn 2026-09-01.
+  The problem it described does not exist, and the item was wrong when it was
+  written here.**
+
+  The claim was that closed threads keep counting against an agent's open load
+  and degrade least-open routing. They do not.
+  `routing/assignment.service.ts:24` defines
+  `OPEN_STATES = ['OPEN','PENDING','AWAITING_CLIENT']` and line 45 counts only
+  those, so a RESOLVED conversation has never counted. The `maxConcurrent` cap
+  reads the same number and is correct for the same reason.
+
+  The claim came from the Respond.io workspace document and was recorded here
+  without checking the code against it — the same stale-premise shape as D-28,
+  found the same way.
+
+  **Building it would also have broken agent reporting.**
+  `analytics/reporting.service.ts:492` groups by `assignedToId` on *resolved*
+  conversations — that is "conversations resolved per agent" — and
+  `ConversationClosure` records `closedById`, not the assignee (null on an
+  auto-close). Clearing `assignedToId` on close would have zeroed every agent's
+  resolved count, CSAT attribution and response-time statistics, with the data
+  gone rather than moved.
+
+  Replaced by **M9.2b**, which is the real defect that was hiding underneath it.
+
+- [x] **M9.2b Reopening a thread must not hand it to an ineligible agent**
+  — **done 2026-09-01.** `reopenConversation` reset status, `resolvedAt`,
+  `openedAt`, `firstResponseAt`, `autoCloseEligible`, `lastHumanOutboundAt`,
+  `autoCloseAt` and `snoozedUntil` — and kept `assignedToId` without asking
+  whether that person could still receive it.
+
+  `eligibleAgents` requires `isActive`, not `isAway`, and membership of the
+  conversation's team. A reopen bypassed all three, and
+  `autoAssignConversation` deliberately skips assigned threads — so a
+  conversation reopening to a deactivated or departed agent was assigned to
+  someone who could not see it, and nothing would ever rescue it. A live
+  customer message in nobody's inbox that still reads as handled on every screen
+  showing an assignee.
+
+  The assignee is now kept only while they pass the same test the router
+  applies, so the two cannot disagree; otherwise it clears and the thread falls
+  back to auto-assignment. Away is included deliberately — an agent on holiday
+  should not be why a returning customer waits. All four reopen call sites
+  converge on `reopenConversation`, so one fix covers manual reopen, the inbound
+  path, and conversation merge. The cleared assignment is written into the audit
+  entry with its reason.
+
+  No migration, no config flag, no reporting impact.
+  — verify: deactivate an agent holding a resolved thread, send from that
+  contact, confirm the thread reopens unassigned and auto-assignment picks it up
 
 - [ ] **M9.3 Chart export (SVG / PNG)** · ~0.5 day
   Reports already export CSV for contacts and finance; the charts export

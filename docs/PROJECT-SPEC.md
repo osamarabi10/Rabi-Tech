@@ -141,7 +141,7 @@ against our own 97 messages — see H3/F4.3 and M3.5/F5.3.
 | WhatsApp 24h window + template fallback | ✔ | ✔ enforced before Meta is called |
 | Merge suggestions | ✔ | ✔ |
 | **Blocked contacts** | ✔ | ✘ — **not built and not previously on any list.** A real need at 663 contacts |
-| **Unassign after conversation closes** | ✔ (observed as a workflow) | ✘ — the engine can nearly express it already |
+| Unassign after conversation closes | ✔ (observed as a workflow) | **n/a — withdrawn 2026-09-01.** The load it would relieve is already excluded: `assignment.service.ts:45` counts only `OPEN`/`PENDING`/`AWAITING_CLIENT`. Building it would have zeroed agent reporting, which reads `assignedToId` on resolved rows. See M9.2 in [TODO.md](TODO.md) |
 | **AI Agents** (assignable, appear in the assignment dropdown) | ✔ | ✘ — P13. Today "AI" here is only plan limits on `ai_tokens_in/out`; there is no feature behind them |
 | **AI summarize / assist in the composer** | ✔ | ✘ — P13 |
 | Tasks inbox | ✔ *(doc, uninspected — and empty in the observed workspace)* | ✘ — **not recommended**; it was unconfigured in a workspace with 663 live contacts |
