@@ -63,6 +63,31 @@ type HistoryEntry = {
   changes: Array<{ field: string; before: unknown; after: unknown }>;
 };
 
+/**
+ * What a pending change would do, as the server computes it.
+ *
+ * The two lists are deliberately separate all the way from the endpoint to the
+ * screen. `changesNow` reaches existing subscribers at the next catalogue
+ * refresh; `changesAtNextActivation` does not reach them at all until their
+ * subscription is activated again, because the enforced limits were copied into
+ * OrganizationConfig when they were last activated and enforcement reads that
+ * copy. Merging the two into one "what changes" list would be the single most
+ * misleading thing this screen could do.
+ */
+type Preview = {
+  code: string;
+  affectedCount: number;
+  organizations: Array<{
+    organizationId: string;
+    name: string;
+    source: string;
+    changesNow: Array<{ field: string; before: unknown; after: unknown }>;
+    changesAtNextActivation: Array<{ field: string; before: unknown; after: unknown }>;
+  }>;
+  channelImpact: { removed: string[]; holders: Array<{ organizationId: string; kind: string; status: string }>; effect: string } | null;
+  note: string;
+};
+
 /** Values are rendered as JSON: a null limit means unlimited and must not read as blank. */
 function renderValue(value: unknown): string {
   if (value === null) return 'unlimited';
@@ -93,6 +118,9 @@ export default function PlatformEditions() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState<string | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewFor, setPreviewFor] = useState<string | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyState, setHistoryState] = useState<'idle' | 'loading' | 'error'>('idle');
@@ -114,6 +142,31 @@ export default function PlatformEditions() {
       setHistoryState('idle');
     } catch {
       setHistoryState('error');
+    }
+  };
+
+  /**
+   * Ask the server what the pending edit would do.
+   *
+   * Sends the same draft the Save button would send, so the answer describes
+   * this change and not an approximation of it. The server computes it by
+   * running the real entitlement resolver against a hypothetical edition, which
+   * is why this is a request rather than something worked out here.
+   */
+  const loadPreview = async (code: string) => {
+    const payload = draft[code];
+    if (!payload || !Object.keys(payload).length) return;
+    setPreviewing(code);
+    setPreviewFor(code);
+    try {
+      const { data } = await api.post(`/api/platform/editions/${code}/preview`, payload);
+      setPreview(data);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Could not preview this change');
+      setPreview(null);
+      setPreviewFor(null);
+    } finally {
+      setPreviewing(null);
     }
   };
 
@@ -231,6 +284,14 @@ export default function PlatformEditions() {
                   >
                     {value('isActive') ? 'Deactivate' : 'Activate'}
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!dirty || previewing === edition.code}
+                    onClick={() => loadPreview(edition.code)}
+                  >
+                    {previewing === edition.code ? 'Checking…' : 'Preview effect'}
+                  </Button>
                   <Button size="sm" disabled={!dirty || saving === edition.code} onClick={() => save(edition.code)}>
                     {saving === edition.code ? 'Saving…' : 'Save'}
                   </Button>
@@ -323,6 +384,84 @@ export default function PlatformEditions() {
                     this screen for now; the server accepts it.
                   </span>
                 </div>
+
+                {previewFor === edition.code && preview ? (
+                  <div className="rounded-md border border-border bg-muted/30 p-4 text-sm">
+                    <p className="font-medium">
+                      {preview.affectedCount === 0
+                        ? 'No current subscriber is on this edition.'
+                        : `${preview.affectedCount} subscriber${preview.affectedCount === 1 ? '' : 's'} on this edition.`}
+                    </p>
+
+                    {preview.organizations.map((org) => (
+                      <div key={org.organizationId} className="mt-3 border-t border-border pt-3">
+                        <p className="font-medium">{org.name}</p>
+
+                        {org.changesNow.length > 0 ? (
+                          <div className="mt-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide">Takes effect immediately</p>
+                            <ul className="mt-1 space-y-0.5">
+                              {org.changesNow.map((c) => (
+                                <li key={c.field} className="flex flex-wrap gap-x-2">
+                                  <code dir="ltr">{c.field}</code>
+                                  <span dir="ltr">{renderValue(c.before)} → {renderValue(c.after)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        {/*
+                          Visually separated, not merged. These are the metered
+                          limits: the edition changes, and this subscriber does
+                          not feel it until something activates their
+                          subscription again. Presenting them alongside the
+                          immediate set would tell an owner that a quota rise
+                          they just granted is already in force, which is the
+                          one thing this panel exists to prevent.
+                        */}
+                        {org.changesAtNextActivation.length > 0 ? (
+                          <div className="mt-3 rounded border border-dashed border-border p-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              Not until their next activation
+                            </p>
+                            <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                              {org.changesAtNextActivation.map((c) => (
+                                <li key={c.field} className="flex flex-wrap gap-x-2">
+                                  <code dir="ltr">{c.field}</code>
+                                  <span dir="ltr">{renderValue(c.before)} → {renderValue(c.after)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        {org.changesNow.length === 0 && org.changesAtNextActivation.length === 0 ? (
+                          <p className="mt-1 text-muted-foreground">Nothing changes for this subscriber.</p>
+                        ) : null}
+                      </div>
+                    ))}
+
+                    {preview.channelImpact ? (
+                      <div className="mt-3 border-t border-border pt-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide">
+                          Channels removed: <code dir="ltr">{preview.channelImpact.removed.join(', ')}</code>
+                        </p>
+                        <p className="mt-1 text-muted-foreground">{preview.channelImpact.effect}</p>
+                        {preview.channelImpact.holders.length > 0 ? (
+                          <p className="mt-1 text-muted-foreground">
+                            {preview.channelImpact.holders.length} connected channel
+                            {preview.channelImpact.holders.length === 1 ? '' : 's'} affected.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">
+                      {preview.note}
+                    </p>
+                  </div>
+                ) : null}
 
                 <div className="border-t border-border pt-4">
                   <Button variant="ghost" size="sm" onClick={() => loadHistory(edition.code)}>
