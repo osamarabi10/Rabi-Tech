@@ -214,6 +214,25 @@ model everywhere, which would also unscope the management routes where one
 workspace must never see another's tokens. The exemption belongs at the single
 call that legitimately has no tenant yet.
 
+### Public API over HTTP
+```bash
+cd apps/backend && npm run test:public-api
+```
+
+**58/58.** Boots the compiled server on port 4199 and drives `/api/v1` with real
+tokens, because everything that makes this surface safe lives in the *chain* —
+the `/v1` exemption from the session-JWT gate, `apiTokenAuth`, the scope check,
+`runAsOrganization`, the limiter — and calling a handler directly proves only the
+last link. Mutation-proved twice: leaking `organizationId` from the serializer,
+and unscoping the id lookup, each take it red.
+
+**If it prints `[ENV]` there is no summary line, deliberately.** A run that could
+not start has not tested anything and must not print a number that looks like it
+did — that is the D-5/D-10/D-12/D-16 family, most recently the tenancy harness
+returning `17/18` for "backend did not become ready".
+
+[docs/PUBLIC-API.md](docs/PUBLIC-API.md) is the contract this gate defends.
+
 ### Platform finance check
 ```bash
 cd apps/backend && npm run test:finance

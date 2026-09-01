@@ -114,6 +114,7 @@ async function main() {
       scopes: ['contacts:read', 'messages:send'],
       expiresInDays: 30,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(live.id);
 
@@ -191,6 +192,7 @@ async function main() {
       scopes: [],
       expiresInDays: 30,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(empty.id);
     const emptyResolved = await resolveApiToken('Bearer ' + empty.token);
@@ -212,6 +214,7 @@ async function main() {
       scopes: ['contacts:read', 'contacts:read', 'not:a:scope', 'tags:read'],
       expiresInDays: 30,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(messy.id);
     check('duplicate scopes are stored once',
@@ -231,6 +234,7 @@ async function main() {
       scopes: ['contacts:read'],
       expiresInDays: 30,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(revoked.id);
     check('the token works before revocation',
@@ -245,6 +249,7 @@ async function main() {
       scopes: ['contacts:read'],
       expiresInDays: 1,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(expired.id);
     await patchRow(expired.id, { expiresAt: new Date(Date.now() - 1000) });
@@ -264,6 +269,7 @@ async function main() {
       scopes: ['workspace:read'],
       expiresInDays: null,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(eternal.id);
     check('expiresInDays null stores no expiry', eternal.expiresAt === null);
@@ -275,6 +281,7 @@ async function main() {
       scopes: ['workspace:read'],
       expiresInDays: DEFAULT_TOKEN_DAYS,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(defaulted.id);
     const expectedMs = Date.now() + DEFAULT_TOKEN_DAYS * 24 * 60 * 60 * 1000;
@@ -287,6 +294,7 @@ async function main() {
       scopes: ['contacts:read'],
       expiresInDays: 30,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(otherOrg.id);
     const resolvedB = await resolveApiToken('Bearer ' + otherOrg.token);
@@ -295,6 +303,41 @@ async function main() {
     check('  …and not to the first', resolvedB.ok && resolvedB.token.organizationId !== orgA.id);
     check('the two workspaces\' tokens are distinct credentials',
       otherOrg.token !== live.token && otherOrg.prefix !== live.prefix);
+
+    /*
+      ── inherited masking ──────────────────────────────────────────────────
+
+      `User.maskPhoneAndEmail` hides contact phone numbers and email addresses
+      from one user, and was enforced only on routes that read `req.user`. A
+      token carries no user, so before this a masked admin could mint a
+      `contacts:read` token and read every unmasked number in the workspace —
+      the restriction held everywhere except through the API.
+
+      The flag is frozen at issue rather than resolved live through
+      `createdById`, because that column is nullable and the creator can be
+      deleted; a token whose masking depended on a row that may not exist would
+      unmask itself the day that user is removed.
+    */
+    const masked = await issueIn(orgA.id, {
+      name: 'gate: masked creator',
+      scopes: ['contacts:read'],
+      expiresInDays: 30,
+      createdById: null,
+      maskContactDetails: true,
+    });
+    created.push(masked.id);
+    check('an issued token reports the masking it was given', masked.maskContactDetails === true);
+    check('  …and stores it', (await readRow(masked.id)).maskContactDetails === true);
+    const maskedResolved = await resolveApiToken('Bearer ' + masked.token);
+    check('masking travels with the resolved token',
+      maskedResolved.ok && maskedResolved.token.maskContactDetails === true);
+    check('an unmasked creator produces an unmasked token',
+      ok.ok && ok.token.maskContactDetails === false);
+    // Deleting the creator must not quietly widen what the token can see.
+    await patchRow(masked.id, { createdById: null });
+    const orphaned = await resolveApiToken('Bearer ' + masked.token);
+    check('masking survives the creator being removed',
+      orphaned.ok && orphaned.token.maskContactDetails === true);
 
     // ── uniqueness and entropy ──────────────────────────────────────────────
     const prefixes = new Set();
@@ -305,6 +348,7 @@ async function main() {
         scopes: ['workspace:read'],
         expiresInDays: 1,
         createdById: null,
+      maskContactDetails: false,
       });
       created.push(t.id);
       prefixes.add(t.prefix);
@@ -341,6 +385,7 @@ async function main() {
       scopes: ['workspace:read'],
       expiresInDays: 1,
       createdById: null,
+      maskContactDetails: false,
     });
     created.push(fresh.id);
     check('a new token has never been used', (await readRow(fresh.id)).lastUsedAt === null);

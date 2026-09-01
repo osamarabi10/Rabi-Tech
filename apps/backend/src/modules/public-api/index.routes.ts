@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
-import { apiTokenAuth, requireScope } from './api-token.middleware';
-import { API_SCOPES } from './api-token.service';
+import { apiTokenAuth, requireScope } from '../api-tokens/api-token.middleware';
+import { API_SCOPES } from '../api-tokens/api-token.service';
+import contactRoutes from './contacts.routes';
 
 /**
  * `/api/v1` — the public API.
@@ -25,6 +26,10 @@ import { API_SCOPES } from './api-token.service';
 
 const router = Router();
 router.use(apiTokenAuth);
+
+// Sub-resources mount after the auth middleware, so no router below can be
+// reached without a resolved token and an established tenant scope.
+router.use('/contacts', contactRoutes);
 
 /**
  * Who am I — the first call any integrator makes.

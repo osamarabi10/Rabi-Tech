@@ -2539,6 +2539,12 @@ export type ApiTokenRow = {
   expiresAt: string | null;
   revokedAt: string | null;
   lastUsedAt: string | null;
+  /**
+   * Inherited from the creator at issue time. A token must not see what the
+   * person who minted it cannot, so a key created by a user whose contact
+   * details are masked returns masked phone numbers and emails.
+   */
+  maskContactDetails: boolean;
   createdAt: string;
   createdBy: { id: string; name: string } | null;
 };

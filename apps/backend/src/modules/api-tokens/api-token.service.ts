@@ -61,6 +61,8 @@ export type IssuedToken = {
   prefix: string;
   scopes: string[];
   expiresAt: Date | null;
+  /** Inherited from the creator. Carried into every response the token reads. */
+  maskContactDetails: boolean;
   /** The only time the full token exists anywhere. Never stored, never re-shown. */
   token: string;
 };
@@ -81,6 +83,14 @@ export async function issueApiToken(input: {
   scopes: ApiScope[];
   expiresInDays: number | null;
   createdById: string | null;
+  /**
+   * The creating user's `maskPhoneAndEmail`.
+   *
+   * A token must not see what the person who minted it cannot. Passed in rather
+   * than read here, because the route already holds the authenticated user and
+   * a second lookup would be a second answer to the same question.
+   */
+  maskContactDetails: boolean;
 }): Promise<IssuedToken> {
   const prefix = crypto.randomBytes(PREFIX_BYTES).toString('hex');
   const secret = crypto.randomBytes(SECRET_BYTES).toString('hex');
@@ -103,9 +113,10 @@ export async function issueApiToken(input: {
       // must not become a stored scope nothing checks.
       scopes: [...new Set(input.scopes)].filter(isValidScope),
       expiresAt,
+      maskContactDetails: input.maskContactDetails,
       createdById: input.createdById,
     },
-    select: { id: true, name: true, prefix: true, scopes: true, expiresAt: true },
+    select: { id: true, name: true, prefix: true, scopes: true, expiresAt: true, maskContactDetails: true },
   });
 
   return { ...row, token: `rbt_${prefix}_${secret}` };
@@ -115,6 +126,14 @@ export type ResolvedToken = {
   id: string;
   organizationId: string;
   scopes: string[];
+  /**
+   * Whether responses must hide contact phone numbers and email addresses.
+   *
+   * Travels with the resolved token rather than being looked up per handler:
+   * a masking rule that each endpoint has to remember to apply is a masking
+   * rule that the next endpoint forgets.
+   */
+  maskContactDetails: boolean;
 };
 
 /**
@@ -156,7 +175,7 @@ export async function resolveApiToken(
       where: { prefix },
       select: {
         id: true, organizationId: true, tokenHash: true, scopes: true,
-        expiresAt: true, revokedAt: true, lastUsedAt: true,
+        expiresAt: true, revokedAt: true, lastUsedAt: true, maskContactDetails: true,
       },
     }),
   );
@@ -196,7 +215,15 @@ export async function resolveApiToken(
     ).catch(() => {});
   }
 
-  return { ok: true, token: { id: row.id, organizationId: row.organizationId, scopes: row.scopes } };
+  return {
+    ok: true,
+    token: {
+      id: row.id,
+      organizationId: row.organizationId,
+      scopes: row.scopes,
+      maskContactDetails: row.maskContactDetails,
+    },
+  };
 }
 
 /** Whether this token carries the scope an endpoint requires. */

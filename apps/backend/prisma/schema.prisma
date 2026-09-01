@@ -1125,6 +1125,13 @@ model ApiToken {
   /// Written on use, at most once a minute. An unused token is the strongest
   /// signal that a credential can be revoked safely.
   lastUsedAt     DateTime?
+  /// Inherited from the creating user's `maskPhoneAndEmail` at issue time.
+  ///
+  /// A token must not see what the person who minted it cannot. Frozen rather
+  /// than resolved live through `createdById`, because that column is nullable
+  /// and the creator can be deleted — a token whose masking depended on a row
+  /// that may not exist would unmask itself the day that user is removed.
+  maskContactDetails Boolean @default(false)
   createdById    String?
   createdAt      DateTime  @default(now())
 

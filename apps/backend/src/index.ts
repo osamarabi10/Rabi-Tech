@@ -43,7 +43,7 @@ import brandingRoutes     from './modules/branding/branding.routes';
 import billingRoutes      from './modules/billing/billing.routes';
 import channelRoutes      from './modules/channels/channels.routes';
 import apiTokenRoutes     from './modules/api-tokens/api-tokens.routes';
-import publicApiRoutes    from './modules/api-tokens/public-api.routes';
+import publicApiRoutes    from './modules/public-api/index.routes';
 import { billingWebhookHandler } from './modules/billing/billing.webhook';
 import { verifyMediaProxyToken, verifyMediaToken } from './utils/signed-url';
 import { runAsOrganization, runAsPlatform } from './lib/tenant-context';

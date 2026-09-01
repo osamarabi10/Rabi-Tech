@@ -54,6 +54,7 @@ const TOKEN_SELECT = {
   expiresAt: true,
   revokedAt: true,
   lastUsedAt: true,
+  maskContactDetails: true,
   createdAt: true,
   createdBy: { select: { id: true, name: true } },
 } as const;
@@ -128,6 +129,18 @@ router.post('/', async (req, res) => {
       scopes,
       expiresInDays,
       createdById: req.user?.id ?? null,
+      /*
+        The token inherits its creator's masking.
+
+        `maskPhoneAndEmail` hides contact phone numbers and email addresses from
+        an individual user, and until this line it was enforced only on routes
+        that read `req.user`. A token carries no user, so a masked admin — masked
+        but not restricted from workspace settings, which are separate flags —
+        could mint a `contacts:read` token and read every unmasked number in the
+        workspace. The restriction was real everywhere except through the door
+        this module opened.
+      */
+      maskContactDetails: !!req.user?.maskPhoneAndEmail,
     });
 
     // The prefix identifies the token in the log; the secret never appears in

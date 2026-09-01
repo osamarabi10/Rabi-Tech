@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, Check, Clock, Copy, KeyRound, Loader2, Plus, ShieldOff, Terminal, Trash2,
+  AlertTriangle, Check, Clock, Copy, EyeOff, KeyRound, Loader2, Plus, ShieldOff, Terminal, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -229,6 +229,14 @@ export function ApiTokens() {
                   <div className="flex items-center gap-2">
                     <h2 className="truncate text-small font-semibold" dir="auto">{token.name}</h2>
                     <StatusBadge status={status} token={token} />
+                    {/* Not decoration: an integrator seeing •••••• where a phone
+                        number should be has no other way to learn why, and the
+                        answer is a setting on the person who made the key. */}
+                    {token.maskContactDetails && (
+                      <Badge variant="outline" className="gap-1 text-muted-foreground">
+                        <EyeOff className="size-3" aria-hidden />{t('Contact details masked')}
+                      </Badge>
+                    )}
                   </div>
                   {/* The prefix identifies the key without revealing anything.
                       It is what an admin matches against a log line. */}

@@ -16,6 +16,7 @@ type Dict = Record<string, { ar?: string; he: string; en: string }>;
 
 const D: Dict = {
   /* ── API tokens (P1a) ── */
+  "Contact details masked": { ar: "تفاصيل جهات الاتصال مخفية", he: "פרטי אנשי הקשר מוסתרים", en: "Contact details masked" },
   "API keys": { ar: "مفاتيح API", he: "מפתחות API", en: "API keys" },
   "Loading API keys": { ar: "جارٍ تحميل مفاتيح API", he: "מפתחות ה-API נטענים", en: "Loading API keys" },
   "Could not load API keys": { ar: "تعذر تحميل مفاتيح API", he: "לא ניתן לטעון את מפתחות ה-API", en: "Could not load API keys" },
