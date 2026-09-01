@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Clock3, Loader2, Mail, Save, UserPlus, X } from 'lucide-react';
+import { Clock3, Loader2, Mail, MoonStar, Save, UserPlus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -65,6 +65,9 @@ function editableSnapshot(
     userInactivityTimeoutMinutes: timeoutValue * UNIT_MINUTES[timeoutUnit],
     weeklyRecapEnabled: settings.weeklyRecapEnabled,
     weeklyRecapRecipientIds: [...settings.weeklyRecapRecipientIds].sort(),
+    quietHoursEnabled: settings.quietHoursEnabled,
+    quietHoursStart: settings.quietHoursStart,
+    quietHoursEnd: settings.quietHoursEnd,
   });
 }
 
@@ -111,7 +114,18 @@ export function WorkspaceGeneral() {
   const currentSnapshot = settings ? editableSnapshot(settings, timeoutValue, timeoutUnit) : '';
   const dirty = Boolean(settings && currentSnapshot !== savedSnapshot);
   const timeoutMinutes = timeoutValue * UNIT_MINUTES[timeoutUnit];
-  const invalid = !settings || settings.name.trim().length < 2 || timeoutMinutes < 5 || timeoutMinutes > 10080 || !settings.timezone;
+  /*
+    A zero-width quiet window is refused here as well as by the server.
+
+    Saving 21:00–21:00 and being told nothing would read as "quiet hours are
+    on", while the worker treats an equal start and end as no window at all and
+    sends through the night. The server rejects it too — this is so the admin
+    sees why before pressing save rather than after.
+  */
+  const quietWindowInvalid = Boolean(
+    settings?.quietHoursEnabled && settings.quietHoursStart === settings.quietHoursEnd,
+  );
+  const invalid = !settings || settings.name.trim().length < 2 || timeoutMinutes < 5 || timeoutMinutes > 10080 || !settings.timezone || quietWindowInvalid;
 
   useEffect(() => {
     if (!dirty) return;
@@ -152,6 +166,9 @@ export function WorkspaceGeneral() {
         userInactivityTimeoutMinutes: timeoutMinutes,
         weeklyRecapEnabled: settings.weeklyRecapEnabled,
         weeklyRecapRecipientIds: settings.weeklyRecapRecipientIds,
+        quietHoursEnabled: settings.quietHoursEnabled,
+        quietHoursStart: settings.quietHoursStart,
+        quietHoursEnd: settings.quietHoursEnd,
       });
       const timeout = timeoutParts(saved.userInactivityTimeoutMinutes);
       setSettings(saved);
@@ -251,6 +268,73 @@ export function WorkspaceGeneral() {
                   </p>
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="py-6" aria-labelledby="quiet-hours-title">
+          <div className="flex gap-3">
+            <MoonStar className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <h2 id="quiet-hours-title" className="sr-only">{t('Quiet hours')}</h2>
+              <ToggleCard
+                className="pt-0"
+                title={t('Quiet hours')}
+                /*
+                  The description names the recipient's timezone explicitly,
+                  because that is the surprising half. An owner reading "no
+                  broadcasts after 21:00" will assume their own clock, and the
+                  whole feature is that it is not.
+                */
+                description={t('Hold broadcasts outside these hours, measured in each recipient’s own local time rather than the workspace’s. Nothing is dropped — held messages send when the window ends.')}
+                checked={settings.quietHoursEnabled}
+                onCheckedChange={(checked) => setSettings({ ...settings, quietHoursEnabled: checked })}
+              />
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2" aria-disabled={!settings.quietHoursEnabled}>
+                <div className="space-y-1.5">
+                  <Label htmlFor="quiet-start">{t('Hold from')}</Label>
+                  <Input
+                    id="quiet-start"
+                    type="time"
+                    dir="ltr"
+                    className="numeric"
+                    value={settings.quietHoursStart}
+                    disabled={!settings.quietHoursEnabled}
+                    onChange={(event) => setSettings({ ...settings, quietHoursStart: event.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="quiet-end">{t('Resume at')}</Label>
+                  <Input
+                    id="quiet-end"
+                    type="time"
+                    dir="ltr"
+                    className="numeric"
+                    value={settings.quietHoursEnd}
+                    disabled={!settings.quietHoursEnabled}
+                    onChange={(event) => setSettings({ ...settings, quietHoursEnd: event.target.value })}
+                  />
+                </div>
+              </div>
+
+              {/*
+                Stated, not hidden. A window that wraps midnight is the normal
+                case — 21:00 to 08:00 — and an owner who reads the two fields
+                left to right could reasonably think it means nothing at all.
+              */}
+              {settings.quietHoursEnabled && !quietWindowInvalid && (
+                <p className="mt-2 text-caption text-muted-foreground">
+                  {settings.quietHoursStart > settings.quietHoursEnd
+                    ? t('This window crosses midnight, so it covers the night.')
+                    : t('This window sits inside one day.')}
+                </p>
+              )}
+              {quietWindowInvalid && (
+                <p className="mt-2 text-caption text-danger">
+                  {t('Start and end cannot be the same time — that is not a window, and nothing would be held.')}
+                </p>
+              )}
             </div>
           </div>
         </section>

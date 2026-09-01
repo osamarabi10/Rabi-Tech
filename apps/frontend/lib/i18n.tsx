@@ -551,6 +551,15 @@ const D: Dict = {
   "Active sessions are checked by the server, not only by this browser.": { ar: "الخادم نفسه بفحص الجلسات النشطة، مش بس هذا المتصفح.", he: "הפעלות פעילות נבדקות בשרת, ולא רק בדפדפן הזה.", en: "Active sessions are checked by the server, not only by this browser." },
   "Workspace timezone": { ar: "المنطقة الزمنية لمساحة الشغل", he: "אזור הזמן של סביבת העבודה", en: "Workspace timezone" },
   "Weekly recap": { ar: "الملخّص الأسبوعي", he: "סיכום שבועי", en: "Weekly recap" },
+  // Quiet hours (M8.4). The Arabic is Palestinian colloquial, matching the
+  // auto-reply seed set — the person reading this writes those replies too.
+  "Quiet hours": { ar: "ساعات الهدوء", he: "שעות שקט", en: "Quiet hours" },
+  "Hold broadcasts outside these hours, measured in each recipient’s own local time rather than the workspace’s. Nothing is dropped — held messages send when the window ends.": { ar: "بتوقّف البثّات برّا هالساعات، وبتنحسب بتوقيت كل مستلم هو، مش بتوقيت مساحة الشغل. ما بينضيع إشي — اللي بينحبس بينبعت لما تخلص الفترة.", he: "השהיית שידורים מחוץ לשעות האלה, לפי שעון מקומי של כל נמען ולא של סביבת העבודה. שום דבר לא נמחק — הודעות שהושהו נשלחות בתום החלון.", en: "Hold broadcasts outside these hours, measured in each recipient’s own local time rather than the workspace’s. Nothing is dropped — held messages send when the window ends." },
+  "Hold from": { ar: "توقّف من", he: "השהיה מ־", en: "Hold from" },
+  "Resume at": { ar: "ارجع ابعث الساعة", he: "חידוש בשעה", en: "Resume at" },
+  "This window crosses midnight, so it covers the night.": { ar: "هالفترة بتعدّي منتصف الليل، يعني بتغطّي الليل كلّه.", he: "החלון חוצה את חצות, כלומר מכסה את הלילה.", en: "This window crosses midnight, so it covers the night." },
+  "This window sits inside one day.": { ar: "هالفترة كلها بنفس اليوم.", he: "החלון כולו באותו יום.", en: "This window sits inside one day." },
+  "Start and end cannot be the same time — that is not a window, and nothing would be held.": { ar: "البداية والنهاية ما بصير يكونوا نفس الوقت — هيك مش فترة، وما رح ينحبس إشي.", he: "ההתחלה והסיום לא יכולים להיות אותה שעה — זה לא חלון, ושום דבר לא יושהה.", en: "Start and end cannot be the same time — that is not a window, and nothing would be held." },
   "Send a seven-day activity summary every Monday at 8:00 AM in the workspace timezone.": { ar: "ابعث ملخّص شغل آخر سبع أيام كل اثنين الساعة 8:00 صباحاً حسب منطقة مساحة الشغل.", he: "שליחת סיכום פעילות של שבעה ימים בכל יום שני ב-08:00 לפי אזור הזמן של סביבת העבודה.", en: "Send a seven-day activity summary every Monday at 8:00 AM in the workspace timezone." },
   "Recipients": { ar: "المستلمين", he: "נמענים", en: "Recipients" },
   "No recap recipients selected.": { ar: "لسا ما اخترت مستلمين للملخّص.", he: "לא נבחרו נמענים לסיכום.", en: "No recap recipients selected." },

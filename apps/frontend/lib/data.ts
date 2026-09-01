@@ -1500,6 +1500,14 @@ export type WorkspaceSettings = {
   weeklyRecapEnabled: boolean;
   weeklyRecapRecipientIds: string[];
   eligibleRecipients: WorkspaceRecipient[];
+  /**
+   * Broadcasts hold outside these hours, in the *recipient's* local time — not
+   * the workspace's. Off by default: enabling it for an existing workspace
+   * would silently delay sends that were already scheduled.
+   */
+  quietHoursEnabled: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
 };
 
 export async function fetchWorkspaceSettings(): Promise<WorkspaceSettings> {
@@ -1508,7 +1516,9 @@ export async function fetchWorkspaceSettings(): Promise<WorkspaceSettings> {
 }
 
 export async function updateWorkspaceSettings(
-  input: Pick<WorkspaceSettings, 'name' | 'timezone' | 'userInactivityTimeoutMinutes' | 'weeklyRecapEnabled' | 'weeklyRecapRecipientIds'>,
+  input: Partial<Pick<WorkspaceSettings,
+    'name' | 'timezone' | 'userInactivityTimeoutMinutes' | 'weeklyRecapEnabled' | 'weeklyRecapRecipientIds'
+    | 'quietHoursEnabled' | 'quietHoursStart' | 'quietHoursEnd'>>,
 ): Promise<WorkspaceSettings> {
   const { data } = await api.patch('/api/system/workspace-settings', input);
   return data as WorkspaceSettings;
