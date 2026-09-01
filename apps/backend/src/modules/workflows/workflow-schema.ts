@@ -36,6 +36,20 @@ export const ACTION_TYPES = [
   'ADD_TAG',
   'REMOVE_TAG',
   'UPDATE_CONTACT_FIELD',
+  /**
+   * Move a contact along the funnel.
+   *
+   * The engine could already *test* `CONTACT_LIFECYCLE_IS` and could not set
+   * it, so an author could branch on a stage that only a human ever advanced.
+   * Every lifecycle number on the dashboard measured how diligently somebody
+   * had been editing contact records.
+   *
+   * Carries a stage **id**, not a name. `Contact.lifecycleStage` stores the
+   * name, and renaming a stage cascades onto contacts — so a workflow holding a
+   * name would keep writing the old one and quietly split the funnel in two.
+   * The id resolves to the current name at execution.
+   */
+  'SET_LIFECYCLE_STAGE',
   'HTTP_WEBHOOK',
   'WAIT_DELAY',
   /**
@@ -231,6 +245,14 @@ function validateAction(
       break;
     case 'UPDATE_CONTACT_FIELD':
       requireText(action.field, 'a field', errors, path);
+      break;
+
+    case 'SET_LIFECYCLE_STAGE':
+      // Shape only here; existence is resolved at execution against this
+      // organization's own stages. Validating existence at save time would
+      // reject a workflow whose stage is created later, and would not help
+      // anyway — a stage can be deleted between save and run.
+      requireText(action.stageId, 'a lifecycle stage', errors, path);
       break;
 
     case 'ASK_QUESTION': {

@@ -991,6 +991,9 @@ const D: Dict = {
   'عرّف مراحل رحلة العميل كما تناسب عملك': { he: 'הגדירו את שלבי מסע הלקוח שמתאימים לעסק שלכם', en: 'Define the customer journey stages that fit your business' },
   'مرحلة محذوفة': { he: 'שלב שנמחק', en: 'deleted stage' },
   'تم تحديث المرحلة': { he: 'השלב עודכן', en: 'Stage updated' },
+  // SET_LIFECYCLE_STAGE workflow action (B8).
+  'نقل لمرحلة': { he: 'העברה לשלב', en: 'Move to stage' },
+  'اختر المرحلة': { he: 'בחר שלב', en: 'Choose a stage' },
   // Ask a Question workflow node (P11.4). The Arabic is Palestinian colloquial,
   // matching the auto-reply seed set — an author reading this is the same person
   // who writes the replies.

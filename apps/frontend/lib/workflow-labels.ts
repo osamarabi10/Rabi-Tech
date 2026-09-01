@@ -34,6 +34,7 @@ export const ACTION_LABELS: Record<string, string> = {
   ADD_TAG: 'إضافة وسم',
   REMOVE_TAG: 'إزالة وسم',
   UPDATE_CONTACT_FIELD: 'تحديث حقل مخصص',
+  SET_LIFECYCLE_STAGE: 'نقل لمرحلة',
   HTTP_WEBHOOK: 'استدعاء رابط خارجي',
   WAIT_DELAY: 'انتظار',
   IF_ELSE: 'إذا / وإلا',
@@ -55,7 +56,7 @@ export const RUN_STATUS_LABELS: Record<string, string> = {
 };
 
 /** Which extra input each action needs. Drives the builder's fields. */
-export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template' | 'tag' | 'customField' | 'url' | 'minutes' | 'branch' | 'question' | 'none'> = {
+export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template' | 'tag' | 'customField' | 'url' | 'minutes' | 'branch' | 'question' | 'lifecycleStage' | 'none'> = {
   ASSIGN_TEAM: 'team',
   ASSIGN_USER: 'user',
   SEND_MESSAGE: 'text',
@@ -63,6 +64,10 @@ export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template'
   ADD_TAG: 'tag',
   REMOVE_TAG: 'tag',
   UPDATE_CONTACT_FIELD: 'customField',
+  // A picker over the tenant's own stages. Free text would let a workflow write
+  // a stage that does not exist — invisible in the builder, and a phantom entry
+  // in the funnel. See D-31 for the same shape on Contact columns.
+  SET_LIFECYCLE_STAGE: 'lifecycleStage',
   HTTP_WEBHOOK: 'url',
   WAIT_DELAY: 'minutes',
   IF_ELSE: 'branch',

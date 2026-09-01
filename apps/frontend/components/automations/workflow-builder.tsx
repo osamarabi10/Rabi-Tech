@@ -7,6 +7,8 @@ import {
   createWorkflow,
   fetchCrmTags,
   fetchCustomFieldDefinitions,
+  fetchLifecycleStages,
+  type LifecycleStage,
   fetchSystemUsers,
   fetchTemplates,
   fetchWorkflowSchema,
@@ -104,6 +106,7 @@ export function WorkflowBuilder({
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [tags, setTags] = useState<CrmTag[]>([]);
   const [fields, setFields] = useState<CustomFieldDefinition[]>([]);
+  const [stages, setStages] = useState<LifecycleStage[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
 
   useEffect(() => {
@@ -115,6 +118,7 @@ export function WorkflowBuilder({
     fetchSystemUsers().then(setUsers).catch(() => setUsers([]));
     fetchCrmTags().then(setTags).catch(() => setTags([]));
     fetchCustomFieldDefinitions().then(setFields).catch(() => setFields([]));
+    fetchLifecycleStages().then(setStages).catch(() => setStages([]));
     fetchTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, [open, workflow]);
 
@@ -339,6 +343,7 @@ export function WorkflowBuilder({
                     users={users}
                     tags={tags}
                     fields={fields}
+                  stages={stages}
                     templates={templates}
                     conditionTypes={schema.conditions}
                     actionTypes={schema.actions}
@@ -410,7 +415,7 @@ function StepCard({
 
 /** The second input an action needs, chosen from its declared operand kind. */
 function ActionOperand({
-  action, onChange, teams, users, tags, fields, templates, conditionTypes, actionTypes, maxDelayMinutes, t,
+  action, onChange, teams, users, tags, fields, stages, templates, conditionTypes, actionTypes, maxDelayMinutes, t,
 }: {
   action: WorkflowAction;
   onChange: (next: WorkflowAction) => void;
@@ -418,6 +423,7 @@ function ActionOperand({
   users: SystemUser[];
   tags: CrmTag[];
   fields: CustomFieldDefinition[];
+  stages: LifecycleStage[];
   templates: Template[];
   /** From the server schema, never a local copy — same rule as everywhere else. */
   conditionTypes: readonly string[];
@@ -437,6 +443,7 @@ function ActionOperand({
         users={users}
         tags={tags}
         fields={fields}
+        stages={stages}
         templates={templates}
         conditionTypes={conditionTypes}
         actionTypes={actionTypes}
@@ -487,6 +494,20 @@ function ActionOperand({
         </select>
         <Input value={String(action.value ?? '')} onChange={(e) => onChange({ ...action, value: e.target.value })} placeholder={t('القيمة')} />
       </div>
+    );
+  }
+  if (kind === 'lifecycleStage') {
+    return (
+      <select
+        className={select}
+        value={String(action.stageId ?? '')}
+        onChange={(e) => onChange({ ...action, stageId: e.target.value })}
+      >
+        <option value="">{t('اختر المرحلة')}</option>
+        {stages.map((stage) => (
+          <option key={stage.id} value={stage.id}>{stage.name}</option>
+        ))}
+      </select>
     );
   }
   if (kind === 'question') {
@@ -704,7 +725,7 @@ function ActionOperand({
  * to an error message.
  */
 function BranchEditor({
-  action, onChange, teams, users, tags, fields, templates, conditionTypes, actionTypes, maxDelayMinutes, t,
+  action, onChange, teams, users, tags, fields, stages, templates, conditionTypes, actionTypes, maxDelayMinutes, t,
 }: {
   action: WorkflowAction;
   onChange: (next: WorkflowAction) => void;
@@ -712,6 +733,7 @@ function BranchEditor({
   users: SystemUser[];
   tags: CrmTag[];
   fields: CustomFieldDefinition[];
+  stages: LifecycleStage[];
   templates: Template[];
   conditionTypes: readonly string[];
   actionTypes: readonly string[];
@@ -777,6 +799,7 @@ function BranchEditor({
                   users={users}
                   tags={tags}
                   fields={fields}
+                  stages={stages}
                   templates={templates}
                   conditionTypes={conditionTypes}
                   actionTypes={actionTypes}

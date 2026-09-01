@@ -420,6 +420,42 @@ async function runAction(
       return entry(stepIndex, action.type, 'ok', `${slug}=${value ?? ''}`);
     }
 
+    case 'SET_LIFECYCLE_STAGE': {
+      if (!context.contactId) return entry(stepIndex, action.type, 'skipped', 'no contact');
+      /*
+        Resolved against this organization's own stages — never a raw write of
+        whatever the author typed.
+
+        `Contact.lifecycleStage` is a plain String column, so
+        `{ lifecycleStage: action.value }` would compile, run, and let a
+        workflow put a contact into a stage that does not exist — invisible in
+        the builder, and a funnel with a phantom stage in it. That is D-31
+        wearing different clothes, and the fix is the same one
+        UPDATE_CONTACT_FIELD already uses: resolve the reference, then write
+        what the resolution returned.
+
+        The lookup is org-scoped by the tenancy extension, so a stage id from
+        another workspace resolves to nothing rather than to their stage.
+      */
+      const stage = await prisma.lifecycleStage.findUnique({
+        where: { id: String(action.stageId) },
+        select: { name: true },
+      });
+      if (!stage) {
+        // Skipped, not failed. A stage deleted after the workflow was written
+        // is an ordinary edit, and stopping the whole automation for it would
+        // punish the tenant for tidying their own funnel.
+        return entry(stepIndex, action.type, 'skipped', `unknown stage ${String(action.stageId)}`);
+      }
+      await prisma.contact.update({
+        where: { id: context.contactId },
+        // The resolved name, not the id: the column stores names, and the
+        // rename cascade in lifecycle.routes.ts keeps contacts in step with it.
+        data: { lifecycleStage: stage.name },
+      });
+      return entry(stepIndex, action.type, 'ok', stage.name);
+    }
+
     case 'CLOSE_CONVERSATION': {
       if (!context.conversationId) return entry(stepIndex, action.type, 'skipped', 'no conversation');
 
