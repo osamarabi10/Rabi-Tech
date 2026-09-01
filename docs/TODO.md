@@ -308,7 +308,10 @@ working-hours util. Skip (documented): Random Split, Zapier/Make nodes, GraphQL.
     auto-reply (nothing if they switched it off). **No CSAT prompt**, unlike a
     manual resolve: that survey asks how an agent handled you, and a thread
     closed by a rule had no handling to rate.
-  - [ ] Ask a Question (wait + validate email/phone/number + write field)
+  - [x] Ask a Question — **done 2026-09-01.** Engine, resume-on-reply, timeout
+    via the existing delayed-job mechanism, retry cap, and the builder editor.
+    Two bugs caught in draft and recorded as D-30 (consent bypass on the
+    re-ask) and D-31 (arbitrary Contact column write).
 - [x] **5. Run log**: per-run timeline (node, input, output, ts) for debugging
   — verify: failed HTTP node shows attempt trail
 - [ ] **6. Canvas UI (React Flow)**: drag nodes, connect edges, config side
@@ -1145,7 +1148,9 @@ Gate **56/56 → 57/57**. All test data removed.
 
 
 - [ ] **4. Quiet hours** enforced in the recipient's local time from phone prefix
-- [ ] **5. Broadcast clone**
+- [x] **5. Broadcast clone** — **done 2026-09-01.** Always a draft, never
+  scheduled; audience re-resolved from the stored filter so an opt-out since the
+  first send is honoured.
 
 ---
 
@@ -1158,7 +1163,9 @@ absent here **and** worth building; the parity scorecard in
 [PROJECT-SPEC.md](PROJECT-SPEC.md) §4 carries the full comparison and says which
 gaps are deliberate.
 
-- [ ] **M9.1 Blocked contacts** · ~0.5 day · *the one real gap nobody had listed*
+- [x] **M9.1 Blocked contacts** — **done 2026-09-01**, migration applied.
+  (original brief below)
+- [x] **M9.1 Blocked contacts** · ~0.5 day · *the one real gap nobody had listed*
   A contact who must stop reaching the inbox — harassment, a wrong number that
   keeps writing, a competitor. At 663 contacts this is operational, not
   theoretical, and today the only remedy is deleting the contact, which destroys
@@ -1220,7 +1227,7 @@ gaps are deliberate.
   — verify: deactivate an agent holding a resolved thread, send from that
   contact, confirm the thread reopens unassigned and auto-assignment picks it up
 
-- [ ] **M9.3 Chart export (SVG / PNG)** · ~0.5 day
+- [x] **M9.3 Chart export (SVG / PNG)** · ~0.5 day — **done 2026-09-01.**
   Reports already export CSV for contacts and finance; the charts export
   nothing. Client-side serialisation of the rendered SVG, with PNG via canvas —
   no server work and no new dependency.
@@ -1230,3 +1237,56 @@ gaps are deliberate.
 inbox (unconfigured in the observed workspace, so it demonstrates nothing at
 this scale) and **calls / incoming calls** (RabiTech is a 1:1 text platform by
 design — see CLAUDE.md).
+
+---
+
+## Session record — 2026-09-01
+
+Twelve pieces of work, each gated and pushed. Recorded here because the phase
+numbering above no longer maps cleanly onto what was done, and a reader
+comparing the two should not have to guess.
+
+**Built and verified**
+
+- **F4.1b** off-host backup pipeline — encryption, destination seam, weekly
+  restore drill. `test:backup-replication` 30/30, hermetic, mutation-proved.
+  **Not ticked**: the destination is a local directory, so nothing yet survives
+  losing this disk.
+- **D-12** seven gate scripts now load the repo-root `.env` via
+  `scripts/load-env.js`. All four database-backed gates subsequently run green
+  from a stripped shell — dunning 14/14, campaign-replies 5/5, snooze-wake 5/5,
+  worker-fairness 3/3.
+- **D-29** signed URLs refuse rather than fall back to a public constant.
+  `test:media-url` 19/19 → 25/25.
+- **M9.1** blocked contacts, enforced at the inbound worker before a thread can
+  open. Migration applied.
+- **M8.5** broadcast clone. **M9.3** chart export, SVG and PNG.
+- **D-28** `invoiceRef` scoped to its organization. Migration applied while the
+  table held zero rows.
+- **M9.2 withdrawn**, replaced by **M9.2b**: a reopened thread no longer stays
+  with an agent who cannot receive it.
+- **P11.4** Ask a Question node, engine and builder.
+- **M8.4** quiet hours for broadcasts, in the recipient's local time.
+  **Backend only — there is no settings control yet, and it ships off by
+  default, so it is currently inert for every subscriber.**
+- **B2** the QR pairing route now carries the entitlement guard its neighbour
+  had. Third instance of declared-and-unenforced in this codebase.
+- **B8** `SET_LIFECYCLE_STAGE` — workflows could test the funnel and not
+  advance it, so every lifecycle number measured manual data entry.
+- **B4** keyword detection across three languages, with `test:keywords` 18/18.
+
+**Four migrations applied**, each preceded by a `pg_dump -Fc` verified with
+`pg_restore -l`, each shipping a `down.sql` that refuses rather than silently
+destroying. Database intact throughout: 31 conversations, 98 messages,
+33 contacts.
+
+**Owed**
+
+- [ ] **Quiet-hours settings control.** The API accepts
+      `quietHoursEnabled/Start/End` on `PATCH /api/system/workspace-settings`
+      and the worker enforces it; no admin can switch it on from a screen.
+- [ ] **M8.1 granular role restrictions** — the one phase of the nine not
+      started.
+- [ ] Backend files are not covered by `check:mojibake`, which scans the
+      frontend only. `constants/keywords.ts` has mojibake in its section
+      comments today.

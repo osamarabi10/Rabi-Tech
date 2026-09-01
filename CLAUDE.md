@@ -108,7 +108,21 @@ cd apps/backend && npx tsc --noEmit -p .
 cd apps/backend && npm run test:tenancy
 ```
 
-The gate uses a disposable PostgreSQL schema and must stay **green (127/127)**. Treat a red gate as a release blocker, not a known issue.
+The gate uses a disposable PostgreSQL schema and must stay **green (128/128)**. Treat a red gate as a release blocker, not a known issue.
+
+Corrected from 127 on 2026-09-01, watched eight times that evening across nine
+phases of work. The harness self-counts (`results.length`), so the number here
+is only ever as fresh as the last run somebody watched — 127 was not wrong, it
+was last observed one check ago.
+
+**A red gate is not automatically a real red.** On 2026-09-01 one run returned
+`17/18` on `database: clean migration chain supports the current Prisma schema
+and fixtures: backend did not become ready` — the test backend failed to start,
+so the harness bailed before running the database section. Two immediately
+subsequent runs returned 128/128 with no code change. That is a startup failure
+wearing a gate's clothes, and it is the D-5/D-10/D-12/D-16 family again. Read
+*which* check failed before concluding anything: an assertion failure names the
+behaviour, an environmental one names the environment.
 
 It was recorded here as 67/67, then 122/122, and neither was wrong when it was
 written: the count grows as the harness gains coverage rather than because
@@ -141,6 +155,36 @@ was watched to run.**
 the same load the server's boot gate does, because `getEdition` no longer falls
 back to `PLAN_ENTITLEMENTS` — an unloaded catalogue resolves to a
 deny-everything floor, and every entitlement assertion would run against zeros.
+
+### Keyword detection across three languages
+```bash
+cd apps/backend && npm run test:keywords
+```
+
+**18/18.** Added 2026-09-01, because no gate covered this class at all.
+`detectPriority` normalised inbound text with an Arabic-only character strip, so
+a Hebrew or English message became whitespace and matched nothing — no priority,
+no category, no CRITICAL routing — and a subscriber's own additions through
+Settings → Keywords never matched either.
+
+Nine of its checks are **negatives**. Latin keywords use whole-word matching
+while Arabic and Hebrew use substring (those attach affixes to the stem), and
+the negatives prove the Latin half does not over-match — `"how"` inside
+`"however"` and `"shower"` would otherwise arrive quietly as mis-routed
+CRITICAL conversations.
+
+Mutation-proved: restoring the Arabic-only strip takes it to 9/18.
+
+### Off-host backup replication
+```bash
+cd apps/backend && npm run test:backup-replication
+```
+
+**30/30, and hermetic** — no Postgres, no Redis, no Docker, so it cannot go red
+for environmental reasons. Covers streaming AES-256-GCM, tamper and wrong-key
+detection, the destination seam, retention refusing to delete files it did not
+write, and freshness. `inbox-views-check` is hermetic for the same reason; keep
+both that way.
 
 ### Platform finance check
 ```bash
