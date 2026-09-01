@@ -1087,9 +1087,6 @@ router.get('/sessions', async (_req, res) => {
 
 // WhatsApp group routes removed: RabiTech is a 1:1 conversation platform.
 
-// GET /api/system/sessions/:name/qr — QR code to link a WhatsApp device.
-// Creates/starts the OpenWA session as needed; returns { connected } once linked,
-// { qrCode } when scannable, or { pending } while the engine is warming up.
 /**
  * POST /api/system/sessions/:name/disconnect — admin only.
  *
@@ -1189,6 +1186,13 @@ router.post('/sessions/:name/disconnect', requireAdmin, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/system/sessions/:name/qr — admin only.
+ *
+ * Creates/starts the OpenWA session as needed; returns `{ connected }` once
+ * linked, `{ qrCode }` while scannable, or `{ pending }` while the engine is
+ * warming up. Entitlement-gated: see the block inside.
+ */
 router.get('/sessions/:name/qr', requireAdmin, async (req, res) => {
   const { name } = req.params;
   try {
@@ -1201,6 +1205,36 @@ router.get('/sessions/:name/qr', requireAdmin, async (req, res) => {
       },
     });
     if (!known) return res.status(404).json({ error: 'Unknown session' });
+
+    /*
+      The same entitlement gate the disconnect route carries, on the route that
+      actually pairs a number.
+
+      `channelGrantRefusal` was added to POST /sessions/:name/disconnect — which
+      recreates a session — and not here, even though this is the endpoint an
+      admin uses to pair one and it calls `createSession` below on the very next
+      line. The guarded path was the rarer of the two.
+
+      Refused before any OpenWA call, for the same reason as there: a session
+      created for a workspace that may not use it is a resource nobody can pair
+      and nothing will clean up.
+
+      Grandfathered on an ACTIVE channel, so `ostudio` — ENTERPRISE, Meta-only
+      by edition, running a working OpenWA number — keeps pairing. The send path
+      stays deliberately unguarded for that same reason; see
+      channel-entitlement.ts. That one is a commercial decision, not a gap.
+    */
+    const refused = await channelGrantRefusal(req.user!.organizationId, 'OPENWA');
+    if (refused) {
+      return res.status(402).json({
+        error: refused.requiredPlan
+          ? `باقة ${refused.planName} لا تشمل قناة واتساب عبر مسح QR. رقّي إلى ${refused.requiredPlan} لتفعيلها.`
+          : `باقة ${refused.planName} لا تشمل قناة واتساب عبر مسح QR.`,
+        code: 'PLAN_UPGRADE_REQUIRED',
+        capability: 'OPENWA',
+        requiredPlan: refused.requiredPlan,
+      });
+    }
 
     let status = '';
     try {
