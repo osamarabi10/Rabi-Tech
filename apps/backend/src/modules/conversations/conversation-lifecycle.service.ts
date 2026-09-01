@@ -10,6 +10,7 @@ import { getIO, SocketEvents } from '../../socket';
 import { socketRoom } from '../../socket/rooms';
 import { sendConversationClosingReply } from '../../utils/conversation-closing-reply';
 import { scheduleConversationAutoClose } from '../../workers/auto-close.queue';
+import { emitWebhook } from '../webhooks/webhook-dispatch.service';
 
 export const MIN_AUTO_CLOSE_MINUTES = 30;
 export const MAX_AUTO_CLOSE_MINUTES = 14 * 24 * 60;
@@ -154,6 +155,16 @@ export async function closeConversation(input: CloseConversationInput) {
 
   if (!result.changed) return result;
 
+  // Only on a real transition. `changed: false` means it was already closed,
+  // and re-notifying on that would have a receiver close the same ticket twice.
+  void emitWebhook('conversation.closed', {
+    conversationId: result.conversation.id,
+    contactId: result.conversation.contactId,
+    source: input.source,
+    closureId: result.closure?.id ?? null,
+    resolvedAt: result.conversation.resolvedAt,
+  });
+
   await auditLog({
     userId: input.actor?.id ?? undefined,
     action: `conversation.closed.${input.source.toLowerCase()}`,
@@ -276,6 +287,12 @@ export async function reopenConversation(
     ipAddress: actor?.ipAddress,
     userAgent: actor?.userAgent,
   });
+  void emitWebhook('conversation.reopened', {
+    conversationId: updated.id,
+    contactId: updated.contactId,
+    openedAt: updated.openedAt,
+  });
+
   return { conversation: updated, changed: true };
 }
 

@@ -22,6 +22,7 @@ import { autoAssignConversation } from '../modules/routing/assignment.service';
 import { dispatchWorkflowEvent } from './workflow.worker';
 import { resumeAwaitingWorkflows } from '../modules/workflows/answer-resume.service';
 import { coordinationKey, withFifoRedisLock } from '../lib/redis-coordination';
+import { emitWebhook } from '../modules/webhooks/webhook-dispatch.service';
 
 // Redis connection config (same as campaign worker)
 const redisUrl = new URL(process.env.REDIS_URL || 'redis://localhost:6379');
@@ -131,6 +132,21 @@ async function processInboundMessage(data: {
   });
 
   /*
+    A brand new contact, and the most common way one appears: a stranger writes
+    in. `createdAt === updatedAt` is how an upsert reports which branch it took
+    — Prisma does not say, and a second read to find out would cost a query on
+    every inbound message to answer a question only the first one needs.
+  */
+  if (contact.createdAt.getTime() === contact.updatedAt.getTime()) {
+    void emitWebhook('contact.created', {
+      contactId: contact.id,
+      phone: contact.phone,
+      name: contact.name,
+      source: 'whatsapp',
+    }, organizationId);
+  }
+
+  /*
     Blocked contacts stop here — before a conversation exists.
 
     The position is the whole feature. Everything below this line has a side
@@ -199,6 +215,15 @@ async function processInboundMessage(data: {
       messageId: inboundMessage.id,
     });
   }
+
+  void emitWebhook('message.received', {
+    messageId: inboundMessage.id,
+    conversationId: conversation.id,
+    contactId: contact.id,
+    body: inboundMessage.body,
+    hasMedia,
+    timestamp: inboundMessage.timestamp,
+  }, organizationId);
 
   // Update conversation timestamp
   await prisma.conversation.update({

@@ -20,6 +20,7 @@ import { requireAdmin, requirePermission, requireSupervisor } from '../../middle
 import { contactAccessWhere, maskContact } from '../../lib/user-access';
 import { auditContact, auditLog } from '../../lib/audit';
 import { validateCustomFieldValue } from './custom-field-validation';
+import { emitWebhook } from '../webhooks/webhook-dispatch.service';
 
 /** Accepted marketing-consent values, validated before any write. */
 const CONSENT_VALUES = ['UNKNOWN', 'OPTED_IN', 'OPTED_OUT'] as const;
@@ -865,11 +866,22 @@ router.patch('/:id', async (req, res) => {
       });
     }
 
+    const payload = contactPayload(req.body);
     const contact = await prisma.contact.update({
       where: { id: req.params.id },
-      data: contactPayload(req.body),
+      data: payload,
       include: CONTACT_INCLUDE,
     });
+
+    // An agent editing a contact is as real a change as an integration doing
+    // it. Emitting from only the API would give subscribers a webhook that
+    // fires for their own scripts and stays silent for their own staff.
+    void emitWebhook('contact.updated', {
+      contactId: contact.id,
+      changed: Object.keys(payload),
+      source: 'agent',
+    });
+
     res.json(req.user!.maskPhoneAndEmail ? maskContact(contact) : contact);
   } catch (err) {
     res.status(400).json({ error: String((err as Error).message || err) });

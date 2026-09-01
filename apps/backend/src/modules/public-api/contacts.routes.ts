@@ -15,6 +15,7 @@ import { setContactConsent } from '../../utils/consent';
 import { requireScope } from '../api-tokens/api-token.middleware';
 import { parseContactRef } from './identifier';
 import { CONTACT_INCLUDE, serializeContact } from './serialize';
+import { emitWebhook } from '../webhooks/webhook-dispatch.service';
 
 /**
  * `/api/v1/contacts` — the contact surface of the public API.
@@ -279,6 +280,7 @@ router.post('/', requireScope('contacts:write'), async (req, res) => {
     if (fields.length) await writeCustomFields(created.id, fields);
 
     const contact = await prisma.contact.findUnique({ where: { id: created.id }, include: CONTACT_INCLUDE });
+    void emitWebhook('contact.created', { contactId: created.id, phone: phone.phone, source: 'api' });
     logger.info('public-api contact created', { contactId: created.id, tokenId: req.apiToken!.id });
     return send(res, req, contact, 201);
   } catch (err) { return fail(res, req, err, 'POST /contacts'); }
@@ -325,6 +327,9 @@ router.put('/:identifier', requireScope('contacts:write'), async (req, res) => {
     if (fields.length) await writeCustomFields(contactId, fields);
 
     const contact = await prisma.contact.findUnique({ where: { id: contactId }, include: CONTACT_INCLUDE });
+    // The same endpoint emits two different events depending on which branch it
+    // took. A receiver welcoming new customers must not be woken by an update.
+    void emitWebhook(existing ? 'contact.updated' : 'contact.created', { contactId, source: 'api' });
     return send(res, req, contact, existing ? 200 : 201);
   } catch (err) { return fail(res, req, err, 'PUT /contacts/:identifier'); }
 });
@@ -336,11 +341,32 @@ router.patch('/:identifier', requireScope('contacts:write'), async (req, res) =>
     if (!contact) return res.status(404).json({ error: 'not_found', message: 'No contact matches that identifier.' });
 
     const fields = await resolveCustomFields(req.body?.customFields);
-    await prisma.contact.update({ where: { id: contact.id }, data: contactPayload(req.body) });
+    const payload = contactPayload(req.body);
+    // Captured before the write, because "what did it change from" is only
+    // knowable beforehand and is half of what makes the event useful.
+    const previousStage = (contact as any).lifecycleStage ?? null;
+
+    await prisma.contact.update({ where: { id: contact.id }, data: payload });
     await applyConsent(contact.id, req.body?.marketingConsent);
     if (fields.length) await writeCustomFields(contact.id, fields);
 
     const updated = await prisma.contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });
+
+    void emitWebhook('contact.updated', {
+      contactId: contact.id,
+      changed: Object.keys(payload),
+      source: 'api',
+    });
+    // Its own event, not merely a field in the update: a lifecycle move is the
+    // thing most automations are actually waiting for, and making receivers
+    // diff every contact.updated to find it is how that gets missed.
+    if (payload.lifecycleStage !== undefined && payload.lifecycleStage !== previousStage) {
+      void emitWebhook('contact.lifecycle_updated', {
+        contactId: contact.id,
+        from: previousStage,
+        to: payload.lifecycleStage,
+      });
+    }
     return send(res, req, updated);
   } catch (err) { return fail(res, req, err, 'PATCH /contacts/:identifier'); }
 });
@@ -380,6 +406,7 @@ router.post('/:identifier/tags', requireScope('tags:write'), async (req, res) =>
     }
 
     const updated = await prisma.contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });
+    void emitWebhook('contact.tagged', { contactId: contact.id, tags: wanted, source: 'api' });
     return send(res, req, updated);
   } catch (err) { return fail(res, req, err, 'POST /contacts/:identifier/tags'); }
 });

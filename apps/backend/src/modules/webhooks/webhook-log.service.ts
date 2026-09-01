@@ -48,15 +48,20 @@ export type DeliveryRecord = {
   requestPayload?: unknown;
   responseBody?: string | null;
   durationMs: number;
+  /** 1-based. A retry must be distinguishable from a fresh event. */
+  attempt?: number;
 };
 
 /**
  * Stable identity for a configured endpoint.
  *
- * There is no webhook table to key against — a webhook is an action step inside
- * a workflow — so identity is the workflow plus the step's position. That is
- * what makes "this endpoint has failed 40 times" a question the health view can
+ * Used for a webhook that is an action step inside a workflow, which has no row
+ * of its own: identity is the workflow plus the step's position. That is what
+ * makes "this endpoint has failed 40 times" a question the health view can
  * answer, rather than 40 unrelated rows.
+ *
+ * A subscriber-configured endpoint does have a row, and puts its
+ * `WebhookEndpoint` id in `webhookId` directly rather than going through here.
  *
  * `--` rather than `:` matches the convention the queues use, and keeps the
  * value safe to embed in a key elsewhere later.
@@ -120,6 +125,7 @@ export async function recordDelivery(record: DeliveryRecord): Promise<void> {
         requestPayload: serialisePayload(record.requestPayload),
         responseBody: truncate(record.responseBody),
         durationMs: Math.max(0, Math.round(record.durationMs)),
+        attempt: Math.max(1, Math.round(record.attempt ?? 1)),
       },
     });
   } catch (err) {

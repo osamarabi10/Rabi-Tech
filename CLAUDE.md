@@ -233,6 +233,36 @@ returning `17/18` for "backend did not become ready".
 
 [docs/PUBLIC-API.md](docs/PUBLIC-API.md) is the contract this gate defends.
 
+### Outbound webhooks
+```bash
+cd apps/backend && npm run test:webhooks
+```
+
+**52/52, and hermetic** — no Postgres, no Redis, no Docker. The receiver is a
+local HTTP server the script starts, so it asserts on the exact bytes and
+headers that arrive. That is the only way to prove a signature is verifiable by
+somebody *else*: the central checks run the documented `verifySignature` against
+the delivered bytes, not against a signature the gate computed itself, which
+would only prove the function agrees with itself.
+
+A signature a receiver cannot verify is worse than no signature — they write the
+verification code, it rejects everything, and they switch it off.
+
+**The timestamp is signed, not just sent.** Signing the body alone — which is
+Respond.io's published scheme — means any captured request replays forever and
+every replay verifies. Mutation-proved: signing the body only takes it red.
+
+**Eleven events, and the gate scans `src/` to prove each has a real call site.**
+An event declared in a table and emitted nowhere is a checkbox a subscriber
+ticks, a webhook that stays silent forever, and no error anywhere to explain it —
+the defect class this repository has now shipped five times.
+
+It hung on its first run with no output at all, because reading a constant from
+`webhook-delivery.worker.ts` constructs a BullMQ `Queue` at import and opens a
+Redis connection. The policy now lives in `webhook-policy.ts`; **keep constants
+out of the worker module**, or the next hermetic gate quietly acquires the
+infrastructure dependency it was written to avoid.
+
 ### Platform finance check
 ```bash
 cd apps/backend && npm run test:finance

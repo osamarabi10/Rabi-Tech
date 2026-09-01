@@ -10,6 +10,7 @@ import {
   cancelConversationAutoClose,
   reopenConversation,
 } from '../modules/conversations/conversation-lifecycle.service';
+import { emitWebhook } from '../modules/webhooks/webhook-dispatch.service';
 
 export type ActiveConversation = {
   conversation: Conversation;
@@ -190,6 +191,16 @@ export async function getOrCreateActiveConversation(
     });
     return { anyPrior, conversation };
   });
+
+  // Every newly created thread, whichever path created it. `isNewSession`
+  // distinguishes a contact's very first thread from a later one, which a
+  // receiver greeting new customers needs and cannot derive.
+  void emitWebhook('conversation.opened', {
+    conversationId: conversation.id,
+    displayId: conversation.displayId,
+    contactId,
+    isFirstEver: anyPrior === 0,
+  }, organizationId);
 
   return {
     conversation,

@@ -1,6 +1,7 @@
 import { prisma } from '../../prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import logger from '../../lib/logger';
+import { emitWebhook } from '../webhooks/webhook-dispatch.service';
 
 /**
  * Automatic conversation assignment.
@@ -129,5 +130,16 @@ export async function autoAssignConversation(conversationId: string): Promise<st
   if (claimed.count === 0) return null;
 
   logger.info('Conversation auto-assigned', { organizationId, conversationId, userId, strategy });
+
+  // Only when this call is the one that claimed it. The conditional update
+  // above already returned when another worker won the race, so a receiver
+  // cannot be told twice that the same thread was assigned.
+  void emitWebhook('conversation.assigned', {
+    conversationId,
+    assigneeId: userId,
+    strategy,
+    automatic: true,
+  }, organizationId);
+
   return userId;
 }

@@ -9,6 +9,7 @@ import { startCampaignWorker } from './workers/campaign.worker';
 import { startCampaignSchedulerWorker } from './workers/campaign-scheduler.worker';
 import { startIncomingMessageWorker } from './workers/incoming-message.worker';
 import { startEscalationWorker } from './workers/escalation.worker';
+import { startWebhookDeliveryWorker } from './workers/webhook-delivery.worker';
 import { startUsageRollupWorker } from './workers/usage-rollup.worker';
 import logger from './lib/logger';
 import { detectMimeType } from './utils/mime';
@@ -44,6 +45,7 @@ import billingRoutes      from './modules/billing/billing.routes';
 import channelRoutes      from './modules/channels/channels.routes';
 import apiTokenRoutes     from './modules/api-tokens/api-tokens.routes';
 import publicApiRoutes    from './modules/public-api/index.routes';
+import webhookEndpointRoutes from './modules/webhooks/webhooks.routes';
 import { billingWebhookHandler } from './modules/billing/billing.webhook';
 import { verifyMediaProxyToken, verifyMediaToken } from './utils/signed-url';
 import { runAsOrganization, runAsPlatform } from './lib/tenant-context';
@@ -450,6 +452,7 @@ app.use('/api/branding',       brandingRoutes);
 app.use('/api/billing',        billingRoutes);
 app.use('/api/channels',       channelRoutes);
 app.use('/api/api-tokens',     apiTokenRoutes);
+app.use('/api/webhook-endpoints', webhookEndpointRoutes);
 // The public API. Mounted last among /api routes and versioned in the path;
 // it authenticates itself and shares no handler with the console.
 app.use('/api/v1',             publicApiRoutes);
@@ -578,6 +581,12 @@ function onListening(): void {
     logger.info('Incoming message worker disabled (DISABLE_MESSAGE_WORKER=1)');
   } else {
     startIncomingMessageWorker();
+  }
+
+  if (process.env.DISABLE_WEBHOOK_WORKER === '1') {
+    logger.info('Webhook delivery worker disabled (DISABLE_WEBHOOK_WORKER=1)');
+  } else {
+    startWebhookDeliveryWorker();
   }
 
   if (process.env.DISABLE_ESCALATION_WORKER === '1') {

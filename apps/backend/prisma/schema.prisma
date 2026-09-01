@@ -92,6 +92,7 @@ model Organization {
   workflowExecutions      WorkflowExecution[]
   authSessions            AuthSession[]
   apiTokens               ApiToken[]
+  webhookEndpoints        WebhookEndpoint[]
   weeklyRecapRecipients   WeeklyRecapRecipient[]
   userInvitations         UserInvitation[]
 
@@ -1050,6 +1051,7 @@ model User {
   blockedContacts       Contact[]              @relation("ContactBlockedBy")
   authSessions          AuthSession[]
   apiTokens             ApiToken[]             @relation("ApiTokenCreatedBy")
+  webhookEndpoints      WebhookEndpoint[]      @relation("WebhookEndpointCreatedBy")
   weeklyRecapMembership WeeklyRecapRecipient[]
 
   // Composite unique: one identity per org
@@ -2018,6 +2020,56 @@ model AnalyticsHourly {
 ///
 /// Highest-volume table in the schema: inbound is one row per received
 /// message. Pruned by the analytics rollup worker.
+/// A subscriber-configured outbound webhook.
+///
+/// ## The delivery log is the differentiator
+///
+/// Respond.io's webhooks have no delivery log and it is an open feature request
+/// against them. A webhook you cannot see is a webhook you cannot debug: "did
+/// you send it?" is unanswerable by both parties. Deliveries here are written to
+/// WebhookDeliveryLog, which already existed for the workflow step.
+///
+/// ## The secret is stored in clear, unlike an API token
+///
+/// Not an oversight, and not the same problem. HMAC needs the *same* secret at
+/// both ends to compute a signature, so hashing it would make signing
+/// impossible. The mitigations are different in kind: it is shown once on
+/// creation, rotatable, and scoped to one endpoint rather than the workspace.
+model WebhookEndpoint {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  url            String
+  /// Shared with the receiver so they can verify. Never returned after creation.
+  secret         String
+  /// Empty means this endpoint receives nothing — never "everything". An
+  /// endpoint subscribed to every event by omission is how a receiver starts
+  /// getting message bodies it never asked for.
+  events         String[] @default([])
+
+  isActive       Boolean  @default(true)
+  /// Switched off after sustained failure. Retrying a dead URL forever costs
+  /// the sender and floods the receiver when it comes back.
+  disabledAt     DateTime?
+  /// Why, in the words the console shows. Respond.io emails you and leaves you
+  /// to find the switch; this is what lets the screen answer instead.
+  disabledReason String?
+
+  lastDeliveryAt DateTime?
+  lastSuccessAt  DateTime?
+  lastFailureAt  DateTime?
+
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("WebhookEndpointCreatedBy", fields: [createdById, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, isActive])
+}
+
 model WebhookDeliveryLog {
   id             String @id @default(cuid())
   organizationId String
@@ -2025,7 +2077,12 @@ model WebhookDeliveryLog {
   /// 'OUTBOUND' | 'INBOUND'.
   direction String
   /// Stable identity of the configured endpoint, so repeated deliveries group.
-  /// There is no webhook table — see webhookIdentity().
+  ///
+  /// Two kinds of value live here, and deliberately no foreign key. A workflow
+  /// step's identity is synthesised by webhookIdentity(); a configured endpoint
+  /// puts its WebhookEndpoint id here directly. A FK would delete the delivery
+  /// history the moment an endpoint is removed — and "what did we send them
+  /// before you deleted it" is exactly the question asked afterwards.
   webhookId String
   eventType String
 
@@ -2047,6 +2104,10 @@ model WebhookDeliveryLog {
   responseBody   String?
 
   durationMs Int      @default(0)
+  /// Which delivery attempt this was, 1-based. Without it a retry is
+  /// indistinguishable from a fresh event, and "we sent it four times" reads as
+  /// four separate failures.
+  attempt    Int      @default(1)
   createdAt  DateTime @default(now())
 
   organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)

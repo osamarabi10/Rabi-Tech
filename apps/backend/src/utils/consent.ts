@@ -1,6 +1,7 @@
 import { prisma } from '../prisma';
 import logger from '../lib/logger';
 import { getTenantId } from '../lib/tenant-context';
+import { emitWebhook } from '../modules/webhooks/webhook-dispatch.service';
 
 /**
  * Marketing consent.
@@ -187,5 +188,14 @@ export async function setContactConsent(
     toValue: consent,
     source,
     actor,
+  });
+
+  // After the history row, so a receiver that immediately reads back the
+  // contact sees the same state the event describes.
+  void emitWebhook('contact.consent_updated', {
+    contactId,
+    from: before?.marketingConsent ?? null,
+    to: consent,
+    source,
   });
 }

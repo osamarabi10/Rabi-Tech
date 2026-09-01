@@ -9,6 +9,7 @@ import { describeSendFailure } from '../../utils/send-failure';
 import { renderDynamicVariables } from '../../utils/template';
 import { gatewayReachableAssetUrl } from '../snippets/snippet-storage';
 import { markSuccessfulHumanOutbound } from './conversation-lifecycle.service';
+import { emitWebhook } from '../webhooks/webhook-dispatch.service';
 
 /**
  * One outbound path, for every caller that sends a customer a message.
@@ -222,6 +223,25 @@ export async function sendOutboundMessage(input: OutboundInput): Promise<Outboun
   } catch {
     // No socket server in a worker or a script. Never fail a delivered message
     // because nobody was listening.
+  }
+
+  /*
+    Notify subscribers, after the work is done and never before it.
+
+    Fire-and-forget: a webhook is a notification *about* a send, and must not be
+    able to fail one. An internal note is excluded — it was never sent to the
+    customer, and a receiver told "message.sent" about an agent's private note
+    would relay it onward as though it had been.
+  */
+  if (!isInternal && !sendError) {
+    void emitWebhook('message.sent', {
+      messageId: message.id,
+      conversationId: input.conversation.id,
+      contactId: (input.conversation.contact as any).id ?? null,
+      body: message.body,
+      sentBy: input.sender.kind,
+      timestamp: message.timestamp,
+    }, organizationId);
   }
 
   return { message, sendError };
