@@ -991,6 +991,26 @@ const D: Dict = {
   'عرّف مراحل رحلة العميل كما تناسب عملك': { he: 'הגדירו את שלבי מסע הלקוח שמתאימים לעסק שלכם', en: 'Define the customer journey stages that fit your business' },
   'مرحلة محذوفة': { he: 'שלב שנמחק', en: 'deleted stage' },
   'تم تحديث المرحلة': { he: 'השלב עודכן', en: 'Stage updated' },
+  // Ask a Question workflow node (P11.4). The Arabic is Palestinian colloquial,
+  // matching the auto-reply seed set — an author reading this is the same person
+  // who writes the replies.
+  'السؤال اللي بينبعت للعميل': { he: 'השאלה שתישלח ללקוח', en: 'The question sent to the customer' },
+  'يتخزن في حقل': { he: 'יישמר בשדה', en: 'Store the answer in' },
+  'لازم تعرّف حقل مخصص أول، عشان تخزن فيه الجواب': { he: 'צריך להגדיר שדה מותאם קודם, כדי לשמור בו את התשובה', en: 'Define a custom field first, to store the answer in' },
+  'لو الجواب مش مفهوم، شو نرد؟ (اختياري)': { he: 'אם התשובה לא ברורה, מה נשיב? (רשות)', en: 'If the answer is unusable, what should we reply? (optional)' },
+  'ينتظر': { he: 'ממתין', en: 'Wait' },
+  'دقيقة': { he: 'דקות', en: 'minutes' },
+  'يعيد السؤال': { he: 'ישאל שוב', en: 'Re-ask' },
+  'مرات': { he: 'פעמים', en: 'times' },
+  'لو ما رد: توقف': { he: 'אם אין תשובה: עצור', en: 'No answer: stop' },
+  'لو ما رد: كمّل باقي الخطوات': { he: 'אם אין תשובה: המשך בשאר השלבים', en: 'No answer: run the remaining steps' },
+  // Answer kinds and run statuses for the same node.
+  'طرح سؤال': { he: 'שאל שאלה', en: 'Ask a question' },
+  'أي جواب': { he: 'כל תשובה', en: 'Any answer' },
+  'إيميل': { he: 'אימייל', en: 'Email' },
+  'رقم تلفون': { he: 'מספר טלפון', en: 'Phone number' },
+  'رقم فقط': { he: 'מספר בלבד', en: 'Numbers only' },
+  'انتهت المهلة بدون رد': { he: 'הזמן אזל ללא תשובה', en: 'Timed out with no reply' },
   // Chart export (M9.3). The formats stay untranslated on the buttons — SVG and
   // PNG are filename extensions, not words, in all three languages.
   'جارٍ التصدير': { he: 'מייצא', en: 'Exporting' },

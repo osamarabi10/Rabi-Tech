@@ -32,7 +32,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
-  ACTION_FIELDS, actionLabel, conditionLabel, triggerLabel,
+  ACTION_FIELDS, ANSWER_KIND_LABELS, actionLabel, conditionLabel, triggerLabel,
 } from '@/lib/workflow-labels';
 
 /**
@@ -489,6 +489,98 @@ function ActionOperand({
       </div>
     );
   }
+  if (kind === 'question') {
+    /*
+      Ordered the way the author thinks about it: what the customer is asked,
+      what counts as an answer, where it goes, then the two limits.
+
+      The answer type sits beside the field on purpose. Picking "number" and
+      storing into a text field is legal and usually a mistake, and the two
+      being adjacent is the cheapest way to make that visible without the
+      builder second-guessing the choice.
+    */
+    const answerKinds = ['text', 'email', 'phone', 'number'];
+    return (
+      <div className="space-y-1.5">
+        <Input
+          value={String(action.prompt ?? '')}
+          onChange={(e) => onChange({ ...action, prompt: e.target.value })}
+          placeholder={t('السؤال اللي بينبعت للعميل')}
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            className={select}
+            value={String(action.expects ?? 'text')}
+            onChange={(e) => onChange({ ...action, expects: e.target.value })}
+          >
+            {answerKinds.map((k) => (
+              <option key={k} value={k}>{t(ANSWER_KIND_LABELS[k])}</option>
+            ))}
+          </select>
+          <select
+            className={select}
+            value={String(action.field ?? '')}
+            onChange={(e) => onChange({ ...action, field: e.target.value })}
+          >
+            <option value="">{t('يتخزن في حقل')}</option>
+            {fields.map((f) => <option key={f.slug} value={f.slug}>{f.name}</option>)}
+          </select>
+        </div>
+        {/*
+          Only custom fields are offered, and that is the security boundary
+          rather than a limitation of the picker: the server resolves this slug
+          through CustomFieldDefinition, so a workflow can only ever write a
+          field this organization defined. See D-31.
+        */}
+        {fields.length === 0 && (
+          <p className="text-micro text-muted-foreground">
+            {t('لازم تعرّف حقل مخصص أول، عشان تخزن فيه الجواب')}
+          </p>
+        )}
+        <Input
+          value={String(action.invalidPrompt ?? '')}
+          onChange={(e) => onChange({ ...action, invalidPrompt: e.target.value })}
+          placeholder={t('لو الجواب مش مفهوم، شو نرد؟ (اختياري)')}
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex items-center gap-1.5 text-micro text-muted-foreground">
+            {t('ينتظر')}
+            <Input
+              type="number"
+              min={5}
+              max={10080}
+              dir="ltr"
+              className="numeric"
+              value={String(action.timeoutMinutes ?? 1440)}
+              onChange={(e) => onChange({ ...action, timeoutMinutes: Number(e.target.value) })}
+            />
+            {t('دقيقة')}
+          </label>
+          <label className="flex items-center gap-1.5 text-micro text-muted-foreground">
+            {t('يعيد السؤال')}
+            <Input
+              type="number"
+              min={1}
+              max={3}
+              dir="ltr"
+              className="numeric"
+              value={String(action.maxAttempts ?? 2)}
+              onChange={(e) => onChange({ ...action, maxAttempts: Number(e.target.value) })}
+            />
+            {t('مرات')}
+          </label>
+        </div>
+        <select
+          className={select}
+          value={String(action.onTimeout ?? 'STOP')}
+          onChange={(e) => onChange({ ...action, onTimeout: e.target.value })}
+        >
+          <option value="STOP">{t('لو ما رد: توقف')}</option>
+          <option value="CONTINUE">{t('لو ما رد: كمّل باقي الخطوات')}</option>
+        </select>
+      </div>
+    );
+  }
   if (kind === 'url') {
     const auth = (action.auth ?? null) as { type?: string; token?: string; username?: string; password?: string } | null;
     return (
@@ -630,7 +722,10 @@ function BranchEditor({
   const branchActions = (side: 'then' | 'else') =>
     (action[side] as WorkflowAction[] | undefined) ?? [];
 
-  const nestable = actionTypes.filter((type) => type !== 'WAIT_DELAY' && type !== 'IF_ELSE');
+  // ASK_QUESTION joins WAIT_DELAY here for the same reason: resuming addresses a
+  // top-level step index, which cannot name a position inside a branch. Offering
+  // it would produce a graph the server refuses on save.
+  const nestable = actionTypes.filter((type) => type !== 'WAIT_DELAY' && type !== 'IF_ELSE' && type !== 'ASK_QUESTION');
 
   const setSide = (side: 'then' | 'else', next: WorkflowAction[]) =>
     onChange({ ...action, [side]: next });

@@ -38,6 +38,7 @@ export const ACTION_LABELS: Record<string, string> = {
   WAIT_DELAY: 'انتظار',
   IF_ELSE: 'إذا / وإلا',
   CLOSE_CONVERSATION: 'إغلاق المحادثة',
+  ASK_QUESTION: 'طرح سؤال',
 };
 
 export const RUN_STATUS_LABELS: Record<string, string> = {
@@ -46,10 +47,15 @@ export const RUN_STATUS_LABELS: Record<string, string> = {
   COMPLETED: 'اكتملت',
   FAILED: 'فشلت',
   SKIPPED: 'تم تخطيها',
+  // A run holding for the contact to answer an ASK_QUESTION step. Distinct from
+  // WAITING, which is holding for a clock — the two look identical in a list and
+  // mean different things to whoever is reading it.
+  AWAITING_REPLY: 'بانتظار رد العميل',
+  TIMED_OUT: 'انتهت المهلة بدون رد',
 };
 
 /** Which extra input each action needs. Drives the builder's fields. */
-export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template' | 'tag' | 'customField' | 'url' | 'minutes' | 'branch' | 'none'> = {
+export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template' | 'tag' | 'customField' | 'url' | 'minutes' | 'branch' | 'question' | 'none'> = {
   ASSIGN_TEAM: 'team',
   ASSIGN_USER: 'user',
   SEND_MESSAGE: 'text',
@@ -63,9 +69,28 @@ export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template'
   // Nothing to configure: what the customer receives is the
   // CONVERSATION_CLOSED auto-reply the subscriber already edits in settings.
   CLOSE_CONVERSATION: 'none',
+  // Its own kind: a prompt, the answer type, the field to store it in, and the
+  // two limits. Reusing 'customField' would give it the field picker and drop
+  // the question, which is the part the customer actually sees.
+  ASK_QUESTION: 'question',
 };
 
 export const triggerLabel = (value: string) => TRIGGER_LABELS[value] || value;
 export const conditionLabel = (value: string) => CONDITION_LABELS[value] || value;
 export const actionLabel = (value: string) => ACTION_LABELS[value] || value;
 export const runStatusLabel = (value: string) => RUN_STATUS_LABELS[value] || value;
+
+/**
+ * What an ASK_QUESTION step will accept, in the author's language.
+ *
+ * Mirrors ANSWER_KINDS on the server. The values are the contract and are not
+ * translated; only the labels are.
+ */
+export const ANSWER_KIND_LABELS: Record<string, string> = {
+  text: 'أي جواب',
+  email: 'إيميل',
+  phone: 'رقم تلفون',
+  // Not 'رقم': that key already means '#' elsewhere, and an Arabic source
+  // string is the dictionary key, so one word cannot carry two meanings.
+  number: 'رقم فقط',
+};

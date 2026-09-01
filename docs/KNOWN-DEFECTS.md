@@ -1051,10 +1051,31 @@ bug of the two.
 
 ---
 
-## D-26 · Every trial signup is placed on an edition the platform cannot operate
+## D-26 · Every trial signup was placed on an edition the platform cannot operate
 
-**Open. Needs a commercial decision, not a code change — which is why D-25's fix
-deliberately stops short of it.**
+**Resolved 2026-09-01: the trial moved to STANDARD.** The analysis below is
+kept because it is the reasoning the fix rests on, and because the shape
+recurs whenever an edition's channel list moves without its gateway flag
+moving with it.
+
+The decision taken was the one option not listed below, and it was not visible
+until the two candidates had been rejected: rather than removing the gateway
+or refusing the signup, **move the trial to an edition that permits the
+channel it provisions**. STANDARD allows OPENWA and WHATSAPP_CLOUD both, so a
+trial there is given a channel its own edition sanctions. STANDARD gained
+`autoProvisionGateway: true` in the same commit, because a trial that cannot
+connect a number demonstrates nothing - the exact objection this entry raises
+against every other fix.
+
+`TRIAL_PLAN_DEFAULT` no longer aliases `ENTRY_PAID_PLAN_CODE`. The two
+answered the same question until E5g and are now separate commercial
+decisions: what a trial runs on, and what the cheapest paid edition is.
+
+A harness check pins the *property* rather than the value - whatever the trial
+plan is, if it provisions a gateway it must permit `OPENWA`. Moving the trial
+again stays possible; moving it somewhere incoherent does not.
+
+**The superseded analysis follows.**
 
 `TRIAL_PLAN_DEFAULT` is `ENTRY_PAID_PLAN_CODE`, which is `GROWTH`. No
 `billing.trialPlan` `PlatformSetting` row exists, so that default is live. A
@@ -1106,3 +1127,221 @@ without revisiting `autoProvisionGateway`, and the two now disagree.
 4. Configure Meta, at which point GROWTH becomes operable and the question
    disappears — but the `autoProvisionGateway`/`allowedChannels` disagreement
    above survives it and still wants fixing.
+
+---
+
+## D-27 · `allowedChannels` was enforced on two paths, and not on the two that matter
+
+**Partly closed 2026-09-01. The remaining gap is deliberate — do not close it
+without reading why.**
+
+`allowedChannels` decides which channel kinds an edition permits. Until this
+change it was consulted at exactly two call sites:
+
+- `POST /api/channels/meta/connect`
+- `POST /api/channels/active`
+
+Both are requests an admin makes deliberately. Neither is how a workspace
+actually ends up with a working OpenWA number. That happens through gateway
+provisioning, which runs unattended at activation, and the QR pairing endpoint
+`GET /api/system/sessions/:name/qr` — and **neither consulted the edition**. Nor
+does the send path: `resolveChannelKind()` returns whichever `OrganizationChannel`
+row is `ACTIVE` and asks nothing about entitlements.
+
+The E5g migration note recorded the send-path half ("Enforcement lives at the
+connect paths only… Nothing on the send path consults allowedChannels"), so it
+was known. What was not traced through was the consequence once the same release
+made GROWTH, BUSINESS and ENTERPRISE Meta-only while leaving
+`autoProvisionGateway: true` on all three. Every workspace on those editions had
+a real OpenWA gateway built for it, reached `AWAITING_QR`, and could be paired
+and sent through normally.
+
+**This is why trials appeared to work while Meta was entirely unconfigured.**
+They were running on a channel their edition forbade, over a rule nothing
+enforced. A silent compensating bug hid a real one, which is the expensive part.
+
+**Closed at:**
+
+| Path | Now |
+|---|---|
+| `maybeProvisionGateway` | Refuses to build a gateway for a kind the edition forbids |
+| `GET /sessions/:name/qr` | Refuses pairing with 402 `PLAN_UPGRADE_REQUIRED`, before any OpenWA call |
+
+**Deliberately still open — the send path and `resolveChannelKind()`.** Both are
+untouched, and that is what makes the fix safe to deploy. `channelGrantRefusal`
+grandfathers any channel already `ACTIVE`, so a live workspace keeps sending.
+**ostudio is on ENTERPRISE — Meta-only — with a working OpenWA channel it has
+been using.** Enforcing retroactively would disconnect a paying subscriber to
+correct a rule they never broke: worse than the inconsistency, and not a
+decision an entitlement check should take on its own.
+
+The boundary is therefore **the future is bounded, the past is grandfathered.**
+No new workspace can obtain a channel its edition forbids; every existing one
+keeps what it has. Closing the remainder means migrating the affected
+subscribers deliberately — onto an edition permitting OpenWA, or accepting the
+disconnection knowingly. That is a commercial act, not a refactor.
+
+**One case did change for a workspace mid-flight:** one on a Meta-only edition
+that had been provisioned but never paired is now refused at the QR screen. It
+was never `ACTIVE`, so it is not grandfathered. Intended — it is precisely the
+state this exists to stop — but a visible change rather than a purely
+forward-looking one.
+
+---
+
+## D-28 · `invoiceRef` uniqueness rests on four characters of organization id
+
+**Open. Not urgent, and gets less comfortable as subscriber count grows.**
+
+`20260921090000_invoice_reference_integrity` moved `Invoice` from
+`@@unique([provider, invoiceRef])` to `@@unique([invoiceRef])` — global
+uniqueness. The reasoning was right: the old pair let one reference exist twice
+under two providers, which is the collision a reference exists to rule out.
+
+But the sequence behind the reference is **per organization**
+(`OrgSequence("invoiceRef")`), and the only thing separating two organizations'
+identical sequence numbers is the tail in the format:
+
+```
+INV-{year}-{last 4 chars of organizationId, uppercased}-{seq}
+```
+
+Collision safety is four characters wide. Two organizations sharing an id tail
+collide the first time both reach the same sequence number — and because the
+constraint is a hard unique, the symptom is **an owner unable to issue an
+invoice at all**, surfacing as a failed write on an ordinary action. Nothing is
+corrupted and no money is misattributed; it is an outage for one subscriber, and
+by birthday arithmetic it stops being unlikely at a few hundred organizations.
+
+**Why it is not a quick fix.** Both obvious remedies change the reference
+format, and references are quoted to customers, printed on documents, and used
+to look documents up:
+
+1. **Widen the tail** — fixes new references, leaves existing ones in the old
+   shape, so the format becomes two formats.
+2. **Make the constraint `(organizationId, invoiceRef)`** — cleaner, and it
+   scopes the reference where it is actually scoped. But it gives up the global
+   guarantee the migration deliberately introduced, so it needs that reasoning
+   revisited rather than reverted.
+
+Option 2 is probably right, because the reference is already a per-organization
+sequence and pretending otherwise is what created the four-character dependency.
+Neither should be done without first deciding what a reference promises.
+
+---
+
+## D-11 addendum · the currency docblock reads as settled when half of it is open
+
+`currency-policy.ts`'s docblock argues, correctly, that archiving an edition must
+not stop billing the subscribers on it — *"archiving stops the selling; it does
+not stop the billing"* — and deliberately omits an `archivedAt` filter for that
+reason.
+
+It then leaves `where: { isActive: true }` in place, which blocks billing for
+exactly the same reason one step earlier: **deactivating** an edition drops its
+currency from the sellable set, and `assertSellableCurrency` fails closed, so an
+owner can be refused when invoicing a subscriber on a deactivated edition.
+
+That is D-11 and is already recorded. This note exists because the docblock is
+persuasive and reads as though the whole question were settled, so a reader who
+trusts it will not go looking for D-11 — and the half still open is the one they
+are likelier to hit, since deactivating is the ordinary act and archiving the
+rare one.
+
+---
+
+## D-30 · A workflow re-ask bypassed consent
+
+**Fixed 2026-09-01, before shipping. Recorded because the class recurs and the
+instance was invisible.**
+
+The first draft of `ASK_QUESTION`'s retry path (`answer-resume.service.ts`)
+carried a small local `sendTo` helper: look up the contact, resolve a session,
+call `ChannelService.sendText`. It read as obviously correct.
+
+It skipped `sendToContact`, which is where Rule 1 of the executor lives — *a
+workflow is not an exemption from consent*. So a contact who had sent STOP and
+was `OPTED_OUT` would have been messaged again by the retry, once per failed
+attempt, by a system whose whole M1 phase exists to make that impossible.
+
+**Why it hid.** Nothing about "re-ask the question" suggests consent is
+involved. The framing is about repetition, not about sending, and the helper
+looked like plumbing rather than like a message path. The consent rule is
+documented at the top of `workflow-executor.ts` and is enforced *inside*
+`sendToContact` — correctly, but that means anything not calling it is silently
+exempt.
+
+**No gate would have caught it.** `tsc` is satisfied by a valid send. The
+tenancy harness asserts organization isolation, not consent. The consent checks
+in the harness cover the campaign and template paths, which do call the shared
+sender.
+
+**Fix.** The local helper is deleted. `sendToContact` is exported and the resume
+path calls it with a minimal `ExecutionContext`. One send path, one place where
+consent is decided.
+
+**The rule this produces.** A second implementation of "send a message to a
+contact" is a consent bug waiting to be written. If a new call site cannot use
+`sendToContact`, that is a reason to change `sendToContact`, not to write
+another one.
+
+---
+
+## D-31 · A workflow could write any column on Contact, including organizationId
+
+**Fixed 2026-09-01, before shipping. The most exploitable defect found this
+session, and it was reachable through an ordinary admin screen.**
+
+The first draft of the `ASK_QUESTION` resume stored the contact's answer with:
+
+```ts
+await prisma.contact.update({
+  where: { id: contactId },
+  data: { [String(question.field)]: parsed.value } as never,
+});
+```
+
+`question.field` comes from the workflow definition — that is, from whatever an
+admin typed into the automation builder. The `as never` silenced the type error
+that would otherwise have named the problem.
+
+**What it allowed.** An admin building a workflow could have named:
+
+- `organizationId` — and moved a contact into another tenant. Every composite
+  foreign key in this schema exists to make exactly that unrepresentable, and
+  this would have done it through the ORM with the tenancy extension satisfied,
+  because the write is scoped to the *current* organization and the value is
+  just a string.
+- `blockedAt` — and silently lifted a block by asking the blocked person a
+  question.
+- `marketingConsent` — and undone an opt-out.
+- `phone` — and pointed a contact at somebody else's number.
+
+None of it would look wrong in the builder. The field box would contain a word.
+
+**Why it hid.** The action's job is "write the answer to a field", and Contact
+has fields. The safe path was one action away: `UPDATE_CONTACT_FIELD` had
+already solved this by resolving a `CustomFieldDefinition` by slug, which can
+only name fields the organization has defined — but that solution lives inside
+that action's `case`, not in a shared helper, so nothing carried it across.
+
+**No gate would have caught it.** The tenancy harness proves the extension and
+the composite FKs stop *cross-tenant* writes. This was a same-tenant write of an
+attacker-chosen column, which is a different shape, and the value only becomes a
+tenancy breach after it lands.
+
+**Fix.** The resume path resolves `CustomFieldDefinition` by slug and upserts a
+`CustomFieldValue`, identically to `UPDATE_CONTACT_FIELD`. A question whose
+field has since been deleted stops the run rather than guessing.
+
+**The rule this produces, and the reason both D-30 and D-31 were found at all.**
+*When writing a new action in a family, read its siblings first.* Neither bug
+was found by testing — both were found by reading `UPDATE_CONTACT_FIELD` and
+`SEND_MESSAGE` next to the new code. The safe patterns already existed; the new
+action simply had not inherited them, because in this engine each `case` carries
+its own safety rather than sharing it.
+
+That is worth a second look on its own: the executor's `switch` means every
+protection is per-case, so a new case starts with none of them. Not changed
+here, since restructuring the executor while adding to it is how both of these
+would have shipped — but it is the structural reason this class exists.
