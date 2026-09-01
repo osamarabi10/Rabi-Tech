@@ -844,3 +844,55 @@ anyone to look. They are indistinguishable from a suspended account.
 **Fix:** the state needs a name the tenant can be shown. `getServiceState`
 already exists as the place that answers "is something about to go wrong", and
 this is the one live state it does not model.
+
+---
+
+## D-22 · Nothing charges a subscription a second time
+
+**Where:** absent, which is the defect. `Subscription.currentPeriodEnd` in
+[`schema.prisma`](../apps/backend/prisma/schema.prisma), and the lack of any
+reader for it.
+
+**What is wrong:** there is no renewal, expiry or recurring billing logic in
+this codebase at all.
+
+`currentPeriodStart` and `currentPeriodEnd` are written by
+`activateManualSubscription` (`now`, and `now + 1` UTC month) and read in
+**exactly one place** — `platform.routes.ts:278`, a `select` that feeds the
+console's "time left" display. **Nothing compares `currentPeriodEnd` to the
+present.** `cancelAtPeriodEnd` is written `false` on cancellation and never read
+by anything.
+
+So a subscription activated today remains `ACTIVE` indefinitely. The period end
+passes in silence. The only exits from `ACTIVE` are a `payment_failed` webhook,
+a `subscription_canceled` webhook, the tenant's `/cancel`, an owner action, or
+dunning.
+
+**And dunning does not close the loop either.** It reacts to overdue local
+`Invoice` rows — and `createInvoice` has exactly one caller, the owner-only
+`POST /subscribers/:id/invoices`. Nothing creates an invoice automatically, so
+the arrears path depends on a person having raised the debt by hand.
+
+Note the asymmetry with trials, which makes the gap easy to miss: a *trial* has
+`trialEndsAt` and its expiry **is** enforced, at the access gate. A paid
+subscription has no equivalent.
+
+**Cost:** nothing while payment is manual, because a human is the renewal
+process. It becomes the defining gap the moment payment is automatic, and the
+shape it takes depends entirely on a choice made outside this codebase:
+
+- With provider-side **subscriptions**, the provider performs the recurring
+  charge and this gap stays a gap — the money arrives, and the system simply
+  does not react to renewals. Survivable.
+- With **one-off charges**, this gap becomes a standing revenue loss: the
+  customer pays once and keeps the product forever, because neither the
+  provider nor this code will ever charge again.
+
+That difference is why `StripeProvider` creates `mode: 'subscription'` sessions
+even though nothing in the code requires a subscription object.
+
+**Fix:** deliberately not built, and deliberately not part of provider
+integration — it is a separate missing capability, and conflating the two is how
+"we integrated Stripe" gets mistaken for "renewals work". The real fix is close
+to E6's effective dates and revision history: a subscription needs a period that
+something enforces, and an invoice that something raises.

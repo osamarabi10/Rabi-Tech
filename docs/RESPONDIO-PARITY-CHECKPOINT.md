@@ -1031,6 +1031,16 @@ endpoint and restores it — so widening the set is not shipping untested code.
    the boot window.
 5. E7, or an accepted equivalent. A sixth edition is the first catalogue change
    whose consequences nobody can preview, and it is the least reversible one.
+6. **A price for it at the payment provider.** Since the Stripe adapter landed,
+   an edition is sellable only if `STRIPE_PRICE_<CODE>` names a price id, and
+   those ids are per-environment so they cannot live in the repository. A sixth
+   edition created from the console today would appear on the pricing page and
+   **refuse at checkout** — `createCheckout` throws rather than charging against
+   another edition's price, which is the correct failure and still a broken
+   purchase. This is the point at which the environment map has to become a
+   column on `Plan` that the console can set, and it is the most concrete
+   operational reason the door being closed is currently load-bearing rather
+   than merely cautious.
 
 **Applying E4's migration was never the one-way door. Creating the sixth edition
 is.**
