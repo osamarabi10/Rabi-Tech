@@ -1413,6 +1413,53 @@ function parseFlag(value: unknown): boolean | undefined {
   return Boolean(value);
 }
 
+/** Mirrors the PricingModel enum in schema.prisma. */
+const PRICING_MODELS = ['FREE', 'FIXED', 'NEGOTIATED'] as const;
+
+/**
+ * The price/pricingModel invariants, enforced against the row **as it will be
+ * after this write** rather than against the patch in isolation.
+ *
+ * That distinction is the whole reason this is a separate step. A PATCH can
+ * carry either field alone: setting GROWTH to FREE while its price stays at
+ * 4900, or setting a FIXED edition's price to 0, each produce an inconsistent
+ * row while looking locally reasonable. Checking the merged result catches both;
+ * checking the patch catches neither.
+ *
+ * These were established when pricingModel landed and were enforced only at
+ * seed time, which meant the console could write states the constant could not.
+ *
+ *   FIXED       price > 0    an edition sold at a list price
+ *   FREE        price = 0    not sold
+ *   NEGOTIATED  price = 0    sold, but the number lives in the contract
+ *
+ * NEGOTIATED coerces rather than refuses, because a price is not a fact about a
+ * negotiated edition — ENTERPRISE stores 0 and always has. Refusing a supplied
+ * price would make the caller delete a field to satisfy a rule that intends to
+ * ignore it.
+ */
+function applyPricingInvariant(
+  data: Record<string, unknown>,
+  current: { pricingModel: string; monthlyPriceCents: number } | null,
+): void {
+  const bad = (message: string) => Object.assign(new Error(message), { status: 400 });
+  // FIXED is the column default, so a create naming no model is a FIXED one and
+  // has to satisfy FIXED's rule rather than slipping past unchecked.
+  const model = String(data.pricingModel ?? current?.pricingModel ?? 'FIXED');
+  const price = Number(data.monthlyPriceCents ?? current?.monthlyPriceCents ?? 0);
+
+  if (model === 'NEGOTIATED') {
+    data.monthlyPriceCents = 0;
+    return;
+  }
+  if (model === 'FREE' && price !== 0) {
+    throw bad('A FREE edition must be priced at 0. Use FIXED for an edition with a list price.');
+  }
+  if (model === 'FIXED' && price <= 0) {
+    throw bad('A FIXED edition must be priced above 0. Use FREE for an unsold edition, or NEGOTIATED for one priced by agreement.');
+  }
+}
+
 /**
  * Parse the editable edition fields out of a request body into a Prisma `data`
  * object, leaving anything the caller did not send untouched.
@@ -1453,6 +1500,26 @@ function applyEditionFields(body: Record<string, unknown>, data: Record<string, 
   if (price !== undefined) {
     if (price === null) throw bad('Monthly price is required; use 0 for a free or negotiated edition');
     data.monthlyPriceCents = price;
+  }
+
+  /*
+    Whether an edition is billable at all, and therefore settable from the
+    console rather than only by a direct database write.
+
+    This is not a display field. isPaidPlan reads pricingModel, and it decides
+    whether a signup opens a checkout session, whether a subscription starts
+    TRIALING, whether dunning may suspend, and whether an edition may be used as
+    the trial plan. Moving an edition to FREE stops it collecting money.
+
+    The invariant against price is applied separately, by applyPricingInvariant,
+    because it has to see the row this patch produces rather than the patch.
+  */
+  if (body.pricingModel !== undefined) {
+    const model = String(body.pricingModel).trim().toUpperCase();
+    if (!(PRICING_MODELS as readonly string[]).includes(model)) {
+      throw bad(`pricingModel must be one of ${PRICING_MODELS.join(', ')}`);
+    }
+    data.pricingModel = model;
   }
   for (const field of [
     'monthlyActiveContactsLimit',
@@ -1531,6 +1598,13 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
     // second PATCH saying the same thing is not a second withdrawal.
     if (data.archivedAt instanceof Date && before?.archivedAt) {
       delete data.archivedAt;
+    }
+
+    // Only when this patch touches either half. An unrelated edit — a rename, a
+    // limit — must not be refused because of a row that was already
+    // inconsistent before anyone touched it.
+    if (data.pricingModel !== undefined || data.monthlyPriceCents !== undefined) {
+      applyPricingInvariant(data, before);
     }
 
     const updated = await prisma.plan.update({ where: { code }, data });
@@ -1666,6 +1740,10 @@ router.post('/editions', requirePlatformOwner, async (req, res) => {
     if (data.monthlyPriceCents === undefined) {
       return res.status(400).json({ error: 'Monthly price is required; use 0 for a free or negotiated edition' });
     }
+
+    // No existing row to merge against: a create is judged entirely on what it
+    // supplies, defaulting to the column's own FIXED.
+    applyPricingInvariant(data, null);
 
     if (data.sortOrder === undefined) {
       // Appended past the current end of the ladder, explicitly. The column
