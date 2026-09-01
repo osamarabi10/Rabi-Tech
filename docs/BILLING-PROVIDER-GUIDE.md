@@ -35,17 +35,30 @@ One file: a class satisfying `PaymentProvider` in
 if (provider === 'stripe') return new StripeProvider();
 ```
 
-Seven methods. `ManualProvider` is a complete worked example of all of them.
+The interface declares seven members. **Three of them make a paid signup reach
+ACTIVE; two more complete the lifecycle; two are never called by anything.**
+This distinction used to be missing from this page, and following it as a flat
+list meant writing two methods nothing invokes.
 
-| Method | Purpose |
-|---|---|
-| `createCheckout(orgId, planCode)` | Return a hosted payment URL + your `externalRef`. **Put `organizationId` in the provider's metadata** — the webhook has to carry it back. |
-| `getCheckoutStatus(externalRef)` | Poll fallback for when a webhook is missed. |
-| `changeSubscription(ref, planCode)` | Upgrade / downgrade. |
-| `cancelSubscription(ref)` | Cancel. |
-| `verifyWebhook(rawBody, headers)` | Verify the signature, then **map the event to a canonical `kind`** (below). |
-| `listInvoices(customerRef)` | Billing history for the tenant panel. |
-| `provider` | Identifier string, also stored on `Subscription.provider`. |
+`ManualProvider` is a worked example of all seven; `StripeProvider` is a worked
+example of the three that matter first.
+
+| Member | Status | Purpose |
+|---|---|---|
+| `provider` | **required** | Identifier string, stored on `Subscription.provider` and `Invoice.provider`. |
+| `createCheckout(orgId, planCode)` | **required** | Return a hosted payment URL + your `externalRef`. **Put `organizationId` *and* `planCode` in the provider's metadata** — the webhook has to carry both back. |
+| `verifyWebhook(rawBody, headers)` | **required** | Verify the signature over the raw bytes, then **map the event to a canonical `kind`** (below). |
+| `getCheckoutStatus(externalRef)` | lifecycle | The poll fallback `reconcileBilling` depends on. Stub it and a dropped webhook becomes a customer who paid and was never activated, recoverable only by someone noticing. |
+| `cancelSubscription(ref)` | lifecycle | Called from `cancelCurrentSubscription`, but **only when `subscriptionRef` is set**. |
+| `changeSubscription(ref, planCode)` | **never called** | Every plan change goes through `activateManualSubscription`, which rewrites the local row and never tells the provider. Kept on the interface because it is the right home for that missing propagation — see D-18. |
+| `listInvoices(customerRef)` | **never called** | The tenant panel reads local `Invoice` rows. |
+
+Implement the three required members first and stop. That alone is a paid
+signup reaching ACTIVE with nobody clicking anything, which is the only
+milestone worth measuring. Throw from the rest rather than returning something
+plausible — a `getCheckoutStatus` that always answers `pending` disables the
+fallback silently, and a `cancelSubscription` that does nothing lets the local
+row read CANCELED while the provider keeps charging.
 
 ### The one thing that is easy to get wrong
 
@@ -68,19 +81,38 @@ literal `manual.*` strings, so any real provider would have logged
 "Unhandled payment event type" and never activated anybody. Mapping now lives in
 the provider, where the vocabulary is known.
 
-A Stripe mapping would be:
+The Stripe mapping, as shipped in `stripe.provider.ts` — and note what is
+**deliberately absent**, because an earlier version of this table mapped all
+four and two of them are traps:
 
-| Stripe event | `kind` |
-|---|---|
-| `checkout.session.completed` | `subscription_activated` |
-| `invoice.payment_succeeded` | `subscription_activated` |
-| `invoice.payment_failed` | `payment_failed` |
-| `customer.subscription.deleted` | `subscription_canceled` |
+| Stripe event | `kind` | Why |
+|---|---|---|
+| `checkout.session.completed` | `subscription_activated` | The one that activates. |
+| `invoice.payment_succeeded` | *(unmapped → `unknown`)* | This is the **renewal** event. Mapping it to `subscription_activated` calls `activateManualSubscription` every month, which runs `applyPlanLimits` and **overwrites `OrganizationConfig`** — silently resetting any negotiated per-subscriber quota, once a month, for as long as they keep paying. See D-14 and D-20. Stripe still takes the money; we take no action. |
+| `invoice.payment_failed` | *(unmapped → `unknown`)* | Routes to `markPaymentFailed`, which suspends the organization **immediately, with no grace**, while Stripe retries a failed invoice over several days. Reacting to the first failure suspends a customer whose card succeeds on the retry. If mapped at all, only the terminal failure (`next_payment_attempt === null`) — and that is a product decision about grace. |
+| `customer.subscription.deleted` | `subscription_canceled` | Stage 2. Note `cancelCurrentSubscription` calls **back** into `provider.cancelSubscription`, so a cancellation arriving from the provider makes us ask the provider to cancel. |
 
-Also set `organizationId` on the returned event (read it back out of the
-provider's metadata). Without it the handler logs *"Payment event carried no
+### Metadata: both fields, or nothing activates
+
+Set **`organizationId` and `planCode`** on the returned event, read back out of
+the provider's metadata.
+
+Without `organizationId` the handler logs *"Payment event carried no
 organization"* and stops — deliberately, since guessing which subscriber to
 upgrade is worse than failing.
+
+Without `planCode`, or with one that does not equal the plan recorded on the
+subscription, the event **parks in `MANUAL_REVIEW`** with a
+`PAYMENT_EVENT_NEEDS_REVIEW` alert and activates nothing. It must be *our* code,
+never the provider's price or product id: translating `price_1abc` into `GROWTH`
+is the provider's job, inside `verifyWebhook`, exactly as `type → kind` is.
+
+**Write the metadata in both places the provider offers.** With Stripe, session
+metadata reaches `checkout.session.completed` and *subscription* metadata
+reaches every later `invoice.*` and `customer.subscription.*` event. Set only
+the first and activation works while every subsequent event parks — which
+presents as an intermittent fault rather than a missing field, and is the single
+most likely way to get this integration wrong.
 
 ### Raw body
 
