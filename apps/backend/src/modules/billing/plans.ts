@@ -93,7 +93,20 @@ export type PlanEntitlements = {
   customDomain: boolean;
   whiteLabel: boolean;
   maskContactDetails: boolean;
-  /** Channel kinds this edition may connect. Matches OrganizationChannel.kind. */
+  /**
+   * Channel kinds this edition may connect. Matches OrganizationChannel.kind.
+   *
+   * The ladder's shape, which is a product decision and not a technical one:
+   * STANDARD is the tier for customers who do **not** have a Meta WhatsApp
+   * Business Account, and is the only paid edition allowing OPENWA. Everything
+   * above it is Meta-only, because those customers bring their own WABA and
+   * token. FREE allows both, so a trial can start without a WABA.
+   *
+   * Enforced at the connect paths only — `/channels/meta/connect` and
+   * `/channels/active`. Nothing on the send path reads this, so narrowing an
+   * edition does not disconnect an organization already sending on a channel it
+   * no longer allows; it stops them selecting that channel again. See D-13.
+   */
   allowedChannels: string[];
 };
 
@@ -182,7 +195,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customDomain: false,
     whiteLabel: false,
     maskContactDetails: false,
-    allowedChannels: ['OPENWA', 'WHATSAPP_CLOUD'],
+    allowedChannels: ['WHATSAPP_CLOUD'],
   },
   BUSINESS: {
     code: 'BUSINESS',
@@ -203,7 +216,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customDomain: true,
     whiteLabel: true,
     maskContactDetails: true,
-    allowedChannels: ['OPENWA', 'WHATSAPP_CLOUD'],
+    allowedChannels: ['WHATSAPP_CLOUD'],
   },
   ENTERPRISE: {
     code: 'ENTERPRISE',
@@ -224,7 +237,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     customDomain: true,
     whiteLabel: true,
     maskContactDetails: true,
-    allowedChannels: ['OPENWA', 'WHATSAPP_CLOUD'],
+    allowedChannels: ['WHATSAPP_CLOUD'],
   },
 };
 
