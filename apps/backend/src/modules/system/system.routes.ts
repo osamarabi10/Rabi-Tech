@@ -623,7 +623,7 @@ router.delete('/user-invitations/:id', requireAdmin, async (req, res) => {
 });
 
 // POST /api/system/users — create user (admin only)
-router.post('/users', requireAdmin, async (req, res) => {
+router.post('/users', requireAdmin, requirePermission('user:create'), async (req, res) => {
   try {
     const { name, email, password, role, phone, primaryTeamId, teamIds } = req.body;
     if (!name?.trim() || !email?.trim() || !password?.trim()) {
@@ -711,7 +711,7 @@ router.post('/users', requireAdmin, async (req, res) => {
 });
 
 // PATCH /api/system/users/:id — update user (admin only)
-router.patch('/users/:id', requireAdmin, async (req, res) => {
+router.patch('/users/:id', requireAdmin, requirePermission('user:update'), async (req, res) => {
   try {
     const {
       name, email, password, role, phone, isActive, primaryTeamId, teamIds,
@@ -719,6 +719,36 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
       restrictWorkflows, maskPhoneAndEmail,
       restrictDataExport, restrictContactDeletion, restrictWorkspaceSettings,
     } = req.body;
+
+    /*
+      Nobody edits their own access.
+
+      Without this, every restriction on this route is advisory: a restricted
+      admin PATCHes themselves, clears the flag, and the restriction was never a
+      control at all. It is the same self-referential hole as an admin granting
+      themselves a role, and it is why respond.io states the rule outright —
+      "A user cannot revoke or edit their own access."
+
+      Scoped to the access fields rather than the whole route on purpose. An
+      admin renaming themselves or changing their own phone number is ordinary;
+      an admin lifting their own restriction is not, and refusing the first to
+      prevent the second would be the kind of over-broad guard people work
+      around.
+    */
+    const ACCESS_FIELDS = {
+      role, isActive,
+      restrictContactVisibility, contactVisibilityScope, restrictCalls,
+      restrictWorkflows, maskPhoneAndEmail,
+      restrictDataExport, restrictContactDeletion, restrictWorkspaceSettings,
+    };
+    const editingOwnAccess = req.params.id === req.user!.id
+      && Object.values(ACCESS_FIELDS).some((value) => value !== undefined);
+    if (editingOwnAccess) {
+      return res.status(403).json({
+        error: 'ما بتقدر تعدّل صلاحياتك الخاصة. لازم مدير تاني يعملها.',
+        code: 'CANNOT_EDIT_OWN_ACCESS',
+      });
+    }
     
     const userToUpdate = await prisma.user.findUnique({
       where: { id: req.params.id },
@@ -839,8 +869,18 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
 });
 
 // DELETE /api/system/users/:id — deactivate user (soft delete)
-router.delete('/users/:id', requireAdmin, async (req, res) => {
+router.delete('/users/:id', requireAdmin, requirePermission('user:delete'), async (req, res) => {
   try {
+    // Same rule as the update route, for the more final version of the act.
+    // An admin deactivating themselves locks themselves out of the workspace
+    // they administer, and there is no self-service way back in.
+    if (req.params.id === req.user!.id) {
+      return res.status(403).json({
+        error: 'ما بتقدر تلغي حسابك انت. لازم مدير تاني يعملها.',
+        code: 'CANNOT_DELETE_SELF',
+      });
+    }
+
     const target = await prisma.user.findUnique({
       where: { id: req.params.id },
       select: { role: true },
