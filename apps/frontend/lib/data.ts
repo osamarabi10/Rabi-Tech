@@ -768,6 +768,13 @@ export async function createCampaign(input: {
   message: string;
   audienceFilter?: ContactFilterDsl | null;
   scheduledAt?: string | null;
+  /**
+   * Required when `audienceFilter` is null, which resolves to every contact.
+   * The server refuses without it: an accidentally-empty audience and a
+   * deliberate send-to-everyone are indistinguishable at the route, and only
+   * one of them is intended.
+   */
+  confirmAllContacts?: boolean;
 }): Promise<{ id: string; recipientCount: number }> {
   const { data } = await api.post('/api/campaigns', input);
   return { id: data.id, recipientCount: data.recipientCount ?? 0 };

@@ -135,12 +135,28 @@ export function CampaignComposer({
       toast.error(t('اختر وقت الإرسال'));
       return;
     }
+    /*
+      No audience filter means every contact, and that is worth a beat.
+
+      The count is already on screen from the preview, so this is not telling
+      the admin something they cannot see — it is making them say it. The server
+      refuses without the flag either way; asking here means they are refused by
+      a question rather than by an error.
+    */
+    if (!audienceFilter) {
+      const confirmed = window.confirm(
+        `${t('هاي الحملة رح توصل كل جهات الاتصال.')}\n\n${t('متأكد؟')}`,
+      );
+      if (!confirmed) return;
+    }
+
     setSubmitting(true);
     try {
       const created = await createCampaign({
         title,
         message,
         audienceFilter,
+        confirmAllContacts: !audienceFilter,
         scheduledAt: mode === 'schedule' ? new Date(scheduledAt).toISOString() : null,
       });
       if (mode === 'now') {

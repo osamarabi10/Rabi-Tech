@@ -1027,6 +1027,9 @@ const D: Dict = {
   // PNG are filename extensions, not words, in all three languages.
   'جارٍ التصدير': { he: 'מייצא', en: 'Exporting' },
   'تعذّر تصدير الرسم': { he: 'ייצוא הגרף נכשל', en: 'Could not export the chart' },
+  // Send-to-everyone confirmation (B1).
+  'هاي الحملة رح توصل كل جهات الاتصال.': { he: 'השידור הזה יגיע לכל אנשי הקשר.', en: 'This broadcast will reach every contact.' },
+  'متأكد؟': { he: 'בטוח?', en: 'Are you sure?' },
   // Broadcast clone (M8.5).
   'نسخ الحملة': { he: 'שכפול שידור', en: 'Duplicate broadcast' },
   'تم نسخ الحملة': { he: 'השידור שוכפל', en: 'Broadcast duplicated' },

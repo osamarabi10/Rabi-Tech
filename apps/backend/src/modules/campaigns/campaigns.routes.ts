@@ -183,12 +183,43 @@ router.get('/:id/report', async (req, res) => {
 router.post('/', requirePermission('campaign:create'), async (req, res) => {
   try {
     const organizationId = req.user!.organizationId;
-    const { title, message, mediaUrl, scheduledAt, audienceFilter } = req.body;
+    const { title, message, mediaUrl, scheduledAt, audienceFilter, confirmAllContacts } = req.body;
 
     const session = await getPrimarySession();
     if (!session) return res.status(400).json({ error: 'No active WhatsApp session found' });
 
     const filter = parseContactFilterDsl(audienceFilter);
+
+    /*
+      No filter means everyone, and that has to be said rather than omitted.
+
+      `audienceWhere(null)` compiles to every non-archived, non-opted-out
+      contact — which is a legitimate broadcast ("we are closed tomorrow") and
+      also what an accidentally-empty request produces. The two are
+      indistinguishable at this route, and the second is one POST away from the
+      largest send this workspace can make.
+
+      The console already shows the count, the sample and the opt-out exclusions
+      through /audience/preview before anyone presses create. But a preview is
+      advisory UI, not a gate: a campaign created directly through the API never
+      sees it. This turns the omission into a statement.
+
+      Deliberately not a size threshold. "Everyone" is a different *kind* of
+      audience from "everyone matching two rules", not a bigger one, and a
+      threshold would let the dangerous case through on a small workspace and
+      block an intended one on a large.
+
+      The segment path already refuses a rule-less filter outright
+      (`validateContactFilter`). This is the campaign equivalent, and it is a
+      confirmation rather than a refusal because here it is a real feature.
+    */
+    if (!filter && confirmAllContacts !== true) {
+      return res.status(400).json({
+        error: 'هاي الحملة رح توصل كل جهات الاتصال. أكّد إنك قاصد هيك.',
+        code: 'AUDIENCE_IS_EVERYONE',
+        hint: 'Send confirmAllContacts: true to broadcast to every contact, or supply an audienceFilter.',
+      });
+    }
 
     const campaign = await prisma.campaign.create({
       data: {

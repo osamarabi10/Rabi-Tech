@@ -54,7 +54,7 @@ async function withCustom(category: KeywordCategory, base: string[]): Promise<st
   return extra && extra.length ? [...base, ...extra] : base;
 }
 
-// ðŸ”´ CRITICAL â€” notify on-call tech immediately
+// CRITICAL - notify on-call tech immediately
 export const KEYWORDS_CRITICAL = [
   'عاجل', 'ضروري', 'حالًا', 'هلا', 'مستعجل', 'شكوى', 'زعلان', 'مش راضي',
   'ما حدا برد', 'صارلي فترة', 'مشكلة كبيرة', 'خسارة', 'تعطل الشغل',
@@ -62,7 +62,7 @@ export const KEYWORDS_CRITICAL = [
   'urgent', 'emergency', 'critical', 'asap', 'complaint', 'nothing works',
 ];
 
-// ðŸŸ  HIGH â€” assign tech within 2 hours
+// HIGH - assign tech within 2 hours
 export const KEYWORDS_HIGH = [
   'مشكلة', 'مش شغال', 'واقف', 'تعطل', 'لا يعمل', 'ما بزبط', 'في خلل',
   'بحاجة مساعدة', 'بدنا حل', 'تواصلوا معي',
@@ -70,7 +70,7 @@ export const KEYWORDS_HIGH = [
   'problem', 'broken', 'not working', 'need help', 'issue', 'fault',
 ];
 
-// ðŸŸ¡ MEDIUM â€” respond within 4 hours
+// MEDIUM - respond within 4 hours
 export const KEYWORDS_MEDIUM = [
   'سؤال', 'استفسار', 'مساعدة', 'توضيح', 'كيف', 'متى', 'وين', 'ممكن',
   'بدي أعرف', 'شو الخطوات',
@@ -78,7 +78,7 @@ export const KEYWORDS_MEDIUM = [
   'question', 'how do i', 'when can', 'where can', 'clarify',
 ];
 
-// ðŸ”µ LOW â€” respond within 24 hours
+// LOW - respond within 24 hours
 export const KEYWORDS_LOW = [
   'شكرًا', 'تمام', 'وصلت', 'ممتاز', 'يعطيكم العافية', 'ملاحظة', 'اقتراح',
   'תודה', 'מצוין', 'קיבלתי', 'הערה',

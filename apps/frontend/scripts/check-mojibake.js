@@ -17,13 +17,33 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const SCAN_DIRS = ['app', 'components', 'lib'];
-const SKIP_DIRS = new Set(['node_modules', '.next']);
+const BACKEND = path.join(ROOT, '..', 'backend');
+
+/** Frontend surfaces, plus the backend source that supplies their text. */
+const SCAN_TARGETS = [
+  path.join(ROOT, 'app'),
+  path.join(ROOT, 'components'),
+  path.join(ROOT, 'lib'),
+  path.join(BACKEND, 'src'),
+];
+const SKIP_DIRS = new Set(['node_modules', '.next', 'dist']);
 
 // Ø-Ú are Ø Ù Ú; × is × for Hebrew. The follower class is the
 // Latin-1 supplement plus the handful of Windows-1252 characters that UTF-8
 // continuation bytes map onto (Œ-ž, ‘-„, …, €).
-const MOJIBAKE = /[×-Ú][-ÿŒ-ž‘-„…€]/;
+// Two lead classes, because two things get corrupted and only one of them was
+// being caught.
+//
+//   Ø Ù Ú  — Arabic text.   ×  — Hebrew text.   ð  — any 4-byte character,
+//   which in this codebase means an emoji.
+//
+// The emoji case was found on 2026-09-01 in constants/keywords.ts and is
+// cosmetic on its own: the corruption is in section comments. It is worth
+// catching anyway, because it is evidence the FILE was mangled — and in that
+// file the Arabic keyword arrays sit three lines below the corrupted comments.
+// A checker that reports clean on a demonstrably mangled file teaches people
+// to trust it exactly where it is blind.
+const MOJIBAKE = /[×-Úð][-ÿŒ-ž‘-„…€]/;
 
 const hits = [];
 
@@ -46,7 +66,7 @@ function walk(dir) {
   }
 }
 
-for (const dir of SCAN_DIRS) walk(path.join(ROOT, dir));
+for (const dir of SCAN_TARGETS) walk(dir);
 
 if (hits.length === 0) {
   console.log('mojibake: none found.');
