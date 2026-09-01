@@ -133,6 +133,20 @@ export async function listPlans() {
         name: plan.name,
         monthlyPriceCents: plan.monthlyPriceCents,
         currency: plan.currency,
+        /*
+          Published so the pricing page can stop inferring it from the price.
+
+          It had been reading `monthlyPriceCents === 0` as "negotiated", which
+          was true of ENTERPRISE by coincidence and would be wrong for any
+          edition that is genuinely free. The catalogue has said which is which
+          since pricingModel landed; the page simply could not see it.
+
+          billingInterval travels with it, because a price without its interval
+          is not a price - "$490" means different things monthly and yearly,
+          and the page has to render the difference.
+        */
+        pricingModel: plan.pricingModel,
+        billingInterval: plan.billingInterval,
         monthlyActiveContactsLimit: entitlements.monthlyActiveContactsLimit,
         monthlyOutboundMessagesLimit: entitlements.monthlyOutboundMessagesLimit,
         monthlyCampaignSendsLimit: entitlements.monthlyCampaignSendsLimit,
