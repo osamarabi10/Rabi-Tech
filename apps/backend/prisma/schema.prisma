@@ -743,6 +743,12 @@ model PlatformAuditLog {
   /// after the org is deleted.
   targetOrgId     String?
   targetOrgName   String?
+  /// Which edition a catalogue change was about, or null for everything else.
+  ///
+  /// Deliberately not targetOrgId: an edition change acts on the offer rather
+  /// than on a subscriber, and borrowing the per-org column would make that
+  /// trail claim a workspace was touched when none was.
+  targetEditionCode String?
   beforeState     Json?
   afterState      Json?
   ipAddress       String?
@@ -750,6 +756,7 @@ model PlatformAuditLog {
   @@index([timestamp])
   @@index([targetOrgId, timestamp])
   @@index([action, timestamp])
+  @@index([targetEditionCode, timestamp])
 }
 
 enum GatewayProvisioningState {

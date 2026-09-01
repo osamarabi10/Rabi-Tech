@@ -1394,6 +1394,80 @@ router.get('/editions', requirePlatformOwner, async (_req, res) => {
   res.json({ editions, notEnforced: [] });
 });
 
+/**
+ * What an edition used to be.
+ *
+ * The record already existed — every edition change writes a PlatformAuditLog
+ * row with full beforeState and afterState snapshots, the actor and a
+ * timestamp — and there was simply no way to read it back. This is that way.
+ *
+ * Owner-only and shaped like /subscribers/:id/commercials/history, which
+ * answers the same question one workspace at a time. The one difference is the
+ * handle: commercials filter on targetOrgId, and an edition change sets that
+ * null deliberately, so this filters on targetEditionCode instead.
+ *
+ * `?code=` narrows to one edition; without it, the whole catalogue's history,
+ * newest first. Both are served by an index rather than by scanning.
+ *
+ * Answers the question `Plan.updatedAt` cannot: that column says a change
+ * happened and never what it was.
+ */
+router.get('/editions/history', requirePlatformOwner, async (req, res) => {
+  try {
+    const code = typeof req.query.code === 'string' && req.query.code.trim()
+      ? req.query.code.trim().toUpperCase()
+      : null;
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+
+    const entries = await prisma.platformAuditLog.findMany({
+      where: code
+        ? { targetEditionCode: code }
+        : { action: { in: ['platform.edition.updated', 'platform.edition.created'] } },
+      orderBy: { timestamp: 'desc' },
+      take: limit,
+    });
+
+    /*
+      The diff is computed here rather than in the console, so every reader of
+      this history sees the same answer to "what actually changed". Two clients
+      deriving it separately is how one of them starts showing a field the other
+      does not.
+
+      Fields whose values are equal are omitted: an edition row carries around
+      thirty columns and a price change touches one of them, so returning all
+      thirty would bury the answer in its own context.
+    */
+    const changes = entries.map((entry) => {
+      const before = (entry.beforeState ?? null) as Record<string, unknown> | null;
+      const after = (entry.afterState ?? null) as Record<string, unknown> | null;
+      const keys = new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})]);
+      const diff: Array<{ field: string; before: unknown; after: unknown }> = [];
+      for (const key of keys) {
+        // updatedAt moves on every write by definition; reporting it as a
+        // change would put a row in every diff that means nothing.
+        if (key === 'updatedAt') continue;
+        const from = before ? before[key] : undefined;
+        const to = after ? after[key] : undefined;
+        if (JSON.stringify(from) !== JSON.stringify(to)) diff.push({ field: key, before: from, after: to });
+      }
+      return {
+        id: entry.id,
+        action: entry.action,
+        editionCode: entry.targetEditionCode,
+        at: entry.timestamp.toISOString(),
+        actorEmail: entry.actorEmail,
+        reason: entry.reason,
+        changes: diff,
+      };
+    });
+
+    res.json({ entries: changes });
+  } catch (error) {
+    logger.error('Edition history read failed', { error: String(error) });
+    res.status(500).json({ error: 'Failed to read edition history' });
+  }
+});
+
 /** A limit is a non-negative integer, or null meaning unlimited. */
 function parseLimit(value: unknown, field: string): number | null | undefined {
   if (value === undefined) return undefined;
@@ -1621,6 +1695,9 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
       data: {
         reason: `edition ${code} updated`,
         action: 'platform.edition.updated',
+        // The handle this row is read back by. targetOrgId stays null on
+        // purpose - no subscriber was acted on.
+        targetEditionCode: code,
         actorIdentityId: req.platformUser!.id,
         actorEmail: req.platformUser!.email,
         beforeState: before as never,
@@ -1779,6 +1856,7 @@ router.post('/editions', requirePlatformOwner, async (req, res) => {
       data: {
         reason: `edition ${code} created`,
         action: 'platform.edition.created',
+        targetEditionCode: code,
         actorIdentityId: req.platformUser!.id,
         actorEmail: req.platformUser!.email,
         afterState: created as never,

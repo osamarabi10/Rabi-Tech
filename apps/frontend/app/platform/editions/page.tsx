@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Info, Loader2, Lock } from 'lucide-react';
+import { ArrowLeft, History, Info, Loader2, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -45,6 +45,32 @@ type Edition = {
   allowedChannels: string[];
 };
 
+/**
+ * One recorded change to an edition.
+ *
+ * The diff is computed by the server, deliberately. Two clients deriving "what
+ * changed" separately is how one of them starts showing a field the other does
+ * not, and this is the screen an operator would consult to settle exactly that
+ * kind of disagreement.
+ */
+type HistoryEntry = {
+  id: string;
+  action: string;
+  editionCode: string | null;
+  at: string;
+  actorEmail: string | null;
+  reason: string;
+  changes: Array<{ field: string; before: unknown; after: unknown }>;
+};
+
+/** Values are rendered as JSON: a null limit means unlimited and must not read as blank. */
+function renderValue(value: unknown): string {
+  if (value === null) return 'unlimited';
+  if (value === undefined) return '—';
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
 const LIMIT_FIELDS = [
   { key: 'monthlyActiveContactsLimit', label: 'Active contacts / month' },
   { key: 'monthlyOutboundMessagesLimit', label: 'Outbound messages / month' },
@@ -67,6 +93,29 @@ export default function PlatformEditions() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [historyState, setHistoryState] = useState<'idle' | 'loading' | 'error'>('idle');
+
+  /**
+   * What this edition used to be.
+   *
+   * `Plan.updatedAt` says a change happened and never what it was. Every edition
+   * change has always written a full before/after snapshot to the platform audit
+   * log; this is the first thing that reads them back.
+   */
+  const loadHistory = async (code: string) => {
+    if (historyFor === code) { setHistoryFor(null); return; }
+    setHistoryFor(code);
+    setHistoryState('loading');
+    try {
+      const { data } = await api.get(`/api/platform/editions/history?code=${encodeURIComponent(code)}`);
+      setHistory(data.entries ?? []);
+      setHistoryState('idle');
+    } catch {
+      setHistoryState('error');
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -253,6 +302,58 @@ export default function PlatformEditions() {
                     channel by edition, and the per-edition rule is still an open
                     product question.
                   </span>
+                </div>
+
+                <div className="border-t border-border pt-4">
+                  <Button variant="ghost" size="sm" onClick={() => loadHistory(edition.code)}>
+                    <History className="me-2 h-4 w-4" />
+                    {historyFor === edition.code ? 'Hide history' : 'History'}
+                  </Button>
+
+                  {historyFor === edition.code ? (
+                    <div className="mt-3 text-sm">
+                      {historyState === 'loading' ? (
+                        <p className="text-muted-foreground">Loading…</p>
+                      ) : historyState === 'error' ? (
+                        <p className="text-danger">Could not load this edition&apos;s history.</p>
+                      ) : history.length === 0 ? (
+                        <p className="text-muted-foreground">
+                          No recorded changes. History begins when an edition is first
+                          edited — it is not reconstructed from the current values.
+                        </p>
+                      ) : (
+                        <ul className="space-y-3">
+                          {history.map((entry) => (
+                            <li key={entry.id} className="rounded-md border border-border p-3">
+                              <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+                                <span dir="ltr">{new Date(entry.at).toLocaleString()}</span>
+                                <span>·</span>
+                                <span>{entry.actorEmail ?? 'unknown'}</span>
+                                <span>·</span>
+                                <span>{entry.action.replace('platform.edition.', '')}</span>
+                              </div>
+                              {entry.changes.length === 0 ? (
+                                <p className="mt-2 text-muted-foreground">
+                                  No field values differed.
+                                </p>
+                              ) : (
+                                <ul className="mt-2 space-y-1">
+                                  {entry.changes.map((change) => (
+                                    <li key={change.field} className="flex flex-wrap gap-x-2">
+                                      <code dir="ltr">{change.field}</code>
+                                      <span className="text-muted-foreground" dir="ltr">
+                                        {renderValue(change.before)} → {renderValue(change.after)}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </section>
