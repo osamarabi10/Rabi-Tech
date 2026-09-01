@@ -1714,6 +1714,7 @@ const D: Dict = {
   "الاشتراك": { he: "מנוי", en: "Subscription" },
   "مجاني": { he: "חינם", en: "Free" },
   "شهرياً": { he: "לחודש", en: "per month" },
+  "سنوياً": { he: "לשנה", en: "per year" },
   "يتجدد": { he: "מתחדש", en: "renews" },
   "ترقية الباقة": { he: "שדרוג חבילה", en: "Upgrade plan" },
   "الفواتير": { he: "חשבוניות", en: "Invoices" },

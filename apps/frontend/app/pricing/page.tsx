@@ -28,6 +28,9 @@ type Plan = {
   monthlyOutboundMessagesLimit: number | null;
   monthlyCampaignSendsLimit: number | null;
   usersLimit: number | null;
+  /** FREE | FIXED | NEGOTIATED. Published by listPlans since E8.1. */
+  pricingModel?: 'FREE' | 'FIXED' | 'NEGOTIATED';
+  billingInterval?: 'MONTHLY' | 'YEARLY';
   autoProvisionGateway?: boolean;
   customDomain?: boolean;
   whiteLabel?: boolean;
@@ -36,14 +39,22 @@ type Plan = {
 /**
  * A price, or the fact that there isn't a published one.
  *
- * ENTERPRISE is stored at zero because its price is negotiated, and rendering
- * that as "0" tells a customer the most expensive plan costs nothing.
+ * Reads pricingModel rather than inferring from the price. It used to test
+ * `monthlyPriceCents === 0`, which was right about ENTERPRISE by accident:
+ * "priced at zero" and "priced by agreement" are different facts, and the
+ * catalogue has been able to tell them apart since pricingModel landed. An
+ * edition that is genuinely free would have been labelled "by agreement", and
+ * a negotiated edition someone gave a placeholder price would have been
+ * advertised at that price.
  */
 function priceLabel(plan: Plan, t: (key: string) => string): string {
-  if (plan.monthlyPriceCents > 0) {
-    return `${(plan.monthlyPriceCents / 100).toLocaleString('en-US')} ${plan.currency ?? 'USD'}`;
-  }
-  return t('حسب الاتفاق');
+  if (plan.pricingModel === 'NEGOTIATED') return t('حسب الاتفاق');
+  return `${(plan.monthlyPriceCents / 100).toLocaleString('en-US')} ${plan.currency ?? 'USD'}`;
+}
+
+/** Per month or per year — the same number means different things. */
+function periodLabel(plan: Plan, t: (key: string) => string): string {
+  return plan.billingInterval === 'YEARLY' ? t('سنوياً') : t('شهرياً');
 }
 
 /** `null` means no ceiling, which is a promise and not a missing value. */
@@ -51,9 +62,9 @@ function limit(value: number | null, t: (k: string) => string): string {
   return value === null ? t('بلا حد') : value.toLocaleString('en-US');
 }
 
-/** Enterprise is negotiated, so "start the trial" is a cheque signup cannot cash. */
+/** A negotiated edition has no self-serve path, so "start the trial" is a cheque signup cannot cash. */
 function ctaFor(plan: Plan, t: (key: string) => string): string {
-  return plan.monthlyPriceCents === 0 ? t('احكي معنا') : t('ابدأ التجربة المجانية');
+  return plan.pricingModel === 'NEGOTIATED' ? t('احكي معنا') : t('ابدأ التجربة المجانية');
 }
 
 export default function PricingPage() {
@@ -78,12 +89,25 @@ export default function PricingPage() {
   }, []);
 
   /*
-   * Free is no longer a plan anyone stays on — it is the trial, and the trial
-   * runs on a real paid plan so that a WhatsApp number can actually be
-   * connected. Showing a Free card here would advertise a tier that no longer
-   * exists.
-   */
-  const sellable = (plans ?? []).filter((plan) => plan.code !== 'FREE');
+    What this page lists is what the product actually sells.
+
+    That used to be spelled `code !== 'FREE'`, which was a name standing in for
+    a rule. The rule is pricingModel: FREE means an edition is not sold, which
+    is exactly what makes Free unsuitable here - it is the trial mechanism
+    rather than a tier anyone buys, and the trial itself runs on a real paid
+    plan so a WhatsApp number can be connected.
+
+    Deliberately the same predicate the server uses. isPaidPlan derives from
+    pricingModel and decides whether a signup opens a checkout session at all,
+    so an edition this page offers is precisely an edition signup can sell. A
+    code literal could not make that promise: a second unsold edition would
+    have been advertised, and a Free tier that genuinely became purchasable
+    would have stayed hidden.
+
+    NEGOTIATED editions stay listed - they are sold, just not at a published
+    price - and ctaFor sends them to a conversation instead of a signup.
+  */
+  const sellable = (plans ?? []).filter((plan) => plan.pricingModel !== 'FREE');
 
   return (
     <PublicShell>
@@ -162,7 +186,7 @@ export default function PricingPage() {
                   <span className="numeric" dir="ltr">{priceLabel(plan, t)}</span>
                 </p>
                 {plan.monthlyPriceCents > 0 && (
-                  <p className="mt-1 text-caption text-muted-foreground">{t('شهرياً')}</p>
+                  <p className="mt-1 text-caption text-muted-foreground">{periodLabel(plan, t)}</p>
                 )}
 
                 {/*
