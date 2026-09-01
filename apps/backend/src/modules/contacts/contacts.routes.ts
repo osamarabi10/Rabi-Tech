@@ -21,6 +21,7 @@ import { contactAccessWhere, maskContact } from '../../lib/user-access';
 import { auditContact, auditLog } from '../../lib/audit';
 import { validateCustomFieldValue } from './custom-field-validation';
 import { emitWebhook } from '../webhooks/webhook-dispatch.service';
+import { csvDocument } from '../../lib/csv';
 
 /** Accepted marketing-consent values, validated before any write. */
 const CONSENT_VALUES = ['UNKNOWN', 'OPTED_IN', 'OPTED_OUT'] as const;
@@ -253,9 +254,12 @@ router.get('/merge-suggestions', requirePermission('contact:update'), async (req
   }
 });
 
-function csvCell(value: unknown): string {
-  return `"${String(value ?? '').replace(/"/g, '""')}"`;
-}
+/*
+  The local escaper used to live here and only doubled quotes. It has moved to
+  lib/csv.ts, which also neutralises formula leaders — a contact's name is their
+  WhatsApp display name, which they set themselves, so "=cmd|'/c calc'!A1" was a
+  value any stranger could put in this export and have run on an admin's machine.
+*/
 
 router.get('/export', requirePermission('contact:export'), async (req, res) => {
   try {
@@ -275,7 +279,7 @@ router.get('/export', requirePermission('contact:export'), async (req, res) => {
       'lifecycleStage', 'assignee', 'tags', 'marketingConsent', 'consentSource',
       'consentUpdatedAt', 'createdAt', 'updatedAt', 'notes', ...customSlugs.map((slug) => `custom:${slug}`),
     ];
-    const rows = contacts.map((rawContact) => {
+    const contactRows = contacts.map((rawContact) => {
       const contact: any = req.user!.maskPhoneAndEmail ? maskContact(rawContact) : rawContact;
       const customValues = new Map(rawContact.customFieldValues.map((row) => [row.fieldDefinition.slug, row.value]));
       return [
@@ -284,7 +288,7 @@ router.get('/export', requirePermission('contact:export'), async (req, res) => {
         contact.contactTags.map((row: any) => row.tag.name).join(', '), contact.marketingConsent,
         contact.consentSource, contact.consentUpdatedAt, contact.createdAt, contact.updatedAt,
         contact.notes, ...customSlugs.map((slug) => customValues.get(slug)),
-      ].map(csvCell).join(',');
+      ];
     });
 
     await auditLog({
@@ -302,7 +306,7 @@ router.get('/export', requirePermission('contact:export'), async (req, res) => {
       'Content-Disposition': 'attachment; filename="contacts.csv"',
       'Cache-Control': 'no-store',
     });
-    return res.send(`\uFEFF${[headers.map(csvCell).join(','), ...rows].join('\r\n')}\r\n`);
+    return res.send(csvDocument(headers, contactRows));
   } catch (err) {
     logger.error('Contact export failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     return res.status(500).json({ error: 'Server error' });

@@ -271,6 +271,29 @@ Redis connection. The policy now lives in `webhook-policy.ts`; **keep constants
 out of the worker module**, or the next hermetic gate quietly acquires the
 infrastructure dependency it was written to avoid.
 
+### CSV injection safety
+```bash
+cd apps/backend && npm run test:csv
+```
+
+**30/30, hermetic.** A cell starting `=` `+` `-` `@` tab CR `;` backtick or
+`|` is a **formula** to Excel, LibreOffice and Sheets — and quoting does not
+defend it, because `"=cmd|..."` is still a formula once CSV quoting is stripped.
+Only a leading apostrophe does.
+
+**This is reachable by a stranger.** A contact's name is their WhatsApp display
+name, which they set. Anyone who can message a subscriber can put a payload
+there, wait for a contact export, and have it run on an admin's machine. The
+finance export is the same shape with a worse target: workspace names are chosen
+at signup and that file is opened by the platform owner.
+
+Both exports wrote their **own** escaper and neither guarded formulas. The
+escaper now lives in `lib/csv.ts`, and the gate asserts no module in `src/`
+writes its own again — because the defect was the duplication, and a third
+export written next year would repeat it.
+
+Mutation-proved: disabling the apostrophe takes it to 16/30.
+
 ### Platform finance check
 ```bash
 cd apps/backend && npm run test:finance

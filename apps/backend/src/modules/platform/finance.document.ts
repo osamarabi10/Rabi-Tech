@@ -1,4 +1,5 @@
 import { formatMoney } from './finance.service';
+import { csvCell } from '../../lib/csv';
 
 /**
  * A finance document as a self-contained, printable HTML page.
@@ -169,13 +170,17 @@ export function renderFinanceDocument(data: DocumentData): string {
  * has to open there without a conversion step. Values are quoted and embedded
  * quotes doubled — a workspace called `Ali "Abu" Trading` would otherwise split
  * into three columns.
+ *
+ * Cells also go through `csvCell`, which neutralises formula leaders. A
+ * workspace name is chosen by the subscriber at signup, so `=cmd|'/c calc'!A1`
+ * is a value somebody can put in this file and have execute on the platform
+ * owner's machine — the one person whose machine has the most access.
  */
 export function renderFinanceCsv(
   rows: Array<Record<string, string | number | null>>,
   columns: string[],
 ): string {
-  const cell = (value: string | number | null | undefined) =>
-    `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const cell = csvCell;
 
   const lines = [
     columns.map(cell).join(','),
