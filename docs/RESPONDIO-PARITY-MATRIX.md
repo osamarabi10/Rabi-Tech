@@ -157,7 +157,7 @@ all downstream of P1.
 |---|---|---|
 | Shape | Emoji, name, colour, description | `✓` |
 | **Agents can create from the Inbox** | Yes, any role | `✓` `contact:create` |
-| Delete confirmation | Type the assigned-contact count | `✗` |
+| Delete confirmation | Type the assigned-contact count | `✓` (verified in `workspace-tags.tsx` + `contacts.routes.ts`) |
 | Bulk tagging cap | 100 contacts at a time | `≈` |
 | **Auto import tag** | Generated for every import | `✗` |
 | Provenance | Not documented | `★` `ContactTag.source` — MANUAL / IMPORT / WORKFLOW / API |
@@ -441,21 +441,23 @@ the first paying customer, because changing it afterwards changes bills.
 
 ## 13 · Developer platform
 
-`✗` **We have none of this.** The largest structural gap in the product.
+**Was** the largest structural gap. **P1 closed most of it** — see
+[PUBLIC-API.md](PUBLIC-API.md). Status below is against the shipped surface.
 
-| | Theirs |
-|---|---|
-| API | `api.respond.io/v2`, 24 operations, 5 services |
-| Auth | Bearer, **max 10 tokens/workspace, workspace-wide, no expiry or scoping** |
-| Identifiers | `id:` `email:` `phone:` |
-| Listing | `POST /contact/list` with a filter body; 13 operators |
-| Rate limit | **5 req/s per method + path** |
-| Pagination | Cursor; limit default 10, max 100 (50 for messages) |
-| Errors | 200/201/400/401/403/404/429/**449**/500/502/504/503 |
-| Webhooks | 11 events, **HMAC-SHA256**, 3 retries at 30/60/90s, auto-off at 30 errors/30 min, **35 endpoints/org** |
-| SDK | `@respond-io/typescript-sdk` |
-| MCP | Self-hosted + hosted; hosted exposes **AI-agent tools with no REST equivalent** |
-| Custom channel | Inbound + outbound contract, Advanced+ |
+| | Theirs | Ours | |
+|---|---|---|---|
+| API | `api.respond.io/v2`, 24 operations, 5 services | `/api/v1`, **15 operations** | `≈` |
+| Auth | Bearer, max 10 tokens/workspace, workspace-wide, **no expiry or scoping** | Bearer, 20 tokens, **scoped + expiring + revocable**, masking inherited from creator | `★` |
+| Identifiers | `id:` `email:` `phone:` | Same grammar, prefix required | `✓` |
+| Listing | `POST /contact/list`, 13 operators | `POST /contacts/list`, our richer DSL | `★` |
+| Rate limit | **5 req/s per method + path** | 120/min per **token**, not per method+path | `≈` |
+| Pagination | Cursor; default 10, max 100 (50 messages) | Cursor; contacts default 10/max 100, conversations default 25/max 100 | `≈` messages cap is 100, not 50 |
+| Errors | …/429/**449**/500/502/504 | No **449** ("still being created") | `≈` |
+| Webhooks | 11 events, HMAC-SHA256, retries 30/60/90s, auto-off 30 errors/30 min, **35 endpoints/org** | 11 events, HMAC **over timestamp+body**, same retries, same auto-off, **10 endpoints/org** | `★` signing · `≈` cap |
+| Webhook delivery log | **None — open feature request against them** | Full log: status, latency, attempt, response body, test button | `★` |
+| SDK | `@respond-io/typescript-sdk` | — | `✗` |
+| MCP | Self-hosted + hosted | — | `✗` |
+| Custom channel | Inbound + outbound contract | — | `✗` |
 
 **What does not exist on their side either:** no broadcasts API, no workflows
 API, no teams API, no AI-agent REST API, no contact-events API, no conversation
