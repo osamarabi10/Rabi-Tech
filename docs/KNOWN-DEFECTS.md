@@ -896,3 +896,46 @@ integration — it is a separate missing capability, and conflating the two is h
 "we integrated Stripe" gets mistaken for "renewals work". The real fix is close
 to E6's effective dates and revision history: a subscription needs a period that
 something enforces, and an invoice that something raises.
+
+---
+
+## D-23 · A failed Stripe payment is invisible to this system
+
+**Where:** `STRIPE_EVENT_KINDS` in
+[`stripe.provider.ts`](../apps/backend/src/modules/billing/stripe.provider.ts).
+`invoice.payment_failed` is deliberately unmapped, so it resolves to `unknown`,
+is recorded in `PaymentEvent`, and acts on nothing.
+
+**What is wrong:** when a subscriber's card is declined, Stripe knows and this
+system does not. The subscription stays `ACTIVE`, the organization stays
+`ACTIVE`, the gateway keeps running, and nothing anywhere says a payment failed.
+
+**Why it is unmapped rather than wired, which is the part worth keeping:** the
+only handler available is `markPaymentFailed`, and it **suspends the
+organization immediately, with no grace period** — while Stripe retries a failed
+invoice over several days. Mapping the first failure would suspend a customer
+whose card succeeds on the retry, taking a working service away from someone who
+has paid.
+
+Mapping only the *terminal* failure (`next_payment_attempt === null`) was
+considered and rejected for a sharper reason: it would give the subscriber full
+service through Stripe's entire retry window and then suspend them abruptly with
+no warning, because `markPaymentFailed` has no grace of its own. That looks fine
+right up until it doesn't, which is worse than a gap somebody knows about.
+
+So the gap is deliberate and visible rather than surprising, and it is honest
+about the real state: **there is no dunning policy for provider-reported
+failures yet.** The existing dunning machinery has a grace period, a warning
+and a `suspendAt` deadline, but it is driven entirely by overdue local `Invoice`
+rows raised by hand (D-22) and knows nothing about the provider.
+
+**Cost:** none today — `PAYMENT_PROVIDER` is unset, so no Stripe payment can
+fail. It becomes real the moment Stripe is switched on: a subscriber whose card
+expires keeps full service indefinitely, and the only signal is a `PaymentEvent`
+row of type `invoice.payment_failed` that nothing reads.
+
+**Fix, in order:** write the grace policy first — how long a failed payment has
+before it costs access, what the subscriber is told and when — then map the
+event to that policy. Mapping first and deciding grace afterwards means choosing
+a policy by accident, in an adapter, which is exactly the decision an adapter
+should not be making.
