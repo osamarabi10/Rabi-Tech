@@ -109,6 +109,17 @@ function trialLabel(subscriber: Subscriber): string | null {
 export default function SubscribersPage() {
   const router = useRouter();
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
+  /*
+    The editions an owner may activate somebody onto.
+
+    Read from the catalogue rather than written into this file. The three menu
+    items here were 'GROWTH', 'BUSINESS' and 'ENTERPRISE', and the parameter
+    type was that same union - so a fourth edition was not merely unlisted, it
+    was unrepresentable: activatePlan(sub, 'STANDARD') did not compile. That
+    also meant STANDARD, a real sellable tier, could never be activated from
+    this console at all.
+  */
+  const [activatable, setActivatable] = useState<Array<{ code: string; name: string }>>([]);
   const [usage, setUsage] = useState<Record<string, RollupUsage>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -138,6 +149,20 @@ export default function SubscribersPage() {
     try {
       const { data } = await api.get<Subscriber[]>('/api/platform/subscribers');
       setSubscribers(data);
+
+      /*
+        An offer read: activating a subscriber is selling them something, so the
+        menu lists what is on sale. The platform endpoint returns every edition
+        including retired and archived ones - deliberately, so the owner can see
+        them - and those are filtered out here. Ladder order is preserved,
+        cheapest first, which is the order the endpoint already returns.
+      */
+      const editions = await api.get('/api/platform/editions');
+      setActivatable(
+        (editions.data.editions ?? [])
+          .filter((edition: any) => edition.isActive && !edition.archivedAt)
+          .map((edition: any) => ({ code: edition.code, name: edition.name })),
+      );
       const usageRows = await Promise.all(data.map(async (subscriber) => {
         const response = await api.get(`/api/platform/subscribers/${subscriber.id}/usage`);
         return [subscriber.id, response.data] as const;
@@ -269,7 +294,7 @@ export default function SubscribersPage() {
     }
   };
 
-  const activatePlan = async (subscriber: Subscriber, planCode: 'GROWTH' | 'BUSINESS' | 'ENTERPRISE') => {
+  const activatePlan = async (subscriber: Subscriber, planCode: string) => {
     setActionId(subscriber.id);
     try {
       await api.post(`/api/platform/subscribers/${subscriber.id}/billing/activate`, { planCode });
@@ -516,15 +541,14 @@ export default function SubscribersPage() {
                         </DropdownMenuItem>
                       </>
                     )}
-                    <DropdownMenuItem onSelect={() => activatePlan(subscriber, 'GROWTH')}>
-                      <CreditCard /> Activate Growth
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => activatePlan(subscriber, 'BUSINESS')}>
-                      <CreditCard /> Activate Business
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => activatePlan(subscriber, 'ENTERPRISE')}>
-                      <CreditCard /> Activate Enterprise
-                    </DropdownMenuItem>
+                    {activatable.map((edition) => (
+                      <DropdownMenuItem
+                        key={edition.code}
+                        onSelect={() => activatePlan(subscriber, edition.code)}
+                      >
+                        <CreditCard /> Activate {edition.name}
+                      </DropdownMenuItem>
+                    ))}
                     <DropdownMenuItem onSelect={() => markPaymentFailed(subscriber)}>
                       <Pause /> Mark payment failed
                     </DropdownMenuItem>
