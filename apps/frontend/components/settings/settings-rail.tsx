@@ -3,10 +3,24 @@
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef } from 'react';
-import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, KeyRound, MessageCircleMore, MessageSquareText, Tags, Users, UserRound, Webhook, Workflow } from 'lucide-react';
+import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, KeyRound, MessageCircleMore, MessageSquareText, Paperclip, Plug, Tags, Users, UserRound, Webhook, Workflow } from 'lucide-react';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
+/*
+  Grouped to mirror Respond.io's workspace settings, deliberately.
+
+  Theirs is a flat list of 18 articles; ours groups them, because a flat list of
+  eighteen in three languages is a wall. What matches is the *membership and
+  order* — which screen sits with which, and in what sequence — because that is
+  what someone moving between the two products is navigating by. API keys and
+  webhooks live under Integrations for exactly that reason: it is where their
+  users look for them, and matching where people look is most of what an
+  information architecture is for.
+
+  Screens they have and we do not are absent rather than stubbed. A greyed-out
+  nav entry is indistinguishable from a broken one.
+*/
 const GROUPS = [
   {
     label: 'شخصي',
@@ -27,8 +41,14 @@ const GROUPS = [
     ],
   },
   {
-    label: 'التطبيقات',
-    items: [{ href: '/settings/channels', label: 'القنوات', icon: Cable }, { href: '/settings/meta-templates', label: 'قوالب Meta', icon: FileText }],
+    label: 'القنوات والتكاملات',
+    items: [
+      { href: '/settings/channels', label: 'القنوات', icon: Cable },
+      { href: '/settings/meta-templates', label: 'قوالب Meta', icon: FileText },
+      { href: '/settings/integrations', label: 'التكاملات', icon: Plug },
+      { href: '/settings/api', label: 'مفاتيح API', icon: KeyRound },
+      { href: '/settings/webhooks', label: 'ويب هوكس', icon: Webhook },
+    ],
   },
   {
     label: 'صندوق الوارد',
@@ -42,19 +62,10 @@ const GROUPS = [
     ],
   },
   {
-    // Developer-facing, and separate from التطبيقات on purpose: connecting a
-    // WhatsApp number and writing software against the API are different jobs
-    // done by different people. Webhooks join this group when they land.
-    label: 'المطوّرون',
-    items: [
-      { href: '/settings/api', label: 'مفاتيح API', icon: KeyRound },
-      { href: '/settings/webhooks', label: 'ويب هوكس', icon: Webhook },
-    ],
-  },
-  {
-    label: 'البيانات',
+    label: 'البيانات والملفات',
     items: [
       { href: '/contacts/import', label: 'استيراد جهات الاتصال', icon: FileUp },
+      { href: '/settings/files', label: 'الملفات', icon: Paperclip },
     ],
   },
 ] as const;

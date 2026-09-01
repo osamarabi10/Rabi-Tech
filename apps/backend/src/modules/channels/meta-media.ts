@@ -41,7 +41,8 @@ import { signingSecret } from '../../lib/signing-secret';
  */
 
 /** Refuse anything implausible before it touches the disk. */
-const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+/** Exported so /api/system/limits publishes the number that actually rejects. */
+export const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 20_000;
 
 export function messageMediaRoot(): string {

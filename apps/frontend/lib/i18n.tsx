@@ -15,6 +15,25 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { ar?: string; he: string; en: string }>;
 
 const D: Dict = {
+  /* ── Integrations + Files (settings IA) ── */
+  "Could not load the limits": { ar: "تعذر تحميل الحدود", he: "לא ניתן לטעון את המגבלות", en: "Could not load the limits" },
+  "Loading limits": { ar: "جارٍ تحميل الحدود", he: "המגבלות נטענות", en: "Loading limits" },
+  "Saved reply attachments": { ar: "مرفقات الردود الجاهزة", he: "קבצים מצורפים לתשובות שמורות", en: "Saved reply attachments" },
+  "Incoming media": { ar: "الوسائط الواردة", he: "מדיה נכנסת", en: "Incoming media" },
+  "Logo and branding images": { ar: "الشعار وصور الهوية", he: "לוגו ותמונות מיתוג", en: "Logo and branding images" },
+  "The sizes this workspace accepts. Anything larger is refused before it is stored.": { ar: "الأحجام اللي بتقبلها هالمساحة. أي إشي أكبر بينرفض قبل ما ينحفظ.", he: "הגדלים שמרחב העבודה מקבל. כל דבר גדול יותר נדחה לפני שנשמר.", en: "The sizes this workspace accepts. Anything larger is refused before it is stored." },
+  "up to": { ar: "لحد", he: "עד", en: "up to" },
+  "files": { ar: "ملفات", he: "קבצים", en: "files" },
+  "Contact import": { ar: "استيراد جهات الاتصال", he: "ייבוא אנשי קשר", en: "Contact import" },
+  "rows": { ar: "صف", he: "שורות", en: "rows" },
+  "These are read from the checks that do the rejecting, so what you see here is what the system enforces.": { ar: "هاي مقروءة من الفحوصات اللي بترفض فعلاً، فاللي بتشوفه هون هو اللي بيطبقه النظام.", he: "אלה נקראים מהבדיקות שדוחות בפועל, כך שמה שאתם רואים כאן הוא מה שהמערכת אוכפת.", en: "These are read from the checks that do the rejecting, so what you see here is what the system enforces." },
+  "Integrations": { ar: "التكاملات", he: "אינטגרציות", en: "Integrations" },
+  "Connect this workspace to your own software.": { ar: "اربط هالمساحة ببرامجك.", he: "חברו את מרחב העבודה לתוכנה שלכם.", en: "Connect this workspace to your own software." },
+  "Developer API": { ar: "واجهة المطوّرين", he: "‏API למפתחים", en: "Developer API" },
+  "Scoped, expiring keys so your own software can read and send on this workspace.": { ar: "مفاتيح بصلاحيات محدودة وبتنتهي، عشان برامجك تقرأ وتبعت من هالمساحة.", he: "מפתחות מוגבלי הרשאות עם תפוגה, כדי שהתוכנה שלכם תוכל לקרוא ולשלוח במרחב הזה.", en: "Scoped, expiring keys so your own software can read and send on this workspace." },
+  "We POST a signed event to your URL when something happens here, with a full delivery log.": { ar: "منبعت حدث موقّع على العنوان تبعك لما يصير إشي هون، مع سجل إرسال كامل.", he: "אנו שולחים אירוע חתום לכתובת שלכם כשמשהו קורה כאן, עם יומן שליחות מלא.", en: "We POST a signed event to your URL when something happens here, with a full delivery log." },
+  "Open": { ar: "افتح", he: "פתיחה", en: "Open" },
+  "Anything else you want to connect can be built on the API above — it is the same interface the ready-made connectors would use.": { ar: "أي إشي تاني بدك تربطه بتقدر تبنيه على الـ API فوق — هي نفس الواجهة اللي رح تستخدمها الموصلات الجاهزة.", he: "כל דבר אחר שתרצו לחבר ניתן לבנות מעל ה-API שלמעלה — זו אותה ממשק שבו ישתמשו המחברים המוכנים.", en: "Anything else you want to connect can be built on the API above — it is the same interface the ready-made connectors would use." },
   /* ── Outbound webhooks (P1d) ── */
   "Webhooks": { ar: "ويب هوكس", he: "Webhooks", en: "Webhooks" },
   "Loading webhooks": { ar: "جارٍ تحميل الويب هوكس", he: "הוובהוקים נטענים", en: "Loading webhooks" },

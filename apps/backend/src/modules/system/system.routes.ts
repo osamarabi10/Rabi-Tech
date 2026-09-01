@@ -8,6 +8,9 @@ import { socketRoom } from '../../socket/rooms';
 import { isWithinWorkingHours } from '../../utils/working-hours';
 import { requireAdmin, requirePermission, requireSupervisor } from '../../middleware/rbac.middleware';
 import { KEYWORD_CATEGORIES, invalidateCustomKeywords } from '../../constants/keywords';
+import { MAX_SNIPPET_FILES, MAX_SNIPPET_FILE_BYTES } from '../snippets/snippet-storage';
+import { MAX_IMPORT_ROWS } from '../contacts/import.service';
+import { MAX_MEDIA_BYTES } from '../channels/meta-media';
 import { getWorkingHoursConfig } from '../../utils/out-of-hours';
 import { reconcileSessionWebhook } from '../../utils/webhook-reconcile';
 import {
@@ -450,6 +453,36 @@ router.delete('/teams/:id', requireAdmin, async (req, res) => {
 });
 
 // GET /api/system/stats — overview dashboard numbers
+/**
+ * GET /api/system/limits — the file and import limits, from the constants that
+ * actually enforce them.
+ *
+ * Served rather than hardcoded in the client for one reason: a limits screen
+ * that states a number nothing enforces is worse than no screen. An operator
+ * reads "20 MB", uploads 19 MB, and is refused by a check that says something
+ * else — and now they distrust every other number on the page.
+ *
+ * Each value below is imported from the module that rejects the request, so the
+ * page cannot drift from the behaviour. Anything we do not actually enforce is
+ * absent, not guessed at: we publish no per-media-type caps because we do not
+ * impose any, and repeating WhatsApp's published table as though it were ours
+ * would be stating a rule we do not apply.
+ */
+router.get('/limits', async (_req, res) => {
+  res.json({
+    files: [
+      {
+        key: 'snippetAttachment',
+        bytes: MAX_SNIPPET_FILE_BYTES,
+        count: MAX_SNIPPET_FILES,
+      },
+      { key: 'inboundMedia', bytes: MAX_MEDIA_BYTES },
+      { key: 'brandingAsset', bytes: 2 * 1024 * 1024 },
+    ],
+    contactImport: { rows: MAX_IMPORT_ROWS },
+  });
+});
+
 router.get('/stats', async (_req, res) => {
   try {
     const todayStart = new Date();

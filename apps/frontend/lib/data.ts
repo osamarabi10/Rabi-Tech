@@ -2674,3 +2674,23 @@ export async function fetchWebhookDeliveries(
 export async function deleteWebhookEndpoint(id: string): Promise<void> {
   await api.delete(`/api/webhook-endpoints/${id}`);
 }
+
+/* ── System limits (settings → Files) ─────────────────────────────────────── */
+
+/**
+ * Served rather than hardcoded on purpose.
+ *
+ * A limits screen that states a number nothing enforces is worse than no
+ * screen: an operator refused at a size the page promised stops trusting every
+ * other number on it. These come from the constants the upload handlers reject
+ * with.
+ */
+export type SystemLimits = {
+  files: { key: string; bytes: number; count?: number }[];
+  contactImport: { rows: number };
+};
+
+export async function fetchSystemLimits(): Promise<SystemLimits> {
+  const { data } = await api.get('/api/system/limits');
+  return data;
+}
