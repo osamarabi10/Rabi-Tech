@@ -991,6 +991,10 @@ const D: Dict = {
   'عرّف مراحل رحلة العميل كما تناسب عملك': { he: 'הגדירו את שלבי מסע הלקוח שמתאימים לעסק שלכם', en: 'Define the customer journey stages that fit your business' },
   'مرحلة محذوفة': { he: 'שלב שנמחק', en: 'deleted stage' },
   'تم تحديث المرحلة': { he: 'השלב עודכן', en: 'Stage updated' },
+  // Broadcast clone (M8.5).
+  'نسخ الحملة': { he: 'שכפול שידור', en: 'Duplicate broadcast' },
+  'تم نسخ الحملة': { he: 'השידור שוכפל', en: 'Broadcast duplicated' },
+  'تعذّر نسخ الحملة': { he: 'שכפול השידור נכשל', en: 'Could not duplicate the broadcast' },
   // Blocked contacts (M9.1). 'Blocked' is deliberately not 'archived' or
   // 'deleted' in any language: the history survives, and the difference has
   // to be legible to whoever is deciding whether to lift it.

@@ -773,6 +773,21 @@ export async function createCampaign(input: {
   return { id: data.id, recipientCount: data.recipientCount ?? 0 };
 }
 
+/**
+ * Duplicate a broadcast as a new draft.
+ *
+ * Always a draft, never scheduled, whatever the source was — and the audience
+ * is re-resolved from the stored filter rather than copied from the original's
+ * recipient list, so anyone who opted out since the first send is excluded.
+ */
+export async function cloneCampaign(
+  id: string,
+  title?: string,
+): Promise<{ id: string; recipientCount: number }> {
+  const { data } = await api.post(`/api/campaigns/${id}/clone`, title ? { title } : {});
+  return { id: data.id, recipientCount: data.recipientCount ?? 0 };
+}
+
 export async function sendCampaign(id: string): Promise<{ queued: number }> {
   const { data } = await api.post(`/api/campaigns/${id}/send`);
   return data;

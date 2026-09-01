@@ -219,6 +219,90 @@ router.post('/', requirePermission('campaign:create'), async (req, res) => {
   }
 });
 
+/**
+ * POST /api/campaigns/:id/clone — a new draft with the same audience.
+ *
+ * A broadcast that worked is the natural starting point for the next one, and
+ * rebuilding a nested audience filter by hand to send "the same again, this
+ * week" is where a mistargeted send comes from.
+ *
+ * **The clone is always a DRAFT and always unscheduled**, however the source
+ * ended up. Copying `status`, `scheduledAt` or `sentAt` would produce a
+ * campaign that believes it has already run — or worse, one that inherits a
+ * schedule and sends itself without anyone pressing anything. Cloning is
+ * preparation; sending is a separate, deliberate act behind `campaign:send`.
+ *
+ * Recipients are **re-resolved from the filter, not copied from the source's
+ * recipient rows.** Those rows are a snapshot of who matched on the day it was
+ * built, and a contact who has since opted out is still in them. Re-resolving
+ * runs the current audience through the same `audienceWhere` the create path
+ * uses, so an opt-out between the two sends is honoured — which is the whole
+ * point of storing the filter rather than the list.
+ */
+router.post('/:id/clone', requirePermission('campaign:create'), async (req, res) => {
+  try {
+    const organizationId = req.user!.organizationId;
+    const source = await prisma.campaign.findFirst({
+      where: { id: req.params.id },
+      select: {
+        title: true, message: true, mediaUrl: true, sessionId: true,
+        audienceFilter: true, metaTemplateId: true, metaTemplateBindings: true,
+      },
+    });
+    if (!source) return res.status(404).json({ error: 'Campaign not found' });
+
+    // The source's session may since have been deleted or unlinked. Fall back to
+    // the current primary rather than 500 on a foreign key, and refuse clearly
+    // when there is no session at all — the same answer the create path gives.
+    const session = await getPrimarySession();
+    const sessionId = source.sessionId || session?.id;
+    if (!sessionId) return res.status(400).json({ error: 'No active WhatsApp session found' });
+
+    /*
+      The caller names the copy; the server does not invent one.
+
+      A default of "Copy of X" would hardcode a language in a backend serving
+      three, two of them right-to-left, and the interface already has the
+      dictionary for it. Falling back to the source title unchanged is safe —
+      Campaign.title carries no unique constraint — and shows up in the list as
+      two rows with one name, which reads as "I duplicated this" rather than as
+      an English word appearing in an Arabic console.
+    */
+    const requested = String(req.body?.title ?? '').trim().slice(0, 255);
+    const title = requested || source.title;
+    const filter = parseContactFilterDsl(source.audienceFilter);
+
+    const campaign = await prisma.campaign.create({
+      data: {
+        organizationId,
+        title,
+        message: source.message,
+        mediaUrl: source.mediaUrl,
+        sessionId,
+        status: 'DRAFT',
+        scheduledAt: null,
+        audienceFilter: (filter as object) ?? undefined,
+        metaTemplateId: source.metaTemplateId,
+        metaTemplateBindings: source.metaTemplateBindings ?? undefined,
+      },
+    });
+
+    const contacts = await prisma.contact.findMany({
+      where: audienceWhere(filter, organizationId),
+      select: { id: true },
+    });
+    await prisma.campaignRecipient.createMany({
+      data: contacts.map((c) => ({ organizationId, campaignId: campaign.id, contactId: c.id })),
+      skipDuplicates: true,
+    });
+
+    res.json({ ...campaign, recipientCount: contacts.length, clonedFrom: req.params.id });
+  } catch (error) {
+    logger.error('Campaign clone failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /api/campaigns/:id/send
 router.post('/:id/send', requirePermission('campaign:send'), async (req, res) => {
   try {

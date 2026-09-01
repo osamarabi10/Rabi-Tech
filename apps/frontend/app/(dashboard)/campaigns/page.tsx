@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { CalendarDays, ChevronLeft, ChevronRight, List, Megaphone, Plus, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
+import { CalendarDays, ChevronLeft, ChevronRight, Copy, List, Megaphone, Plus, RefreshCw } from 'lucide-react';
 import {
   fetchCampaigns,
+  cloneCampaign,
   fetchTemplates,
   type Campaign,
   type Template,
@@ -139,7 +141,11 @@ function CalendarView({ campaigns }: { campaigns: Campaign[] }) {
   );
 }
 
-function CampaignList({ campaigns }: { campaigns: Campaign[] }) {
+function CampaignList({ campaigns, onClone, cloningId }: {
+  campaigns: Campaign[];
+  onClone: (campaign: Campaign) => void;
+  cloningId: string | null;
+}) {
   const { locale, t } = useT();
   return (
     <Card className="divide-y divide-border">
@@ -167,6 +173,22 @@ function CampaignList({ campaigns }: { campaigns: Campaign[] }) {
             label={campaignStatusLabel(campaign.status, t)}
             color={campaignStatusColor(campaign.status)}
           />
+          {/*
+            Inside the Link, so preventDefault AND stopPropagation are both
+            required. Without them the click navigates to the campaign it was
+            meant to duplicate, and the clone looks like it did nothing —
+            a toast-only button by accident.
+          */}
+          <button
+            type="button"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClone(campaign); }}
+            disabled={cloningId === campaign.id}
+            title={t('نسخ الحملة')}
+            aria-label={t('نسخ الحملة')}
+            className="shrink-0 rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+          >
+            <Copy className="size-3.5" aria-hidden />
+          </button>
         </Link>
       ))}
     </Card>
@@ -192,6 +214,28 @@ export default function CampaignsPage() {
       setError(true);
     } finally {
       setLoading(false);
+    }
+  };
+
+  /**
+   * Duplicate a broadcast, then reload the list.
+   *
+   * The toast names the recipient count rather than saying "copied", because
+   * the copy's audience is re-resolved from the stored filter and can
+   * legitimately differ from the original — someone opted out since. A number
+   * that changed is the one thing worth seeing before pressing send.
+   */
+  const [cloningId, setCloningId] = useState<string | null>(null);
+  const handleClone = async (campaign: Campaign) => {
+    setCloningId(campaign.id);
+    try {
+      const created = await cloneCampaign(campaign.id);
+      toast.success(`${t('تم نسخ الحملة')} — ${created.recipientCount} ${t('مستلم')}`);
+      await load();
+    } catch {
+      toast.error(t('تعذّر نسخ الحملة'));
+    } finally {
+      setCloningId(null);
     }
   };
 
@@ -303,7 +347,7 @@ export default function CampaignsPage() {
       ) : view === 'calendar' ? (
         <CalendarView campaigns={visibleCampaigns} />
       ) : (
-        <CampaignList campaigns={visibleCampaigns} />
+        <CampaignList campaigns={visibleCampaigns} onClone={handleClone} cloningId={cloningId} />
       )}
 
       <CampaignComposer
