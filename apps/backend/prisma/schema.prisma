@@ -379,10 +379,33 @@ model Invoice {
   receipts     PaymentReceipt[]
 
   @@unique([id, organizationId])
-  /// On invoiceRef alone. The old (provider, invoiceRef) pair let the same
-  /// reference exist twice under two providers, which is exactly the collision
-  /// a reference is supposed to rule out.
-  @@unique([invoiceRef])
+  /// Scoped to the organization that issued it (D-28), which is what a
+  /// reference here actually promises.
+  ///
+  /// This was `@@unique([provider, invoiceRef])`, which let one reference exist
+  /// twice under two providers — the collision a reference exists to rule out.
+  /// The fix for that was right; making it global was an over-correction, and
+  /// it created a dependency nobody intended.
+  ///
+  /// The sequence behind the reference is per organization
+  /// (`OrgSequence("invoiceRef")`), so under a global constraint the only thing
+  /// separating two organizations' identical sequence numbers was the four-char
+  /// id tail in the format. Two organizations sharing a tail collided the first
+  /// time both reached the same number, and because the constraint is a hard
+  /// unique the symptom was **an owner unable to issue an invoice at all** — an
+  /// outage for one subscriber, arriving on an ordinary action. By birthday
+  /// arithmetic that stops being unlikely in the low hundreds of organizations.
+  ///
+  /// `(organizationId, invoiceRef)` still rules out the original defect: one
+  /// reference cannot exist twice within an organization, whatever the provider.
+  /// It gives up only cross-organization uniqueness, which nothing uses — every
+  /// one of `invoiceRef`'s call sites writes it at creation, reads it for
+  /// display, or passes it to a provider as metadata. Nothing looks an invoice
+  /// up by reference, so there is no path that could receive the wrong row.
+  ///
+  /// **What a reference promises: unique within the organization that issued
+  /// it, and always quoted in that context.**
+  @@unique([organizationId, invoiceRef])
   @@index([organizationId, createdAt])
   @@index([provider, customerRef])
 }
