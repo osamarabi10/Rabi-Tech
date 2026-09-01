@@ -68,7 +68,7 @@ import { cn } from '@/lib/utils';
  */
 
 export type InboxScope =
-  | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' | 'mentions' | 'snoozed' }
+  | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' | 'mentions' | 'snoozed' | 'blocked' }
   | { kind: 'lifecycle'; value: string }
   | { kind: 'team'; value: string }
   /** A saved view. `value` is its id. */
@@ -135,6 +135,22 @@ export function scopeMatches(
   // by the tenant, and a stage called "snoozed" would otherwise take over
   // this branch and show snoozed threads under a stage heading.
   if (scope.kind === 'system' && scope.value === 'snoozed') return isSnoozed(conv);
+
+  /*
+    Blocked is its own inbox, and like snoozed it is answered before the
+    blanket exclusions below.
+
+    Blocking refuses a contact at the inbound worker, before a conversation
+    exists — so it stops NEW threads and leaves the ones already open sitting
+    in the queue looking ordinary. That is the gap this closes: an operator
+    blocks somebody and then cannot find what they blocked them from.
+
+    Excluded from every other scope, the way snoozed is. A blocked contact's
+    threads appearing under All is how an agent replies to somebody the
+    workspace has decided not to talk to.
+  */
+  if (scope.kind === 'system' && scope.value === 'blocked') return conv.contactBlocked;
+  if (conv.contactBlocked) return false;
 
   // Views decide their own relationship with snoozing, so they are answered
   // before the blanket exclusion below rather than after it.

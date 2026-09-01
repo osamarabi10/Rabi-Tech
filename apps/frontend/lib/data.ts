@@ -57,6 +57,25 @@ export type Conv = {
   firstResponseAt: string | null;
   /** Persisted inactivity deadline; null when auto-close is not scheduled. */
   autoCloseAt: string | null;
+  /**
+   * Whether the contact is blocked, for the Blocked inbox.
+   *
+   * Blocking stops a contact opening NEW threads — the inbound worker refuses
+   * before a conversation exists — so a blocked contact's existing threads stay
+   * in the queue with nothing marking them. That is the gap: an operator blocks
+   * somebody and the thread they blocked them from carries on looking ordinary.
+   */
+  contactBlocked: boolean;
+  /**
+   * Direction of the most recent message.
+   *
+   * The Unreplied filter is built on this. It cannot be derived from
+   * firstResponseAt, which answers a different question — whether anyone ever
+   * replied, not whether the customer is waiting *now*. A thread answered last
+   * week and written to again this morning is unreplied, and has a
+   * firstResponseAt.
+   */
+  lastMsgDirection: 'in' | 'out' | null;
   sessionPhone: string | null;
   labels: string[];
 };
@@ -491,6 +510,10 @@ export async function startConversation(input: {
     snoozedByName: data.snoozedByName ?? null,
     firstResponseAt: data.firstResponseAt ?? null,
     autoCloseAt: data.autoCloseAt ?? null,
+    // A thread an agent just started: the contact cannot be blocked (the start
+    // route refuses that) and the only message is the agent's own.
+    contactBlocked: !!data.contact?.blockedAt,
+    lastMsgDirection: 'out',
     sessionPhone: data.session?.phoneNumber ?? null,
     labels: data.labels ?? [],
   };
@@ -529,6 +552,11 @@ export async function fetchConversations(
     snoozedByName: c.snoozedByName ?? null,
     firstResponseAt: c.firstResponseAt ?? null,
     autoCloseAt: c.autoCloseAt ?? null,
+    contactBlocked: !!c.contact?.blockedAt,
+    // The include takes the single newest message; an empty thread has none.
+    lastMsgDirection: c.messages?.[0]
+      ? (c.messages[0].direction === 'INBOUND' ? 'in' : 'out')
+      : null,
     sessionPhone: c.session?.phoneNumber ?? null,
     labels: c.labels ?? [],
   }));

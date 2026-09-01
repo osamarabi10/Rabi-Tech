@@ -98,6 +98,17 @@ export function InboxScopeMenu({
           ...(mentioned.size > 0
             ? [{ scope: { kind: 'system', value: 'mentions' } as InboxScope, label: t('ذُكرت فيها') }]
             : []),
+          /*
+            Blocked, on the same rule.
+
+            Shown only when a blocked contact actually has threads, because an
+            empty Blocked inbox on a workspace that has never blocked anybody is
+            a permanent row explaining a feature nobody used. When it appears it
+            is because there is something in it.
+          */
+          ...(convs.some((conv) => conv.contactBlocked)
+            ? [{ scope: { kind: 'system', value: 'blocked' } as InboxScope, label: t('محظورة') }]
+            : []),
         ] as Array<{ scope: InboxScope; label: string }>
       ).map((option) => ({ ...option, count: countWhere(option.scope) })),
     },

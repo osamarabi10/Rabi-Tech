@@ -15,6 +15,9 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { ar?: string; he: string; en: string }>;
 
 const D: Dict = {
+  /* ── Inbox: unreplied + blocked ── */
+  "بدون رد": { he: "ללא מענה", en: "Unreplied" },
+  "محظورة": { he: "חסומות", en: "Blocked" },
   "Upload limits": { ar: "حدود الرفع", he: "מגבלות העלאה", en: "Upload limits" },
   /* ── Integrations + Files (settings IA) ── */
   "Could not load the limits": { ar: "تعذر تحميل الحدود", he: "לא ניתן לטעון את המגבלות", en: "Could not load the limits" },

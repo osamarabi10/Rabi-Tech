@@ -27,6 +27,7 @@ import {
   ImageOff,
   AlarmClock,
   AlarmClockOff,
+  Reply,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -231,6 +232,20 @@ const DENSITY_OPTIONS: { key: Density; label: string }[] = [
 export default function InboxPage() {
   const { t } = useT();
   const [convFilter, setConvFilter] = useState<ConvStatus>('all');
+  /*
+    Unreplied: the customer wrote last and nobody has answered.
+
+    A toggle rather than a status tab, because it composes with the statuses
+    rather than replacing them — "open AND unreplied" is the question a
+    supervisor actually asks, and a sixth tab would make the two mutually
+    exclusive.
+
+    Built on the direction of the newest message, not on firstResponseAt. Those
+    answer different questions: firstResponseAt is whether anyone EVER replied,
+    and a thread answered last week then written to again this morning is
+    unreplied while having one.
+  */
+  const [unrepliedOnly, setUnrepliedOnly] = useState(false);
 
   /**
    * Which queue is being looked at, as opposed to which status it is in.
@@ -1054,6 +1069,7 @@ export default function InboxPage() {
       if (convFilter === 'mine') return c.assigneeId === currentUser?.id;
       return true; // 'all'
     })
+    .filter((c) => !unrepliedOnly || c.lastMsgDirection === 'in')
     .filter((c) => !search.trim() || c.name.includes(search) || c.phone.includes(search))
     .filter((c) => !labelFilter || c.labels.includes(labelFilter));
 
@@ -1183,6 +1199,40 @@ export default function InboxPage() {
                     )}
                   </button>
                 ))}
+                {/*
+                  Sits with the status tabs but is visually a toggle, not a
+                  tab — it stacks with whichever status is selected rather than
+                  replacing it, and looking like a sixth tab would promise the
+                  opposite.
+                */}
+                <button
+                  type="button"
+                  aria-pressed={unrepliedOnly}
+                  onClick={() => setUnrepliedOnly((on) => !on)}
+                  className={cn(
+                    'flex shrink-0 items-center gap-1 rounded-md border px-2.5 py-1 text-caption font-semibold transition-colors',
+                    unrepliedOnly
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground',
+                  )}
+                >
+                  <Reply className="size-3.5 rtl:-scale-x-100" aria-hidden />
+                  {t('بدون رد')}
+                  {(() => {
+                    const count = convs.filter((c) =>
+                      isRealConversation(c)
+                      && scopeMatches(c, scope, scopeCtx)
+                      && c.lastMsgDirection === 'in').length;
+                    return count > 0 ? (
+                      <span className={cn(
+                        'rounded-full px-1 text-micro',
+                        unrepliedOnly ? 'bg-primary/15 font-semibold text-primary' : 'bg-muted',
+                      )}>
+                        {count}
+                      </span>
+                    ) : null;
+                  })()}
+                </button>
               </div>
 
               <div
