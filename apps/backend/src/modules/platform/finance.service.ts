@@ -133,6 +133,22 @@ export async function createInvoice(input: {
       data: {
         organizationId: input.organizationId,
         subscriptionId: input.subscriptionId,
+        /*
+          `manual` regardless of PAYMENT_PROVIDER, and that is correct rather
+          than an oversight — it was once flagged as a provider leak and is not
+          one.
+
+          This function has a single caller: the owner-only endpoint that raises
+          a debt by hand, settled through `recordPayment` with a method of
+          `bank_transfer` or `cash`. These are the platform's own invoices. No
+          payment provider issued them, and labelling them `stripe` because
+          Stripe happens to be configured would claim Stripe had raised an
+          invoice it has never seen.
+
+          A provider's own invoices arrive through `listInvoices` and are that
+          provider's, which is exactly the distinction this column exists to
+          record.
+        */
         provider: 'manual',
         invoiceRef: await nextReference(tx, 'INV', input.organizationId),
         status: 'OPEN',

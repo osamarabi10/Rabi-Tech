@@ -432,20 +432,60 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
   });
 }
 
-export async function activateManualSubscription(organizationId: string, planInput: string) {
+/**
+ * What a provider knows a subscription by. All optional; see
+ * VerifiedPaymentEvent for why.
+ */
+export type ProviderIdentifiers = {
+  subscriptionRef?: string | null;
+  customerRef?: string | null;
+  /** For the alert, when an activation arrives without references. */
+  source?: string;
+};
+
+export async function activateManualSubscription(
+  organizationId: string,
+  planInput: string,
+  identifiers: ProviderIdentifiers = {},
+) {
   const planCode = normalizePlanCode(planInput);
   return runAsPlatform(`billing-manual-activate:${organizationId}:${planCode}`, async () => {
-    const provider = getPaymentProvider();
-    const customerRef = `manual_customer_${organizationId}`;
-    const subscriptionRef = `manual_subscription_${organizationId}`;
     const now = new Date();
     const periodEnd = new Date(now);
     periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
     const existing = await prisma.subscription.findFirst({
       where: { organizationId },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, planCode: true },
+      select: { id: true, planCode: true, provider: true, subscriptionRef: true, customerRef: true },
     });
+
+    /*
+      The row keeps the provider that created it; only a brand new subscription
+      takes the configured one.
+
+      This used to read getPaymentProvider() and write that name onto the row
+      unconditionally, which meant an owner activating an existing subscriber
+      from the console under PAYMENT_PROVIDER=stripe relabelled a `manual` row
+      as `stripe` while still writing synthetic `manual_*` references. A row
+      that lies about its own provenance is worse than one with synthetic
+      references: cancellation dispatches on that name, so the lie is what
+      routes a manual subscription to Stripe.
+    */
+    const providerName = existing?.provider || getPaymentProvider().provider;
+
+    /*
+      Real references win, then whatever the row already holds, then synthetic.
+
+      The synthetic form is not dead weight — ManualProvider looks its own rows
+      up by it — so it stays as the last resort rather than being removed. What
+      changes is that a provider which supplies real identifiers no longer has
+      them thrown away.
+    */
+    const syntheticSubscriptionRef = `manual_subscription_${organizationId}`;
+    const syntheticCustomerRef = `manual_customer_${organizationId}`;
+    const subscriptionRef = identifiers.subscriptionRef || existing?.subscriptionRef || syntheticSubscriptionRef;
+    const customerRef = identifiers.customerRef || existing?.customerRef || syntheticCustomerRef;
+    const usingSyntheticRefs = subscriptionRef === syntheticSubscriptionRef;
 
     const currentMac = await runAsOrganization(organizationId, () => getMetricUsage('active_contacts'));
     const targetLimit = getEdition(planCode).monthlyActiveContactsLimit;
@@ -457,7 +497,7 @@ export async function activateManualSubscription(organizationId: string, planInp
           where: { id: existing.id },
           data: {
             planCode,
-            provider: provider.provider,
+            provider: providerName,
             status: 'ACTIVE',
             customerRef,
             subscriptionRef,
@@ -471,7 +511,7 @@ export async function activateManualSubscription(organizationId: string, planInp
           data: {
             organizationId,
             planCode,
-            provider: provider.provider,
+            provider: providerName,
             status: 'ACTIVE',
             customerRef,
             subscriptionRef,
@@ -485,7 +525,7 @@ export async function activateManualSubscription(organizationId: string, planInp
       where: { id: organizationId },
       data: {
         status: 'ACTIVE',
-        paymentProvider: provider.provider,
+        paymentProvider: providerName,
         paymentCustomerRef: customerRef,
         downgradeGraceEndsAt: graceEnd,
         downgradeGraceReason: overLimit ? `Current monthly active contacts (${currentMac}) exceed ${planCode} limit (${targetLimit}). Outbound is blocked until usage is reduced or plan is upgraded.` : null,
@@ -507,6 +547,45 @@ export async function activateManualSubscription(organizationId: string, planInp
     if (getEdition(planCode).autoProvisionGateway) {
       await maybeProvisionGateway(organizationId, 'manual-activation');
     }
+
+    /*
+      Activated, but with a reference the provider has never heard of.
+
+      Only for real providers: `manual` invents these strings by design and
+      looks its own rows up by them, so alerting there would fire on every
+      activation and teach everyone to ignore the alert.
+
+      A separate type from PAYMENT_EVENT_NEEDS_REVIEW, deliberately. That one
+      means "nothing happened and a person must act". This means "everything
+      happened, and one thing is missing" — a WARNING rather than an ERROR.
+      Filing them under one name would put "the customer is not activated" and
+      "the customer is fine" in the same queue, and the queue would stop being
+      read.
+
+      It is an alert rather than a log line because of when the consequence
+      lands: a missing subscription reference costs nothing until somebody
+      cancels, which may be months later, and at that point the failure appears
+      in the cancellation path with nothing pointing back to the activation that
+      caused it. This is the only moment the connection is visible.
+    */
+    if (usingSyntheticRefs && providerName !== 'manual') {
+      const message = `Subscription activated for ${organizationId} on provider ${providerName} `
+        + 'with a synthetic reference: the provider supplied none. Cancellation through the provider '
+        + 'will not work for this subscription until a real reference is recorded.';
+      logger.warn('Activation carried no provider references', {
+        organizationId, provider: providerName, source: identifiers.source ?? 'unknown',
+      });
+      await prisma.platformAlert.create({
+        data: {
+          organizationId,
+          type: 'PAYMENT_REFS_MISSING',
+          severity: 'WARNING',
+          message,
+          metadata: { provider: providerName, source: identifiers.source ?? 'unknown', planCode } as never,
+        },
+      });
+    }
+
     return subscription;
   });
 }
@@ -526,7 +605,24 @@ export async function markPaymentFailed(organizationId: string, reason = 'Paymen
   });
 }
 
-export async function cancelCurrentSubscription(organizationId: string): Promise<void> {
+/**
+ * Cancel the current subscription.
+ *
+ * `originatedFromProvider` suppresses the call back to the provider. A
+ * `subscription_canceled` webhook is the provider telling us it has already
+ * cancelled; asking it to cancel again is at best a redundant API call against
+ * a subscription that no longer exists, and at worst a loop — if that call
+ * emits its own cancellation event it arrives with a *different* eventId, so
+ * PaymentEvent's idempotency will not stop it.
+ *
+ * Everything else — a tenant cancelling from the panel, an owner cancelling
+ * from the console — originates here and must reach the provider, or the local
+ * row reads CANCELED while billing continues.
+ */
+export async function cancelCurrentSubscription(
+  organizationId: string,
+  options: { originatedFromProvider?: boolean } = {},
+): Promise<void> {
   await runAsPlatform(`billing-cancel:${organizationId}`, async () => {
     const subscription = await prisma.subscription.findFirst({
       where: { organizationId, status: { in: ['ACTIVE', 'TRIALING', 'MANUAL_REVIEW', 'PENDING'] } },
@@ -547,7 +643,7 @@ export async function cancelCurrentSubscription(organizationId: string): Promise
       A subscription is a relationship with one provider and it outlives the
       environment variable. An unregistered name throws — see the registry.
     */
-    if (subscription.subscriptionRef) {
+    if (subscription.subscriptionRef && !options.originatedFromProvider) {
       await paymentProviderFor(subscription.provider).cancelSubscription(subscription.subscriptionRef);
     }
     await prisma.subscription.update({
@@ -586,6 +682,7 @@ async function activateFromPaymentEvent(
   organizationId: string,
   namedPlan: string | null,
   context: { provider: string; type: string },
+  identifiers: ProviderIdentifiers = {},
 ): Promise<'activated' | 'parked'> {
   const subscription = await prisma.subscription.findFirst({
     where: { organizationId },
@@ -640,7 +737,7 @@ async function activateFromPaymentEvent(
     );
   }
 
-  await activateManualSubscription(organizationId, requested);
+  await activateManualSubscription(organizationId, requested, identifiers);
   return 'activated';
 }
 
@@ -696,6 +793,10 @@ export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<stri
         await activateFromPaymentEvent(organizationId, namedPlan ? String(namedPlan) : null, {
           provider: provider.provider,
           type: event.type,
+        }, {
+          subscriptionRef: event.subscriptionRef,
+          customerRef: event.customerRef,
+          source: `webhook:${event.type}`,
         });
         break;
       }
@@ -703,7 +804,10 @@ export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<stri
         await markPaymentFailed(organizationId, String(event.reason || payload?.reason || 'Payment failed'));
         break;
       case 'subscription_canceled':
-        await cancelCurrentSubscription(organizationId);
+        // The provider has already cancelled; calling back would ask it to
+        // cancel a subscription that no longer exists. See the echo guard on
+        // cancelCurrentSubscription.
+        await cancelCurrentSubscription(organizationId, { originatedFromProvider: true });
         break;
       default:
         logger.warn('Unhandled payment event type', {
@@ -738,7 +842,29 @@ export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<stri
  * schedule, in-process, triggered by no request. Nothing outside can reach it.
  */
 export async function getCheckoutStatus(externalRef: string) {
-  return getPaymentProvider().getCheckoutStatus(externalRef);
+  /*
+    Resolved from the row that owns this reference, not from configuration.
+
+    Same defect as the cancellation path had: a checkout created under `manual`
+    carries a `manual_...` externalRef, and asking Stripe about it once Stripe
+    is the configured provider is a 404 from Stripe and a 500 from an endpoint
+    that is deliberately unauthenticated.
+
+    An unknown reference returns `pending` without contacting any provider. That
+    is what ManualProvider already answered for a reference it did not
+    recognise, so the observable behaviour is unchanged — and it removes an
+    unauthenticated path that reached a third-party API with a caller-supplied
+    string, which was a request-forgery shaped surface even though the reference
+    is unguessable.
+
+    Nothing about the provider is returned. The response is the same
+    CheckoutStatusResult as before, so which provider a workspace is on stays
+    unobservable from here.
+  */
+  const subscription = await runAsPlatform(`billing-checkout-status:${externalRef}`, () =>
+    prisma.subscription.findFirst({ where: { externalRef }, select: { provider: true } }));
+  if (!subscription) return { status: 'pending' as const };
+  return paymentProviderFor(subscription.provider).getCheckoutStatus(externalRef);
 }
 
 export async function getCurrentBilling(organizationId: string) {
@@ -782,7 +908,15 @@ export async function reconcileBilling(): Promise<{ checked: number; repaired: n
       try {
         const status = await provider.getCheckoutStatus(subscription.externalRef!);
         if (status.status === 'paid' && subscription.status !== 'ACTIVE') {
-          await activateManualSubscription(subscription.organizationId, subscription.planCode);
+          // getCheckoutStatus returns the provider's real identifiers alongside
+          // the status, and this is the path that records them when a webhook
+          // was missed — so it passes them on rather than letting the
+          // activation fall back to a synthetic reference.
+          await activateManualSubscription(subscription.organizationId, subscription.planCode, {
+            subscriptionRef: status.subscriptionRef,
+            customerRef: status.customerRef,
+            source: 'reconcile',
+          });
           repaired += 1;
         }
         if (status.status === 'failed' && subscription.status !== 'PAST_DUE') {

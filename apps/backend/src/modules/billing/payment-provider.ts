@@ -35,6 +35,25 @@ export type VerifiedPaymentEvent = {
   organizationId?: string;
   planCode?: string;
   reason?: string;
+  /**
+   * The provider's own identifiers for this subscription and customer, when the
+   * event carries them.
+   *
+   * **Optional, and deliberately so.** Most events have no identifiers to give —
+   * a payment failure names no new subscription — and requiring them would force
+   * authors to invent values on events where none exist, which is how fabricated
+   * references get back in by a different route. Absent means "I have none for
+   * this event", and the caller falls back to a synthetic reference.
+   *
+   * Supply them on activation events. Without them a subscription activates
+   * with a synthetic `manual_*` reference that means nothing to the provider,
+   * so a later cancellation reaches nothing and the local row reads CANCELED
+   * while billing continues. Because that failure surfaces months later and far
+   * from its cause, an activation carrying no references raises a
+   * PAYMENT_REFS_MISSING alert rather than only a log line.
+   */
+  subscriptionRef?: string;
+  customerRef?: string;
   payload: unknown;
 };
 

@@ -37,6 +37,7 @@ import {
 /** Stripe's event names mapped onto our canonical kinds. */
 const STRIPE_EVENT_KINDS: Record<string, PaymentEventKind> = {
   'checkout.session.completed': 'subscription_activated',
+  'customer.subscription.deleted': 'subscription_canceled',
 
   /*
     Deliberately absent, and this is not an oversight:
@@ -128,6 +129,30 @@ function metadataOf(object: unknown): { organizationId?: string; planCode?: stri
   };
 }
 
+/** A Stripe field that is either an id or an expanded object. */
+function refOf(value: unknown): string | undefined {
+  if (typeof value === 'string') return value || undefined;
+  const id = (value as { id?: unknown } | null | undefined)?.id;
+  return typeof id === 'string' && id ? id : undefined;
+}
+
+/**
+ * The provider's identifiers, read from whichever shape the event carries.
+ *
+ * `checkout.session.completed` carries a session, whose `subscription` and
+ * `customer` point at the objects it created. `customer.subscription.*` carries
+ * the subscription itself, so its own `id` is the reference. Reading the wrong
+ * one yields a session id where a subscription id belongs, which fails only
+ * later, at cancellation.
+ */
+function identifiersOf(type: string, object: unknown): { subscriptionRef?: string; customerRef?: string } {
+  const record = (object ?? {}) as Record<string, unknown>;
+  if (type.startsWith('customer.subscription.')) {
+    return { subscriptionRef: refOf(record.id), customerRef: refOf(record.customer) };
+  }
+  return { subscriptionRef: refOf(record.subscription), customerRef: refOf(record.customer) };
+}
+
 export class StripeProvider implements PaymentProvider {
   readonly provider = 'stripe';
 
@@ -160,8 +185,40 @@ export class StripeProvider implements PaymentProvider {
     return { checkoutUrl: session.url, externalRef: session.id };
   }
 
-  async getCheckoutStatus(_externalRef: string): Promise<CheckoutStatusResult> {
-    throw new Error('StripeProvider.getCheckoutStatus is not implemented yet (Stage 2)');
+  /**
+   * What Stripe says about a checkout session, and the identifiers it produced.
+   *
+   * This is what makes reconcileBilling mean something. The manual provider's
+   * version reads our own Subscription.status and so can only ever confirm what
+   * the database already believes; this one asks Stripe, which is the only
+   * party that knows whether money moved. It is the missed-webhook fallback:
+   * if a delivery is dropped, the half-hourly pass repairs the row from here.
+   *
+   * `paid` requires the session to be both complete and paid. A session can be
+   * `complete` with `payment_status: 'unpaid'` — a subscription with a trial, or
+   * a payment still processing — and treating that as paid would activate a
+   * subscriber who has not been charged.
+   */
+  async getCheckoutStatus(externalRef: string): Promise<CheckoutStatusResult> {
+    const session = await this.client().checkout.sessions.retrieve(externalRef);
+
+    const subscriptionRef = typeof session.subscription === 'string'
+      ? session.subscription
+      : session.subscription?.id;
+    const customerRef = typeof session.customer === 'string'
+      ? session.customer
+      : session.customer?.id;
+    const identifiers = { subscriptionRef, customerRef };
+
+    if (session.status === 'expired') return { status: 'canceled', ...identifiers };
+    if (session.status === 'complete' && session.payment_status !== 'unpaid') {
+      return { status: 'paid', ...identifiers };
+    }
+    // Stripe has no "failed session" state — a failed payment leaves the session
+    // open for another attempt — so `failed` is reported from invoice events,
+    // not from here. Everything unresolved is pending, which is what the
+    // reconciliation pass and the return page both treat as "keep waiting".
+    return { status: 'pending', ...identifiers };
   }
 
   async changeSubscription(_subscriptionRef: string, _newPlanCode: string): Promise<void> {
@@ -170,8 +227,29 @@ export class StripeProvider implements PaymentProvider {
     throw new Error('StripeProvider.changeSubscription is not implemented');
   }
 
-  async cancelSubscription(_subscriptionRef: string): Promise<void> {
-    throw new Error('StripeProvider.cancelSubscription is not implemented yet (Stage 2)');
+  /**
+   * Cancel immediately, not at period end.
+   *
+   * `cancelCurrentSubscription` already writes `cancelAtPeriodEnd: false` and
+   * drops the organization to FREE limits in the same breath, so scheduling the
+   * cancellation for later would leave Stripe still billing a subscriber this
+   * system has already downgraded.
+   *
+   * Only ever reached with a Stripe reference: cancellation dispatches on the
+   * row's own provider, so a subscription created under `manual` goes to the
+   * manual provider and never arrives here with a synthetic `manual_*` string.
+   */
+  async cancelSubscription(subscriptionRef: string): Promise<void> {
+    if (!subscriptionRef.startsWith('sub_')) {
+      // Belt and braces behind the dispatch fix. A synthetic reference reaching
+      // Stripe would 404, and the resulting error is far less legible than
+      // saying which reference was wrong and where it came from.
+      throw new Error(
+        `Refusing to cancel with "${subscriptionRef}": not a Stripe subscription reference. `
+        + 'This row was created by another provider and must be cancelled through it.',
+      );
+    }
+    await this.client().subscriptions.cancel(subscriptionRef);
   }
 
   async verifyWebhook(
@@ -207,7 +285,9 @@ export class StripeProvider implements PaymentProvider {
     // defensively rather than narrowing on event type, because the set of
     // events that reach here is decided by the dashboard subscription, not by
     // this file.
-    const { organizationId, planCode } = metadataOf(event.data?.object as unknown);
+    const object = event.data?.object as unknown;
+    const { organizationId, planCode } = metadataOf(object);
+    const { subscriptionRef, customerRef } = identifiersOf(event.type, object);
 
     return {
       valid: true,
@@ -216,6 +296,8 @@ export class StripeProvider implements PaymentProvider {
       kind: STRIPE_EVENT_KINDS[event.type] ?? 'unknown',
       organizationId,
       planCode,
+      subscriptionRef,
+      customerRef,
       payload: event,
     };
   }
