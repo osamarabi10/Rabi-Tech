@@ -90,13 +90,31 @@ export function SettingsRail() {
   }, [pathname, query]);
 
   return (
-    <aside className="w-full shrink-0 border-b border-border bg-card lg:w-64 lg:border-b-0 lg:border-e" aria-label={t('الإعدادات')}>
-      <div ref={railRef} className="flex gap-1 overflow-x-auto p-2 lg:block lg:h-full lg:overflow-y-auto lg:p-3">
+    /*
+      Wider and quieter than it was.
+
+      Respond.io's settings nav is roomier than ours and sits on the page
+      background rather than a raised card — which sounds like nothing and is
+      most of why their settings read as calm. The rail is a wayfinding surface,
+      not content, so it should recede.
+
+      Still `border-e`, never `border-r`: this is the frame two of three
+      languages read from the right.
+    */
+    <aside className="w-full shrink-0 border-b border-border bg-background lg:w-[248px] lg:border-b-0 lg:border-e" aria-label={t('الإعدادات')}>
+      <div ref={railRef} className="flex gap-1 overflow-x-auto p-2 lg:block lg:h-full lg:overflow-y-auto lg:px-3 lg:py-5">
         {GROUPS.filter((group) => group.items.length > 0).map((group, groupIndex) => {
           const groupId = `settings-group-${groupIndex + 1}`;
           return (
-          <section key={group.label} className="shrink-0 lg:mb-4" aria-labelledby={groupId}>
-            <h2 id={groupId} className="hidden px-2 pb-1 text-micro font-semibold text-muted-foreground lg:block">{t(group.label)}</h2>
+          <section key={group.label} className="shrink-0 lg:mb-6" aria-labelledby={groupId}>
+            {/* Uppercase, tracked, and quieter than the items under it — a
+                group label is a signpost, not a destination. */}
+            <h2
+              id={groupId}
+              className="hidden px-3 pb-1.5 text-micro font-semibold uppercase tracking-wider text-muted-foreground/80 lg:block"
+            >
+              {t(group.label)}
+            </h2>
             <nav className="flex gap-1 lg:block" aria-label={t(group.label)}>
               {group.items.map((item) => {
                 const [hrefPath, suffix = ''] = item.href.split(/(?=[?#])/);
@@ -108,8 +126,17 @@ export function SettingsRail() {
                     href={item.href}
                     aria-current={active ? 'page' : undefined}
                     className={cn(
-                      'flex min-h-9 items-center gap-2 whitespace-nowrap rounded-md px-2.5 text-caption font-medium text-muted-foreground hover:bg-accent hover:text-foreground lg:mb-0.5',
-                      active && 'bg-primary/10 text-primary',
+                      'flex min-h-9 items-center gap-2.5 whitespace-nowrap rounded-md px-3 text-caption font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:mb-px lg:min-h-[34px]',
+                      /*
+                        The active fill is the TENANT's colour, mixed down — not
+                        a fixed brand blue. Respond.io can hardcode theirs
+                        because every workspace looks the same; a white-label
+                        product cannot, and the accent is the one thing a
+                        subscriber actually chose. color-mix rather than
+                        concatenating alpha onto the hsl string, which is
+                        invalid CSS and fails silently.
+                      */
+                      active && 'bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary',
                     )}
                   >
                     <Icon className="size-4 shrink-0" aria-hidden />

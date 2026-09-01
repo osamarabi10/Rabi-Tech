@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { ArrowLeft, KeyRound, Webhook } from 'lucide-react';
 import { useT } from '@/lib/i18n';
 import { Badge } from '@/components/ui/badge';
+import { SettingsPage, SettingsSection } from './settings-primitives';
 
 /**
  * Integrations — the hub Respond.io puts API and webhooks under.
@@ -46,18 +47,15 @@ export function Integrations() {
   ];
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="border-b border-border px-4 py-4 sm:px-6">
-        <h1 className="text-lg font-semibold">{t('Integrations')}</h1>
-        <p className="mt-1 text-caption text-muted-foreground">
-          {t('Connect this workspace to your own software.')}
-        </p>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
-        <section aria-labelledby="developer-api">
-          <h2 id="developer-api" className="mb-3 text-small font-semibold">{t('Developer API')}</h2>
-          <div className="grid gap-3 sm:grid-cols-2">
+    <SettingsPage
+      title={t('Integrations')}
+      description={t('Connect this workspace to your own software.')}
+    >
+      <SettingsSection
+        title={t('Developer API')}
+        description={t('Anything else you want to connect can be built on the API above — it is the same interface the ready-made connectors would use.')}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
             {cards.map((card) => {
               const Icon = card.icon;
               return (
@@ -81,18 +79,8 @@ export function Integrations() {
                 </Link>
               );
             })}
-          </div>
-        </section>
-
-        {/*
-          One sentence rather than a grid of greyed-out logos. Naming what does
-          not exist is honest; rendering it as a disabled card implies it is
-          nearly here, and nobody has promised that.
-        */}
-        <p className="mt-6 max-w-prose text-caption text-muted-foreground">
-          {t('Anything else you want to connect can be built on the API above — it is the same interface the ready-made connectors would use.')}
-        </p>
-      </div>
-    </div>
+        </div>
+      </SettingsSection>
+    </SettingsPage>
   );
 }

@@ -5,6 +5,7 @@ import { FileUp, HardDrive, Paperclip, Image as ImageIcon } from 'lucide-react';
 import { fetchSystemLimits, type SystemLimits } from '@/lib/data';
 import { useT } from '@/lib/i18n';
 import { ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
+import { SettingsPage, SettingsSection } from './settings-primitives';
 
 /**
  * Files — the sizes this workspace actually enforces.
@@ -62,20 +63,20 @@ export function FileLimits() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="border-b border-border px-4 py-4 sm:px-6">
-        <h1 className="text-lg font-semibold">{t('Files')}</h1>
-        <p className="mt-1 text-caption text-muted-foreground">
-          {t('The sizes this workspace accepts. Anything larger is refused before it is stored.')}
-        </p>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
-        <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
+    <SettingsPage
+      title={t('Files')}
+      description={t('The sizes this workspace accepts. Anything larger is refused before it is stored.')}
+    >
+      <SettingsSection
+        title={t('Upload limits')}
+        description={t('These are read from the checks that do the rejecting, so what you see here is what the system enforces.')}
+        contentClassName="p-0"
+      >
+        <div className="divide-y divide-border">
           {limits.files.map((file) => {
             const Icon = ICONS[file.key as keyof typeof ICONS] ?? Paperclip;
             return (
-              <div key={file.key} className="flex flex-wrap items-center gap-3 px-4 py-3">
+              <div key={file.key} className="flex flex-wrap items-center gap-3 px-5 py-3">
                 <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                 <span className="text-small">{labels[file.key] ?? file.key}</span>
                 <span className="ms-auto flex items-center gap-3">
@@ -95,7 +96,7 @@ export function FileLimits() {
             );
           })}
 
-          <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3 px-5 py-3">
             <FileUp className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <span className="text-small">{t('Contact import')}</span>
             <span className="ms-auto font-mono text-small tabular-nums" dir="ltr">
@@ -103,11 +104,7 @@ export function FileLimits() {
             </span>
           </div>
         </div>
-
-        <p className="mt-4 max-w-prose text-caption text-muted-foreground">
-          {t('These are read from the checks that do the rejecting, so what you see here is what the system enforces.')}
-        </p>
-      </div>
-    </div>
+      </SettingsSection>
+    </SettingsPage>
   );
 }
