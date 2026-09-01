@@ -84,7 +84,16 @@ if (process.env.NODE_ENV === 'production') {
   );
 }
 app.use(cors({ origin: corsOriginCallback, credentials: true }));
-app.post('/api/billing/webhook', express.raw({ type: '*/*', limit: '1mb' }), billingWebhookHandler);
+// LIMITS.webhook ahead of express.raw, matching the Meta webhook below. The
+// limiter reads only req.ip and never touches the body, so it cannot disturb
+// the exact bytes HMAC verification needs — and running it first means a flood
+// is rejected before a 1 MB body is buffered and a signature computed over it.
+//
+// This route is registered here, above `app.use('/api', LIMITS.api)`, which is
+// why it had no limiter at all: the general /api backstop never reached it.
+// Signature verification is cheap per request and unbounded in aggregate, which
+// is the shape of a CPU-burn target even though the endpoint is authenticated.
+app.post('/api/billing/webhook', LIMITS.webhook, express.raw({ type: '*/*', limit: '1mb' }), billingWebhookHandler);
 // Meta Cloud API webhooks are registered HERE, ahead of express.json, because
 // the X-Hub-Signature-256 check must run over the exact bytes Meta signed. A
 // parsed-then-reserialised body is a different string, so verifying against it

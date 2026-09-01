@@ -12,7 +12,12 @@ import {
   trialDeadlineFrom,
 } from './trial.service';
 import { getPaymentProvider } from './provider-registry';
-import { ENTRY_PAID_PLAN_CODE, isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
+// ENTRY_PAID_PLAN_CODE is deliberately no longer imported here. It was used for
+// exactly one thing in this file — guessing a plan when a payment event named
+// none — and that guess is now a park in MANUAL_REVIEW. It remains in plans.ts
+// as trial.service.ts's TRIAL_PLAN_DEFAULT, which is a real use, so the constant
+// stays; it simply has no activation consumer any more.
+import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
 import { getEdition, getEditions, getEditionEditedAt } from './editions.service';
 import { resolveEntitlements } from './entitlements.resolver';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
@@ -538,6 +543,91 @@ export async function cancelCurrentSubscription(organizationId: string): Promise
   });
 }
 
+/**
+ * Activate from a payment event, but only onto a plan the subscription of
+ * record can vouch for.
+ *
+ * The event's plan used to be passed straight through. `normalizePlanCode`
+ * checks only that a code exists in the catalogue, so any code in the catalogue
+ * was accepted: an event naming ENTERPRISE activated ENTERPRISE, whatever the
+ * customer signed up for or paid. The subscription already records the plan its
+ * checkout was created for — `createSignup` writes `planCode` and `externalRef`
+ * in the same row — so there is something to check against, and not checking was
+ * the whole defect.
+ *
+ * Anything that cannot be verified is **parked in MANUAL_REVIEW** rather than
+ * guessed at. That state already exists for exactly this purpose: a paid signup
+ * sits in it until a person confirms. Parking is visible and reversible; the
+ * previous behaviour — falling back to the entry paid plan with a warning — put
+ * a subscriber on a plan nobody chose and left a log line as the only evidence.
+ *
+ * A parked event is still *consumed*: it is recorded in PaymentEvent, so a
+ * provider retrying it gets `duplicate` rather than a second attempt. The alert
+ * is what asks for a human, and it is an alert rather than a log because the
+ * money has already moved and silence here costs a customer their service.
+ */
+async function activateFromPaymentEvent(
+  organizationId: string,
+  namedPlan: string | null,
+  context: { provider: string; type: string },
+): Promise<'activated' | 'parked'> {
+  const subscription = await prisma.subscription.findFirst({
+    where: { organizationId },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, planCode: true, status: true },
+  });
+
+  const park = async (reason: string): Promise<'parked'> => {
+    logger.error('Payment event parked for review', { organizationId, ...context, reason });
+    // Never demote a subscription that is already live. An odd event about an
+    // active customer is a question for an owner, not grounds for taking a
+    // working service away from someone who is paying for it.
+    if (subscription && subscription.status !== 'ACTIVE') {
+      await prisma.subscription.update({
+        where: { id: subscription.id },
+        data: { status: 'MANUAL_REVIEW' },
+      });
+    }
+    await prisma.platformAlert.create({
+      data: {
+        organizationId,
+        type: 'PAYMENT_EVENT_NEEDS_REVIEW',
+        severity: 'ERROR',
+        message: reason,
+        metadata: { ...context, namedPlan, subscriptionPlan: subscription?.planCode ?? null } as never,
+      },
+    });
+    return 'parked';
+  };
+
+  if (!subscription) {
+    return park('Payment event names an organization with no subscription to activate.');
+  }
+  if (!namedPlan) {
+    return park('Payment event activated a subscription without naming a plan.');
+  }
+
+  let requested: PlanCode;
+  try {
+    requested = normalizePlanCode(namedPlan);
+  } catch {
+    return park(`Payment event named a plan the catalogue does not carry: ${namedPlan}`);
+  }
+
+  // Compared against the stored string rather than through normalizePlanCode,
+  // which throws on a code the catalogue no longer carries — an edition that has
+  // since been renamed or removed must park, not crash the webhook.
+  const ofRecord = String(subscription.planCode || '').trim().toUpperCase();
+  if (requested !== ofRecord) {
+    return park(
+      `Payment event names ${requested} but the subscription of record is ${ofRecord || 'unset'}.`,
+    );
+  }
+
+  await activateManualSubscription(organizationId, requested);
+  return 'activated';
+}
+
 export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<string, string | string[] | undefined>) {
   const provider = getPaymentProvider();
   const event = await provider.verifyWebhook(rawBody, headers);
@@ -586,20 +676,11 @@ export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<stri
 
     switch (event.kind) {
       case 'subscription_activated': {
-        // A provider that activates without naming a plan is telling us money
-        // moved but not what for. Activating the entry paid plan is a guess;
-        // refusing would leave a customer who has paid with nothing, which is
-        // worse. So it guesses, and says so loudly — the log is the only
-        // signal an owner has that a subscription may be on the wrong plan.
         const namedPlan = event.planCode || payload?.planCode;
-        if (!namedPlan) {
-          logger.warn('Payment event activated a subscription without naming a plan', {
-            provider: provider.provider,
-            organizationId,
-            fallbackPlan: ENTRY_PAID_PLAN_CODE,
-          });
-        }
-        await activateManualSubscription(organizationId, String(namedPlan || ENTRY_PAID_PLAN_CODE));
+        await activateFromPaymentEvent(organizationId, namedPlan ? String(namedPlan) : null, {
+          provider: provider.provider,
+          type: event.type,
+        });
         break;
       }
       case 'payment_failed':
@@ -617,18 +698,31 @@ export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<stri
   });
 }
 
+/**
+ * What the provider says about a checkout. **Reports; never changes anything.**
+ *
+ * This is served by `GET /api/billing/checkout-status/:externalRef`, which is in
+ * the authentication bypass in index.ts and has to be: its only caller is the
+ * return-from-checkout landing page, reached by someone who has just signed up,
+ * has not verified their email, and whose organization is therefore still
+ * PENDING — so they cannot hold a session, and requiring one would break the
+ * only legitimate use.
+ *
+ * It used to activate. A `paid` status called activateManualSubscription and a
+ * `failed` status called markPaymentFailed, which suspends the organization.
+ * That made an unauthenticated endpoint, keyed on a value that travels in a URL,
+ * able both to grant a subscription and to suspend a workspace. It was inert
+ * only by accident: the manual provider derives checkout status *from* the
+ * subscription's own status, so it could never report anything the database did
+ * not already say. Integrating any real provider removes that accident.
+ *
+ * **Activation now has exactly one externally reachable entrance: the signed
+ * webhook.** The missed-webhook fallback is not lost — reconcileBilling still
+ * polls the same provider method and still acts on it — but it runs on a
+ * schedule, in-process, triggered by no request. Nothing outside can reach it.
+ */
 export async function getCheckoutStatus(externalRef: string) {
-  const provider = getPaymentProvider();
-  const status = await provider.getCheckoutStatus(externalRef);
-  await runAsPlatform(`billing-checkout-reconcile:${externalRef}`, async () => {
-    const subscription = await prisma.subscription.findFirst({ where: { provider: provider.provider, externalRef } });
-    if (!subscription) return;
-    if (status.status === 'paid' && subscription.status !== 'ACTIVE') {
-      await activateManualSubscription(subscription.organizationId, subscription.planCode);
-    }
-    if (status.status === 'failed') await markPaymentFailed(subscription.organizationId, 'Checkout reported failed');
-  });
-  return status;
+  return getPaymentProvider().getCheckoutStatus(externalRef);
 }
 
 export async function getCurrentBilling(organizationId: string) {
