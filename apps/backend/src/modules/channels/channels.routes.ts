@@ -12,7 +12,7 @@ import {
   getMetaChannel,
 } from './meta.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
-import { getEdition, getEditions } from '../billing/editions.service';
+import { cheapestUpgradeGranting, getEdition } from '../billing/editions.service';
 
 /**
  * Whether this workspace's edition may connect a channel kind.
@@ -42,8 +42,17 @@ async function channelRefusal(
 ): Promise<{ planName: string; requiredPlan: string | null } | null> {
   const effective = await resolveEntitlements(organizationId);
   if (getEdition(effective.plan).allowedChannels.includes(kind)) return null;
-  const granting = getEditions().find((edition) => edition.allowedChannels.includes(kind));
-  return { planName: effective.planName, requiredPlan: granting?.name ?? null };
+  /*
+    Only an edition that is actually an upgrade. Channels are granted downward
+    since the narrowing - OPENWA is allowed by FREE and STANDARD only - so
+    "first in ladder order" would tell an ENTERPRISE subscriber to upgrade to
+    Free. See cheapestUpgradeGranting; both callers of this already render the
+    null case without a suggestion.
+  */
+  return {
+    planName: effective.planName,
+    requiredPlan: cheapestUpgradeGranting(effective.plan, (edition) => edition.allowedChannels.includes(kind)),
+  };
 }
 
 /**

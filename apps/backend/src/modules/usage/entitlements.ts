@@ -10,6 +10,8 @@ import {
   recordUsageEvents,
 } from './usage.service';
 import { PLAN_METRIC_FIELDS } from './metrics';
+import { cheapestUpgradeGranting } from '../billing/editions.service';
+import type { PlanCode, PlanEntitlements } from '../billing/plans';
 import { resolveEntitlements, resolveMetricLimit } from '../billing/entitlements.resolver';
 
 export const ENTITLEMENTS: Record<UsageMetric, { blocksOutbound: boolean }> = {
@@ -108,24 +110,23 @@ export function capabilityErrorResponse(error: CapabilityNotIncludedError) {
  * request, never on the send path — so the extra read costs nothing that
  * matters.
  */
-async function editionGranting(metric: UsageMetric): Promise<string | null> {
+async function editionGranting(metric: UsageMetric, askingPlan: PlanCode): Promise<string | null> {
   const field = (PLAN_METRIC_FIELDS as Record<string, string | undefined>)[metric];
   if (!field) return null;
   try {
-    const editions = await runAsPlatform('capability-required-edition', () =>
-      prisma.plan.findMany({
-        where: { isActive: true, archivedAt: null },
-        // Tie-broken by code. Two editions at the same sortOrder would
-        // otherwise make "the cheapest edition that grants this" answer
-        // differently between runs, which is a refusal message that changes
-        // its advice at random.
-        orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
-      }));
-    const granting = editions.find((edition) => {
+    /*
+      Reads the published ladder from the catalogue cache rather than the
+      database, so it shares one definition of "is this actually an upgrade"
+      with channelRefusal. The two carried the identical assumption and would
+      have had to be fixed twice; now they are the same function.
+
+      The cache is already ordered by sortOrder with code breaking ties, which
+      is what made the previous query's own ordering necessary.
+    */
+    return cheapestUpgradeGranting(askingPlan, (edition: PlanEntitlements) => {
       const value = (edition as unknown as Record<string, unknown>)[field];
       return value === null || Number(value) > 0;
     });
-    return granting?.name ?? null;
   } catch (error) {
     // The refusal stands either way. Failing to name the upgrade is a worse
     // message, not a reason to let the request through.
@@ -172,7 +173,11 @@ export async function assertMetricAvailable(
   */
   if (limit === BigInt(0)) {
     const entitlements = await resolveEntitlements(organizationId, reference);
-    throw new CapabilityNotIncludedError(metric, entitlements.planName, await editionGranting(metric));
+    throw new CapabilityNotIncludedError(
+      metric,
+      entitlements.planName,
+      await editionGranting(metric, entitlements.plan),
+    );
   }
 
   const current = await getMetricUsage(metric, reference);
