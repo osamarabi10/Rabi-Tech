@@ -4067,6 +4067,7 @@ async function databaseAudits() {
         'name',
         'monthlyPriceCents',
         'pricingModel',
+        'billingInterval',
         'monthlyActiveContactsLimit',
         'monthlyOutboundMessagesLimit',
         'monthlyCampaignSendsLimit',

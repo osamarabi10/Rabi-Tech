@@ -82,6 +82,7 @@ export async function ensurePlans(): Promise<void> {
           name: plan.name,
           monthlyPriceCents: plan.monthlyPriceCents,
           pricingModel: plan.pricingModel,
+          billingInterval: plan.billingInterval,
           // Declaration order in PLAN_ENTITLEMENTS, which is already cheapest
           // to dearest. The literal array this replaces was a second copy of
           // that ordering, and a code absent from it seeded at -1 — sorting
@@ -451,8 +452,19 @@ export async function activateManualSubscription(
   const planCode = normalizePlanCode(planInput);
   return runAsPlatform(`billing-manual-activate:${organizationId}:${planCode}`, async () => {
     const now = new Date();
+    /*
+      The period follows the edition's billing interval rather than a hardcoded
+      month. Nothing reads currentPeriodEnd to decide access today (D-22), so
+      this is a record being made correct rather than an enforcement change -
+      but a yearly subscription whose period said one month would be wrong in
+      the console the moment yearly editions exist.
+    */
     const periodEnd = new Date(now);
-    periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
+    if (getEdition(planCode).billingInterval === 'YEARLY') {
+      periodEnd.setUTCFullYear(periodEnd.getUTCFullYear() + 1);
+    } else {
+      periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
+    }
     const existing = await prisma.subscription.findFirst({
       where: { organizationId },
       orderBy: { createdAt: 'desc' },

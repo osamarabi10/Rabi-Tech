@@ -112,6 +112,9 @@ const RESTRICTED_FLOOR: PlanEntitlements = {
   // published map by code rather than this object, so the value here decides
   // nothing — it is set only because the shape requires it.
   pricingModel: 'FREE',
+  // Like pricingModel above, this decides nothing here - the floor grants
+  // nothing whatever interval it claims. Set because the shape requires it.
+  billingInterval: 'MONTHLY',
   monthlyActiveContactsLimit: 0,
   monthlyOutboundMessagesLimit: 0,
   monthlyCampaignSendsLimit: 0,
@@ -165,6 +168,7 @@ function rowToEdition(row: {
   name: string;
   monthlyPriceCents: number;
   pricingModel: PlanEntitlements['pricingModel'];
+  billingInterval: PlanEntitlements['billingInterval'];
   monthlyActiveContactsLimit: number | null;
   monthlyOutboundMessagesLimit: number | null;
   monthlyCampaignSendsLimit: number | null;
@@ -190,6 +194,7 @@ function rowToEdition(row: {
     name: row.name,
     monthlyPriceCents: row.monthlyPriceCents,
     pricingModel: row.pricingModel,
+    billingInterval: row.billingInterval,
     monthlyActiveContactsLimit: row.monthlyActiveContactsLimit,
     monthlyOutboundMessagesLimit: row.monthlyOutboundMessagesLimit,
     monthlyCampaignSendsLimit: row.monthlyCampaignSendsLimit,

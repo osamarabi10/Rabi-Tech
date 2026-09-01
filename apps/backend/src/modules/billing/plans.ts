@@ -1,4 +1,4 @@
-import { PricingModel } from '@prisma/client';
+import { BillingInterval, PricingModel } from '@prisma/client';
 
 /**
  * An edition's code.
@@ -71,6 +71,14 @@ export type PlanEntitlements = {
   monthlyPriceCents: number;
   /** Read this before the price; see the PricingModel enum in schema.prisma. */
   pricingModel: PricingModel;
+  /**
+   * How often monthlyPriceCents is charged.
+   *
+   * Not the usage window. Every monthly* limit below resets per calendar month
+   * whatever this says - a yearly subscription still meters monthly, and
+   * granting twelve months of allowance on day one is not what is being sold.
+   */
+  billingInterval: BillingInterval;
   monthlyActiveContactsLimit: number | null;
   monthlyOutboundMessagesLimit: number | null;
   monthlyCampaignSendsLimit: number | null;
@@ -116,6 +124,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     name: 'Free',
     monthlyPriceCents: 0,
     pricingModel: 'FREE',
+    billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: 100,
     monthlyOutboundMessagesLimit: 100,
     monthlyCampaignSendsLimit: 0,
@@ -160,6 +169,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     name: 'Standard',
     monthlyPriceCents: 1900,
     pricingModel: 'FIXED',
+    billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: 500,
     monthlyOutboundMessagesLimit: 2000,
     monthlyCampaignSendsLimit: 0,
@@ -181,6 +191,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     name: 'Growth',
     monthlyPriceCents: 4900,
     pricingModel: 'FIXED',
+    billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: 2500,
     monthlyOutboundMessagesLimit: 10000,
     monthlyCampaignSendsLimit: 5000,
@@ -202,6 +213,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     name: 'Business',
     monthlyPriceCents: 19900,
     pricingModel: 'FIXED',
+    billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: 10000,
     monthlyOutboundMessagesLimit: 50000,
     monthlyCampaignSendsLimit: 25000,
@@ -223,6 +235,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     name: 'Enterprise',
     monthlyPriceCents: 0,
     pricingModel: 'NEGOTIATED',
+    billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: null,
     monthlyOutboundMessagesLimit: null,
     monthlyCampaignSendsLimit: null,
@@ -309,6 +322,26 @@ export function isPaidPlan(code: PlanCode): boolean {
  * enforcement site. Changing it is a data migration, not an edit: existing
  * rows hold the old number.
  */
+/**
+ * One edition's price expressed per month, whatever interval it is billed on.
+ *
+ * Revenue aggregates sum across editions, so they cannot add a yearly figure to
+ * a monthly one and call the result monthly recurring revenue - that overstates
+ * a yearly subscriber twelvefold. One definition, so the pricing page and the
+ * platform dashboard cannot answer differently.
+ *
+ * Still currency-blind: it returns cents with no currency, and callers sum them
+ * across editions that could in principle be priced differently. Every edition
+ * is USD today so nothing is wrong yet; recorded rather than fixed here.
+ */
+export function monthlyEquivalentCents(
+  edition: Pick<PlanEntitlements, 'monthlyPriceCents' | 'billingInterval'>,
+): number {
+  return edition.billingInterval === 'YEARLY'
+    ? Math.round(edition.monthlyPriceCents / 12)
+    : edition.monthlyPriceCents;
+}
+
 export const UNLIMITED_SENTINEL = 1_000_000_000;
 
 /**

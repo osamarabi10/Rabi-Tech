@@ -124,10 +124,19 @@ services:
       # price ids are per-environment, so a test-mode id is not the live one and
       # neither belongs in the repository. An edition with no entry here refuses
       # at checkout rather than being charged against another edition's price.
-      - STRIPE_PRICE_STANDARD=${STRIPE_PRICE_STANDARD}
-      - STRIPE_PRICE_GROWTH=${STRIPE_PRICE_GROWTH}
-      - STRIPE_PRICE_BUSINESS=${STRIPE_PRICE_BUSINESS}
-      - STRIPE_PRICE_ENTERPRISE=${STRIPE_PRICE_ENTERPRISE}
+      # Keyed by interval as well as edition: on Stripe's side the interval is
+      # part of what a price is, so a yearly edition is a different Price id.
+      # An unmapped combination refuses at checkout rather than charging the
+      # wrong one. Every edition is MONTHLY today; the YEARLY lines exist so
+      # switching one is a config change rather than a code change.
+      - STRIPE_PRICE_STANDARD_MONTHLY=${STRIPE_PRICE_STANDARD_MONTHLY}
+      - STRIPE_PRICE_GROWTH_MONTHLY=${STRIPE_PRICE_GROWTH_MONTHLY}
+      - STRIPE_PRICE_BUSINESS_MONTHLY=${STRIPE_PRICE_BUSINESS_MONTHLY}
+      - STRIPE_PRICE_ENTERPRISE_MONTHLY=${STRIPE_PRICE_ENTERPRISE_MONTHLY}
+      - STRIPE_PRICE_STANDARD_YEARLY=${STRIPE_PRICE_STANDARD_YEARLY}
+      - STRIPE_PRICE_GROWTH_YEARLY=${STRIPE_PRICE_GROWTH_YEARLY}
+      - STRIPE_PRICE_BUSINESS_YEARLY=${STRIPE_PRICE_BUSINESS_YEARLY}
+      - STRIPE_PRICE_ENTERPRISE_YEARLY=${STRIPE_PRICE_ENTERPRISE_YEARLY}
       - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
       - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-http://localhost:8080}
       # Broadcast pacing. OpenWA drives WhatsApp Web, so blasting risks a ban.

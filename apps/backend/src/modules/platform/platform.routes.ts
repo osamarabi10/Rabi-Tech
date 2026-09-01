@@ -12,7 +12,7 @@ import {
   cancelCurrentSubscription,
   markPaymentFailed,
 } from '../billing/billing.service';
-import { PLAN_CODE_PATTERN, RESERVED_PLAN_CODES, normalizePlanCode } from '../billing/plans';
+import { PLAN_CODE_PATTERN, RESERVED_PLAN_CODES, monthlyEquivalentCents, normalizePlanCode } from '../billing/plans';
 import { getEdition, refreshEditions } from '../billing/editions.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { probeOrganization } from '../gateway/health-monitor';
@@ -326,9 +326,18 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
       }),
     ]);
 
+    /*
+      Monthly RECURRING revenue, so a yearly edition contributes a twelfth of
+      its price rather than all of it. Summing raw prices across intervals
+      overstates a yearly subscriber twelvefold and calls the result monthly.
+
+      Still currency-blind: these are cents summed across editions that could in
+      principle be priced in different currencies. Every edition is USD today,
+      so nothing is wrong yet - flagged, not fixed here.
+    */
     const mrrCents = paid.reduce((sum, subscription) => {
       const code = normalizePlanCode(subscription.planCode);
-      return sum + getEdition(code).monthlyPriceCents;
+      return sum + monthlyEquivalentCents(getEdition(code));
     }, 0);
 
     const now = Date.now();
@@ -343,7 +352,7 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
         // accident.
         potentialCents: trialing
           .filter((t) => t.trialEndsAt && t.trialEndsAt.getTime() > now)
-          .reduce((sum, t) => sum + getEdition(normalizePlanCode(t.planCode)).monthlyPriceCents, 0),
+          .reduce((sum, t) => sum + monthlyEquivalentCents(getEdition(normalizePlanCode(t.planCode))), 0),
       },
       byTier: paid.reduce<Record<string, number>>((acc, subscription) => {
         acc[subscription.planCode] = (acc[subscription.planCode] || 0) + 1;
@@ -1490,6 +1499,9 @@ function parseFlag(value: unknown): boolean | undefined {
 /** Mirrors the PricingModel enum in schema.prisma. */
 const PRICING_MODELS = ['FREE', 'FIXED', 'NEGOTIATED'] as const;
 
+/** Mirrors the BillingInterval enum in schema.prisma. */
+const BILLING_INTERVALS = ['MONTHLY', 'YEARLY'] as const;
+
 /**
  * The price/pricingModel invariants, enforced against the row **as it will be
  * after this write** rather than against the patch in isolation.
@@ -1588,6 +1600,22 @@ function applyEditionFields(body: Record<string, unknown>, data: Record<string, 
     The invariant against price is applied separately, by applyPricingInvariant,
     because it has to see the row this patch produces rather than the patch.
   */
+  if (body.billingInterval !== undefined) {
+    const interval = String(body.billingInterval).trim().toUpperCase();
+    if (!BILLING_INTERVALS.includes(interval as (typeof BILLING_INTERVALS)[number])) {
+      throw bad(`billingInterval must be one of ${BILLING_INTERVALS.join(', ')}`);
+    }
+    /*
+      No price conversion. Moving an edition from MONTHLY to YEARLY does not
+      multiply monthlyPriceCents by twelve, because the column means "amount per
+      interval" and the owner is stating what a year costs, not asking for a
+      calculation. Converting on their behalf would silently reprice the
+      edition, and the direction of the error would not be obvious from the
+      screen afterwards.
+    */
+    data.billingInterval = interval;
+  }
+
   if (body.pricingModel !== undefined) {
     const model = String(body.pricingModel).trim().toUpperCase();
     if (!(PRICING_MODELS as readonly string[]).includes(model)) {

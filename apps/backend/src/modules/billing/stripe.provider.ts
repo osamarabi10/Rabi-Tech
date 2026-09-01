@@ -1,4 +1,6 @@
+import { BillingInterval } from '@prisma/client';
 import Stripe from 'stripe';
+import { getEdition } from './editions.service';
 import {
   CheckoutStatusResult,
   PaymentEventKind,
@@ -75,7 +77,9 @@ function requiredEnv(name: string): string {
  * Read from the environment because Stripe price ids are **per-environment** —
  * a test-mode `price_…` is not the live one — so anything committed to the
  * repository would be wrong in one mode or the other. The shape is
- * `STRIPE_PRICE_<PLANCODE>`.
+ * `STRIPE_PRICE_<PLANCODE>_<INTERVAL>`: a second billing interval means a
+ * second Stripe Price for the same edition, because on Stripe's side the
+ * interval is part of what a price *is* rather than a modifier applied to one.
  *
  * **Never falls back to another edition's price.** An unmapped edition throws,
  * and the signup fails visibly, because the alternative is charging somebody
@@ -89,13 +93,13 @@ function requiredEnv(name: string): string {
  * checkout. When CREATABLE_PLAN_CODES is widened, this map has to become a
  * column on Plan that the console can set.
  */
-function priceIdFor(planCode: string): string {
-  const key = `STRIPE_PRICE_${planCode.trim().toUpperCase()}`;
+function priceIdFor(planCode: string, interval: BillingInterval): string {
+  const key = `STRIPE_PRICE_${planCode.trim().toUpperCase()}_${interval}`;
   const priceId = (process.env[key] || '').trim();
   if (!priceId) {
     throw Object.assign(
       new Error(
-        `No Stripe price is configured for edition ${planCode}. Set ${key}. `
+        `No Stripe price is configured for edition ${planCode} billed ${interval}. Set ${key}. `
         + 'Refusing rather than charging against another edition\'s price.',
       ),
       { status: 500 },
@@ -161,9 +165,16 @@ export class StripeProvider implements PaymentProvider {
   }
 
   async createCheckout(organizationId: string, planCode: string) {
-    // Resolved before the session is created, so an unmapped edition fails
-    // before anything exists on Stripe's side to clean up.
-    const price = priceIdFor(planCode);
+    /*
+      Resolved before the session is created, so an unmapped edition fails
+      before anything exists on Stripe's side to clean up.
+
+      The interval comes from the catalogue, not the caller. An edition is
+      billed monthly or yearly as a property of the edition; letting a checkout
+      request choose would make the same edition cost different things
+      depending on who asked for it.
+    */
+    const price = priceIdFor(planCode, getEdition(planCode).billingInterval);
 
     const session = await this.client().checkout.sessions.create({
       mode: 'subscription',

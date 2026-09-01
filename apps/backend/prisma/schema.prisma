@@ -127,6 +127,17 @@ model Organization {
 /// FREE        price is 0 and that is the offer.
 /// FIXED       price is published and self-serve.
 /// NEGOTIATED  price is agreed per deal; the stored number means nothing.
+/// How often a subscriber on this edition is charged.
+///
+/// Distinct from the usage month. Every monthly* limit resets per calendar
+/// month via monthRange() whatever this says — a yearly subscription still
+/// meters monthly, and giving it twelve months of allowance on day one is not
+/// what anyone is selling.
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
 enum PricingModel {
   FREE
   FIXED
@@ -140,6 +151,11 @@ model Plan {
   monthlyPriceCents Int
   /// Read this before the price. See PricingModel.
   pricingModel      PricingModel @default(FIXED)
+  /// How often monthlyPriceCents is charged. That column's name predates
+  /// yearly billing and now means "amount per interval"; the rename is real
+  /// debt, deliberately unpaid — 52 references across 11 files and the API
+  /// boundary, for no behaviour change.
+  billingInterval   BillingInterval @default(MONTHLY)
   currency          String  @default("USD")
   isActive          Boolean @default(true)
   sortOrder         Int     @default(0)
