@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef } from 'react';
-import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, KeyRound, MessageCircleMore, MessageSquareText, Tags, Users, UserRound, Workflow } from 'lucide-react';
+import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, KeyRound, MessageCircleMore, MessageSquareText, Tags, Users, UserRound, Webhook, Workflow } from 'lucide-react';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -46,7 +46,10 @@ const GROUPS = [
     // WhatsApp number and writing software against the API are different jobs
     // done by different people. Webhooks join this group when they land.
     label: 'المطوّرون',
-    items: [{ href: '/settings/api', label: 'مفاتيح API', icon: KeyRound }],
+    items: [
+      { href: '/settings/api', label: 'مفاتيح API', icon: KeyRound },
+      { href: '/settings/webhooks', label: 'ويب هوكس', icon: Webhook },
+    ],
   },
   {
     label: 'البيانات',

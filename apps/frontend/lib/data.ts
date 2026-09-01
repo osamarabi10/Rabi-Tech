@@ -2579,3 +2579,98 @@ export async function createApiToken(input: {
 export async function revokeApiToken(id: string): Promise<void> {
   await api.delete(`/api/api-tokens/${id}`);
 }
+
+/* ── Outbound webhooks (P1d) ──────────────────────────────────────────────── */
+
+/**
+ * A configured outbound endpoint.
+ *
+ * Named `ConfiguredWebhook` rather than the obvious `WebhookEndpointRow`
+ * because that name is already taken, by the analytics *aggregate* for webhook
+ * health. Two different things called the same thing is how a component ends up
+ * reading `successRatePct` off a row that never had one.
+ */
+export type ConfiguredWebhook = {
+  id: string;
+  name: string;
+  url: string;
+  events: string[];
+  isActive: boolean;
+  /** Set when it was switched off. Paired with the reason, never alone. */
+  disabledAt: string | null;
+  /** Why it went off, in words meant for the screen. */
+  disabledReason: string | null;
+  lastDeliveryAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  createdAt: string;
+  createdBy: { id: string; name: string } | null;
+};
+
+/** Returned exactly once, on creation or rotation. Never stored client-side. */
+export type IssuedConfiguredWebhook = ConfiguredWebhook & { secret: string };
+
+export type WebhookDelivery = {
+  id: string;
+  eventType: string;
+  statusCode: number | null;
+  ok: boolean;
+  errorMessage: string | null;
+  responseBody: string | null;
+  durationMs: number;
+  attempt: number;
+  createdAt: string;
+};
+
+export async function fetchWebhookEndpoints(): Promise<ConfiguredWebhook[]> {
+  const { data } = await api.get('/api/webhook-endpoints');
+  return data.endpoints;
+}
+
+export async function fetchWebhookEventCatalogue(): Promise<{
+  events: string[];
+  groups: { resource: string; events: string[] }[];
+  autoDisable: { failures: number; windowMinutes: number };
+}> {
+  const { data } = await api.get('/api/webhook-endpoints/events');
+  return data;
+}
+
+export async function createWebhookEndpoint(input: {
+  name: string; url: string; events: string[];
+}): Promise<IssuedConfiguredWebhook> {
+  const { data } = await api.post('/api/webhook-endpoints', input);
+  return data.endpoint;
+}
+
+export async function updateWebhookEndpoint(
+  id: string,
+  input: Partial<{ name: string; url: string; events: string[]; isActive: boolean }>,
+): Promise<ConfiguredWebhook> {
+  const { data } = await api.patch(`/api/webhook-endpoints/${id}`, input);
+  return data.endpoint;
+}
+
+export async function rotateWebhookSecret(id: string): Promise<string> {
+  const { data } = await api.post(`/api/webhook-endpoints/${id}/rotate-secret`);
+  return data.secret;
+}
+
+export async function testWebhookEndpoint(id: string): Promise<boolean> {
+  const { data } = await api.post(`/api/webhook-endpoints/${id}/test`);
+  return !!data.ok;
+}
+
+export async function fetchWebhookDeliveries(
+  id: string,
+  failedOnly = false,
+): Promise<WebhookDelivery[]> {
+  const { data } = await api.get(`/api/webhook-endpoints/${id}/deliveries`, {
+    params: { ...(failedOnly ? { failedOnly: 'true' } : {}) },
+  });
+  return data.deliveries;
+}
+
+export async function deleteWebhookEndpoint(id: string): Promise<void> {
+  await api.delete(`/api/webhook-endpoints/${id}`);
+}

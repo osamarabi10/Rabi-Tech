@@ -384,6 +384,117 @@ inverted.
 
 ---
 
+## Webhooks
+
+Configured in the console at **Settings → Developers → Webhooks**. We POST a
+signed JSON body to your URL whenever a subscribed event happens.
+
+### Verifying a delivery — do this before trusting anything
+
+```
+X-RabiTech-Signature: t=1730000000,v1=<hex hmac-sha256>
+X-RabiTech-Event:     message.received
+X-RabiTech-Delivery:  whd_<hex>
+```
+
+The signature is `HMAC-SHA256("<timestamp>.<raw body>", secret)`.
+
+**The timestamp is part of what is signed, and that is the point.** A signature
+over the body alone proves the body came from us and nothing about *when* —
+anyone who captures one valid request can replay it forever and every replay
+verifies. Reject deliveries whose `t` is more than five minutes from your clock.
+
+Compare in constant time, and verify against the **raw** body bytes: a body that
+has been parsed and re-serialised is a different string and will not match.
+
+`v1` is versioned so a future scheme can ship alongside this one rather than
+replacing it mid-flight.
+
+### Events
+
+| Event | Fires when |
+|---|---|
+| `contact.created` | A contact appears — a stranger writes in, or one is created through the API |
+| `contact.updated` | Contact fields change, from the console or the API |
+| `contact.tagged` | Tags are applied |
+| `contact.lifecycle_updated` | The lifecycle stage moves — its own event, because this is what most automations wait for |
+| `contact.consent_updated` | Marketing consent changes, with `from` and `to` |
+| `conversation.opened` | A thread is created. `isFirstEver` distinguishes a new customer from a returning one |
+| `conversation.assigned` | Auto-assignment claims a thread |
+| `conversation.closed` | A thread is resolved, with the closing `source` |
+| `conversation.reopened` | A resolved thread starts a new episode |
+| `message.received` | A customer message arrives |
+| `message.sent` | An outbound message is delivered. Internal notes never fire this |
+
+### The envelope
+
+```json
+{ "id": "whd_...",
+  "event": { "id": "evt_...", "type": "message.received", "occurredAt": "..." },
+  "workspace": { "id": "..." },
+  "data": { } }
+```
+
+`id` is per **delivery attempt**; `event.id` is per **occurrence**. A retry
+repeats `event.id` with a new `id` — that pair is what lets you deduplicate.
+Without it you cannot tell "we sent this twice" from "it happened twice", and an
+order gets shipped again.
+
+Fan-out shares the event id too: three endpoints subscribed to the same event
+get three deliveries and one `event.id`.
+
+### Retries
+
+**30s, 60s, 90s** — four attempts in total. Any 2xx is success.
+
+Linear rather than exponential on purpose: your endpoint is usually a small
+server or a serverless function, and what is being recovered from is a deploy or
+a restart. An exponential ladder would still be retrying tomorrow, long after the
+event stopped being useful.
+
+A **4xx is not retried** — it means the request itself is wrong and repeating it
+changes nothing. The exceptions are `408` and `429`, which explicitly say "try
+again". Return a 2xx quickly and do your work asynchronously; we time out at 10
+seconds.
+
+### Auto-deactivation
+
+**30 failed deliveries within 30 minutes** switches the endpoint off.
+
+Failures, not *consecutive* failures — an endpoint alternating success and
+failure thirty times in half an hour is broken in a way a consecutive counter
+would never fire on.
+
+The console shows **why and when**, on the endpoint itself, with one button to
+turn it back on. Re-enabling clears the reason: a stale "turned off after 30
+failures" sitting on a working endpoint is worse than no message.
+
+### The delivery log
+
+Every attempt is recorded with its status code, latency, attempt number, and the
+first 2 KB of the response body — visible in the console, filterable to failures
+only, refreshable, and with a **Send test** button so you can check a URL without
+waiting for a real event.
+
+This is the piece Respond.io does not have; it is an open feature request against
+them. Without it, "did you send it?" is unanswerable by both parties.
+
+### Restrictions
+
+HTTPS only in production, and private or loopback addresses are refused. Without
+that, a webhook endpoint is a request-forgery primitive: point it at an internal
+address, have our server make the request from inside our network, and read the
+response back out of the delivery log.
+
+The signing secret is stored in clear, unlike an API token — HMAC needs the same
+secret at both ends, so hashing it would make signing impossible. It is shown
+once, rotatable, and scoped to one endpoint. **Rotation is immediate**: the old
+secret verifies nothing the moment you rotate.
+
+Ten endpoints per workspace.
+
+---
+
 ## Deliberately absent
 
 **No `DELETE /contacts`.** The console has no contact deletion either. Deleting
@@ -404,7 +515,8 @@ most callers want.
 ## Verifying a change to this surface
 
 ```bash
-cd apps/backend && npm run test:public-api
+cd apps/backend && npm run test:public-api   # 103 checks, over HTTP
+cd apps/backend && npm run test:webhooks     # 52 checks, hermetic
 ```
 
 103 checks over HTTP against the running server, because everything that makes
@@ -417,6 +529,5 @@ red.
 
 ## Roadmap
 
-P1d adds outbound webhooks with
-HMAC-SHA256 signatures and a delivery log. See
+See
 [RESPONDIO-PARITY-ROADMAP.md](RESPONDIO-PARITY-ROADMAP.md).
