@@ -3,6 +3,13 @@
 -- This migration is intentionally additive. It establishes provider identity,
 -- approval state, WABA isolation, future campaign bindings, and the future
 -- reservation/delivery ledger. No send path is enabled by this migration.
+--
+-- 2026-09-01: still accurate, and narrower than it looks. No TEMPLATE send path
+-- exists to this day - meta.client.ts can create and list templates and cannot
+-- send one - which is what canInitiateConversations: false encodes. Text and
+-- media do send, through meta.adapter.ts, inside the 24-hour service window.
+-- The sentence describes the template path only; it is not a statement that the
+-- Meta channel cannot send at all.
 
 ALTER TABLE "MetaChannelCredential"
   ADD COLUMN "businessPortfolioId" TEXT;

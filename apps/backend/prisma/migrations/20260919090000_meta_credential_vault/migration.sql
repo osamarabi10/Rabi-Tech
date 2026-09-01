@@ -6,6 +6,13 @@
 -- Nothing reads this table yet. The connection flow, webhook and send path come
 -- in later steps; this lands the storage so those can be built against a shape
 -- that is already reviewed.
+--
+-- 2026-09-01: the paragraph above is a statement about THIS migration and is
+-- read too often as a statement about the product. It was true when written and
+-- is now stale in one direction: the connection flow, the signature-verified
+-- webhook and a send path for text and media all exist and are wired. Only
+-- template sending is still absent. Do not read "nothing reads this table" as
+-- "Meta does not work".
 
 -- OrganizationChannel needs a composite unique before a child can carry a
 -- composite FK to it. Additive and free: id is already the primary key, so this

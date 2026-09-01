@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response, Router } from 'express';
+import { editionOfferability } from '../channels/channel-viability';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
@@ -1401,7 +1402,25 @@ router.get('/editions', requirePlatformOwner, async (_req, res) => {
   // decides gateway provisioning at activation, and allowedChannels is checked
   // when a channel is connected or activated. Every switch on this screen
   // grants something.
-  res.json({ editions, notEnforced: [] });
+  /*
+    Whether each edition can currently be sold, and if not, why.
+
+    An owner looking at this screen has to be able to see the cause without
+    reading code. `isActive` and `archivedAt` are their own decisions and this
+    is not one of them - it is derived from whether the platform can operate
+    the channels the edition permits, so an edition can read active here and
+    still be unsellable, which without this field would look like a bug in the
+    pricing page rather than a missing secret.
+
+    Deliberately not written to the row. The moment the configuration is fixed
+    these become sellable again on the next request; a persisted flag would
+    have to be found and cleared by someone who remembered it existed.
+  */
+  const withOffer = editions.map((edition) => {
+    const offer = editionOfferability(edition.allowedChannels);
+    return { ...edition, offerable: offer.offerable, unavailableReason: offer.reasonCode, unavailableDetail: offer.reason };
+  });
+  res.json({ editions: withOffer, notEnforced: [] });
 });
 
 /**

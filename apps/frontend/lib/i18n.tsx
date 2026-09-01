@@ -685,6 +685,9 @@ const D: Dict = {
   'تواصل معنا': { he: 'צרו קשר', en: 'Contact' },
   // ---- Trial + pricing rewrite ----
   'ابدأ التجربة المجانية': { he: 'התחילו תקופת ניסיון', en: 'Start free trial' },
+  'غير متاحة حالياً': { he: 'לא זמינה כרגע', en: 'Not available yet' },
+  'هاي الباقة بتشتغل على قناة واتساب الرسمية، وهي لسا مش متاحة عندنا. احكي معنا وبنعلمك أول ما تفتح.': { he: 'החבילה הזו פועלת על ערוץ וואטסאפ הרשמי, שעדיין אינו זמין אצלנו. דברו איתנו ונעדכן אתכם ברגע שייפתח.', en: 'This edition runs on the official WhatsApp channel, which is not available here yet. Talk to us and we will let you know as soon as it opens.' },
+  'هاي الباقة بتشتغل على قناة واتساب الرسمية، وهي لسا مش متاحة عندنا. جرّب باقة تانية أو احكي معنا.': { he: 'החבילה הזו פועלת על ערוץ וואטסאפ הרשמי, שעדיין אינו זמין אצלנו. נסו חבילה אחרת או דברו איתנו.', en: 'This edition runs on the official WhatsApp channel, which is not available here yet. Try another edition or talk to us.' },
   'خلصت فترتك التجريبية': { he: 'תקופת הניסיון הסתיימה', en: 'Your free trial has ended' },
   'اشتراكك موقوف': { he: 'המנוי שלכם מושהה', en: 'Your subscription is paused' },
   'شغلك ومحادثاتك محفوظة زي ما هي. اختار باقة وبترجع تشتغل من نفس المكان.': { he: 'העבודה והשיחות שלכם נשמרו כמו שהן. בחרו חבילה ותמשיכו בדיוק מאותה נקודה.', en: 'Your work and conversations are exactly as you left them. Pick a plan and carry on from the same place.' },

@@ -20,6 +20,7 @@ import { getPaymentProvider, paymentProviderFor } from './provider-registry';
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
 import { getEdition, getEditions, getEditionEditedAt } from './editions.service';
 import { resolveEntitlements } from './entitlements.resolver';
+import { editionOfferability } from '../channels/channel-viability';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
 import { seedLifecycleStages } from '../lifecycle/lifecycle.service';
 
@@ -128,6 +129,7 @@ export async function listPlans() {
 
     return plans.map((plan) => {
       const entitlements = getEdition(normalizePlanCode(plan.code));
+      const offer = editionOfferability(entitlements.allowedChannels);
       return {
         code: plan.code,
         name: plan.name,
@@ -154,6 +156,22 @@ export async function listPlans() {
         autoProvisionGateway: entitlements.autoProvisionGateway,
         customDomain: entitlements.customDomain,
         whiteLabel: entitlements.whiteLabel,
+        /*
+          Whether the platform can actually operate this edition today.
+
+          Published rather than filtered: an edition the owner has put on sale
+          and the platform cannot honour is still part of the offer, and hiding
+          it would leave a would-be customer wondering where a tier they read
+          about went. Shown and marked unavailable tells them something true.
+
+          Derived from allowedChannels against platform configuration, so this
+          answers a different question from isActive/archivedAt above. Those are
+          the owner's intent; this is whether that intent is currently
+          deliverable. Both must hold for a sale, and only the second heals
+          itself when the configuration is fixed.
+        */
+        offerable: offer.offerable,
+        unavailableReason: offer.reasonCode,
       };
     });
   });
@@ -223,6 +241,37 @@ export async function createSignup(input: {
     throw Object.assign(new Error('Administrator password must be at least 8 characters'), { status: 400 });
   }
 
+  /*
+    Refuse an edition this platform cannot currently operate.
+
+    The pricing page marks these unpurchasable; this is the guard, because a
+    direct POST naming the code reaches here without ever loading that page.
+    Before it existed, GROWTH/BUSINESS/ENTERPRISE - narrowed to WHATSAPP_CLOUD
+    only - were sellable through a working checkout while META_APP_SECRET was
+    unset, and the buyer landed in a workspace whose one permitted channel
+    could neither send nor receive.
+
+    409, matching PLAN_CODE_RESERVED's reasoning: the request is well formed
+    and legal in shape, and what refuses it is the server's state, not
+    anything the caller can retype. Deliberately not 503 - that promises the
+    caller a retry will succeed shortly, and nobody has made that promise.
+
+    Checked before the throttle counters so a refused signup does not spend
+    the caller's per-IP budget on a request the platform was never going to
+    accept.
+  */
+  const offer = editionOfferability(getEdition(planCode).allowedChannels);
+  if (!offer.offerable) {
+    logger.warn('Signup refused: edition not operable on this platform', {
+      planCode,
+      reason: offer.reason,
+    });
+    throw Object.assign(
+      new Error('This edition requires a channel that is not available on this platform yet.'),
+      { status: 409, code: 'PLAN_CHANNEL_UNAVAILABLE' },
+    );
+  }
+
   return runAsPlatform(`billing-signup:${emailDomain}`, async () => {
     const since = new Date(Date.now() - SIGNUP_WINDOW_MS);
     const [ipCount, domainCount, existingIdentity] = await Promise.all([
@@ -257,6 +306,38 @@ export async function createSignup(input: {
     const isTrial = !isPaidPlan(planCode);
     const effectivePlanCode = isTrial ? await getTrialPlanCode() : planCode;
     const trialEndsAt = isTrial ? await trialDeadlineFrom(new Date()) : null;
+
+    /*
+      The plan actually provisioned, which for a trial is not the one asked for.
+
+      Recorded, not refused. The guard at the top of this function turns away a
+      caller who *named* an edition this platform cannot operate. A trial names
+      nothing: effectivePlanCode comes from getTrialPlanCode(), and today that
+      resolves to GROWTH - ENTRY_PAID_PLAN_CODE, with no billing.trialPlan row
+      set - which the E5g narrowing made Meta-only. So every trial signup is
+      placed on an edition whose one channel this platform cannot currently
+      operate.
+
+      Refusing here was written and backed out: it would close self-serve
+      signup completely, which is a larger outage than the one being fixed, and
+      substituting a different plan silently makes a commercial decision - the
+      only offerable alternatives grant no gateway at all
+      (autoProvisionGateway is false on FREE and STANDARD), so a substituted
+      trial would demonstrate less than a broken one. Neither belongs in a
+      correctness fix. See D-26; the resolution is the platform owner's.
+
+      No money changes hands on this path, which is what separates it from the
+      defect above: a paid signup for an inoperable edition is refused, a free
+      trial on one is logged and allowed to proceed.
+    */
+    const effectiveOffer = editionOfferability(getEdition(effectivePlanCode).allowedChannels);
+    if (!effectiveOffer.offerable) {
+      logger.warn('Trial placed on an edition this platform cannot operate (D-26)', {
+        requested: planCode,
+        effective: effectivePlanCode,
+        reason: effectiveOffer.reason,
+      });
+    }
 
     const created = await prisma.$transaction(async (tx) => {
       const organization = await tx.organization.create({

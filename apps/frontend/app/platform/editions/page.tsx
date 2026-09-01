@@ -31,6 +31,14 @@ type Edition = {
   isActive: boolean;
   /** Set means withdrawn from the catalogue entirely; stronger than !isActive. */
   archivedAt: string | null;
+
+  /**
+   * Derived, not stored: whether the platform can operate the channels this
+   * edition permits. An edition can be active here and still unsellable.
+   */
+  offerable?: boolean;
+  unavailableReason?: string | null;
+  unavailableDetail?: string | null;
   pricingModel: 'FREE' | 'FIXED' | 'NEGOTIATED';
   billingInterval: 'MONTHLY' | 'YEARLY';
   sortOrder: number;
@@ -329,6 +337,21 @@ export default function PlatformEditions() {
                   {!edition.isActive && (
                     <span className="text-sm text-muted-foreground">
                       Inactive — hidden from pricing. Subscribers already on it keep working.
+                    </span>
+                  )}
+                  {/*
+                    Why an edition cannot be sold, not merely that it cannot.
+
+                    This is not a switch on this screen and deliberately has no
+                    control beside it - the cause is platform configuration, and
+                    the remedy is setting the named secrets, not clicking here.
+                    Without the detail line an owner sees an active edition
+                    missing from the pricing page and reads it as a bug.
+                  */}
+                  {edition.offerable === false && (
+                    <span className="block text-sm text-warning">
+                      Not sellable — {edition.unavailableDetail || 'the channels it permits cannot be operated'}.
+                      {' '}Subscribers already on it keep working.
                     </span>
                   )}
                 </div>

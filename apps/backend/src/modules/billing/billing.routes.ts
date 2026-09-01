@@ -25,7 +25,20 @@ function handleRouteError(res: any, error: unknown) {
     error: error instanceof Error ? error.stack : String(error),
   });
   const status = typeof (error as any)?.status === 'number' ? (error as any).status : 500;
-  res.status(status).json({ error: status >= 500 ? 'Billing request failed' : (error as Error).message });
+  /*
+    A machine code travels with the message when the thrower set one.
+
+    This endpoint is public and its copy is rendered in three languages, so a
+    server-composed Arabic sentence would be wrong in two of them - the same
+    reasoning the trial-status endpoint below states for returning a deadline
+    rather than a banner. The `error` string stays as an English fallback for
+    logs and for any caller that does not know the code.
+  */
+  const code = typeof (error as any)?.code === 'string' ? (error as any).code : undefined;
+  res.status(status).json({
+    error: status >= 500 ? 'Billing request failed' : (error as Error).message,
+    ...(code && status < 500 ? { code } : {}),
+  });
 }
 
 /**

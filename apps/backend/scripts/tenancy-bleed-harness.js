@@ -4578,6 +4578,130 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
+    await check('billing: an edition whose channels the platform cannot operate is unofferable, and its subscribers still resolve', async () => {
+      const { refreshEditions, getEdition, getEditions } = require('../src/modules/billing/editions.service');
+      const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
+      const { listPlans, createSignup } = require('../src/modules/billing/billing.service');
+      const { editionOfferability } = require('../src/modules/channels/channel-viability');
+
+      /*
+        The defect this pins: after the E5g channel narrowing, GROWTH, BUSINESS
+        and ENTERPRISE permit WHATSAPP_CLOUD only. With META_APP_SECRET unset
+        the Meta webhook fails closed, so no inbound message row is ever
+        written, the 24-hour service window can never open and every outbound
+        send is refused - yet all three were still purchasable through a
+        working checkout. The buyer paid, activated automatically, and landed
+        in a workspace whose one permitted channel could neither send nor
+        receive.
+
+        Both halves are asserted together on purpose. Unofferable-and-still-
+        resolving is the whole property; an implementation that withdrew the
+        edition by making it stop resolving would satisfy the first half and
+        strand every existing subscriber, which is the more expensive bug.
+      */
+      const previousAppSecret = process.env.META_APP_SECRET;
+      const previousVerifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN;
+      try {
+        delete process.env.META_APP_SECRET;
+        delete process.env.META_WEBHOOK_VERIFY_TOKEN;
+        await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+        for (const code of ['GROWTH', 'BUSINESS', 'ENTERPRISE']) {
+          const edition = getEdition(code);
+          assert.deepEqual(
+            edition.allowedChannels,
+            ['WHATSAPP_CLOUD'],
+            `${code} is expected to be Meta-only; if this changed, this check needs rewriting rather than deleting`,
+          );
+          assert.equal(
+            editionOfferability(edition.allowedChannels).offerable,
+            false,
+            `${code} must not be offerable while the platform cannot operate Meta`,
+          );
+        }
+
+        // FREE and STANDARD permit OpenWA too, so they stay sellable. One
+        // operable channel is enough: withdrawing them would refuse a sale the
+        // platform can honour.
+        for (const code of ['FREE', 'STANDARD']) {
+          assert.equal(
+            editionOfferability(getEdition(code).allowedChannels).offerable,
+            true,
+            `${code} permits OpenWA and must stay offerable`,
+          );
+        }
+
+        const published = await runAsPlatform('bleed-list-plans', () => listPlans());
+        const growthRow = published.find((plan) => plan.code === 'GROWTH');
+        assert.ok(growthRow, 'GROWTH must still be listed - marked unavailable, not hidden');
+        assert.equal(growthRow.offerable, false, 'listPlans must publish offerable:false');
+        assert.equal(growthRow.unavailableReason, 'CHANNEL_SECRETS_MISSING');
+
+        /*
+          Offer versus resolution, the invariant that makes withdrawal safe. A
+          subscriber already on ENTERPRISE keeps every entitlement it grants:
+          the edition is unsellable, not withdrawn from the people who bought
+          it.
+        */
+        await setTierGoverned(orgA, 'ENTERPRISE');
+        const resolved = await runAsPlatform('bleed-viability-resolve', () =>
+          resolveEntitlements(orgA.organizationId));
+        assert.equal(resolved.plan, 'ENTERPRISE', 'an existing subscriber must still resolve its own edition');
+        /*
+          seatLimit rather than limits: seatLimit is read straight off the
+          resolved edition, while limits layers OrganizationConfig over it and
+          would agree with the edition only by coincidence. This asserts the
+          edition resolved, which is the property under test.
+        */
+        assert.equal(
+          resolved.seatLimit,
+          getEdition('ENTERPRISE').usersLimit,
+          'an unofferable edition must still grant exactly what it grants',
+        );
+
+        // The guard, not the presentation. A direct call naming the code is
+        // refused before anything is created.
+        let refusal = null;
+        try {
+          await createSignup({
+            organizationName: 'Viability Probe',
+            adminName: 'Probe',
+            adminEmail: `viability-${Date.now()}@example.test`,
+            adminPassword: 'probe-password-1',
+            planCode: 'GROWTH',
+            ipAddress: '203.0.113.9',
+          });
+        } catch (error) {
+          refusal = error;
+        }
+        assert.ok(refusal, 'signup naming an inoperable edition must be refused');
+        assert.equal(refusal.status, 409);
+        assert.equal(refusal.code, 'PLAN_CHANNEL_UNAVAILABLE');
+
+        /*
+          Self-healing, which is the point of deriving this rather than setting
+          a flag. Configuration alone restores the tiers - no migration, no row
+          to change back, nobody having to remember why they were stopped.
+        */
+        process.env.META_APP_SECRET = 'x'.repeat(40);
+        process.env.META_WEBHOOK_VERIFY_TOKEN = 'y'.repeat(40);
+        for (const code of ['GROWTH', 'BUSINESS', 'ENTERPRISE']) {
+          assert.equal(
+            editionOfferability(getEdition(code).allowedChannels).offerable,
+            true,
+            `${code} must become offerable again once the Meta secrets are set`,
+          );
+        }
+      } finally {
+        if (previousAppSecret === undefined) delete process.env.META_APP_SECRET;
+        else process.env.META_APP_SECRET = previousAppSecret;
+        if (previousVerifyToken === undefined) delete process.env.META_WEBHOOK_VERIFY_TOKEN;
+        else process.env.META_WEBHOOK_VERIFY_TOKEN = previousVerifyToken;
+        await setTierGoverned(orgA, 'FREE');
+        await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      }
+    });
+
     await check('billing: the edition ladder is ordered, and ties resolve the same way every time', async () => {
       const { refreshEditions, getEditions } = require('../src/modules/billing/editions.service');
 
