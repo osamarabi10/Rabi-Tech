@@ -714,3 +714,133 @@ expressed as a rolling window and an assertion expressed over a calendar period
 will agree almost always and disagree on the boundary. If a check compares a
 metric to rows, both sides must be scoped the same way, and the cheap way to
 find out is to ask what the check does on the first of the month.
+
+---
+
+## D-17 · `pricingModel` decides whether an edition collects money, and nothing says so
+
+**Where:** `isPaidPlan` in
+[`plans.ts`](../apps/backend/src/modules/billing/plans.ts), consulted at
+`billing.service.ts:237` (the trial fork), `:357` (checkout) and `:421`
+(`maybeProvisionGateway`). Settable from `/platform/editions` since `5febfd75`.
+
+**What is wrong:** setting a paid edition's `pricingModel` to `FREE` does far
+more than skip checkout. `isPaidPlan` returns false, so `createSignup` treats
+the signup as a **trial** — of a *different* plan, `getTrialPlanCode()` — writes
+the subscription as `TRIALING` rather than `MANUAL_REVIEW`, email verification
+takes the organization to `ACTIVE` because `TRIALING` is access-granting, and
+`maybeProvisionGateway` starts a WhatsApp gateway. **The customer receives the
+product, free, immediately, and no error is raised anywhere.**
+
+The E5b invariants constrain price against model — `FIXED` must be priced above
+zero, `FREE` at zero — and say nothing about what the model *does*. They make the
+row internally consistent while the consequence goes unmentioned.
+
+**Cost:** none today, because a human activates every paid signup and would
+notice a workspace that went live without being activated. That is exactly the
+guardrail that disappears when a real provider is integrated: after that, this is
+an owner changing one dropdown and silently making an edition free for everyone
+who signs up on it.
+
+**Fix:** not a validation problem — the row is legitimate, the consequence is
+just invisible. What is missing is the consequence being *stated* at the point of
+the edit, which is E7's consequence preview. A narrower stopgap would be to
+refuse `FREE` on an edition that any live subscription references.
+
+---
+
+## D-18 · Two of the seven `PaymentProvider` methods are never called
+
+**Where:** `changeSubscription` and `listInvoices` in
+[`payment-provider.ts`](../apps/backend/src/modules/billing/payment-provider.ts).
+Documented as part of the contract in
+[BILLING-PROVIDER-GUIDE.md](BILLING-PROVIDER-GUIDE.md).
+
+**What is wrong:** nothing in the codebase calls either. `changeSubscription`
+exists for upgrade and downgrade, and every plan change goes through
+`activateManualSubscription` instead, which rewrites the subscription row
+directly and never tells the provider. `listInvoices` exists for the tenant
+billing panel, which reads local `Invoice` rows.
+
+**Cost:** a provider author follows the guide's seven-method table and writes two
+methods that do nothing — wasted work, and worse, a false expectation that
+changing a plan propagates to the provider. With a real provider that gap means
+the local subscription and the provider's subscription silently diverge on every
+upgrade: the customer is charged the old amount indefinitely.
+
+**Fix:** either call them or delete them from the interface, and correct the
+guide either way. The decision is which side of the divergence is authoritative,
+which is a design question rather than a cleanup.
+
+---
+
+## D-19 · Provider identifiers are discarded and overwritten
+
+**Where:** `activateManualSubscription` in
+[`billing.service.ts`](../apps/backend/src/modules/billing/billing.service.ts).
+
+**What is wrong:** it hardcodes `customerRef = manual_customer_${organizationId}`
+and `subscriptionRef = manual_subscription_${organizationId}` and writes them
+onto the subscription regardless of what the provider supplied.
+`CheckoutStatusResult.subscriptionRef` and `.customerRef` are part of the
+contract, are returned by `getCheckoutStatus`, and **are never read by anything**.
+
+**Cost:** none with the manual provider, which invents those strings anyway. With
+a real provider it is severe: `cancelSubscription(subscriptionRef)` would be
+called with a fabricated `manual_subscription_*` string that means nothing to the
+provider, so cancellation would fail or cancel nothing while the local row says
+`CANCELED` — a customer who cancels and keeps being charged.
+
+**Fix:** persist what the provider returns, and fall back to the synthetic refs
+only when it returns none. The synthetic form is load-bearing for the manual
+provider's own `getCheckoutStatus` lookups, so it cannot simply be removed.
+
+---
+
+## D-20 · Idempotency covers webhooks only
+
+**Where:** `PaymentEvent`'s unique `(provider, eventId)` guards
+`handlePaymentWebhook`. `reconcileBilling` has no equivalent.
+
+**What is wrong:** `activateManualSubscription` has three callers — the webhook,
+the scheduled reconciliation, and the platform console — and only the first is
+deduplicated. A webhook and a reconciliation pass can each activate the same
+subscription independently, and nothing records that the other did.
+
+**Cost:** currently benign because activation is idempotent in effect: it writes
+the same row to the same values. What is not idempotent is what it triggers —
+`applyPlanLimits` overwrites `OrganizationConfig` (including any deliberate
+manual adjustment, per D-14), and `downgradeGraceEndsAt` is recomputed from
+current usage, so two activations minutes apart can produce different grace
+windows for the same event.
+
+**Fix:** the shape of it is that activation should be a function of a recorded
+event rather than a bare call, so every path names the evidence it acted on.
+That is close to E6's revision history, and is likely the same work.
+
+---
+
+## D-21 · A subscription in MANUAL_REVIEW is invisible to the person waiting on it
+
+**Where:** the interaction between `createSignup` writing `MANUAL_REVIEW`
+(`billing.service.ts:336`), `verifyEmail` leaving the organization `PENDING`
+because `MANUAL_REVIEW` is not in `ACCESS_GRANTING_SUBSCRIPTION_STATUSES`, and
+the login gate at `auth.routes.ts:114`.
+
+**What is wrong:** a paid signup verifies their email and then cannot log in. The
+refusal is `403 {error: 'Organization is not active'}` — a generic message that
+names no cause, no expected wait and no next step. `getServiceState` models
+suspended, overdue and trial-expired and has **no state for this one**, and
+`decideAccess` would allow the request; both are unreachable anyway, because the
+customer never gets a session in which to call them.
+
+**Cost:** today a human is activating the account and presumably also emailing
+the customer, so the gap is covered by the same person the flow depends on. Once
+payment is automatic the gap becomes the failure mode: a payment that succeeds
+but produces no webhook leaves a paying customer at a generic 403, with nothing
+telling them to wait, nothing telling them to make contact, and no alert asking
+anyone to look. They are indistinguishable from a suspended account.
+
+**Fix:** the state needs a name the tenant can be shown. `getServiceState`
+already exists as the place that answers "is something about to go wrong", and
+this is the one live state it does not model.
