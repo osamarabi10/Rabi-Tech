@@ -93,14 +93,79 @@ export function permissionsForRole(role: string): string[] {
     .sort();
 }
 
+/**
+ * Per-user restrictions, as data rather than as a growing chain of `if`s.
+ *
+ * A role says what a *kind* of person may do. A restriction narrows one
+ * individual below their role — "this supervisor may not export contacts" —
+ * without inventing a sixth role for every combination somebody asks for.
+ *
+ * Each entry maps a flag to the operations it withdraws. Adding a restriction
+ * is a row here plus a column; it is deliberately not a new branch in the
+ * middleware, because the previous shape (`if (operation.startsWith('workflow:')
+ * && user.restrictWorkflows)`) does not survive four more of itself — and the
+ * fourth copy is where one of them gets the check backwards.
+ *
+ * **Exact operation names, not prefixes.** A prefix would silently capture
+ * operations added later, and — worse — a prefix that matches nothing looks
+ * identical to one that works. Naming each operation means a restriction that
+ * gates nothing is visible here as an empty list rather than as a checkbox
+ * nobody has tested.
+ */
+const USER_RESTRICTIONS = [
+  { flag: 'restrictWorkflows', operations: ['workflow:manage', 'workflow:view'], code: 'USER_WORKFLOW_RESTRICTED', message: 'Workflow access is restricted for this user' },
+  { flag: 'restrictDataExport', operations: ['contact:export'], code: 'USER_EXPORT_RESTRICTED', message: 'Exporting data is restricted for this user' },
+  { flag: 'restrictContactDeletion', operations: ['contact:delete'], code: 'USER_CONTACT_DELETE_RESTRICTED', message: 'Deleting contacts is restricted for this user' },
+  /*
+    Workspace settings is `system:config` plus the four user-management
+    operations, because "who is in this workspace" is a workspace setting in
+    every product this resembles, and an admin restricted from settings who can
+    still create admins has not been restricted from anything.
+  */
+  { flag: 'restrictWorkspaceSettings', operations: ['system:config', 'user:create', 'user:update', 'user:delete', 'user:list'], code: 'USER_SETTINGS_RESTRICTED', message: 'Workspace settings are restricted for this user' },
+] as const;
+
+/*
+  Integration settings — channels, gateways, webhooks — has NO restriction here,
+  and that is a finding rather than an omission.
+
+  There is no `channel:`, `webhook:` or `integration:` operation in the table
+  above. Those routes guard with `requireAdmin` directly rather than through
+  `requirePermission`, so a restriction keyed on an operation name would match
+  nothing and gate nothing — declared and unenforced, which is the exact shape
+  this codebase has now hit four times (autoProvisionGateway, allowedChannels on
+  the QR path, the Keyword model, and very nearly this).
+
+  Shipping `restrictIntegrationSettings` as a column and a checkbox that quietly
+  did nothing would have been worse than not shipping it. Closing it properly
+  means moving those routes onto named operations first, which is its own piece
+  of work and is recorded in TODO.md rather than half-done here.
+*/
+
+export type UserRestrictions = Partial<Record<(typeof USER_RESTRICTIONS)[number]['flag'], boolean>>;
+
+/** The first restriction that withdraws this operation, or null. */
+function restrictionFor(operation: string, restrictions: UserRestrictions | undefined) {
+  if (!restrictions) return null;
+  return USER_RESTRICTIONS.find(
+    (rule) => restrictions[rule.flag] && (rule.operations as readonly string[]).includes(operation),
+  ) ?? null;
+}
+
+/**
+ * What this user may actually do, role minus their own restrictions.
+ *
+ * Returned by `/auth/me` and used by the sidebar, so a restricted user is not
+ * offered a destination that will refuse them. The server enforces the same
+ * table, so the two cannot disagree — a mirrored list on the client would drift
+ * the first time a restriction gained a prefix, and it would drift toward
+ * offering more than the server allows.
+ */
 export function permissionsForUser(
   role: string,
-  restrictions?: { restrictWorkflows?: boolean },
+  restrictions?: UserRestrictions,
 ): string[] {
-  const permissions = permissionsForRole(role);
-  return restrictions?.restrictWorkflows
-    ? permissions.filter((permission) => !permission.startsWith('workflow:'))
-    : permissions;
+  return permissionsForRole(role).filter((permission) => !restrictionFor(permission, restrictions));
 }
 
 /**
@@ -148,15 +213,27 @@ export function requirePermission(operation: string) {
     }
 
 
-    if (operation.startsWith('workflow:') && user.restrictWorkflows) {
+    /*
+      Restrictions are checked after the role, and the order matters.
+
+      A user who lacks the permission entirely gets the plain 403; only somebody
+      whose *role* grants it and whose *restriction* withdraws it sees the
+      restriction message. Checking restrictions first would tell an agent that
+      "exporting is restricted for this user" when the truth is that no agent
+      may export at all — a message that sends them to an admin to have a
+      restriction lifted that was never applied.
+    */
+    const restriction = restrictionFor(operation, user as UserRestrictions);
+    if (restriction) {
       logger.warn('Permission denied by user restriction', {
         operation,
+        restriction: restriction.flag,
         userId: user.id,
         requestId: (req as any).id,
       });
       return res.status(403).json({
-        error: 'Workflow access is restricted for this user',
-        code: 'USER_WORKFLOW_RESTRICTED',
+        error: restriction.message,
+        code: restriction.code,
         operation,
       });
     }

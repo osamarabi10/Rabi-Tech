@@ -1025,6 +1025,13 @@ model User {
   contactVisibilityScope      ContactVisibilityScope @default(TEAM)
   restrictCalls               Boolean                @default(false)
   restrictWorkflows           Boolean                @default(false)
+  /// Narrows one individual below their role, without inventing a sixth role
+  /// for every combination somebody asks for. Enforced from USER_RESTRICTIONS
+  /// in rbac.middleware.ts, which names the exact operations each withdraws —
+  /// see the note there on why exact names rather than prefixes.
+  restrictDataExport          Boolean                @default(false)
+  restrictContactDeletion     Boolean                @default(false)
+  restrictWorkspaceSettings   Boolean                @default(false)
   maskPhoneAndEmail           Boolean                @default(false)
   createdAt                   DateTime               @default(now())
   updatedAt                   DateTime               @updatedAt

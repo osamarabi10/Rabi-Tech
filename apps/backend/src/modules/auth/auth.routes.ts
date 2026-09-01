@@ -506,6 +506,14 @@ router.get('/me', verifyToken, async (req, res) => {
         contactVisibilityScope: true,
         restrictCalls: true,
         restrictWorkflows: true,
+        // Selected because permissionsForUser below subtracts them from the
+        // role. Omitting one here would silently hand the client a permission
+        // the server then refuses — the sidebar would offer a page that 403s,
+        // which is the exact failure the derived-permissions design exists to
+        // prevent.
+        restrictDataExport: true,
+        restrictContactDeletion: true,
+        restrictWorkspaceSettings: true,
         maskPhoneAndEmail: true,
         isAway: true,
         organizationId: true,

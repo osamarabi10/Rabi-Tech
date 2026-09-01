@@ -501,6 +501,9 @@ router.get('/users', async (req, res) => {
         contactVisibilityScope: true,
         restrictCalls: true,
         restrictWorkflows: true,
+        restrictDataExport: true,
+        restrictContactDeletion: true,
+        restrictWorkspaceSettings: true,
         maskPhoneAndEmail: true,
         createdAt: true,
         authSessions: {
@@ -714,6 +717,7 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
       name, email, password, role, phone, isActive, primaryTeamId, teamIds,
       restrictContactVisibility, contactVisibilityScope, restrictCalls,
       restrictWorkflows, maskPhoneAndEmail,
+      restrictDataExport, restrictContactDeletion, restrictWorkspaceSettings,
     } = req.body;
     
     const userToUpdate = await prisma.user.findUnique({
@@ -773,6 +777,9 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
     if (restrictCalls !== undefined) data.restrictCalls = restrictCalls === true;
     if (restrictWorkflows !== undefined) data.restrictWorkflows = restrictWorkflows === true;
     if (maskPhoneAndEmail !== undefined) data.maskPhoneAndEmail = maskPhoneAndEmail === true;
+    if (restrictDataExport !== undefined) data.restrictDataExport = restrictDataExport === true;
+    if (restrictContactDeletion !== undefined) data.restrictContactDeletion = restrictContactDeletion === true;
+    if (restrictWorkspaceSettings !== undefined) data.restrictWorkspaceSettings = restrictWorkspaceSettings === true;
 
     const user = await prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({

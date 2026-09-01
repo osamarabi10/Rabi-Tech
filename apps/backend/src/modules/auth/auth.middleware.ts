@@ -18,6 +18,9 @@ export interface JwtPayload {
   contactVisibilityScope?: 'TEAM' | 'SELF';
   restrictCalls?: boolean;
   restrictWorkflows?: boolean;
+  restrictDataExport?: boolean;
+  restrictContactDeletion?: boolean;
+  restrictWorkspaceSettings?: boolean;
   maskPhoneAndEmail?: boolean;
 }
 
@@ -159,6 +162,9 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
                   contactVisibilityScope: true,
                   restrictCalls: true,
                   restrictWorkflows: true,
+                  restrictDataExport: true,
+                  restrictContactDeletion: true,
+                  restrictWorkspaceSettings: true,
                   maskPhoneAndEmail: true,
                   organization: {
                     select: {
@@ -192,6 +198,9 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
           contactVisibilityScope: true,
           restrictCalls: true,
           restrictWorkflows: true,
+          restrictDataExport: true,
+          restrictContactDeletion: true,
+          restrictWorkspaceSettings: true,
           maskPhoneAndEmail: true,
         },
       });
@@ -242,6 +251,9 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
         contactVisibilityScope: user.contactVisibilityScope,
         restrictCalls: user.restrictCalls,
         restrictWorkflows: user.restrictWorkflows,
+        restrictDataExport: user.restrictDataExport,
+        restrictContactDeletion: user.restrictContactDeletion,
+        restrictWorkspaceSettings: user.restrictWorkspaceSettings,
         maskPhoneAndEmail: user.maskPhoneAndEmail,
       };
       next();
