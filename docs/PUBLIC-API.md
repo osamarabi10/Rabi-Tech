@@ -35,6 +35,7 @@ is revoked and replaced, not recovered.
 | 403 | `insufficient_scope` | Valid key, but it does not carry the scope this endpoint needs |
 | 403 | `TRIAL_EXPIRED` / `SUBSCRIBER_SUSPENDED` | The workspace's access is gated |
 | 429 | — | Rate limit; see `Retry-After` |
+| 449 | `workspace_provisioning` | The workspace is still being set up — retry, see `Retry-After` |
 
 **All five authentication failures return the same 401 body.** Distinguishing
 "expired" from "revoked" from "unknown prefix" would tell an attacker which of
@@ -43,6 +44,11 @@ can read it.
 
 **401 is worth retrying after fixing the credential; 403 is not.** A key that
 lacks a scope will never gain it by retrying — reissue it with the scope.
+
+**449 always is.** A workspace mid-provisioning has no channel yet, so without
+this a send would 409 and a read would return an empty list — both of which look
+like permanent answers. A client that gets 409 stops; one that gets an empty list
+writes it down as fact. 449 says "this will work shortly", which is the truth.
 
 ---
 
@@ -60,7 +66,7 @@ never everything.
 | `conversations:write` | Assign, close, reopen, label |
 | `messages:read` | Read the messages in a conversation |
 | `messages:send` | Send a message to a contact or into a thread |
-| `tags:read` | Read tags |
+| `tags:read` | `GET /tags` |
 | `tags:write` | Apply and remove tags |
 | `workspace:read` | `GET /me` |
 
@@ -78,12 +84,18 @@ hold it.
 
 ## Rate limits
 
-120 requests per minute, **keyed by token**, not by IP.
+**5 requests per second per method + path**, keyed by token — the same shape
+Respond.io publishes. A wider backstop of 600/minute bounds the credential as a
+whole.
 
-An IP key is wrong in both directions: several integrations behind one corporate
-NAT would throttle each other for reasons none of them can see, and one
-integration spread across a serverless fleet would get a fresh budget per cold
-start. A 429 carries `Retry-After` in seconds.
+"Per method + path" means the *route*, not the URL: `/contacts/id:A` and
+`/contacts/id:B` share a bucket. If they did not, a client sweeping ten thousand
+contacts would never be throttled once and the limit would exist only on paper.
+
+An IP key would be wrong in both directions: several integrations behind one
+corporate NAT would throttle each other for reasons none of them can see, and one
+spread across a serverless fleet would get a fresh budget per cold start. A 429
+carries `Retry-After` in seconds.
 
 ---
 
@@ -112,6 +124,23 @@ Email lookup is case-insensitive; addresses are stored lower-cased.
 ---
 
 ## Endpoints
+
+### Discovery
+
+Every write endpoint takes values you cannot invent. These are how you find them.
+
+| Endpoint | Scope | Returns |
+|---|---|---|
+| `GET /tags` | `tags:read` | The tag vocabulary |
+| `GET /contact-fields` | `workspace:read` | Custom field slugs, types, allowed values |
+| `GET /lifecycle-stages` | `workspace:read` | Stages in workspace order, with `kind` |
+| `GET /users` | `workspace:read` | Active users with email, for assignment |
+| `GET /teams` | `workspace:read` | Teams, for routing to a group |
+
+Lifecycle stages are ordered by the workspace's own sequence, not alphabetically —
+alphabetical would put Customer before Lead. `kind` matters: `ACTIVE` stages form
+the funnel, `LOST` stages record drop-off, and an integration advancing a contact
+must not walk into a `LOST` stage by iterating the list.
 
 ### `GET /me` · `workspace:read`
 
@@ -186,6 +215,19 @@ tag from one a colleague applied.
 
 Removing a tag the contact does not have is a success, not a 404 — a retrying
 client must be able to converge without special-casing "already gone".
+
+### `GET /contacts/:identifier/conversations` · `conversations:read`
+
+This person's threads, addressed by contact. Doing it the other way — filtering
+the conversation list — needs the contact id first, which is the part a caller
+holding a phone number does not have. Resolved threads are included; they usually
+carry the answer.
+
+### `PUT /contacts/:identifier/custom-fields/:slug` · `contacts:write`
+
+Set one field. Exists alongside `customFields` on `PATCH` because a webhook
+handler reacting to one external change should not have to read the rest first
+and race whoever edits in between.
 
 ### `GET /conversations` · `conversations:read`
 
@@ -321,6 +363,21 @@ There is no soft delete: `archived` already means "hidden but retained", and a
 second, softer delete would leave a workspace unable to answer *is this person's
 data gone* with a yes. The erasure is logged — the one record that outlives the
 contact, so "did we honour that request" stays answerable.
+
+### `POST /conversations/:id/comments` · `conversations:write`
+
+An internal comment. **`authorId` is required** and validated as an active
+workspace user — `GET /users` lists them.
+
+That requirement is the whole design. Sending an internal *note* through the
+messaging endpoints is refused, because a note is addressed to colleagues and a
+token has no name to sign it with; a note from "nobody" is worse than no note.
+Naming an author answers that rather than dodging it, and the comment reads in
+the inbox exactly like one a person typed — because a person is on it.
+
+### `GET /conversations/:id/comments` · `conversations:read` + `messages:read`
+
+The comments alone. They never appear in the default message transcript.
 
 ---
 
@@ -519,11 +576,11 @@ cd apps/backend && npm run test:public-api   # 103 checks, over HTTP
 cd apps/backend && npm run test:webhooks     # 52 checks, hermetic
 ```
 
-103 checks over HTTP against the running server, because everything that makes
+141 checks over HTTP against the running server, because everything that makes
 this surface safe lives in the middleware chain rather than in the handlers.
-Mutation-proved three times: leaking `organizationId` from the serializer,
-unscoping the id lookup, and including internal notes by default each take it
-red.
+Mutation-proved four times: leaking `organizationId` from the serializer,
+unscoping the id lookup, including internal notes by default, and removing the
+rate limiter's path collapse each take it red.
 
 ---
 

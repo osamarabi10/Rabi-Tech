@@ -446,14 +446,14 @@ the first paying customer, because changing it afterwards changes bills.
 
 | | Theirs | Ours | |
 |---|---|---|---|
-| API | `api.respond.io/v2`, 24 operations, 5 services | `/api/v1`, **15 operations** | `≈` |
+| API | `api.respond.io/v2`, 24 operations, 5 services | `/api/v1`, **24 operations** | `✓` |
 | Auth | Bearer, max 10 tokens/workspace, workspace-wide, **no expiry or scoping** | Bearer, 20 tokens, **scoped + expiring + revocable**, masking inherited from creator | `★` |
 | Identifiers | `id:` `email:` `phone:` | Same grammar, prefix required | `✓` |
 | Listing | `POST /contact/list`, 13 operators | `POST /contacts/list`, our richer DSL | `★` |
-| Rate limit | **5 req/s per method + path** | 120/min per **token**, not per method+path | `≈` |
-| Pagination | Cursor; default 10, max 100 (50 messages) | Cursor; contacts default 10/max 100, conversations default 25/max 100 | `≈` messages cap is 100, not 50 |
-| Errors | …/429/**449**/500/502/504 | No **449** ("still being created") | `≈` |
-| Webhooks | 11 events, HMAC-SHA256, retries 30/60/90s, auto-off 30 errors/30 min, **35 endpoints/org** | 11 events, HMAC **over timestamp+body**, same retries, same auto-off, **10 endpoints/org** | `★` signing · `≈` cap |
+| Rate limit | **5 req/s per method + path** | 5/s per method+path, + a 600/min backstop | `✓` |
+| Pagination | Cursor; default 10, max 100 (50 messages) | Same, messages capped at 50 | `✓` |
+| Errors | …/429/**449**/500/502/504 | 449 `workspace_provisioning`, with Retry-After | `✓` |
+| Webhooks | 11 events, HMAC-SHA256, retries 30/60/90s, auto-off 30 errors/30 min, **35 endpoints/org** | 11 events, HMAC **over timestamp+body**, same retries, same auto-off, 35 endpoints | `★` signing |
 | Webhook delivery log | **None — open feature request against them** | Full log: status, latency, attempt, response body, test button | `★` |
 | SDK | `@respond-io/typescript-sdk` | — | `✗` |
 | MCP | Self-hosted + hosted | — | `✗` |

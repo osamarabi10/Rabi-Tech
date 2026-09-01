@@ -31,7 +31,8 @@ import {
 const router = Router();
 router.use(verifyToken, requireAdmin, requirePermission('system:config'));
 
-const MAX_ENDPOINTS = 10;
+/** Theirs is 35 per workspace; matched rather than guessed at. */
+const MAX_ENDPOINTS = 35;
 const MAX_NAME_LENGTH = 60;
 
 /**

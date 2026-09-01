@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import logger from '../../lib/logger';
-import { runAsOrganization } from '../../lib/tenant-context';
+import { prisma } from '../../prisma';
+import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { decideAccess } from '../../middleware/access-gate.middleware';
 import { resolveApiToken, tokenHasScope, type ApiScope, type ResolvedToken } from './api-token.service';
 
@@ -69,6 +70,37 @@ export async function apiTokenAuth(req: Request, res: Response, next: NextFuncti
 
   const token = result.token;
   req.apiToken = token;
+
+  /*
+    449 — the workspace is still being set up.
+
+    Checked before the access gate because it is the more specific state: a
+    provisioning workspace is not suspended and not expired, it is simply not
+    ready yet, and answering with either of the other two would be wrong.
+
+    Respond.io publishes a 449 for "resource is still being created" and it is
+    worth copying, because the alternative is worse in a specific way: a
+    workspace mid-provisioning has no channel yet, so a send would 409 and a read
+    would return an empty list. Both look like a permanent answer. A client that
+    gets 409 stops; a client that gets an empty list writes it down as fact.
+
+    449 says "this will work shortly, come back", which is the truth, and
+    `Retry-After` tells them when rather than leaving them to poll.
+  */
+  const provisioning = await runAsPlatform(`api-provisioning-check:${token.organizationId}`, () =>
+    prisma.organization.findUnique({
+      where: { id: token.organizationId },
+      select: { status: true },
+    }),
+  );
+  if (provisioning?.status === 'PROVISIONING') {
+    res.setHeader('Retry-After', '30');
+    return res.status(449).json({
+      error: 'workspace_provisioning',
+      message: 'This workspace is still being set up. Retry shortly.',
+      retryAfter: 30,
+    });
+  }
 
   /*
     A suspended or expired workspace loses its API too.

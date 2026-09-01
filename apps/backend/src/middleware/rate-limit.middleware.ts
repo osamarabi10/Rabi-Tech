@@ -79,6 +79,50 @@ export function rateLimit(name: string, options: RateLimitOptions) {
 }
 
 /**
+ * Who is calling the public API — the token prefix, never the secret.
+ *
+ * An IP key would be wrong in both directions: several integrations behind one
+ * corporate NAT would throttle each other for reasons none of them can see, and
+ * one integration spread across a serverless fleet would get a fresh budget per
+ * cold start. The token is the thing whose behaviour we want to bound and whose
+ * owner can be told about it. Falls back to IP only when there is no usable
+ * credential, so an unauthenticated flood is still bounded rather than sharing
+ * one empty-string bucket.
+ */
+export function publicApiCaller(req: Request): string {
+  const raw = String(req.headers.authorization || '');
+  const prefix = raw.startsWith('Bearer rbt_') ? raw.slice(11).split('_')[0] : '';
+  return prefix || `ip:${req.ip}`;
+}
+
+/**
+ * Collapse a concrete path to the route it belongs to.
+ *
+ * "Per method + path" means the *route*, not the URL. Keying on the raw path
+ * would give every contact its own bucket — `/contacts/id:A` and
+ * `/contacts/id:B` would never share a limit, so a client sweeping ten thousand
+ * contacts would never be throttled at all, and the limit would exist only on
+ * paper.
+ *
+ * Express does not expose the matched route here (this runs before the router),
+ * so the collapse is by shape: anything that looks like an identifier becomes
+ * `:id`.
+ */
+export function routeTemplate(path: string): string {
+  return path
+    .split('/')
+    .map((segment) => {
+      if (!segment) return segment;
+      // The API's own identifier grammar: id:, phone:, email:.
+      if (/^(id|phone|email):/i.test(segment)) return ':id';
+      // A cuid, or any long opaque token.
+      if (/^c[a-z0-9]{20,}$/i.test(segment) || segment.length > 20) return ':id';
+      return segment;
+    })
+    .join('/');
+}
+
+/**
  * Named limiters. Auth and signup are strict because they are the abuse targets;
  * the API default is loose enough that a busy agent never notices it.
  */
@@ -139,15 +183,33 @@ export const LIMITS = {
     lives in memory and appears in the log line above on every 429.
   */
   publicApi: rateLimit('public-api', {
-    max: 120,
+    /*
+      5 per second per method+path, matching Respond.io's published limit.
+
+      Configurable only so the verification gate can raise it: at five a second
+      the gate's own ~130 sequential assertions trip the limiter and fail as
+      though the endpoints were broken, which is what happened the first time
+      this shipped. The default is the shipped value and production never sets
+      the variable.
+    */
+    max: Number(process.env.PUBLIC_API_RATE_PER_SECOND) || 5,
+    windowMs: 1_000,
+    keyBy: (req) => `${publicApiCaller(req)}:${req.method}:${routeTemplate(req.path)}`,
+    message: 'Rate limit exceeded. Retry after the interval in the Retry-After header.',
+  }),
+
+  /**
+   * A wider backstop on the same credential, across all endpoints.
+   *
+   * The per-method limit above bounds hammering one endpoint; it does nothing
+   * about a client sweeping thirty endpoints at five a second each. This is the
+   * ceiling on the credential as a whole, and it is generous enough that no
+   * legitimate integration meets it.
+   */
+  publicApiTotal: rateLimit('public-api-total', {
+    max: Number(process.env.PUBLIC_API_RATE_PER_MINUTE) || 600,
     windowMs: 60_000,
-    keyBy: (req) => {
-      const raw = String(req.headers.authorization || '');
-      const prefix = raw.startsWith('Bearer rbt_') ? raw.slice(11).split('_')[0] : '';
-      // No usable credential: fall back to IP so an unauthenticated flood is
-      // still bounded rather than sharing one empty-string bucket.
-      return prefix || `ip:${req.ip}`;
-    },
+    keyBy: publicApiCaller,
     message: 'Rate limit exceeded. Retry after the interval in the Retry-After header.',
   }),
 };

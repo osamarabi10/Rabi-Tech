@@ -348,7 +348,7 @@ app.use('/api/branding/public', LIMITS.publicBranding);
 app.use('/webhooks', LIMITS.webhook);
 // Before the /api backstop, so a public-API request is bounded by its token
 // budget first and only then by the shared per-IP one.
-app.use('/api/v1', LIMITS.publicApi);
+app.use('/api/v1', LIMITS.publicApi, LIMITS.publicApiTotal);
 app.use('/api', LIMITS.api);
 
 // SECURITY: Require authentication for ALL /api/* routes except /api/auth/*

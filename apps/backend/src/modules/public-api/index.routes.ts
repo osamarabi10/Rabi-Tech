@@ -6,6 +6,7 @@ import { API_SCOPES } from '../api-tokens/api-token.service';
 import contactRoutes from './contacts.routes';
 import conversationRoutes from './conversations.routes';
 import messagingRoutes from './messaging.routes';
+import workspaceRoutes from './workspace.routes';
 
 /**
  * `/api/v1` — the public API.
@@ -36,6 +37,9 @@ router.use('/contacts', contactRoutes);
 // /contacts/:identifier/messages and /conversations/:id/messages — and one
 // router owning both keeps the send rules in a single file.
 router.use(messagingRoutes);
+// Discovery endpoints hang off the root: they describe the workspace, not one
+// resource inside it.
+router.use(workspaceRoutes);
 router.use('/conversations', conversationRoutes);
 
 /**

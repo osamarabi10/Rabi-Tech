@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
+import { getTenantId } from '../../lib/tenant-context';
+import { getIO, SocketEvents } from '../../socket';
+import { socketRoom } from '../../socket/rooms';
 import { requireScope } from '../api-tokens/api-token.middleware';
 import { serializeContact, CONTACT_INCLUDE } from './serialize';
 import {
@@ -31,14 +34,22 @@ import {
 const router = Router();
 
 const MAX_LIMIT = 100;
+/**
+ * Messages cap lower than everything else, matching theirs.
+ *
+ * A page of messages carries full bodies and media metadata, so 100 of them is
+ * an order of magnitude more payload than 100 contacts. Their split is 100
+ * generally and 50 for messages, and it is the right one.
+ */
+const MAX_MESSAGE_LIMIT = 50;
 const DEFAULT_LIMIT = 25;
 
 const STATUSES = ['OPEN', 'PENDING', 'RESOLVED'] as const;
 
-function limitOf(value: unknown): number {
+function limitOf(value: unknown, max = MAX_LIMIT): number {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_LIMIT;
-  return Math.min(Math.floor(parsed), MAX_LIMIT);
+  if (!Number.isFinite(parsed) || parsed < 1) return Math.min(DEFAULT_LIMIT, max);
+  return Math.min(Math.floor(parsed), max);
 }
 
 function fail(res: any, req: any, err: unknown, where: string) {
@@ -183,7 +194,7 @@ router.get('/:id/messages', requireScope('conversations:read'), requireScope('me
       return res.status(404).json({ error: 'not_found', message: 'No conversation with that id.' });
     }
 
-    const limit = limitOf(req.query.limit);
+    const limit = limitOf(req.query.limit, MAX_MESSAGE_LIMIT);
     const cursorId = req.query.cursorId ? String(req.query.cursorId) : undefined;
 
     const where: any = { conversationId: conversation.id };
@@ -305,6 +316,112 @@ router.patch('/:id', requireScope('conversations:write'), async (req, res) => {
     });
     return res.json(serializeConversation(updated, req.apiToken!.maskContactDetails));
   } catch (err) { return fail(res, req, err, 'PATCH /conversations/:id'); }
+});
+
+/* ── comments ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Internal comments on a thread.
+ *
+ * ## Why these exist when API-sent *notes* are refused
+ *
+ * `messaging.routes.ts` refuses `isInternal` outright, on the grounds that a
+ * note is addressed to colleagues and a token has no name to sign it with — a
+ * note from "nobody" is worse than no note. That objection is about
+ * attribution, not about the capability, so this endpoint answers it directly:
+ * **`authorId` is required.** The integration names which workspace user the
+ * comment is from, and it is validated as a real, active member.
+ *
+ * The result is a comment that reads in the inbox exactly like one a person
+ * typed, because a person is on it. An integration that cannot name an author
+ * has no business writing in the team's private margin.
+ */
+router.post('/:id/comments', requireScope('conversations:write'), async (req, res) => {
+  try {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: String(req.params.id) },
+      select: { id: true },
+    });
+    if (!conversation) {
+      return res.status(404).json({ error: 'not_found', message: 'No conversation with that id.' });
+    }
+
+    const text = String(req.body?.text ?? '').trim().slice(0, 4000);
+    if (!text) {
+      return res.status(400).json({ error: 'invalid_request', message: 'A comment needs text.' });
+    }
+
+    const authorId = String(req.body?.authorId ?? '').trim();
+    if (!authorId) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        message: 'authorId is required — a comment is addressed to colleagues and needs a person on it. GET /users lists them.',
+      });
+    }
+    const author = await prisma.user.findFirst({
+      where: { id: authorId, isActive: true },
+      select: { id: true },
+    });
+    if (!author) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        message: 'No active user in this workspace has that id.',
+      });
+    }
+
+    /*
+      A comment is a Message with `isInternal`, which is how the console models
+      one too. Writing it directly rather than through sendOutboundMessage is
+      correct: that function's whole job is the gateway, the send clock and the
+      auto-close reschedule, and a comment touches none of them — it is never
+      transmitted and must never restart a response timer.
+    */
+    const comment = await prisma.message.create({
+      data: {
+        organizationId: getTenantId(),
+        conversationId: conversation.id,
+        direction: 'OUTBOUND',
+        body: text,
+        isInternal: true,
+        status: 'SENT',
+        sentById: author.id,
+      },
+      include: { sentBy: { select: { id: true, name: true } } },
+    });
+
+    // The agent watching the thread sees it appear, exactly as they would a
+    // colleague's note. A comment nobody is shown is a comment nobody reads.
+    try {
+      getIO()
+        .to(socketRoom.conversation(getTenantId(), conversation.id))
+        .emit(SocketEvents.NEW_MESSAGE, { conversationId: conversation.id, message: comment });
+    } catch { /* no socket server in a worker or a script */ }
+
+    return res.status(201).json(serializeMessage(comment));
+  } catch (err) { return fail(res, req, err, 'POST /conversations/:id/comments'); }
+});
+
+/** The thread's comments alone, without the customer-facing messages. */
+router.get('/:id/comments', requireScope('conversations:read'), requireScope('messages:read'), async (req, res) => {
+  try {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: String(req.params.id) },
+      select: { id: true },
+    });
+    if (!conversation) {
+      return res.status(404).json({ error: 'not_found', message: 'No conversation with that id.' });
+    }
+
+    const limit = limitOf(req.query.limit, MAX_MESSAGE_LIMIT);
+    const comments = await prisma.message.findMany({
+      where: { conversationId: conversation.id, isInternal: true },
+      include: { sentBy: { select: { id: true, name: true } } },
+      orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
+      take: limit,
+    });
+
+    return res.json({ comments: comments.map(serializeMessage) });
+  } catch (err) { return fail(res, req, err, 'GET /conversations/:id/comments'); }
 });
 
 export default router;

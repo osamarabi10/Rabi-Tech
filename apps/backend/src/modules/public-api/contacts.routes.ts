@@ -371,6 +371,103 @@ router.patch('/:identifier', requireScope('contacts:write'), async (req, res) =>
   } catch (err) { return fail(res, req, err, 'PATCH /contacts/:identifier'); }
 });
 
+/**
+ * `GET /contacts/:identifier/conversations` — this person's threads.
+ *
+ * Addressed by contact rather than filtered from the conversation list, because
+ * that is the question an integration actually asks: *what has happened with
+ * this customer*. Doing it the other way round means first resolving the
+ * contact id, then filtering — two calls for one question, and the first one is
+ * the part a caller with a phone number does not have.
+ *
+ * Resolved threads are included. They are usually the ones carrying the answer,
+ * and the inbox's default filter hides them, which is exactly why they are hard
+ * to reach from anywhere else.
+ */
+router.get('/:identifier/conversations', requireScope('conversations:read'), async (req, res) => {
+  try {
+    const { contact } = await findByRef(req.params.identifier, req);
+    if (!contact) return res.status(404).json({ error: 'not_found', message: 'No contact matches that identifier.' });
+
+    const conversations = await prisma.conversation.findMany({
+      where: { contactId: contact.id },
+      select: {
+        id: true, displayId: true, status: true, labels: true,
+        openedAt: true, lastMessageAt: true, resolvedAt: true, isArchived: true,
+        assignee: { select: { id: true, name: true } },
+      },
+      orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+      take: 50,
+    });
+
+    return res.json({
+      contactId: contact.id,
+      conversations: conversations.map((row) => ({
+        id: row.id,
+        displayId: row.displayId,
+        status: row.status,
+        labels: row.labels,
+        archived: row.isArchived,
+        assignee: row.assignee,
+        openedAt: row.openedAt,
+        lastMessageAt: row.lastMessageAt,
+        resolvedAt: row.resolvedAt,
+      })),
+    });
+  } catch (err) { return fail(res, req, err, 'GET /contacts/:identifier/conversations'); }
+});
+
+/**
+ * `PUT /contacts/:identifier/custom-fields/:slug` — set one field.
+ *
+ * The single-field form exists alongside `customFields` on `PATCH` because they
+ * are used by different callers. A sync job writes the whole object; a webhook
+ * handler reacting to one external change writes one field, and making it send
+ * the rest means reading them first and racing anyone who edits in between.
+ *
+ * `GET /contact-fields` lists the slugs and their types.
+ */
+router.put('/:identifier/custom-fields/:slug', requireScope('contacts:write'), async (req, res) => {
+  try {
+    const { contact } = await findByRef(req.params.identifier, req);
+    if (!contact) return res.status(404).json({ error: 'not_found', message: 'No contact matches that identifier.' });
+
+    const slug = String(req.params.slug);
+    const definition = await prisma.customFieldDefinition.findFirst({ where: { slug } });
+    if (!definition) {
+      return res.status(404).json({
+        error: 'not_found',
+        message: `No custom field with slug "${slug}". GET /contact-fields lists them.`,
+      });
+    }
+
+    let value: string | null;
+    try {
+      value = validateCustomFieldValue(definition, clean(req.body?.value, 2000) ?? null) ?? null;
+    } catch (error) {
+      // The validator throws with the message the console shows, which names
+      // the field and what it expected — better than anything generic here.
+      return res.status(400).json({ error: 'invalid_request', message: String((error as Error).message) });
+    }
+
+    const organizationId = getTenantId();
+    await prisma.customFieldValue.upsert({
+      where: {
+        organizationId_contactId_fieldDefinitionId: {
+          organizationId, contactId: contact.id, fieldDefinitionId: definition.id,
+        },
+      },
+      create: { organizationId, contactId: contact.id, fieldDefinitionId: definition.id, value },
+      update: { value },
+    });
+
+    void emitWebhook('contact.updated', { contactId: contact.id, changed: [slug], source: 'api' });
+
+    const updated = await prisma.contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });
+    return send(res, req, updated);
+  } catch (err) { return fail(res, req, err, 'PUT /contacts/:identifier/custom-fields/:slug'); }
+});
+
 /* ── tags ─────────────────────────────────────────────────────────────────── */
 
 /**

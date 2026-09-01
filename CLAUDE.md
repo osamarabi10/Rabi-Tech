@@ -219,12 +219,20 @@ call that legitimately has no tenant yet.
 cd apps/backend && npm run test:public-api
 ```
 
-**103/103.** Boots the compiled server on port 4199 and drives `/api/v1` with real
+**141/141.** Boots the compiled server on port 4199 and drives `/api/v1` with real
 tokens, because everything that makes this surface safe lives in the *chain* —
 the `/v1` exemption from the session-JWT gate, `apiTokenAuth`, the scope check,
 `runAsOrganization`, the limiter — and calling a handler directly proves only the
-last link. Mutation-proved three times: leaking `organizationId` from the serializer,
-unscoping the id lookup, and including internal notes by default, each take it red.
+last link. Mutation-proved four times: leaking `organizationId` from the serializer,
+unscoping the id lookup, including internal notes by default, and removing the rate limiter's path collapse, each take it red.
+
+**The gate raises the rate limit for its own run**, via
+`PUBLIC_API_RATE_PER_SECOND`. The shipped limit is 5/s per method+path; the suite
+fires ~140 sequential assertions, many against the same route, so at the real
+limit it throttles *itself* and reports 429 where it expected 404. That happened
+on the first run after the limiter landed. Do not remove the override — the
+limiter is asserted directly at the end of the file instead, where the path
+collapse can be checked exactly rather than inferred from a race.
 
 **If it prints `[ENV]` there is no summary line, deliberately.** A run that could
 not start has not tested anything and must not print a number that looks like it

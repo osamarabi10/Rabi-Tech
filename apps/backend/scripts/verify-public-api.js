@@ -110,6 +110,16 @@ async function main() {
       PORT: String(PORT),
       DISABLE_MESSAGE_WORKER: '1',
       DISABLE_CAMPAIGN_WORKER: '1',
+      /*
+        The shipped limit is 5/s per method+path. This suite fires ~130
+        sequential assertions, many against the same route, so at the real
+        limit it throttles itself and reports 429 where it expected 404 —
+        which is exactly what happened on the first run after the limiter
+        landed. The limiter is asserted directly below instead, where the
+        property can be checked precisely rather than inferred from a race.
+      */
+      PUBLIC_API_RATE_PER_SECOND: '10000',
+      PUBLIC_API_RATE_PER_MINUTE: '100000',
     },
     stdio: 'ignore',
   });
@@ -198,7 +208,7 @@ async function main() {
     const wrongKind = await call(RW, 'GET', '/api/v1/contacts/name:Gate');
     check('an unknown identifier type is refused', wrongKind.status === 400);
     const missing = await call(RW, 'GET', '/api/v1/contacts/phone:99999999999999');
-    check('an unmatched identifier is 404, not 500', missing.status === 404);
+    check('an unmatched identifier is 404, not 500', missing.status === 404, 'got ' + missing.status + ' ' + JSON.stringify(missing.body));
 
     // ── PATCH updates, never creates ────────────────────────────────────────
     const patched = await call(RW, 'PATCH', '/api/v1/contacts/id:' + contactId, { name: 'Renamed' });
@@ -622,6 +632,114 @@ async function main() {
       (await runAsPlatform('verify-public-api:check', () =>
         prisma.contact.findFirst({ where: { phone: PHONE_C } }))) === null);
 
+    // ── discovery ───────────────────────────────────────────────────────────
+    /*
+      A caller cannot invent a lifecycle stage, a custom-field slug or a user id.
+      Without these endpoints an integrator finds the workspace's vocabulary by
+      guessing and reading 400s, which is how one ends up hardcoding a stage name
+      that happens to exist in one workspace and silently failing in every other.
+    */
+    const discovery = await mint(orgA.id, ['workspace:read', 'tags:read']);
+    tokens.discovery = discovery;
+    const D = discovery.token;
+
+    for (const [route, key] of [
+      ['/api/v1/tags', 'tags'],
+      ['/api/v1/contact-fields', 'fields'],
+      ['/api/v1/lifecycle-stages', 'stages'],
+      ['/api/v1/users', 'users'],
+      ['/api/v1/teams', 'teams'],
+    ]) {
+      const result = await call(D, 'GET', route);
+      check(`GET ${route} answers`, result.status === 200, result.status);
+      check(`  …with a ${key} array`, Array.isArray(result.body?.[key]));
+    }
+
+    /*
+      `tags:read` was a scope a subscriber could grant that NOTHING required —
+      a ticked box gating nothing, the defect shape this repository has shipped
+      six times, and that time it was ours. This is the assertion that it now
+      grants something and, just as importantly, that it is still required.
+    */
+    const noTagRead = await call(tokens.threads.token, 'GET', '/api/v1/tags');
+    check('tags:read is genuinely required for GET /tags', noTagRead.status === 403, noTagRead.status);
+
+    const noWorkspaceRead = await call(tokens.rw.token, 'GET', '/api/v1/users');
+    check('workspace:read is required for GET /users', noWorkspaceRead.status === 403, noWorkspaceRead.status);
+
+    const usersBody = await call(D, 'GET', '/api/v1/users');
+    check('users carry an email, so an integrator can match a person',
+      (usersBody.body?.users || []).every((u) => 'email' in u));
+    const stagesBody = await call(D, 'GET', '/api/v1/lifecycle-stages');
+    check('lifecycle stages carry kind, so an integration cannot walk into a LOST stage',
+      (stagesBody.body?.stages || []).every((s) => typeof s.kind === 'string'));
+
+    // ── a contact's threads, and one custom field ───────────────────────────
+    const contactThreads = await call(RW2, 'GET', `/api/v1/contacts/id:${contactId}/conversations`);
+    check('a contact\'s conversations are addressable by contact', contactThreads.status === 200);
+    check('  …and include the thread we made',
+      (contactThreads.body?.conversations || []).some((c) => c.id === thread.id));
+
+    const fieldsList = await call(D, 'GET', '/api/v1/contact-fields');
+    const firstSlug = (fieldsList.body?.fields || [])[0]?.slug;
+    if (firstSlug) {
+      const setOne = await call(RW, 'PUT', `/api/v1/contacts/id:${contactId}/custom-fields/${firstSlug}`, {
+        value: 'gate-value',
+      });
+      check('a single custom field can be set without sending the rest',
+        setOne.status === 200, JSON.stringify(setOne.body).slice(0, 120));
+      check('  …and comes back on the contact',
+        setOne.body?.customFields?.[firstSlug] !== undefined);
+    }
+    const unknownSlug = await call(RW, 'PUT', `/api/v1/contacts/id:${contactId}/custom-fields/definitely_not_a_field`, {
+      value: 'x',
+    });
+    check('an unknown field slug is 404, and says where to find the real ones',
+      unknownSlug.status === 404 && /contact-fields/.test(unknownSlug.body?.message || ''));
+
+    // ── comments ────────────────────────────────────────────────────────────
+    /*
+      The API refuses internal *notes* because a token has no name to sign one
+      with. Comments answer that objection rather than dodging it: authorId is
+      required and validated, so the note that lands in the inbox has a real
+      person on it.
+    */
+    const noAuthor = await call(tokens.lifecycle.token, 'POST', `/api/v1/conversations/${thread.id}/comments`, {
+      text: 'no author',
+    });
+    check('a comment without an author is refused', noAuthor.status === 400);
+    check('  …and points at GET /users', /users/i.test(noAuthor.body?.message || ''));
+
+    const badAuthor = await call(tokens.lifecycle.token, 'POST', `/api/v1/conversations/${thread.id}/comments`, {
+      text: 'x', authorId: 'not-a-user',
+    });
+    check('an author who is not a workspace user is refused', badAuthor.status === 400);
+
+    const realUser = (usersBody.body?.users || [])[0];
+    if (realUser) {
+      const comment = await call(tokens.lifecycle.token, 'POST', `/api/v1/conversations/${thread.id}/comments`, {
+        text: 'gate: internal comment', authorId: realUser.id,
+      });
+      check('a comment with a real author is accepted', comment.status === 201, JSON.stringify(comment.body).slice(0, 120));
+      check('  …is internal, so it is never sent to the customer', comment.body?.internal === true);
+      check('  …and is signed by that person', comment.body?.sentBy?.id === realUser.id);
+
+      const commentList = await call(RW2, 'GET', `/api/v1/conversations/${thread.id}/comments`);
+      check('comments are listable', commentList.status === 200);
+      check('  …and every one is internal',
+        (commentList.body?.comments || []).every((c) => c.internal === true));
+
+      // The customer-facing transcript must still exclude it.
+      const transcript = await call(RW2, 'GET', `/api/v1/conversations/${thread.id}/messages`);
+      check('the comment does not appear in the default transcript',
+        !(transcript.body?.messages || []).some((m) => m.body === 'gate: internal comment'));
+    }
+
+    // ── caps and limits ─────────────────────────────────────────────────────
+    const bigPage = await call(RW2, 'GET', `/api/v1/conversations/${thread.id}/messages?limit=500`);
+    check('the messages page caps at 50, not 100',
+      (bigPage.body?.messages || []).length <= 50, (bigPage.body?.messages || []).length);
+
     // ── the console is still guarded ────────────────────────────────────────
     // The /v1 exemption is from the session-JWT middleware only. If it ever
     // widened, this is where it shows.
@@ -633,6 +751,67 @@ async function main() {
   } finally {
     await cleanup();
   }
+
+  /*
+    ── the rate limiter, asserted directly ──────────────────────────────────
+
+    Not over HTTP. The server above runs with the limit raised so the semantic
+    assertions do not throttle themselves, and re-lowering it mid-run would make
+    every later assertion depend on timing. Here the middleware is exercised as
+    a function, which lets the load-bearing property be checked exactly rather
+    than inferred from a race.
+
+    That property is the path collapse. "Per method + path" means the *route*,
+    not the URL — if `/contacts/id:A` and `/contacts/id:B` got separate buckets,
+    a client sweeping ten thousand contacts would never be throttled once and
+    the limit would exist only on paper.
+  */
+  const { rateLimit, routeTemplate } = require('../dist/middleware/rate-limit.middleware');
+
+  check('routeTemplate collapses the identifier grammar',
+    routeTemplate('/contacts/id:abc') === routeTemplate('/contacts/id:xyz'),
+    routeTemplate('/contacts/id:abc') + ' vs ' + routeTemplate('/contacts/id:xyz'));
+  check('  …for phone: and email: too',
+    routeTemplate('/contacts/phone:972500000000') === routeTemplate('/contacts/email:a@b.co'));
+  check('  …and for raw cuids', routeTemplate('/conversations/clx7k2p9q0001abcdefghij') === '/conversations/:id');
+  check('but keeps distinct routes distinct',
+    routeTemplate('/contacts/id:a/tags') !== routeTemplate('/contacts/id:a'));
+  check('  …and does not collapse ordinary path words',
+    routeTemplate('/contacts/list') === '/contacts/list');
+
+  // Five through, the sixth refused — the shipped number.
+  const limiter = rateLimit('gate-limiter', {
+    max: 5,
+    windowMs: 1000,
+    keyBy: (req) => `${req.headers.authorization}:${req.method}:${routeTemplate(req.path)}`,
+  });
+  function hit(path, method = 'GET', auth = 'Bearer rbt_aaaaaaaaaaaa_x') {
+    let status = 200;
+    let nexted = false;
+    const res = {
+      setHeader() {},
+      status(code) { status = code; return this; },
+      json() { return this; },
+    };
+    limiter({ headers: { authorization: auth }, method, path, ip: '127.0.0.1' }, res, () => { nexted = true; });
+    return { status, nexted };
+  }
+
+  let allowed = 0;
+  for (let i = 0; i < 5; i += 1) if (hit('/contacts/id:a').nexted) allowed += 1;
+  check('five requests a second are allowed', allowed === 5, allowed);
+  check('the sixth is refused with 429', hit('/contacts/id:a').status === 429);
+
+  // The same route with a different identifier shares the bucket. This is the
+  // one that would silently make the limit meaningless if it regressed.
+  check('a different identifier on the same route shares the limit',
+    hit('/contacts/id:completely-different').status === 429);
+
+  // A different method, and a different route, each get their own budget.
+  check('a different method has its own budget', hit('/contacts/id:a', 'PATCH').nexted === true);
+  check('a different route has its own budget', hit('/conversations', 'GET').nexted === true);
+  check('a different token has its own budget',
+    hit('/contacts/id:a', 'GET', 'Bearer rbt_bbbbbbbbbbbb_y').nexted === true);
 
   console.log('');
   console.log(passed + '/' + (passed + failed) + ' checks passed.');
