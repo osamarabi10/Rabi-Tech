@@ -14,7 +14,7 @@ import {
   markPaymentFailed,
 } from '../billing/billing.service';
 import { PLAN_CODE_PATTERN, RESERVED_PLAN_CODES, monthlyEquivalentCents, normalizePlanCode } from '../billing/plans';
-import { getEdition, refreshEditions } from '../billing/editions.service';
+import { getEdition, refreshEditions, rowToEdition } from '../billing/editions.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { probeOrganization } from '../gateway/health-monitor';
 import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
@@ -1739,6 +1739,178 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
   } catch (error) {
     const status = (error as { status?: number }).status || 400;
     res.status(status).json({ error: (error as Error).message || 'Failed to update edition' });
+  }
+});
+
+/**
+ * What an edition change would do, before it is made.
+ *
+ * ## It shares the resolver; it does not mirror it
+ *
+ * The patch is applied to an in-memory copy of the row, converted with the same
+ * `rowToEdition` the live cache uses, and handed to `resolveEntitlements` as an
+ * override. Every number in the response therefore comes from the function that
+ * will produce the real answer afterwards — the same code, called twice, with
+ * one value swapped.
+ *
+ * A preview computed by a second implementation agrees with itself and drifts
+ * from reality, silently, the first time either side changes. That is worse
+ * than no preview: it is a wrong answer wearing the authority of a check. The
+ * harness pins this by applying the change for real and asserting the preview
+ * said so.
+ *
+ * ## What it cannot deliver, said plainly rather than omitted
+ *
+ * Two lists come back, and the split is the honest part. `changesNow` is what
+ * reaches existing subscribers at the next cache refresh. `changesAtNextActivation`
+ * is the five metered usage limits, which do **not** reach them at all until
+ * something reactivates their subscription — `applyPlanLimits` copied the old
+ * values into OrganizationConfig and enforcement reads that copy (D-14).
+ *
+ * This is the same divergence `detectQuotaDrift` sees and is required to stay
+ * silent about, because as a monitor it would fire on every organization on the
+ * edition and a detector that always fires is one nobody reads. Here it is a
+ * scoped answer to one question at one moment, so it can say what the detector
+ * must not.
+ *
+ * ## Resolution, not offer
+ *
+ * Affected organizations are found across every edition state — inactive and
+ * archived included. An archived edition still resolves for the subscribers on
+ * it, so filtering them out here would under-report exactly the people a
+ * consequence preview exists to protect.
+ */
+router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) => {
+  try {
+    const code = normalizePlanCode(req.params.code);
+    const body = (req.body || {}) as Record<string, unknown>;
+
+    const current = await prisma.plan.findUnique({ where: { code } });
+    if (!current) return res.status(404).json({ error: `Edition ${code} not found` });
+
+    // Same validation the real PATCH performs, so a preview cannot describe a
+    // change the PATCH would refuse.
+    const data: Record<string, unknown> = {};
+    applyEditionFields(body, data);
+    if (data.pricingModel !== undefined || data.monthlyPriceCents !== undefined) {
+      applyPricingInvariant(data, current);
+    }
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'No editable fields supplied to preview' });
+    }
+
+    // The hypothetical edition, built by the mapper the cache itself uses.
+    const proposedRow = { ...current, ...data } as typeof current;
+    const proposedEdition = rowToEdition(proposedRow);
+
+    /*
+      Every organization the change could reach, by any of the three routes a
+      plan is decided: a live override, a live subscription, or the tier column.
+      resolveEntitlements settles which actually applies - this only has to
+      avoid missing anyone.
+    */
+    const candidates = await prisma.organization.findMany({
+      where: {
+        OR: [
+          { tier: code },
+          { planOverride: code },
+          { subscriptions: { some: { planCode: code, status: { in: ['ACTIVE', 'TRIALING'] } } } },
+        ],
+      },
+      select: { id: true, name: true },
+    });
+
+    const METERED = [
+      'monthlyActiveContactsLimit',
+      'monthlyOutboundMessagesLimit',
+      'monthlyCampaignSendsLimit',
+      'monthlyAiTokensInLimit',
+      'monthlyAiTokensOutLimit',
+    ] as const;
+
+    const now = new Date();
+    const organizations = [];
+    for (const organization of candidates) {
+      const before = await resolveEntitlements(organization.id, now);
+      // Only an organization the edition actually governs. A candidate whose
+      // override points elsewhere is not affected by this change.
+      if (before.plan !== code) continue;
+      const after = await resolveEntitlements(organization.id, now, { editionOverride: proposedEdition });
+
+      const changesNow: Array<{ field: string; before: unknown; after: unknown }> = [];
+      if (before.planName !== after.planName) changesNow.push({ field: 'planName', before: before.planName, after: after.planName });
+      if (before.listPriceCents !== after.listPriceCents) changesNow.push({ field: 'listPriceCents', before: before.listPriceCents, after: after.listPriceCents });
+      if (before.seatLimit !== after.seatLimit) changesNow.push({ field: 'seatLimit', before: before.seatLimit, after: after.seatLimit });
+      for (const metric of Object.keys(before.limits)) {
+        const from = before.limits[metric as keyof typeof before.limits];
+        const to = after.limits[metric as keyof typeof after.limits];
+        if (from !== to) changesNow.push({ field: `limits.${metric}`, before: from, after: to });
+      }
+
+      /*
+        The metered limits the edition changed that the subscriber will not
+        feel. Computed against the EDITION values, not the resolved ones -
+        resolveEntitlements correctly reports no change for these, and reporting
+        only that would be true and useless.
+      */
+      const changesAtNextActivation = METERED
+        .filter((field) => String((current as Record<string, unknown>)[field]) !== String((proposedRow as Record<string, unknown>)[field]))
+        .map((field) => ({
+          field,
+          before: (current as Record<string, unknown>)[field],
+          after: (proposedRow as Record<string, unknown>)[field],
+        }));
+
+      organizations.push({
+        organizationId: organization.id,
+        name: organization.name,
+        source: before.source,
+        changesNow,
+        changesAtNextActivation,
+      });
+    }
+
+    /*
+      Channel narrowing, reported as measured rather than as feared.
+
+      Enforcement lives at the connect paths only, so a workspace already
+      sending on a channel this change removes KEEPS SENDING. What it loses is
+      the ability to select that channel again once it switches away. A preview
+      that said "will disconnect N customers" would be wrong, and being wrong in
+      the alarming direction is how a preview stops being trusted.
+    */
+    let channelImpact = null;
+    if (data.allowedChannels !== undefined) {
+      const removed = current.allowedChannels.filter((kind) => !(data.allowedChannels as string[]).includes(kind));
+      if (removed.length) {
+        const affected = await prisma.organizationChannel.findMany({
+          where: { kind: { in: removed }, organizationId: { in: organizations.map((o) => o.organizationId) } },
+          select: { organizationId: true, kind: true, status: true },
+        });
+        channelImpact = {
+          removed,
+          holders: affected,
+          effect: 'A workspace already sending on a removed channel keeps sending: enforcement is at '
+            + 'the connect paths, not the send path. What it loses is the ability to select that channel '
+            + 'again once it switches away. Nothing disconnects.',
+        };
+      }
+    }
+
+    res.json({
+      code,
+      changes: data,
+      affectedCount: organizations.length,
+      organizations,
+      channelImpact,
+      note: 'changesNow reach existing subscribers at the next catalogue refresh. '
+        + 'changesAtNextActivation do not reach them until their subscription is activated again, '
+        + 'because applyPlanLimits copied the previous values into OrganizationConfig and enforcement '
+        + 'reads that copy.',
+    });
+  } catch (error) {
+    const status = (error as { status?: number }).status || 400;
+    res.status(status).json({ error: (error as Error).message || 'Failed to preview edition change' });
   }
 });
 

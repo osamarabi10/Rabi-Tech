@@ -2,7 +2,7 @@ import { OrganizationConfig, SubscriptionStatus, UsageMetric } from '@prisma/cli
 import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { METRIC_LIMIT_FIELDS, USAGE_METRICS } from '../usage/metrics';
-import { PlanCode, UNLIMITED_SENTINEL, normalizePlanCode } from './plans';
+import { PlanCode, PlanEntitlements, UNLIMITED_SENTINEL, normalizePlanCode } from './plans';
 import { getEdition } from './editions.service';
 
 /**
@@ -103,8 +103,11 @@ function normalizeLimit(raw: number | bigint | null | undefined): number | null 
  * changes is that they *can* be set, which is what makes AI sellable as part of
  * an edition rather than only negotiable into one deal.
  */
-function planLimits(plan: PlanCode): Partial<Record<UsageMetric, number | bigint | null>> {
-  const entitlements = getEdition(plan);
+function planLimits(
+  plan: PlanCode,
+  edition: EditionLookup,
+): Partial<Record<UsageMetric, number | bigint | null>> {
+  const entitlements = edition(plan);
   return {
     messages_outbound: entitlements.monthlyOutboundMessagesLimit,
     active_contacts: entitlements.monthlyActiveContactsLimit,
@@ -133,8 +136,9 @@ function effectiveLimits(
   config: OrganizationConfig | null,
   overridePlan: PlanCode | null,
   macQuota: number | null,
+  edition: EditionLookup,
 ): Record<UsageMetric, number | null> {
-  const fromPlan = overridePlan ? planLimits(overridePlan) : {};
+  const fromPlan = overridePlan ? planLimits(overridePlan, edition) : {};
   const limits = {} as Record<UsageMetric, number | null>;
   for (const metric of USAGE_METRICS) {
     const planValue = fromPlan[metric];
@@ -176,10 +180,36 @@ function safePlanCode(value: unknown, context: string): PlanCode | null {
  * `organizationId` is **not** injected automatically — it is required here and
  * always passed explicitly in the `where`.
  */
+/**
+ * How an edition is looked up. Always getEdition in production.
+ *
+ * The one exception is the consequence preview, which needs to ask this exact
+ * function what a subscriber WOULD get if one edition held different values.
+ * Injecting the lookup is what lets the preview share this code rather than
+ * reimplement it — and a preview computed by a second implementation drifts
+ * from the real change, which makes it worse than no preview at all.
+ */
+export type EditionLookup = (code: PlanCode) => PlanEntitlements;
+
 export async function resolveEntitlements(
   organizationId: string,
   now = new Date(),
+  options: { editionOverride?: PlanEntitlements } = {},
 ): Promise<EffectiveEntitlements> {
+  /*
+    Every edition read below goes through this. With no override it is
+    getEdition and nothing changes; with one, the named edition answers with the
+    proposed values and every other edition still answers from the catalogue.
+
+    Deliberately not a temporary mutation of the cache: that would make one
+    request's hypothetical visible to every concurrent request in the process,
+    which is a preview changing what real subscribers are entitled to.
+  */
+  const edition: EditionLookup = (code) => (
+    options.editionOverride && options.editionOverride.code === code
+      ? options.editionOverride
+      : getEdition(code)
+  );
   if (!organizationId) throw new Error('resolveEntitlements requires an organizationId');
 
   const organization = await prisma.organization.findUnique({
@@ -235,21 +265,21 @@ export async function resolveEntitlements(
   // If per-metric overrides are ever needed, add a JSON map consulted before
   // this line — additive, with no migration of existing rows.
   const macQuota = overrideLive ? organization.macQuotaOverride : null;
-  const limits = effectiveLimits(organization.configuration, overridePlan, macQuota);
+  const limits = effectiveLimits(organization.configuration, overridePlan, macQuota, edition);
 
   const discountPercent = overrideLive ? organization.discountPercent : null;
-  const listPriceCents = getEdition(plan).monthlyPriceCents;
+  const listPriceCents = edition(plan).monthlyPriceCents;
   const effectivePriceCents = discountPercent
     ? Math.round(listPriceCents * (100 - discountPercent) / 100)
     : listPriceCents;
 
   return {
     plan,
-    planName: getEdition(plan).name,
+    planName: edition(plan).name,
     planOfRecord,
     source,
     limits,
-    seatLimit: getEdition(plan).usersLimit,
+    seatLimit: edition(plan).usersLimit,
     isOverridden: overrideLive,
     override: {
       plan: safePlanCode(organization.planOverride, 'planOverride'),

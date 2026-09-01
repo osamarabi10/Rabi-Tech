@@ -164,8 +164,15 @@ let editedAt: Map<string, Date> | null = null;
 let activeCodes: Set<string> | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
 
-/** Shape a database row into the same object the constant provides. */
-function rowToEdition(row: {
+/**
+ * Shape a database row into the same object the constant provides.
+ *
+ * Exported so the consequence preview can build its hypothetical edition with
+ * the SAME mapper the live cache uses. A preview that converted rows its own
+ * way would drift from the catalogue the first time a column was added, and
+ * would drift silently, because both sides would still typecheck.
+ */
+export function rowToEdition(row: {
   code: string;
   name: string;
   monthlyPriceCents: number;

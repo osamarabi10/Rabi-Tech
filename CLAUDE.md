@@ -79,7 +79,7 @@ cd apps/backend && npx tsc --noEmit -p .
 cd apps/backend && npm run test:tenancy
 ```
 
-The gate uses a disposable PostgreSQL schema and must stay **green (125/125)**. Treat a red gate as a release blocker, not a known issue.
+The gate uses a disposable PostgreSQL schema and must stay **green (126/126)**. Treat a red gate as a release blocker, not a known issue.
 
 It was recorded here as 67/67, then 122/122, and neither was wrong when it was
 written: the count grows as the harness gains coverage rather than because
@@ -87,7 +87,9 @@ anything is double-counted. Conversation-lifecycle and closure-reporting checks
 arrived with the Conversation Operations release, edition coverage with the
 owner-controlled edition ladder, and three more when the Editions phase closed —
 archiving an edition without orphaning its subscribers, the ladder's ordering
-and tie-breaking, and the create path exercised against a closed code space. Two
+and tie-breaking, and the create path exercised against a closed code space —
+and one more with E7, which previews an edition change and then **applies it**
+to prove the preview was true rather than merely self-consistent. Two
 gates were also found non-functional on this machine and repaired, so the number
 that replaced 67 is not comparable to it without that context — see §8 and §6f
 of `docs/RESPONDIO-PARITY-CHECKPOINT.md`.

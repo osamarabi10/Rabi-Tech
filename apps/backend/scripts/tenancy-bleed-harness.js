@@ -4734,6 +4734,112 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
+    await check('billing: the consequence preview matches what the change actually does', async () => {
+      /*
+        The preview is only worth having if it is true, and the only way to know
+        it is true is to APPLY the change and compare. Two computations agreeing
+        proves the formula is consistent with itself; it says nothing about
+        whether either one describes reality.
+
+        So this previews, then really patches, then re-resolves, and asserts the
+        preview predicted what happened - including the part it predicted would
+        NOT happen.
+      */
+      const { refreshEditions, getEdition } = require('../src/modules/billing/editions.service');
+      const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
+
+      const owner = await raw.identity.create({
+        data: {
+          email: `owner-preview-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const ownerToken = mintPlatformToken(owner);
+      const asOwner = (method, path, body) =>
+        fetch(`${baseUrl}${path}`, {
+          method,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+
+      await setTierGoverned(orgA, 'GROWTH');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      const before = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+
+      /*
+        Two fields chosen deliberately, one of each kind:
+
+          usersLimit                 - reaches existing subscribers immediately,
+                                       because seatLimit is read from the edition.
+          monthlyActiveContactsLimit - does NOT reach them until reactivation,
+                                       because applyPlanLimits copied the old
+                                       value into OrganizationConfig and
+                                       enforcement reads that copy. This is D-14,
+                                       and it is the half a preview is most
+                                       tempted to lie about.
+      */
+      const patch = { usersLimit: 11, monthlyActiveContactsLimit: 3333 };
+
+      const previewResponse = await asOwner('POST', '/api/platform/editions/GROWTH/preview', patch);
+      assert.equal(previewResponse.status, 200, 'the preview must be available to an owner');
+      const preview = await previewResponse.json();
+
+      const previewed = preview.organizations.find((row) => row.organizationId === orgA.organizationId);
+      assert.ok(previewed, 'the preview must name the organization the edition governs');
+
+      const seatPrediction = previewed.changesNow.find((c) => c.field === 'seatLimit');
+      assert.ok(seatPrediction, 'the preview must say the seat limit changes now');
+      assert.equal(seatPrediction.after, 11);
+
+      const macPrediction = previewed.changesAtNextActivation.find(
+        (c) => c.field === 'monthlyActiveContactsLimit',
+      );
+      assert.ok(macPrediction, 'the preview must say the metered limit does NOT reach them yet');
+      assert.ok(
+        !previewed.changesNow.some((c) => c.field === 'limits.active_contacts'),
+        'the metered limit must not also be claimed as an immediate change',
+      );
+
+      const resolvedBefore = await runAsPlatform('bleed-preview-before', () =>
+        resolveEntitlements(orgA.organizationId));
+
+      // ── apply it for real ────────────────────────────────────────────────
+      const applied = await asOwner('PATCH', '/api/platform/editions/GROWTH', patch);
+      assert.equal(applied.status, 200, 'the same patch must be accepted by the real endpoint');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+
+      const resolvedAfter = await runAsPlatform('bleed-preview-after', () =>
+        resolveEntitlements(orgA.organizationId));
+
+      // The preview said the seat limit would change now. It did.
+      assert.equal(
+        resolvedAfter.seatLimit, 11,
+        'the change the preview promised immediately must have happened',
+      );
+      assert.equal(getEdition('GROWTH').usersLimit, 11);
+
+      // And the preview said the metered limit would NOT reach them. It did not.
+      assert.equal(
+        resolvedAfter.limits.active_contacts, resolvedBefore.limits.active_contacts,
+        'a metered limit the preview placed at next activation must not have moved now',
+      );
+      assert.equal(
+        getEdition('GROWTH').monthlyActiveContactsLimit, 3333,
+        'the edition itself must carry the new value even though nobody feels it yet',
+      );
+
+      await raw.plan.update({
+        where: { code: 'GROWTH' },
+        data: {
+          usersLimit: before.usersLimit,
+          monthlyActiveContactsLimit: before.monthlyActiveContactsLimit,
+        },
+      });
+      await setTierGoverned(orgA, 'FREE');
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+    });
+
     await check('billing: the edition catalogue loads on a timer, with no ambient scope', async () => {
       const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
 
