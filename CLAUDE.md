@@ -61,6 +61,8 @@ The authoritative RabiTech target architecture, implementation checkpoint, relea
 
 **[docs/RESPONDIO-PARITY-ROADMAP.md](docs/RESPONDIO-PARITY-ROADMAP.md) is the phased plan for matching Respond.io** — seven phases with the UI decision written beside the engineering, plus what we already match, what we are ahead on and must not regress, and what to deliberately not copy. Compiled from a survey of ~130 first-party Respond.io pages and their OpenAPI spec, checked against this codebase.
 
+[docs/RESPONDIO-PARITY-MATRIX.md](docs/RESPONDIO-PARITY-MATRIX.md) is the exhaustive inventory behind that roadmap — all thirteen modules, every capability, marked match / partial / absent / **ahead** / deliberate. Read it before claiming a gap or rebuilding something we already have.
+
 [docs/RESPONDIO-BLUEPRINT-FIT.md](docs/RESPONDIO-BLUEPRINT-FIT.md) maps the Respond.io architecture blueprint onto RabiTech's verified state — what already exists, what to build, and which parts of that blueprint to deliberately skip (multi-datastore persistence, light-canvas re-theme, omnichannel fan-out). Read it before starting workflow-engine or channel work.
 
 ## Commands
