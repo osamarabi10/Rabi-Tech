@@ -1,8 +1,11 @@
 import { execFile } from 'child_process';
 import { promises as fs } from 'fs';
+import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 import logger from '../../lib/logger';
+import { backupEncryptionConfigured, encryptFile } from './backup-crypto';
+import { getBackupDestination, replicaKeyFor } from './backup-destination';
 
 const run = promisify(execFile);
 
@@ -36,13 +39,26 @@ const KEEP = Number(process.env.BACKUP_KEEP || 14);
 /** Restored into, then dropped. Never the live database, whatever else breaks. */
 const VERIFY_DB = 'rabitech_restore_check';
 
+export type RestoredCounts = { conversations: number; messages: number; contacts: number };
+
 export type BackupResult = {
   file: string;
   bytes: number;
   /** Rows counted after restoring into the scratch database. */
-  verified: { conversations: number; messages: number; contacts: number };
+  verified: RestoredCounts;
   durationMs: number;
   pruned: string[];
+  /** The encrypted off-host copy, when one was configured and written. */
+  replica: { destination: string; key: string; bytes: number; offHost: boolean } | null;
+  /**
+   * Why replication did not happen, when it did not.
+   *
+   * Separate from throwing, because a failed upload does not make the local
+   * verified dump any less good. Degrading a working backup to a failed one
+   * over a network call would report the wrong thing to the person reading the
+   * alert at 04:00. The worker raises its own alert off this field.
+   */
+  replicaError: string | null;
 };
 
 /** Connection parts, from the URL the app already uses. */
@@ -76,8 +92,12 @@ function stamp(now: Date): string {
  * The counts are the assertion. A dump that restores into an empty database
  * technically "restored" — and would be a catastrophe to discover during a real
  * recovery.
+ *
+ * Exported because the off-host drill asks the identical question of a
+ * different file, and two implementations of "did this restore" is how they
+ * drift until one of them is quietly wrong.
  */
-async function verifyRestore(file: string): Promise<BackupResult['verified']> {
+export async function restoreAndCount(file: string): Promise<RestoredCounts> {
   const db = connection();
   const psql = (sql: string, database: string) =>
     run('psql', ['-h', db.host, '-p', db.port, '-U', db.user, '-d', database, '-tAc', sql], {
@@ -180,9 +200,9 @@ export async function runBackup(now: Date = new Date()): Promise<BackupResult> {
     throw new Error('pg_dump produced an empty file');
   }
 
-  let verified: BackupResult['verified'];
+  let verified: RestoredCounts;
   try {
-    verified = await verifyRestore(file);
+    verified = await restoreAndCount(file);
   } catch (error) {
     /*
      * Keep the file, but rename it out of the automated set.
@@ -204,15 +224,80 @@ export async function runBackup(now: Date = new Date()): Promise<BackupResult> {
 
   const pruned = await prune();
 
+  // Only a verified dump is ever replicated. Pushing an unverified one off-host
+  // would put a file nobody has restored somewhere it is harder to check, which
+  // is the opposite of the point.
+  const { replica, replicaError } = await replicate(file);
+
   const result: BackupResult = {
     file: path.basename(file),
     bytes: size,
     verified,
     durationMs: Date.now() - started,
     pruned,
+    replica,
+    replicaError,
   };
   logger.info('Backup complete and verified', result);
   return result;
+}
+
+/**
+ * Encrypt the verified dump and hand it to the configured destination.
+ *
+ * Never throws. Three distinct non-events are reported the same way, as a
+ * reason rather than a failure, because none of them means the backup is bad:
+ * no destination configured, no encryption key set, or the destination refused
+ * the write. Only the third is a fault, and the worker decides what to say
+ * about it — this function's job is to not lie about the dump.
+ *
+ * **There is no plaintext path.** A missing key switches replication off; it
+ * does not fall back to uploading the dump unencrypted. That fallback is the
+ * single worst thing this code could do, so it does not exist.
+ */
+async function replicate(
+  dumpFile: string,
+): Promise<{ replica: BackupResult['replica']; replicaError: string | null }> {
+  const destination = getBackupDestination();
+  if (!destination) return { replica: null, replicaError: null };
+
+  if (!backupEncryptionConfigured()) {
+    return {
+      replica: null,
+      replicaError: 'BACKUP_ENCRYPTION_KEY is not set — replication is off, nothing was uploaded',
+    };
+  }
+
+  // Encrypt into the OS temp directory, not alongside the dump: the backup
+  // directory is bind-mounted to the host and listed in the console, and a
+  // transient `.enc` appearing there looks like a second backup to anyone
+  // reading the folder during an incident.
+  const staging = path.join(os.tmpdir(), `${path.basename(dumpFile)}.enc`);
+  try {
+    await encryptFile(dumpFile, staging);
+    const key = replicaKeyFor(path.basename(dumpFile));
+    const { bytes } = await destination.put(staging, key);
+    const removed = await destination.prune(KEEP);
+    logger.info('Backup replicated', {
+      destination: destination.name,
+      key,
+      bytes,
+      offHost: destination.offHost,
+      pruned: removed,
+    });
+    return {
+      replica: { destination: destination.name, key, bytes, offHost: destination.offHost },
+      replicaError: null,
+    };
+  } catch (error) {
+    logger.error('Backup replication FAILED — the local dump is still verified and good', {
+      destination: destination.name,
+      error: String(error),
+    });
+    return { replica: null, replicaError: String(error).slice(0, 500) };
+  } finally {
+    await fs.unlink(staging).catch(() => {});
+  }
 }
 
 /** Newest first, for the console. Only ours — their manual dumps are not ours to report on. */

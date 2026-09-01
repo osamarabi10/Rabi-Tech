@@ -62,6 +62,13 @@ services:
       # in the thing it is backing up is not a backup.
       - ./.tools/backups:/app/backups
       - ./.tools/uploads:/app/uploads
+      # Off-host replica target. Commented out deliberately: the whole value of
+      # this bind is that the left-hand side is a *different device* — another
+      # drive, a NAS mount, a syncing folder — and a default pointing back into
+      # this repository would be the one path that looks configured and protects
+      # against nothing. Uncomment, set the host path, then set
+      # BACKUP_REPLICA_DIR=/app/replica and BACKUP_REPLICA_OFFHOST=1 in .env.
+      # - D:/rabitech-replica:/app/replica
     depends_on:
       - postgres
       - redis
@@ -102,6 +109,17 @@ services:
       - MAIL_FROM=${MAIL_FROM:-}
       # Backups: how many automated dumps to keep. Never prunes manual ones.
       - BACKUP_KEEP=${BACKUP_KEEP:-14}
+      - BACKUP_CRON=${BACKUP_CRON:-}
+      # Off-host replication. Absent means dumps stay on this host only and the
+      # boot log says so. Set this to /app/replica and uncomment the matching
+      # bind above — the host side of that bind must be a different device, or
+      # this is not off-host whatever the flag claims.
+      - BACKUP_REPLICA_DIR=${BACKUP_REPLICA_DIR:-}
+      - BACKUP_REPLICA_OFFHOST=${BACKUP_REPLICA_OFFHOST:-0}
+      # Never sent in plaintext: no key means no upload, not an unencrypted one.
+      - BACKUP_ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY:-}
+      - BACKUP_DRILL_CRON=${BACKUP_DRILL_CRON:-}
+      - BACKUP_REPLICA_MAX_AGE_HOURS=${BACKUP_REPLICA_MAX_AGE_HOURS:-}
       - SNIPPET_UPLOAD_DIR=${SNIPPET_UPLOAD_DIR:-/app/uploads/snippets}
       # How the gateway container reaches this backend to deliver webhooks.
       # Must be a dotted host (the gateway's URL validator rejects single-label
