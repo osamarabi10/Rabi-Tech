@@ -181,10 +181,12 @@ export default function PlatformEditions() {
       <div className="mt-4 flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
-          Adding a new edition is not available here. An edition code has to exist
-          in the server&apos;s <code>PlanCode</code> type before anything can resolve
-          it, so a row created from this page would be a plan no enforcement path
-          recognises. Adding one is a code change today.
+          Adding a new edition is not available here, and the reason has changed.
+          Edition codes are no longer fixed in the server&apos;s type — the catalogue
+          can carry codes the code has never heard of. What holds the door shut is
+          a deliberate list of creatable codes, because the first edition outside
+          the original five is the point past which the change cannot be rolled
+          back. Opening it is a decision, not a missing feature.
         </span>
       </div>
 
@@ -283,14 +285,30 @@ export default function PlatformEditions() {
                   Disabled with a stated reason, never a bare greyed box. The
                   checkpoint's rule: a control the operator cannot use must say
                   why, or it is indistinguishable from a bug.
+
+                  The reason has changed, and the copy changed with it. Both of
+                  these once said "not enforced anywhere yet", which was true when
+                  written and became false without anyone noticing: the flag now
+                  decides gateway provisioning at activation, and allowedChannels
+                  is checked when a channel is connected or made active — the
+                  ladder was narrowed on the strength of it, so three editions are
+                  Meta-only today.
+
+                  That is the worse half of a stale comment. An operator reading
+                  "not enforced" would reasonably treat the channel list as
+                  decorative and edit it to tidy the screen, and would be
+                  narrowing a live edition. They are read-only here only because
+                  this screen has not been wired to send them; the server accepts
+                  both.
                 */}
                 <label className="flex items-start gap-2 text-sm text-muted-foreground">
                   <input type="checkbox" checked={edition.autoProvisionGateway} disabled className="mt-1" />
                   <span>
                     <Lock className="mr-1 inline h-3 w-3" />
-                    Automatic gateway provisioning —{' '}
-                    <strong>not enforced anywhere yet.</strong> It is reported in the
-                    billing summary only, so changing it here would grant nothing.
+                    Automatic gateway provisioning — <strong>enforced.</strong> This
+                    flag decides whether activating a subscription starts a WhatsApp
+                    gateway for that workspace. Read-only on this screen for now;
+                    the server accepts it.
                   </span>
                 </label>
 
@@ -298,9 +316,11 @@ export default function PlatformEditions() {
                   <Lock className="mt-0.5 h-3 w-3 shrink-0" />
                   <span>
                     Channels: <code dir="ltr">{edition.allowedChannels.join(', ')}</code> —{' '}
-                    <strong>not enforced yet.</strong> No code permits or refuses a
-                    channel by edition, and the per-edition rule is still an open
-                    product question.
+                    <strong>enforced.</strong> A workspace on this edition can connect
+                    and switch to these channel kinds and no others. Narrowing this
+                    list does not disconnect anyone already sending — it stops them
+                    selecting that channel again once they switch away. Read-only on
+                    this screen for now; the server accepts it.
                   </span>
                 </div>
 
