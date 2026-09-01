@@ -6,6 +6,9 @@ import Link from 'next/link';
 import { ExternalLink, User, X } from 'lucide-react';
 import {
   updateContact,
+  blockContact,
+  unblockContact,
+  fetchContact,
   type Agent,
   type Conv,
   contactDisplayName,
@@ -14,6 +17,7 @@ import {
   type MarketingConsent,
   type Msg,
 } from '@/lib/data';
+import api from '@/lib/api';
 import { avatarColor } from '@/lib/constants';
 import { useT } from '@/lib/i18n';
 import { ConsentProvenanceLine } from '@/components/inbox/consent-provenance';
@@ -116,6 +120,68 @@ export function ContactPanel({
    * none of them wants to pay for a history.
    */
   const [provenance, setProvenance] = useState<ConsentProvenance | null>(null);
+
+  /**
+   * Block state, and whether this user may change it.
+   *
+   * Read per contact rather than carried on the conversation row, for the same
+   * reason as provenance: the inbox list reads conversations constantly and
+   * none of that traffic needs to pay for a moderation flag.
+   *
+   * `canBlock` starts null — "not yet known" — and renders as nothing rather
+   * than as a refusal. Defaulting to false would tell an admin they lack a
+   * permission they hold, for as long as the request takes.
+   */
+  const [blockedAt, setBlockedAt] = useState<string | null>(null);
+  const [blockedReason, setBlockedReason] = useState<string | null>(null);
+  const [savingBlock, setSavingBlock] = useState(false);
+  const [canBlock, setCanBlock] = useState<boolean | null>(null);
+  const blocked = Boolean(blockedAt);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchContact(conversation.contactId)
+      .then((contact) => {
+        if (cancelled) return;
+        setBlockedAt(contact.blockedAt ?? null);
+        setBlockedReason(contact.blockedReason ?? null);
+      })
+      .catch(() => {
+        // Silent, and deliberately not an error state. An unread block flag is
+        // "not yet known", and this repository's rule is that an unconfirmed
+        // fault renders as nothing rather than as a fault.
+        if (!cancelled) setBlockedAt(null);
+      });
+    return () => { cancelled = true; };
+  }, [conversation.contactId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/api/auth/me')
+      .then((r) => {
+        if (cancelled) return;
+        const permissions = r.data?.permissions;
+        setCanBlock(Array.isArray(permissions) ? permissions.includes('contact:update') : null);
+      })
+      .catch(() => { if (!cancelled) setCanBlock(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggleBlock = async () => {
+    setSavingBlock(true);
+    try {
+      const next = blocked
+        ? await unblockContact(conversation.contactId)
+        : await blockContact(conversation.contactId);
+      setBlockedAt(next.blockedAt ?? null);
+      setBlockedReason(next.blockedReason ?? null);
+      toast.success(blocked ? t('تم إلغاء الحظر') : t('تم حظر جهة الاتصال'));
+    } catch {
+      toast.error(t('فشل التحديث'));
+    } finally {
+      setSavingBlock(false);
+    }
+  };
   /** Badge on the Conversations tab, reported by the tab body once counted. */
   const [conversationCount, setConversationCount] = useState<number | undefined>(undefined);
 
@@ -288,6 +354,51 @@ export function ContactPanel({
             {t('مستبعد من كل الحملات')}
           </p>
         )}
+
+        {/*
+          Blocking sits with consent because both are per-contact states that
+          stop something being sent or received — and neither is a delete. It is
+          deliberately not a row in the <dl> above: those are facts about the
+          contact, this is an action taken against them, and an action that
+          silently stops a customer reaching the business should not look like a
+          field.
+
+          Shown to everyone, enabled for those who may use it. Hiding it from an
+          agent would leave a blocked contact looking merely quiet, with nothing
+          on screen explaining why no messages arrive.
+        */}
+        {blocked ? (
+          <div className="mt-3 rounded border border-danger/40 bg-danger/10 p-2">
+            <p className="text-micro font-semibold text-danger">{t('محظور')}</p>
+            <p className="mt-0.5 text-micro text-danger/90">
+              {t('الرسائل الواردة من هذا الرقم لا تصل. المحادثات السابقة محفوظة.')}
+            </p>
+            {blockedReason && (
+              <p className="mt-1 truncate text-micro text-muted-foreground" title={blockedReason}>
+                {blockedReason}
+              </p>
+            )}
+            {canBlock ? (
+              <button
+                onClick={toggleBlock}
+                disabled={savingBlock}
+                className="mt-2 rounded border border-border bg-card px-2 py-0.5 text-micro font-medium transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                {savingBlock ? t('جارٍ الحفظ') : t('إلغاء الحظر')}
+              </button>
+            ) : (
+              <p className="mt-2 text-micro text-muted-foreground">{t('المشرف وحده يقدر يلغي الحظر')}</p>
+            )}
+          </div>
+        ) : canBlock ? (
+          <button
+            onClick={toggleBlock}
+            disabled={savingBlock}
+            className="mt-3 rounded border border-border px-2 py-0.5 text-micro font-medium text-muted-foreground transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-50"
+          >
+            {savingBlock ? t('جارٍ الحفظ') : t('حظر جهة الاتصال')}
+          </button>
+        ) : null}
 
       </div>
 

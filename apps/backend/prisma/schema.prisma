@@ -145,20 +145,20 @@ enum PricingModel {
 }
 
 model Plan {
-  id                String  @id @default(cuid())
-  code              String  @unique
+  id                String          @id @default(cuid())
+  code              String          @unique
   name              String
   monthlyPriceCents Int
   /// Read this before the price. See PricingModel.
-  pricingModel      PricingModel @default(FIXED)
+  pricingModel      PricingModel    @default(FIXED)
   /// How often monthlyPriceCents is charged. That column's name predates
   /// yearly billing and now means "amount per interval"; the rename is real
   /// debt, deliberately unpaid — 52 references across 11 files and the API
   /// boundary, for no behaviour change.
   billingInterval   BillingInterval @default(MONTHLY)
-  currency          String  @default("USD")
-  isActive          Boolean @default(true)
-  sortOrder         Int     @default(0)
+  currency          String          @default("USD")
+  isActive          Boolean         @default(true)
+  sortOrder         Int             @default(0)
 
   /// Metered allowances. Null means unlimited.
   monthlyActiveContactsLimit   Int?
@@ -178,8 +178,8 @@ model Plan {
   ///
   /// Shipped null on every edition, which is exactly what the config already
   /// held — the lever is added without setting a policy with it.
-  monthlyAiTokensInLimit       BigInt?
-  monthlyAiTokensOutLimit      BigInt?
+  monthlyAiTokensInLimit  BigInt?
+  monthlyAiTokensOutLimit BigInt?
 
   /// Broadcast pacing. OpenWA drives WhatsApp Web, so blasting risks a ban.
   campaignRateMax        Int?
@@ -326,22 +326,22 @@ model MetaChannelCredential {
 }
 
 model Subscription {
-  id                 String    @id @default(cuid())
+  id                 String             @id @default(cuid())
   organizationId     String
   planCode           String
-  provider           String    @default("manual")
-  subscriptionRef    String?   @unique
+  provider           String             @default("manual")
+  subscriptionRef    String?            @unique
   customerRef        String?
   externalRef        String?
   status             SubscriptionStatus @default(PENDING)
   currentPeriodStart DateTime?
   currentPeriodEnd   DateTime?
-  cancelAtPeriodEnd  Boolean   @default(false)
+  cancelAtPeriodEnd  Boolean            @default(false)
   trialEndsAt        DateTime?
   activatedAt        DateTime?
   canceledAt         DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   plan         Plan         @relation(fields: [planCode], references: [code], onDelete: Restrict)
@@ -760,25 +760,25 @@ model PlatformAuditLog {
 
   /// Everything below is nullable: auditPlatformScope() writes reason-only rows
   /// and predates these columns.
-  action          String?
+  action            String?
   /// Identity.id — the platform actor. A platform owner has no User row in the
   /// target org, which is why the org-scoped AuditLog cannot carry these.
-  actorIdentityId String?
-  actorEmail      String?
+  actorIdentityId   String?
+  actorEmail        String?
   /// The organization acted on. Plain strings, no relation: an audit trail must
   /// outlive the subscriber it describes, and targetOrgName keeps it readable
   /// after the org is deleted.
-  targetOrgId     String?
-  targetOrgName   String?
+  targetOrgId       String?
+  targetOrgName     String?
   /// Which edition a catalogue change was about, or null for everything else.
   ///
   /// Deliberately not targetOrgId: an edition change acts on the offer rather
   /// than on a subscriber, and borrowing the per-org column would make that
   /// trail claim a workspace was touched when none was.
   targetEditionCode String?
-  beforeState     Json?
-  afterState      Json?
-  ipAddress       String?
+  beforeState       Json?
+  afterState        Json?
+  ipAddress         String?
 
   @@index([timestamp])
   @@index([targetOrgId, timestamp])
@@ -1003,6 +1003,7 @@ model User {
   notifications         Notification[]
   csatResponses         CsatSurveyResponse[]
   assignedContacts      Contact[]              @relation("ContactAssignee")
+  blockedContacts       Contact[]              @relation("ContactBlockedBy")
   authSessions          AuthSession[]
   weeklyRecapMembership WeeklyRecapRecipient[]
 
@@ -1120,10 +1121,27 @@ model Contact {
   /// How consent last changed: keyword | agent | import | api.
   consentSource    String?
   consentUpdatedAt DateTime?
+  /// Blocked from reaching this workspace.
+  ///
+  /// Deliberately NOT `isArchived` and NOT a delete. Archiving hides a contact
+  /// from lists and still accepts their messages; deleting them destroys the
+  /// conversation history that is usually the entire reason for blocking
+  /// someone — harassment, a dispute, a number that will not stop writing. The
+  /// history has to survive the block, so this is a third state.
+  ///
+  /// Enforced in `incoming-message.worker.ts` immediately after the contact
+  /// upsert and *before* `getOrCreateActiveConversation`, so a blocked number
+  /// cannot open a thread, trigger an auto-reply, consume quota or reach an
+  /// agent. Existing threads stay readable, and outbound is not restricted —
+  /// an operator may still need to send a final message.
+  blockedAt        DateTime?
+  blockedReason    String?
+  blockedById      String?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
   organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  blockedBy          User?                @relation("ContactBlockedBy", fields: [blockedById, organizationId], references: [id, organizationId], onDelete: Restrict)
   conversations      Conversation[]
   campaignRecipients CampaignRecipient[]
   metaTemplateSends  MetaTemplateSend[]
@@ -1142,6 +1160,9 @@ model Contact {
   @@index([organizationId, assigneeId])
   @@index([organizationId, marketingConsent])
   @@index([organizationId, lifecycleStage])
+  // The inbound worker reads this on every single message that arrives, which
+  // makes it the hottest lookup in the schema after phone.
+  @@index([organizationId, blockedAt])
 }
 
 model Tag {

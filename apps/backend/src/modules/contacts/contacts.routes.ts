@@ -18,7 +18,7 @@ import { ImportError, importContacts } from './import.service';
 import logger from '../../lib/logger';
 import { requireAdmin, requirePermission, requireSupervisor } from '../../middleware/rbac.middleware';
 import { contactAccessWhere, maskContact } from '../../lib/user-access';
-import { auditLog } from '../../lib/audit';
+import { auditContact, auditLog } from '../../lib/audit';
 import { validateCustomFieldValue } from './custom-field-validation';
 
 /** Accepted marketing-consent values, validated before any write. */
@@ -523,6 +523,69 @@ router.get('/:id/tags', async (req, res) => {
       assignedByName: row.createdByName,
       assignedAt: row.createdAt,
     })));
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+/**
+ * Block a contact, or lift a block.
+ *
+ * `contact:update` — ADMIN and SUPERVISOR — not `contact:create`, which agents
+ * hold. Blocking silently stops a customer reaching the business, and an agent
+ * who is tired of a difficult conversation is exactly the wrong person to be
+ * able to end it unilaterally. It is a supervisor decision.
+ *
+ * Idempotent in both directions. Blocking an already-blocked contact returns
+ * the existing block rather than restamping it — the original timestamp is the
+ * useful one, and overwriting it would erase how long this has been in force.
+ */
+router.post('/:id/block', requirePermission('contact:update'), async (req, res) => {
+  try {
+    const contact = await prisma.contact.findFirst({
+      where: { id: req.params.id, ...contactAccessWhere(req.user!) },
+      select: { id: true, blockedAt: true, blockedReason: true, blockedById: true },
+    });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (contact.blockedAt) return res.json({ ...contact, alreadyBlocked: true });
+
+    const reason = cleanString(req.body?.reason, 200) || null;
+    const updated = await prisma.contact.update({
+      where: { id: contact.id },
+      data: { blockedAt: new Date(), blockedReason: reason, blockedById: req.user!.id },
+      select: { id: true, blockedAt: true, blockedReason: true, blockedById: true },
+    });
+
+    // Recorded, never silent: a block is a moderation action against a real
+    // person, and "who blocked this number, when, and why" has to be answerable
+    // later without reading logs.
+    await auditContact(req.user!.id, contact.id, 'updated',
+      { blockedAt: null }, { blockedAt: updated.blockedAt, blockedReason: reason });
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.post('/:id/unblock', requirePermission('contact:update'), async (req, res) => {
+  try {
+    const contact = await prisma.contact.findFirst({
+      where: { id: req.params.id, ...contactAccessWhere(req.user!) },
+      select: { id: true, blockedAt: true },
+    });
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!contact.blockedAt) return res.json({ id: contact.id, blockedAt: null, alreadyUnblocked: true });
+
+    const updated = await prisma.contact.update({
+      where: { id: contact.id },
+      data: { blockedAt: null, blockedReason: null, blockedById: null },
+      select: { id: true, blockedAt: true },
+    });
+    await auditContact(req.user!.id, contact.id, 'updated',
+      { blockedAt: contact.blockedAt }, { blockedAt: null });
+
+    res.json(updated);
   } catch (err: any) {
     res.status(400).json({ error: String(err?.message || err) });
   }

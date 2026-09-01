@@ -129,6 +129,38 @@ async function processInboundMessage(data: {
     update: { ...(contactName ? { name: contactName } : {}) },
   });
 
+  /*
+    Blocked contacts stop here — before a conversation exists.
+
+    The position is the whole feature. Everything below this line has a side
+    effect a blocked person should not be able to cause: opening or reopening a
+    thread, firing an auto-reply or an out-of-hours reply, consuming the
+    subscriber's metered quota, waking an agent's inbox over Socket.io, and
+    triggering round-robin assignment. Dropping the message at the route, or
+    filtering blocked contacts out of the inbox query, would leave every one of
+    those still happening — invisibly, which is worse than not blocking at all,
+    because the operator believes it stopped.
+
+    The contact row is still upserted above, deliberately. The name may have
+    changed, and a blocked person's record should stay current: an operator
+    reviewing a block needs to see who it is, not a stale snapshot from the day
+    they blocked them.
+
+    Logged at info, not debug. This is a moderation control doing something on a
+    real person's message, and "did the block actually work?" must be answerable
+    from the logs without turning debug on first.
+  */
+  if (contact.blockedAt) {
+    logger.info('Inbound dropped: contact is blocked', {
+      organizationId,
+      contactId: contact.id,
+      blockedAt: contact.blockedAt,
+      session,
+      waMessageId,
+    });
+    return;
+  }
+
   // Get or create conversation
   const { conversation, isNewSession, reopenedFromResolved } =
     await getOrCreateActiveConversation(contact.id, sessionRecord.id, sessionRecord.teamId);

@@ -991,6 +991,17 @@ const D: Dict = {
   'عرّف مراحل رحلة العميل كما تناسب عملك': { he: 'הגדירו את שלבי מסע הלקוח שמתאימים לעסק שלכם', en: 'Define the customer journey stages that fit your business' },
   'مرحلة محذوفة': { he: 'שלב שנמחק', en: 'deleted stage' },
   'تم تحديث المرحلة': { he: 'השלב עודכן', en: 'Stage updated' },
+  // Blocked contacts (M9.1). 'Blocked' is deliberately not 'archived' or
+  // 'deleted' in any language: the history survives, and the difference has
+  // to be legible to whoever is deciding whether to lift it.
+  'محظور': { he: 'חסום', en: 'Blocked' },
+  'حظر جهة الاتصال': { he: 'חסימת איש קשר', en: 'Block contact' },
+  'إلغاء الحظر': { he: 'ביטול חסימה', en: 'Unblock' },
+  'تم حظر جهة الاتصال': { he: 'איש הקשר נחסם', en: 'Contact blocked' },
+  'تم إلغاء الحظر': { he: 'החסימה בוטלה', en: 'Block lifted' },
+  'جارٍ الحفظ': { he: 'שומר', en: 'Saving' },
+  'المشرف وحده يقدر يلغي الحظر': { he: 'רק מנהל יכול לבטל חסימה', en: 'Only a supervisor can lift a block' },
+  'الرسائل الواردة من هذا الرقم لا تصل. المحادثات السابقة محفوظة.': { he: 'הודעות מהמספר הזה לא מגיעות. השיחות הקודמות נשמרו.', en: 'Messages from this number do not arrive. Earlier conversations are kept.' },
   'اسم المرحلة': { he: 'שם השלב', en: 'Stage name' },
   'لا توجد مراحل': { he: 'אין שלבים', en: 'No stages' },
   'فشل جلب المراحل': { he: 'טעינת השלבים נכשלה', en: 'Could not load the stages' },

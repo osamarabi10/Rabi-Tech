@@ -136,6 +136,12 @@ export type Contact = {
   notes?: string | null;
   marketingConsent?: MarketingConsent;
   customFields?: Record<string, string | null>;
+  /**
+   * Set when inbound from this number is dropped before a thread is opened.
+   * Not the same as archived: an archived contact still reaches the inbox.
+   */
+  blockedAt?: string | null;
+  blockedReason?: string | null;
 };
 
 export type ContactMergeSuggestion = {
@@ -802,6 +808,12 @@ function mapContact(c: any): Contact {
     assigneeId: c.assigneeId,
     assigneeName: c.assignee?.name || null,
     notes: c.notes,
+    // Passed through explicitly. The block/unblock endpoints return a narrow
+    // projection rather than a full contact, so `blockedAt` has to survive a
+    // map that is otherwise built for the list shape — without this the button
+    // would flip back on the next render and look like the block had failed.
+    blockedAt: c.blockedAt ?? null,
+    blockedReason: c.blockedReason ?? null,
     customFields: Object.fromEntries((c.customFieldValues || []).map((row: any) => [row.fieldDefinition.slug, row.value])),
   };
 }
@@ -858,6 +870,24 @@ export async function fetchContact(ref: string): Promise<Contact> {
 
 export async function updateContact(id: string, input: Partial<Contact>): Promise<Contact> {
   const { data } = await api.patch(`/api/contacts/${id}`, input);
+  return mapContact(data);
+}
+
+/**
+ * Block a contact, or lift the block.
+ *
+ * Blocking drops inbound at the worker before a conversation exists, so a
+ * blocked number cannot open a thread, fire an auto-reply, consume quota or
+ * reach an agent. It does not delete anything: the conversation history is
+ * usually the reason for blocking someone, so it stays readable.
+ */
+export async function blockContact(id: string, reason?: string): Promise<Contact> {
+  const { data } = await api.post(`/api/contacts/${id}/block`, reason ? { reason } : {});
+  return mapContact(data);
+}
+
+export async function unblockContact(id: string): Promise<Contact> {
+  const { data } = await api.post(`/api/contacts/${id}/unblock`, {});
   return mapContact(data);
 }
 
