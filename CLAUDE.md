@@ -136,6 +136,27 @@ reset those counters to make a test read `0001` again; see
 `חשבונית מס` / `فاتورة ضريبية` labelling. Do not add any without a real
 accounting provider behind it — see [docs/API-CONTRACTS-U2-U6.md](docs/API-CONTRACTS-U2-U6.md).
 
+### Image rebuilds run at checkpoints, not per commit
+
+`docker compose build backend frontend` belongs at the end of a batch of work,
+before anything ships. **It is not a per-commit gate**, and it was deliberately
+removed as one on 2026-09-01 — this note exists so it is not restored later by
+someone assuming it was dropped by accident.
+
+The reasoning, which is the same one this repository has applied four times
+already: across eleven consecutive runs it **never once caught a fault that
+`tsc` and the two harnesses had not already caught**, and it twice took the
+Docker engine down with it — `rpc error: code = Unavailable ... EOF` mid-build,
+followed by the daemon wedging and the database becoming unreachable behind a
+half-open port proxy (D-3). A check whose failures report on the environment
+rather than on the code is the D-5 / D-10 / D-12 / D-16 family, and the cost of
+running it eleven times was two recovery cycles and no information.
+
+What it *does* verify is real — that the image builds at all, which the
+type-checker cannot tell you, since the Dockerfile installs, generates the
+Prisma client and compiles inside the container. That is worth knowing before
+anything ships. It is worth knowing **once per batch**, not once per commit.
+
 ### Check migration status
 ```bash
 docker compose exec backend npx prisma migrate status
