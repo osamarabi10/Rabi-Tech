@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef } from 'react';
-import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, MessageCircleMore, MessageSquareText, Tags, Users, UserRound, Workflow } from 'lucide-react';
+import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, KeyRound, MessageCircleMore, MessageSquareText, Tags, Users, UserRound, Workflow } from 'lucide-react';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -40,6 +40,13 @@ const GROUPS = [
       { href: '/settings/tags', label: 'Tags', icon: Tags },
       { href: '/settings/general#auto-replies', label: 'الأتمتة', icon: Workflow },
     ],
+  },
+  {
+    // Developer-facing, and separate from التطبيقات on purpose: connecting a
+    // WhatsApp number and writing software against the API are different jobs
+    // done by different people. Webhooks join this group when they land.
+    label: 'المطوّرون',
+    items: [{ href: '/settings/api', label: 'مفاتيح API', icon: KeyRound }],
   },
   {
     label: 'البيانات',

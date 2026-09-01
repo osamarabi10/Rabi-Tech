@@ -2525,3 +2525,51 @@ export async function setActiveChannel(kind: string): Promise<ChannelCapabilitie
   const { data } = await api.post('/api/channels/active', { kind });
   return data.capabilities ?? null;
 }
+
+/* ── API tokens (P1a) ─────────────────────────────────────────────────────── */
+
+export type ApiTokenScope = string;
+
+export type ApiTokenRow = {
+  id: string;
+  name: string;
+  /** Public half. The secret is never returned by any endpoint. */
+  prefix: string;
+  scopes: ApiTokenScope[];
+  expiresAt: string | null;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  createdBy: { id: string; name: string } | null;
+};
+
+/**
+ * The one and only time the plaintext exists on this side.
+ *
+ * Deliberately not stored anywhere by the client — no localStorage, no state
+ * that survives navigation. It is shown once, copied, and gone.
+ */
+export type IssuedApiToken = ApiTokenRow & { token: string };
+
+export async function fetchApiTokens(): Promise<ApiTokenRow[]> {
+  const { data } = await api.get('/api/api-tokens');
+  return data.tokens;
+}
+
+export async function fetchApiTokenScopes(): Promise<{ scopes: string[]; defaultExpiryDays: number }> {
+  const { data } = await api.get('/api/api-tokens/scopes');
+  return data;
+}
+
+export async function createApiToken(input: {
+  name: string;
+  scopes: string[];
+  expiresInDays: number | null;
+}): Promise<IssuedApiToken> {
+  const { data } = await api.post('/api/api-tokens', input);
+  return data.token;
+}
+
+export async function revokeApiToken(id: string): Promise<void> {
+  await api.delete(`/api/api-tokens/${id}`);
+}
