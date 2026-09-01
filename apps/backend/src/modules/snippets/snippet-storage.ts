@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
+import { signingSecret } from '../../lib/signing-secret';
 
 export const MAX_SNIPPET_FILES = 5;
 export const MAX_SNIPPET_FILE_BYTES = 20 * 1024 * 1024;
@@ -63,7 +64,7 @@ export async function removeSnippetAsset(organizationId: string, storageKey: str
 }
 
 export function signSnippetAsset(organizationId: string, storageKey: string): string {
-  const secret = process.env.JWT_SECRET || 'dev-secret';
+  const secret = signingSecret();
   return crypto.createHmac('sha256', secret).update(`snippet:${organizationId}:${storageKey}`).digest('hex');
 }
 

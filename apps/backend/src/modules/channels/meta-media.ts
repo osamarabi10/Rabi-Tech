@@ -4,6 +4,7 @@ import path from 'path';
 import axios from 'axios';
 import logger from '../../lib/logger';
 import { META_GRAPH_VERSION } from './meta.client';
+import { signingSecret } from '../../lib/signing-secret';
 
 /**
  * Inbound Meta media: fetched once, at ingest, and kept.
@@ -64,7 +65,7 @@ export function messageMediaPath(organizationId: string, storageKey: string): st
 }
 
 function sign(organizationId: string, storageKey: string): string {
-  const secret = process.env.JWT_SECRET || 'dev-secret';
+  const secret = signingSecret();
   return crypto
     .createHmac('sha256', secret)
     .update(`message-media:${organizationId}:${storageKey}`)

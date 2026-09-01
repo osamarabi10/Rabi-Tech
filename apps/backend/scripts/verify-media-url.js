@@ -94,6 +94,49 @@ check('a non-proxy URL is left alone',
   signMediaUrl('https://example.test/a.jpg', ORG) === 'https://example.test/a.jpg');
 check('null stays null', signMediaUrl(null, ORG) === null);
 
+// ── D-29: no signing key means no signature, never a default one ──────────
+//
+// Four call sites used to sign with `JWT_SECRET || 'dev-secret'`. Because
+// possession of a valid signature *is* the authorisation for media, branding
+// and snippet assets, a predictable key does not weaken the check — it removes
+// it, for every tenant at once, silently. The boot gate does not close this:
+// outside production it only warns, and ALLOW_INSECURE_SECRETS=1 downgrades it
+// to a log line, which is the state this deployment runs in today.
+//
+// So the assertion is that it THROWS. A test that only proved the signature
+// changed would pass just as happily against a second hardcoded constant.
+{
+  const { signBrandingAsset } = require('../dist/modules/branding/branding.service');
+  const { signSnippetAsset } = require('../dist/modules/snippets/snippet-storage');
+  const previous = process.env.JWT_SECRET;
+
+  const refuses = (label, fn) => {
+    try {
+      const out = fn();
+      check(label, false, 'returned ' + JSON.stringify(out) + ' instead of throwing');
+    } catch (error) {
+      check(label, /JWT_SECRET/.test(String(error)), String(error).slice(0, 90));
+    }
+  };
+
+  try {
+    delete process.env.JWT_SECRET;
+    refuses('media: no JWT_SECRET refuses to sign', () => generateMediaToken(MSG, SESSION, ORG));
+    refuses('media: no JWT_SECRET refuses to verify', () => verifyMediaToken(token));
+    refuses('branding: no JWT_SECRET refuses to sign', () => signBrandingAsset(ORG, 'logo', 'a.png'));
+    refuses('snippets: no JWT_SECRET refuses to sign', () => signSnippetAsset(ORG, 'k/a.pdf'));
+
+    process.env.JWT_SECRET = '   ';
+    refuses('a whitespace-only JWT_SECRET is not a secret', () => generateMediaToken(MSG, SESSION, ORG));
+  } finally {
+    if (previous === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previous;
+  }
+
+  check('the real secret still signs after the refusals',
+    typeof generateMediaToken(MSG, SESSION, ORG) === 'string');
+}
+
 console.log('');
 console.log(passed + '/' + (passed + failed) + ' checks passed.');
 if (failed > 0) process.exitCode = 1;

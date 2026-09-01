@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { signingSecret } from '../lib/signing-secret';
 
 /**
  * Time-limited signed URLs for media.
@@ -30,7 +31,7 @@ const MEDIA_URL_EXPIRY_SECONDS = 3600; // 1 hour
 
 function sign(payload: string): string {
   return crypto
-    .createHmac('sha256', process.env.JWT_SECRET || 'default-secret')
+    .createHmac('sha256', signingSecret())
     .update(payload)
     .digest('hex');
 }

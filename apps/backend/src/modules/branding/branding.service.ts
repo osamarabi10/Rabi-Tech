@@ -6,6 +6,7 @@ import path from 'path';
 import { Organization, OrganizationBranding } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { runAsPlatform } from '../../lib/tenant-context';
+import { signingSecret } from '../../lib/signing-secret';
 
 export type PublicBranding = {
   productName: string;
@@ -223,7 +224,7 @@ export function brandingUploadRoot(): string {
 }
 
 export function signBrandingAsset(organizationId: string, kind: BrandingAssetKind, fileName: string): string {
-  const secret = process.env.JWT_SECRET || 'dev-secret';
+  const secret = signingSecret();
   return crypto.createHmac('sha256', secret).update(`${organizationId}:${kind}:${fileName}`).digest('hex');
 }
 
