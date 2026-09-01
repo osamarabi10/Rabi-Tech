@@ -190,6 +190,30 @@ detection, the destination seam, retention refusing to delete files it did not
 write, and freshness. `inbox-views-check` is hermetic for the same reason; keep
 both that way.
 
+### Public API tokens
+```bash
+cd apps/backend && npm run test:api-tokens
+```
+
+**81/81, against the real database** — and not hermetic on purpose. Its subject
+*is* stored rows: that the secret was never written, that the unique index makes
+prefixes non-colliding, that `revokedAt` is read on the path a request actually
+takes. It deletes everything it creates, including on failure.
+
+**`resolveApiToken` is called with no ambient tenant scope**, because that is
+the state the server is in when it calls it — resolution is what *establishes*
+the tenant. `main()` is deliberately not wrapped in `runAsPlatform` for that
+reason. Do not "fix" that by wrapping it; it is the regression this file exists
+to catch. During development the resolver read `ApiToken` unwrapped and the
+fail-closed extension threw `TENANT_ISOLATION_VIOLATION` on what would have been
+**every API request**. Mutation-proved: deleting the `runAsPlatform` wrap in
+`dist` takes the gate straight to that exception.
+
+`ApiToken` is deliberately **not** in `PLATFORM_MODELS`. That list unscopes a
+model everywhere, which would also unscope the management routes where one
+workspace must never see another's tokens. The exemption belongs at the single
+call that legitimately has no tenant yet.
+
 ### Platform finance check
 ```bash
 cd apps/backend && npm run test:finance

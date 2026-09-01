@@ -42,6 +42,8 @@ import usageRoutes        from './modules/usage/usage.routes';
 import brandingRoutes     from './modules/branding/branding.routes';
 import billingRoutes      from './modules/billing/billing.routes';
 import channelRoutes      from './modules/channels/channels.routes';
+import apiTokenRoutes     from './modules/api-tokens/api-tokens.routes';
+import publicApiRoutes    from './modules/api-tokens/public-api.routes';
 import { billingWebhookHandler } from './modules/billing/billing.webhook';
 import { verifyMediaProxyToken, verifyMediaToken } from './utils/signed-url';
 import { runAsOrganization, runAsPlatform } from './lib/tenant-context';
@@ -342,6 +344,9 @@ app.use('/api/auth/verify-email', LIMITS.emailVerify);
 app.use('/api/auth/resend-verification', LIMITS.emailVerify);
 app.use('/api/branding/public', LIMITS.publicBranding);
 app.use('/webhooks', LIMITS.webhook);
+// Before the /api backstop, so a public-API request is bounded by its token
+// budget first and only then by the shared per-IP one.
+app.use('/api/v1', LIMITS.publicApi);
 app.use('/api', LIMITS.api);
 
 // SECURITY: Require authentication for ALL /api/* routes except /api/auth/*
@@ -370,6 +375,19 @@ app.use('/api', (req, res, next) => {
     || req.path === '/billing/verify-email'
     || req.path.startsWith('/billing/checkout-status/')
   ) {
+    return next();
+  }
+
+  /*
+    The public API authenticates with a bearer token, not a session JWT, and
+    establishes its own tenant scope in `apiTokenAuth`. Falling through to
+    `verifyToken` here would reject every API token as a malformed JWT.
+
+    This is an exemption from *this* middleware only — `/api/v1` is not
+    unauthenticated. Its router calls `apiTokenAuth` before any handler, and
+    that middleware ends in `runAsOrganization` exactly like the branch below.
+  */
+  if (req.path === '/v1' || req.path.startsWith('/v1/')) {
     return next();
   }
 
@@ -431,6 +449,10 @@ app.use('/api/usage',          usageRoutes);
 app.use('/api/branding',       brandingRoutes);
 app.use('/api/billing',        billingRoutes);
 app.use('/api/channels',       channelRoutes);
+app.use('/api/api-tokens',     apiTokenRoutes);
+// The public API. Mounted last among /api routes and versioned in the path;
+// it authenticates itself and shares no handler with the console.
+app.use('/api/v1',             publicApiRoutes);
 
 // 404
 app.use((req: any, res) => {

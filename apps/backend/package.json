@@ -11,6 +11,7 @@
     "test:backup-replication": "npm run build && node scripts/verify-backup-replication.js",
     "test:keywords": "npm run build && node scripts/verify-keywords.js",
     "test:restrictions": "npm run build && node scripts/verify-restrictions.js",
+    "test:api-tokens": "npm run build && node scripts/verify-api-tokens.js",
     "test:inbox-views": "npm run build && node scripts/inbox-views-check.js",
     "backup:now": "npm run build && node scripts/run-backup.js",
     "test:snooze": "npm run build && node scripts/verify-snooze-wake.js",

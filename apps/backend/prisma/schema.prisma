@@ -91,6 +91,7 @@ model Organization {
   workflows               Workflow[]
   workflowExecutions      WorkflowExecution[]
   authSessions            AuthSession[]
+  apiTokens               ApiToken[]
   weeklyRecapRecipients   WeeklyRecapRecipient[]
   userInvitations         UserInvitation[]
 
@@ -1048,6 +1049,7 @@ model User {
   assignedContacts      Contact[]              @relation("ContactAssignee")
   blockedContacts       Contact[]              @relation("ContactBlockedBy")
   authSessions          AuthSession[]
+  apiTokens             ApiToken[]             @relation("ApiTokenCreatedBy")
   weeklyRecapMembership WeeklyRecapRecipient[]
 
   // Composite unique: one identity per org
@@ -1078,6 +1080,59 @@ model AuthSession {
   @@unique([id, organizationId])
   @@index([organizationId, userId, revokedAt])
   @@index([lastSeenAt])
+}
+
+/// A bearer token for the public API (P1).
+///
+/// ## Scoped and expiring, deliberately
+///
+/// Respond.io's own developer documentation records the alternative as a gap:
+/// "No expiry, rotation, revocation procedure or scoping mechanism is
+/// documented anywhere… the token is workspace-wide." A workspace-wide eternal
+/// token is a single credential that can read every conversation a subscriber
+/// has ever had, and retrofitting auth is the most expensive change in
+/// software — so scopes and an expiry exist from the first row.
+///
+/// ## The secret is never stored
+///
+/// `tokenHash` is SHA-256 of the secret half. Not bcrypt: this is a
+/// high-entropy random value rather than a human password, so a slow KDF buys
+/// nothing against brute force and costs a hash on every API request.
+///
+/// `prefix` is the public half, stored in clear so a token can be identified
+/// in a list and looked up in one indexed query without hashing every row.
+/// The full token is shown to the operator exactly once, at creation.
+model ApiToken {
+  id             String    @id @default(cuid())
+  organizationId String
+  /// What the operator called it. Shown wherever the token is listed.
+  name           String
+  /// Public half — `rbt_<prefix>`. Unique platform-wide so lookup needs no
+  /// tenant hint: an inbound request carries a token and nothing else.
+  prefix         String    @unique
+  /// SHA-256 of the secret half, hex.
+  tokenHash      String
+  /// Operations this token may perform, e.g. `contacts:read`.
+  /// Empty is not "everything" — it is "nothing", and the middleware treats it
+  /// that way. A scope list that defaults open is how a restricted credential
+  /// becomes an unrestricted one by omission.
+  scopes         String[]  @default([])
+  /// Null means no expiry. Permitted, because an integration nobody maintains
+  /// is worse than one that keeps working — but the console warns, and the
+  /// creation form defaults to 90 days.
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  /// Written on use, at most once a minute. An unused token is the strongest
+  /// signal that a credential can be revoked safely.
+  lastUsedAt     DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("ApiTokenCreatedBy", fields: [createdById, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, revokedAt])
 }
 
 /// Recipients are memberships, not loose email strings. The composite foreign

@@ -125,4 +125,29 @@ export const LIMITS = {
 
   /** Everything else under /api. Generous — this is a backstop, not a throttle. */
   api: rateLimit('api', { max: 300, windowMs: 60_000 }),
+
+  /*
+    The public API, keyed by *token* rather than by IP.
+
+    An IP key is wrong here in both directions. Several integrations behind one
+    corporate NAT would throttle each other for reasons none of them can see,
+    and one integration spread across a serverless fleet would get a fresh
+    budget per cold start. The token is the thing whose behaviour we actually
+    want to bound, and it is the thing whose owner can be told about it.
+
+    Only the prefix is keyed — the secret half never reaches this map, which
+    lives in memory and appears in the log line above on every 429.
+  */
+  publicApi: rateLimit('public-api', {
+    max: 120,
+    windowMs: 60_000,
+    keyBy: (req) => {
+      const raw = String(req.headers.authorization || '');
+      const prefix = raw.startsWith('Bearer rbt_') ? raw.slice(11).split('_')[0] : '';
+      // No usable credential: fall back to IP so an unauthenticated flood is
+      // still bounded rather than sharing one empty-string bucket.
+      return prefix || `ip:${req.ip}`;
+    },
+    message: 'Rate limit exceeded. Retry after the interval in the Retry-After header.',
+  }),
 };
