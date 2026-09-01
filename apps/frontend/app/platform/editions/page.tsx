@@ -29,6 +29,10 @@ type Edition = {
   monthlyPriceCents: number;
   currency: string;
   isActive: boolean;
+  /** Set means withdrawn from the catalogue entirely; stronger than !isActive. */
+  archivedAt: string | null;
+  pricingModel: 'FREE' | 'FIXED' | 'NEGOTIATED';
+  billingInterval: 'MONTHLY' | 'YEARLY';
   sortOrder: number;
   monthlyActiveContactsLimit: number | null;
   monthlyOutboundMessagesLimit: number | null;
@@ -118,6 +122,8 @@ export default function PlatformEditions() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [archiving, setArchiving] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewFor, setPreviewFor] = useState<string | null>(null);
@@ -170,6 +176,30 @@ export default function PlatformEditions() {
     }
   };
 
+  /**
+   * Withdraw an edition from the catalogue, or bring it back.
+   *
+   * Distinct from unticking "sold": archiving removes it from the console and
+   * every upgrade prompt, while an archived edition still resolves in full for
+   * the subscribers already on it. Nobody loses anything they are paying for.
+   *
+   * Clearing it restores whatever isActive already said, so an edition that was
+   * deactivated before being archived comes back deactivated rather than on
+   * sale. One action each way, and neither guesses at the other's intent.
+   */
+  const setArchived = async (code: string, archived: boolean) => {
+    setArchiving(code);
+    try {
+      await api.patch(`/api/platform/editions/${code}`, { archived });
+      toast.success(archived ? `${code} archived` : `${code} restored`);
+      await load();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || `Could not update ${code}`);
+    } finally {
+      setArchiving(null);
+    }
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(false);
@@ -210,6 +240,15 @@ export default function PlatformEditions() {
     }
   };
 
+  /*
+    Archived editions are withheld from the list, not from the data. They still
+    resolve in full for the subscribers on them - that is the whole point of
+    archiving rather than deleting - so this is a display decision and nothing
+    else reads it.
+  */
+  const archivedCount = editions.filter((edition) => edition.archivedAt).length;
+  const visible = showArchived ? editions : editions.filter((edition) => !edition.archivedAt);
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -243,6 +282,23 @@ export default function PlatformEditions() {
         </span>
       </div>
 
+      {/*
+        Archived editions are hidden by default and counted rather than
+        silently dropped. An owner who archived something last month should not
+        have to wonder whether it is gone or merely out of sight - and an empty
+        screen with no explanation is indistinguishable from a failed load.
+      */}
+      {archivedCount > 0 ? (
+        <label className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+          />
+          Show {archivedCount} archived edition{archivedCount === 1 ? '' : 's'}
+        </label>
+      ) : null}
+
       <div className="mt-8 space-y-8">
         {loadError ? (
           <ErrorState
@@ -251,12 +307,12 @@ export default function PlatformEditions() {
             retryLabel="Retry"
             onRetry={load}
           />
-        ) : editions.length === 0 ? (
+        ) : visible.length === 0 ? (
           <EmptyState
             title="No editions configured"
             description="The edition catalogue is empty. Add an edition through the server configuration before selling it."
           />
-        ) : editions.map((edition) => {
+        ) : visible.map((edition) => {
           const pending = draft[edition.code] || {};
           const value = <K extends keyof Edition>(field: K): Edition[K] =>
             (pending[field as string] !== undefined ? pending[field as string] : edition[field]) as Edition[K];
@@ -291,6 +347,16 @@ export default function PlatformEditions() {
                     onClick={() => loadPreview(edition.code)}
                   >
                     {previewing === edition.code ? 'Checking…' : 'Preview effect'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={archiving === edition.code}
+                    onClick={() => setArchived(edition.code, !edition.archivedAt)}
+                  >
+                    {archiving === edition.code
+                      ? 'Working…'
+                      : edition.archivedAt ? 'Restore' : 'Archive'}
                   </Button>
                   <Button size="sm" disabled={!dirty || saving === edition.code} onClick={() => save(edition.code)}>
                     {saving === edition.code ? 'Saving…' : 'Save'}
@@ -372,6 +438,35 @@ export default function PlatformEditions() {
                     the server accepts it.
                   </span>
                 </label>
+
+                {/*
+                  Read-only, and each for its own reason.
+
+                  pricingModel is settable through the API but not exposed here
+                  yet; it decides whether an edition collects money at all, so
+                  it is shown because an operator reading a price needs to know
+                  whether it is charged, free or negotiated.
+
+                  currency is deliberately NOT editable, and this is a decision
+                  rather than an omission. The create path does not validate it,
+                  and Plan.currency is what sellableCurrencies() derives from -
+                  so a typo here would become the allowlist that invoices are
+                  written against. Making it settable needs validation designed
+                  first.
+                */}
+                <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
+                  <span>
+                    <Lock className="mr-1 inline h-3 w-3" />
+                    Pricing: <code dir="ltr">{edition.pricingModel}</code>
+                    {' · '}
+                    <code dir="ltr">{edition.billingInterval === 'YEARLY' ? 'per year' : 'per month'}</code>
+                  </span>
+                  <span>
+                    <Lock className="mr-1 inline h-3 w-3" />
+                    Currency: <code dir="ltr">{edition.currency}</code> — read-only; it is the
+                    source the invoicing allowlist is derived from.
+                  </span>
+                </div>
 
                 <div className="flex items-start gap-2 text-sm text-muted-foreground">
                   <Lock className="mt-0.5 h-3 w-3 shrink-0" />
