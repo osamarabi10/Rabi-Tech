@@ -6,6 +6,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 RabiTech is a multi-tenant, white-label WhatsApp customer-conversation platform. Independent businesses (subscribers) each get a branded workspace: customers message their WhatsApp number, and the system auto-routes, auto-replies, and lets their agents respond from a shared web inbox. A separate platform-owner console manages subscribers, plans, and billing.
 
+## Release rule — every change is committed and pushed
+
+**[docs/RELEASE-WORKFLOW.md](docs/RELEASE-WORKFLOW.md) is the sequence.** Adopted
+2026-09-01: work is not finished until it is committed and pushed to
+`origin`. Nothing waits in the working tree for a later batch.
+
+It exists because the alternative was measured — on 2026-09-01 this repository
+held **54 commits across 16 branches on one laptop only**, last push 31 August,
+with the editions phase, Stripe adapter and invoice-integrity migration having
+no second copy anywhere.
+
+**This repository is PUBLIC**, deliberately and confirmed by the owner. Two
+consequences that change how you work here:
+
+- **No secret ever enters the tracked tree** — not in code, a doc, a commit
+  message or a fixture. Name a variable, never show its value. `.env` is
+  gitignored and has never been committed; keep `git log --all -- .env` empty.
+  A secret that is committed must be **rotated**, not merely removed.
+- **Rotating O1–O3 is urgent, not scheduled**, because the public documents
+  already name the shipped default database password and `dev-admin-key`.
+
+**Commit only your own files.** This tree routinely carries the owner's
+uncommitted work; `git status` first and stage by name. Never `git add -A`.
+
+[docs/WHITEPAPER.md](docs/WHITEPAPER.md) describes the system for someone who
+has not seen the code — architecture, the multi-tenancy model, the commercial
+model, and an honest status section. Update it when an architectural claim in it
+stops being true.
+
 ## Roadmap
 
 The authoritative RabiTech target architecture, implementation checkpoint, release gates, and sequencing are documented in [docs/ARCHITECTURE-MULTITENANCY.md](docs/ARCHITECTURE-MULTITENANCY.md). Phase 1 is incomplete until every isolation gate marked there is verified.

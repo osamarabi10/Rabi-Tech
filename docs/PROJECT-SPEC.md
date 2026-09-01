@@ -114,18 +114,46 @@ outbound: composer → Message row (persist-first) → gateway → SENT/FAILED
 
 | Capability | Respond.io | RabiTech |
 |---|---|---|
+Refreshed 2026-09-01 against
+`Respond.io_Workspace_System_Documentation.docx` — a read-only inspection of a
+live workspace (ID 320612, Asia/Jerusalem). **That document directly inspected
+only Dashboard and Inbox**; its Contacts, AI Agents, Broadcasts, Workflows,
+Reports, Onboarding, Users and Lifecycle sections are route names plus quotes
+from Respond.io's public docs, so rows sourced from them are marked *(doc,
+uninspected)* rather than treated as observed behaviour.
+
+Its value is the operating numbers, which are the first real ones we have for a
+workspace in this market: **663 contacts open and assigned, 972 New Lead / 5 Hot
+Lead / 4 Payment / 1 Customer, 423 conversations opened and 279 closed in 14
+days.** Two of our deferrals should be read against those figures rather than
+against our own 97 messages — see H3/F4.3 and M3.5/F5.3.
+
+| Capability | Respond.io | RabiTech |
+|---|---|---|
 | Team inbox, threading, assignment | ✔ | ✔ (round-robin + least-open + caps) |
-| Internal notes / collaboration | ✔ | ✔ notes; ✘ @mentions, typing-collision |
+| Internal notes / collaboration | ✔ | ✔ notes **and @mentions with notification fan-out** (H5/M6.6, 2026-08-22); ✘ typing-collision |
 | Snippets + shortcodes | ✔ | ✔ full CRUD + composer expansion |
-| Contacts, tags, custom fields | ✔ | ✔ (custom-field UI thin) |
-| Saved segments | ✔ | ✘ — filter DSL exists, not saveable (P10-a) |
+| Contacts, tags, custom fields | ✔ | ✔ incl. in-panel custom-field editing with type validation (H4, 2026-08-23) |
+| Saved segments | ✔ | ✔ **delivered (P10-a, 8/8)** |
+| Custom inboxes / saved queues | ✔ | ✔ `InboxView` (M6) |
+| Lifecycle stages + lifecycle queues | ✔ | ✔ tenant-configurable |
+| Closing notes, categories, auto-close | ✔ | ✔ three closing-note modes |
+| WhatsApp 24h window + template fallback | ✔ | ✔ enforced before Meta is called |
+| Merge suggestions | ✔ | ✔ |
+| **Blocked contacts** | ✔ | ✘ — **not built and not previously on any list.** A real need at 663 contacts |
+| **Unassign after conversation closes** | ✔ (observed as a workflow) | ✘ — the engine can nearly express it already |
+| **AI Agents** (assignable, appear in the assignment dropdown) | ✔ | ✘ — P13. Today "AI" here is only plan limits on `ai_tokens_in/out`; there is no feature behind them |
+| **AI summarize / assist in the composer** | ✔ | ✘ — P13 |
+| Tasks inbox | ✔ *(doc, uninspected — and empty in the observed workspace)* | ✘ — **not recommended**; it was unconfigured in a workspace with 663 live contacts |
+| Calls / incoming calls | ✔ | ✘ — **deliberate.** RabiTech is a 1:1 text platform |
+| Chart export SVG / PNG | ✔ | ✘ — CSV exists for contacts and finance; charts export nothing |
 | Broadcasts + delivery reports | ✔ | ✔ incl. real delivered/read acks |
 | Auto-replies / away / welcome | ✔ | ✔ 10 configurable kinds |
 | **Visual workflow builder** | ✔ flagship | ✘ — Phase 11 |
 | AI assist / RAG | ✔ | ✘ — deliberately last |
 | Omnichannel (TG/FB/IG…) | ✔ | ✘ WhatsApp only, by design for now |
 | Official WhatsApp Cloud API | ✔ | ✘ unofficial gateway (risk: see runbook) |
-| Reports/analytics | ✔ | ✔ core; ✘ SLA, channel-volume charts |
+| Reports/analytics | ✔ | ✔ core; ✘ SLA, channel-volume charts, chart export |
 | Multi-tenant + white-label + metering + billing | n/a (they're the SaaS) | ✔ — our differentiator |
 
 ---

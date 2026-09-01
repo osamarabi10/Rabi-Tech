@@ -420,10 +420,47 @@ while breaking all metering.
 CRITICAL alert for RabiTech Demo is genuine, not test residue, and was left in
 place deliberately. See the gateway runbook.
 
-- [ ] **H2. Per-org campaign rate limits** (plan-aware): queue-per-org or Redis
+- [x] **H2. Per-org campaign rate limits** (plan-aware): queue-per-org or Redis
   token bucket — BullMQ group limiting is Pro-only, so not a one-liner
-- [ ] **H3. Reports onto `PlatformDailyMetric` rollups** (scale, not
-  correctness)
+  — **done 2026-08-26**, recorded here 2026-09-01. This box was still open
+  while `PHASES-TO-LAUNCH.md` F4.2 recorded the same work as complete, with
+  `npm run test:worker-fairness` proving same-key FIFO/no-overlap, cross-key
+  concurrency and rate delay. Two files disagreeing about what is done is how
+  finished work gets done twice.
+- [ ] **H3. Reports onto rollups** (scale, not correctness) — **deferred
+  2026-09-01, and this named the wrong table.** `PlatformDailyMetric` is keyed
+  by the `UsageMetric` enum and structurally cannot hold conversations,
+  durations, agents, CSAT or closures; `AnalyticsHourly` is the right
+  destination and `reporting.service.ts` already reads it at 2 of ~22 sites.
+  The scans are already capped with a `truncated` flag, and there is no
+  measured bottleneck at 97 messages. Full reasoning and the real cost when it
+  is earned: F4.3 in [PHASES-TO-LAUNCH.md](PHASES-TO-LAUNCH.md).
+
+- [x] **H7. D-12 — gate scripts read `DATABASE_URL` from the ambient shell**
+  — **done 2026-09-01.** Seven scripts inherited `DATABASE_URL`, `REDIS_URL`
+  and `JWT_SECRET` through the modules they import and named none of them, so
+  each passed in a warmed terminal and failed in a clean one. The rule now
+  lives once, in `scripts/load-env.js`, required first by
+  `verify-campaign-replies`, `verify-dunning`, `verify-snooze-wake`,
+  `verify-media-url`, `verify-finance`, `run-backup` and (as a bare
+  side-effect import, which TypeScript emits first and never elides)
+  `verify-worker-fairness.ts` — where the position is load-bearing because
+  `redis-coordination` builds its client at module load.
+
+  `inbox-views-check.js` is deliberately **not** patched: it reaches only
+  `lib/inbox-view-filter`, which reads no environment at all, and loading an
+  environment a check does not use is how a hermetic gate stops being one.
+  `verify-backup-replication.js` is hermetic for the same reason.
+
+  Verified: in a shell with all three variables stripped the loader resolves
+  each from the repo root; a pre-set `DATABASE_URL` is **preserved**, so the CI
+  workflow's own value still wins; the loader precedes the first env-reading
+  require in all seven, confirmed against the TypeScript emit for the `.ts`
+  one. The three database-free gates were run and watched — media-url 19/19,
+  inbox-views 16/16, backup-replication 30/30. The four database-backed gates
+  were **not** run, so their green is still owed.
+  — verify: `npm run test:finance` and `test:dunning` from a terminal that has
+  never exported `DATABASE_URL`
 - [x] **H4. Custom-field editing** in the inbox contact panel
   — **done 2026-08-23.** A subscriber could define custom fields in settings
   and then fill them from exactly one place: a CSV import. The panel an agent
@@ -444,7 +481,21 @@ place deliberately. See the gateway runbook.
   mistyped value permanently stuck.
 - [x] **H5. @mentions in internal notes** (+ notification fan-out)
   — **done 2026-08-22.** Same work as M6.6 above; this entry predated it.
-- [ ] **H6. Backup job**: nightly `pg_dump` to `.tools/backups` + retention
+- [x] **H6. Backup job**: nightly `pg_dump` to `.tools/backups` + retention
+  — **done before 2026-08-26**, recorded here 2026-09-01. `backup.worker.ts`
+  is started at boot (`src/index.ts:25`), runs 03:20 UTC, verifies each dump by
+  restoring it into a scratch database and counting, prunes to `BACKUP_KEEP`
+  touching only its own `auto-` prefix, and alerts the owner on failure. Same
+  drift as H2: `PHASES-TO-LAUNCH.md` F4.1 already recorded it with consecutive
+  verified files for August 24-26.
+
+- [ ] **H6b. Off-host backup replication** — the encrypted copy and its restore
+  drill are built and gated (`npm run test:backup-replication`, 30/30,
+  hermetic); the destination is still a local directory, so nothing yet
+  survives losing this disk. Tracks F4.1b in
+  [PHASES-TO-LAUNCH.md](PHASES-TO-LAUNCH.md), where the detail lives.
+  — verify: a real destination configured, `BACKUP_ENCRYPTION_KEY` set **and
+  written down off this machine**, then one watched green drill
 
 ---
 
@@ -1095,3 +1146,45 @@ Gate **56/56 → 57/57**. All test data removed.
 
 - [ ] **4. Quiet hours** enforced in the recipient's local time from phone prefix
 - [ ] **5. Broadcast clone**
+
+---
+
+## M9 — Gaps found against a live Respond.io workspace · ~1.5 days
+
+Added 2026-09-01 from `Respond.io_Workspace_System_Documentation.docx`, an
+inspection of a real workspace carrying 663 open contacts and 423 conversations
+per fortnight. These are the only items in that document that are **both**
+absent here **and** worth building; the parity scorecard in
+[PROJECT-SPEC.md](PROJECT-SPEC.md) §4 carries the full comparison and says which
+gaps are deliberate.
+
+- [ ] **M9.1 Blocked contacts** · ~0.5 day · *the one real gap nobody had listed*
+  A contact who must stop reaching the inbox — harassment, a wrong number that
+  keeps writing, a competitor. At 663 contacts this is operational, not
+  theoretical, and today the only remedy is deleting the contact, which destroys
+  the conversation history that is the reason to block them.
+  Inbound must be dropped **at the webhook, before `getOrCreateActiveConversation`**,
+  so a blocked contact cannot open a thread; the existing threads stay readable.
+  — verify: block a contact, send from that number, confirm no conversation is
+  created and no auto-reply is sent, then unblock and confirm the next message
+  lands in the existing thread rather than a new one
+
+- [ ] **M9.2 Unassign after a conversation closes** · ~0.5 day
+  Observed in the live workspace as a workflow. Without it, closed threads keep
+  counting against an agent's open-conversation load, which is the input to
+  least-open auto-assignment — so the router quietly gets worse the longer
+  someone works. An organization-level setting rather than a workflow node, so
+  it holds for closures from every source (manual, auto-close, workflow).
+  — verify: close a conversation, confirm `assignedToId` clears and the agent's
+  least-open count drops by one
+
+- [ ] **M9.3 Chart export (SVG / PNG)** · ~0.5 day
+  Reports already export CSV for contacts and finance; the charts export
+  nothing. Client-side serialisation of the rendered SVG, with PNG via canvas —
+  no server work and no new dependency.
+  — verify: export both formats from the conversations chart and open them
+
+**Deliberately not built**, recorded so they are not re-proposed: a **Tasks**
+inbox (unconfigured in the observed workspace, so it demonstrates nothing at
+this scale) and **calls / incoming calls** (RabiTech is a 1:1 text platform by
+design — see CLAUDE.md).

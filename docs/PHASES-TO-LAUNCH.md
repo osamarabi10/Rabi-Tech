@@ -158,6 +158,33 @@ Not blocking a first sale. Blocking a good night's sleep once there is one.
 - [ ] **F4.1b Replicate verified dumps off-host.** The current host bind survives
       a container replacement but not disk or VPS loss. Production needs an
       encrypted object-store copy and a restore drill from that copy.
+
+      **Pipeline and drill built 2026-09-01; the destination is still pending,
+      so this stays open.** What exists: `backup-crypto.ts` (streaming
+      AES-256-GCM, `[RBK1][IV][ciphertext][tag]`, keyed on a separate
+      `BACKUP_ENCRYPTION_KEY`), `backup-destination.ts` (a four-method
+      `BackupDestination` seam with a local-directory implementation), and
+      `backup-drill.ts` (download → decrypt → restore → count, weekly).
+      `npm run test:backup-replication` is **30/30**, hermetic — no Postgres,
+      no Redis, no Docker, so it cannot go red for environmental reasons.
+
+      **Why it is not ticked.** The only implementation writes to a directory
+      this host can see. That survives a container replacement, which the
+      existing bind already did, and not the disk loss this item exists for.
+      Closing it needs a real destination — B2 or R2 against the same
+      interface, roughly one file — plus `BACKUP_ENCRYPTION_KEY` set and
+      **recorded off this machine**. An encrypted copy whose only key dies with
+      the host is ciphertext, not a backup.
+
+      Three deliberate behaviours, each of which was a way to get this wrong:
+      a missing key switches replication **off** rather than uploading
+      plaintext; a failed upload does not fail the backup, because the local
+      dump is still verified and good, and raises its own
+      `BACKUP_REPLICATION_FAILED` rather than borrowing `BACKUP_FAILED`; and
+      the drill fails on a copy older than `BACKUP_REPLICA_MAX_AGE_HOURS` even
+      when it restores perfectly, because replication that stopped quietly
+      while the drill kept passing on an old file is the D-5 / D-10 / D-16
+      pattern exactly.
 - [x] **F4.2 Per-organization campaign rate limits**, plan-aware. Completed
       2026-08-26. Incoming work now runs concurrently across organization,
       session and contact keys while a Redis FIFO lock preserves ordering for
@@ -166,8 +193,37 @@ Not blocking a first sale. Blocking a good night's sleep once there is one.
       optional operator ceilings. One tenant can no longer monopolise either
       worker. `npm run test:worker-fairness` proves same-key FIFO/no-overlap,
       cross-key concurrency and rate delay; the tenancy gate is now 88/88.
-- [ ] **F4.3 Reports onto `PlatformDailyMetric` rollups.** Today's reports scan
-      live tables; that stops being viable at volume, not at correctness.
+- [ ] **F4.3 Reports onto rollups.** Today's reports scan live tables; that
+      stops being viable at volume, not at correctness.
+
+      **Deferred 2026-09-01, and the item named the wrong table.**
+      `PlatformDailyMetric` cannot hold what the reports need: its primary key
+      is `[organizationId, date, metric]` where `metric` is the `UsageMetric`
+      enum — `messages_inbound`, `messages_outbound`, `active_contacts`,
+      `ai_tokens_in`, `ai_tokens_out`, `campaign_sends`. The reports want
+      conversations created and resolved, first-response and resolution
+      percentiles, per-agent breakdowns, CSAT, closure categories and campaign
+      acks. None of those is a `UsageMetric`.
+
+      **`AnalyticsHourly` is the right destination and already exists**
+      (`inbound, outbound, automated, failed, conversationsCreated,
+      conversationsResolved`, materialised by `analytics/rollup.service.ts`).
+      `reporting.service.ts` already reads it at 2 of its ~22 aggregate sites.
+
+      **Why it is deferred rather than done.** Every unbounded scan is already
+      capped — `MAX_DURATION_SAMPLE = 20000`, `MAX_SERIES_SAMPLE = 50000` —
+      with a `truncated` flag surfaced to the caller, so the reports degrade to
+      "approximate above 20k" instead of falling over. Against 31 conversations
+      and 97 messages there is nothing to measure, and
+      [RESPONDIO-BLUEPRINT-FIT.md](RESPONDIO-BLUEPRINT-FIT.md) §3.2 is explicit:
+      revisit on a measured bottleneck. F5.3 was deferred on the same basis.
+
+      **What it will actually cost when earned**, so nobody re-scopes it as a
+      afternoon's work: duration **percentiles** do not aggregate from daily
+      buckets without storing distributions, and per-agent reports need a
+      dimension `AnalyticsHourly` does not carry. That is a new model and a
+      migration — architectural, and worth designing against real access
+      patterns rather than guessed ones.
 - [ ] **F4.4 Scan the remaining WhatsApp numbers.** 3 of 5 sessions have never
       been paired, including both of `test`'s and one of the demo's.
 
