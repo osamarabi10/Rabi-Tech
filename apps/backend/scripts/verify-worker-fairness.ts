@@ -1,3 +1,10 @@
+// D-12, and the position is load-bearing: `redis-coordination` constructs its
+// Redis client at module load from `process.env.REDIS_URL`, so this side-effect
+// import has to be emitted above it. TypeScript preserves import order for
+// CommonJS and never elides a bare import, which is why this works and why it
+// must stay first.
+import './load-env';
+
 import assert from 'assert';
 import {
   closeRedisCoordination,

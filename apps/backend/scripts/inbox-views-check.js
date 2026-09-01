@@ -17,6 +17,11 @@
  * against the compiled output the server actually runs, for the same reason the
  * finance check does.
  */
+// No `./load-env` here, deliberately. This gate reaches only
+// `lib/inbox-view-filter`, which reads no environment variable at all, so it is
+// hermetic — it cannot fail for a reason that has nothing to do with the code.
+// Loading an environment a check does not use is how that property gets lost
+// quietly. See the note in `load-env.js`, and D-12.
 const assert = require('assert');
 
 const { validateInboxViewFilter, InboxViewFilterError } = require('../dist/lib/inbox-view-filter');

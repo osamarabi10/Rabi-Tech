@@ -6,7 +6,15 @@
  * boundary, and a boundary nobody tests is a boundary nobody has.
  *
  * Pure functions over crypto — no database, nothing to clean up.
+ *
+ * It still loads the environment, and the reason is worth stating: `signed-url`
+ * falls back to `process.env.JWT_SECRET || 'default-secret'`. Without the
+ * loader this gate signs and verifies with that constant and passes, proving a
+ * round trip under a key production does not use. Loading the real secret makes
+ * the check exercise the real signature. See D-12.
  */
+require('./load-env');
+
 const {
   generateMediaToken,
   generateMediaProxyToken,

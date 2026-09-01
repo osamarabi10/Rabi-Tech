@@ -8,7 +8,11 @@
  * Exits explicitly: the backup pulls in the queue module, whose Redis handle
  * would otherwise hold the process open forever.
  */
-require('dotenv').config();
+// D-12: the repo-root .env. The bare `dotenv.config()` this replaced resolved
+// against the process working directory — `apps/backend`, which has no `.env` —
+// so it loaded nothing and this script ran on whatever the shell was carrying.
+require('./load-env');
+
 const { runBackup } = require('../dist/modules/ops/backup.service');
 
 runBackup()

@@ -9,6 +9,9 @@
  * Fabricates a campaign, two recipients and one reply; asserts; deletes
  * everything it made, including on failure.
  */
+// D-12: the repo-root .env, before anything that reads it.
+require('./load-env');
+
 const { runAsPlatform, runAsOrganization } = require('../dist/lib/tenant-context');
 const { prisma } = require('../dist/prisma');
 const { campaignRepliedContactWhere } = require('../dist/modules/analytics/reporting.service');

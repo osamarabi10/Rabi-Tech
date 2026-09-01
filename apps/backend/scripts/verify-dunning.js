@@ -6,6 +6,9 @@
  * throwaway organization, and the organization is deleted afterwards including
  * on failure.
  */
+// D-12: the repo-root .env, before anything that reads it.
+require('./load-env');
+
 const { runAsPlatform } = require('../dist/lib/tenant-context');
 const { prisma } = require('../dist/prisma');
 const { runDunning, setDunningGraceDays, getDunningGraceDays } = require('../dist/modules/billing/dunning.service');

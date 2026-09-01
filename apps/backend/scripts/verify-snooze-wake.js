@@ -8,6 +8,9 @@
  * Snoozes a real conversation, runs the inbound path against it, asserts the
  * snooze is gone, and puts the row back the way it was found.
  */
+// D-12: the repo-root .env, before anything that reads it.
+require('./load-env');
+
 const { runAsOrganization, runAsPlatform } = require('../dist/lib/tenant-context');
 const { prisma } = require('../dist/prisma');
 const { getOrCreateActiveConversation } = require('../dist/utils/conversation-session');
