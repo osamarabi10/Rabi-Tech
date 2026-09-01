@@ -102,6 +102,8 @@ async function main() {
   const PHONE_C = '99902' + stamp;
 
   const tokens = {};
+  let conversationId = null;
+  let sessionId = null;
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'dist', 'index.js')], {
     env: {
       ...process.env,
@@ -115,7 +117,12 @@ async function main() {
   const cleanup = async () => {
     child.kill('SIGKILL');
     await runAsPlatform('verify-public-api:cleanup', async () => {
+      // Reverse dependency order: messages hold the conversation, the
+      // conversation holds both the contact and the session.
+      if (conversationId) await prisma.message.deleteMany({ where: { conversationId } });
+      if (conversationId) await prisma.conversation.deleteMany({ where: { id: conversationId } });
       await prisma.contact.deleteMany({ where: { phone: { in: [PHONE_A, PHONE_B, PHONE_C] } } });
+      if (sessionId) await prisma.whatsappSession.deleteMany({ where: { id: sessionId } });
       await prisma.apiToken.deleteMany({ where: { id: { in: Object.values(tokens).map((t) => t.id) } } });
       await prisma.tag.deleteMany({ where: { name: { in: ['gate-tag-one', 'gate-tag-two'] } } });
     });
@@ -137,8 +144,10 @@ async function main() {
     tokens.readOnly = await mint(orgA.id, ['contacts:read']);
     tokens.writeOnly = await mint(orgA.id, ['contacts:write']);
     tokens.masked = await mint(orgA.id, ['contacts:read', 'contacts:write'], { maskContactDetails: true });
-    tokens.otherOrg = await mint(orgB.id, ['contacts:read', 'contacts:write']);
+    tokens.otherOrg = await mint(orgB.id, ['contacts:read', 'contacts:write', 'conversations:read', 'messages:read']);
+    tokens.threads = await mint(orgA.id, ['conversations:read', 'messages:read']);
     const RW = tokens.rw.token;
+    const RW2 = tokens.threads.token;
 
     // ── create ──────────────────────────────────────────────────────────────
     const created = await call(RW, 'POST', '/api/v1/contacts', {
@@ -334,6 +343,108 @@ async function main() {
     const listedMasked = await call(tokens.masked.token, 'POST', '/api/v1/contacts/list', { limit: 5 });
     check('list masks too, not just the single read',
       (listedMasked.body?.contacts || []).every((c) => c.phone === '••••••'));
+
+    // ── conversations ───────────────────────────────────────────────────────
+    /*
+      A thread needs a session, so the gate makes its own rather than borrowing
+      whichever one the workspace happens to have. Borrowing would tie the run to
+      a row somebody else can rename or delete, and this suite has already been
+      bitten by that class once — the finance gate drew a different organization
+      between runs because its selection was unordered.
+    */
+    const session = await runAsPlatform('verify-public-api:setup', () =>
+      prisma.whatsappSession.create({
+        data: {
+          organizationId: orgA.id,
+          sessionName: 'gate-session-' + stamp,
+          label: 'gate',
+          isActive: false,
+        },
+        select: { id: true },
+      }),
+    );
+    sessionId = session.id;
+
+    const thread = await runAsPlatform('verify-public-api:setup', () =>
+      prisma.conversation.create({
+        data: {
+          organizationId: orgA.id,
+          displayId: 900000 + Number(stamp.slice(-4)),
+          contactId: contactId,
+          sessionId: session.id,
+          status: 'OPEN',
+          lastMessageAt: new Date(),
+        },
+        select: { id: true },
+      }),
+    );
+    conversationId = thread.id;
+
+    await runAsPlatform('verify-public-api:setup', () =>
+      prisma.message.createMany({
+        data: [
+          { organizationId: orgA.id, conversationId: thread.id, direction: 'INBOUND', body: 'customer said this', status: 'DELIVERED' },
+          { organizationId: orgA.id, conversationId: thread.id, direction: 'OUTBOUND', body: 'agent note, not sent', status: 'SENT', isInternal: true },
+        ],
+      }),
+    );
+
+    const convList = await call(RW2, 'GET', '/api/v1/conversations?limit=5');
+    check('GET /conversations lists threads', convList.status === 200 && Array.isArray(convList.body?.conversations));
+    check('  …includes the one just created',
+      (convList.body?.conversations || []).some((c) => c.id === thread.id));
+
+    const convOne = await call(RW2, 'GET', '/api/v1/conversations/' + thread.id);
+    check('GET /conversations/:id resolves', convOne.status === 200 && convOne.body?.id === thread.id);
+    check('  …publishes displayId, which is what an agent reads on screen',
+      typeof convOne.body?.displayId === 'number');
+    check('  …embeds the contact', convOne.body?.contact?.id === contactId);
+
+    // Internal scheduling columns describe how this product runs its own queues.
+    // They change whenever that changes and nothing outside can act on them.
+    const convLeaked = ['sessionId', 'autoCloseAt', 'autoCloseEligible', 'pendingMenuChoice', 'organizationId']
+      .filter((key) => key in (convOne.body || {}));
+    check('no internal scheduling column leaks', convLeaked.length === 0, convLeaked.join(', '));
+
+    // `snoozedUntil` in the past means "not snoozed". A caller comparing clocks
+    // gets that wrong half the time, so the boolean is derived server-side.
+    check('snoozed is derived, not the raw timestamp', convOne.body?.snoozed === false);
+
+    const convBadStatus = await call(RW2, 'GET', '/api/v1/conversations?status=SLEEPING');
+    check('an unknown status filter is refused', convBadStatus.status === 400);
+    const convFiltered = await call(RW2, 'GET', '/api/v1/conversations?status=RESOLVED');
+    check('a status filter is applied',
+      (convFiltered.body?.conversations || []).every((c) => c.status === 'RESOLVED'));
+
+    const crossConv = await call(tokens.otherOrg.token, 'GET', '/api/v1/conversations/' + thread.id);
+    check('another workspace cannot read this thread', crossConv.status === 404, crossConv.status);
+
+    // ── messages ────────────────────────────────────────────────────────────
+    const msgs = await call(RW2, 'GET', `/api/v1/conversations/${thread.id}/messages`);
+    check('GET messages returns the thread', msgs.status === 200 && Array.isArray(msgs.body?.messages));
+    check('  …and excludes internal notes by default',
+      (msgs.body?.messages || []).every((m) => m.internal === false),
+      JSON.stringify((msgs.body?.messages || []).map((m) => m.internal)));
+    check('  …so a transcript cannot quote an agent note back to the customer',
+      (msgs.body?.messages || []).some((m) => m.body === 'customer said this'));
+
+    const withInternal = await call(RW2, 'GET', `/api/v1/conversations/${thread.id}/messages?includeInternal=true`);
+    check('internal notes are available when asked for',
+      (withInternal.body?.messages || []).some((m) => m.internal === true));
+
+    // Both grants are required: a reporting integration that counts open
+    // threads has no business reading what customers wrote in them.
+    const convOnly = await mint(orgA.id, ['conversations:read']);
+    tokens.convOnly = convOnly;
+    const convOnlyMsgs = await call(convOnly.token, 'GET', `/api/v1/conversations/${thread.id}/messages`);
+    check('conversations:read alone cannot read messages', convOnlyMsgs.status === 403,
+      convOnlyMsgs.status);
+    const convOnlyList = await call(convOnly.token, 'GET', '/api/v1/conversations');
+    check('  …but can still list threads', convOnlyList.status === 200);
+
+    const crossMsgs = await call(tokens.otherOrg.token, 'GET', `/api/v1/conversations/${thread.id}/messages`);
+    check('another workspace cannot read the messages either', crossMsgs.status === 403 || crossMsgs.status === 404,
+      crossMsgs.status);
 
     // ── the console is still guarded ────────────────────────────────────────
     // The /v1 exemption is from the session-JWT middleware only. If it ever

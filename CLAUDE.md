@@ -219,12 +219,12 @@ call that legitimately has no tenant yet.
 cd apps/backend && npm run test:public-api
 ```
 
-**58/58.** Boots the compiled server on port 4199 and drives `/api/v1` with real
+**75/75.** Boots the compiled server on port 4199 and drives `/api/v1` with real
 tokens, because everything that makes this surface safe lives in the *chain* —
 the `/v1` exemption from the session-JWT gate, `apiTokenAuth`, the scope check,
 `runAsOrganization`, the limiter — and calling a handler directly proves only the
-last link. Mutation-proved twice: leaking `organizationId` from the serializer,
-and unscoping the id lookup, each take it red.
+last link. Mutation-proved three times: leaking `organizationId` from the serializer,
+unscoping the id lookup, and including internal notes by default, each take it red.
 
 **If it prints `[ENV]` there is no summary line, deliberately.** A run that could
 not start has not tested anything and must not print a number that looks like it
