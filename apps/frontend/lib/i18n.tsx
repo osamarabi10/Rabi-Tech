@@ -991,6 +991,10 @@ const D: Dict = {
   'عرّف مراحل رحلة العميل كما تناسب عملك': { he: 'הגדירו את שלבי מסע הלקוח שמתאימים לעסק שלכם', en: 'Define the customer journey stages that fit your business' },
   'مرحلة محذوفة': { he: 'שלב שנמחק', en: 'deleted stage' },
   'تم تحديث المرحلة': { he: 'השלב עודכן', en: 'Stage updated' },
+  // Chart export (M9.3). The formats stay untranslated on the buttons — SVG and
+  // PNG are filename extensions, not words, in all three languages.
+  'جارٍ التصدير': { he: 'מייצא', en: 'Exporting' },
+  'تعذّر تصدير الرسم': { he: 'ייצוא הגרף נכשל', en: 'Could not export the chart' },
   // Broadcast clone (M8.5).
   'نسخ الحملة': { he: 'שכפול שידור', en: 'Duplicate broadcast' },
   'تم نسخ الحملة': { he: 'השידור שוכפל', en: 'Broadcast duplicated' },

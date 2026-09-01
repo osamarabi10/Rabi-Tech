@@ -1,6 +1,8 @@
 'use client';
 
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { exportChartPng, exportChartSvg } from '@/lib/chart-export';
 import { useT } from '@/lib/i18n';
 import { EmptyNote } from './primitives';
 
@@ -31,10 +33,47 @@ const VIEW_H = 200;
 const PAD_X = 8;
 const PAD_Y = 12;
 
-export function LineChart({ series, height = 200 }: { series: Series[]; height?: number }) {
+export function LineChart({
+  series,
+  height = 200,
+  exportName,
+}: {
+  series: Series[];
+  height?: number;
+  /**
+   * Base filename for the export controls. Omitted means no controls — a
+   * chart embedded somewhere an export makes no sense should not grow two
+   * buttons that produce a file nobody asked for.
+   */
+  exportName?: string;
+}) {
   const { t } = useT();
   const gradientId = useId();
   const [hover, setHover] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [exporting, setExporting] = useState<null | 'svg' | 'png'>(null);
+
+  /**
+   * The ref is the live element, deliberately.
+   *
+   * Re-rendering the series into a detached SVG for export would produce a
+   * second implementation of the drawing code, and the export would drift from
+   * what is on screen the first time either changed. Serialising the node the
+   * user is looking at cannot drift.
+   */
+  const runExport = async (kind: 'svg' | 'png') => {
+    const svg = svgRef.current;
+    if (!svg || !exportName) return;
+    setExporting(kind);
+    try {
+      if (kind === 'svg') exportChartSvg(svg, exportName);
+      else await exportChartPng(svg, exportName);
+    } catch {
+      toast.error(t('تعذّر تصدير الرسم'));
+    } finally {
+      setExporting(null);
+    }
+  };
 
   const dates = series[0]?.points.map((p) => p.date) ?? [];
   const max = Math.max(1, ...series.flatMap((s) => s.points.map((p) => p.value)));
@@ -70,10 +109,34 @@ export function LineChart({ series, height = 200 }: { series: Series[]; height?:
             {s.label}
           </span>
         ))}
+        {exportName && (
+          // Pushed to the end of the legend row rather than given a toolbar of
+          // its own: two rarely-used buttons do not earn a band of chrome above
+          // every chart.
+          <span className="ms-auto flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => void runExport('svg')}
+              disabled={exporting !== null}
+              className="rounded border border-border px-1.5 py-0.5 text-micro font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+            >
+              {exporting === 'svg' ? t('جارٍ التصدير') : 'SVG'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void runExport('png')}
+              disabled={exporting !== null}
+              className="rounded border border-border px-1.5 py-0.5 text-micro font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+            >
+              {exporting === 'png' ? t('جارٍ التصدير') : 'PNG'}
+            </button>
+          </span>
+        )}
       </div>
 
       <div className="relative">
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
           className="w-full"
           style={{ height }}

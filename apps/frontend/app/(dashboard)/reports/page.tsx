@@ -421,7 +421,7 @@ function OverviewTab({
         onGroupByChange={onGroupByChange}
         groupByOptions={series.map((item) => ({ value: item.key, label: item.label }))}
       >
-        <LineChart series={visibleSeries} />
+        <LineChart series={visibleSeries} exportName="rabitech-conversations" />
       </ChartCard>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
