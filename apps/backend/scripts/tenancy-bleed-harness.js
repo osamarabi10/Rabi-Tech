@@ -2566,7 +2566,37 @@ async function databaseAudits() {
     await check('usage: 24h synthetic counters reconcile with Message rows within 1%', async () => {
       const { countMonthlyActiveContacts, getMetricUsage, recordUsageEvents } = require('../src/modules/usage/usage.service');
       const orgC = await seedOrganization(raw, 'c', 0);
-      const syntheticStart = new Date(Date.now() - (23 * 60 * 60 * 1000));
+      /*
+        The synthetic window is clamped to the UTC month, because that is the
+        window getMetricUsage actually sums.
+
+        Without the clamp the fixture straddles a month boundary on the 1st: 500
+        rows are written from now-23h, getMetricUsage counts only those at or
+        after the UTC month start, and the two sides disagree by however much of
+        the window fell in the previous month. On 2026-09-01 at 05:53 UTC that
+        was 17.1 of the 24 hours, so the check failed at 71.4% against a 1%
+        tolerance — on code that had passed every day of the preceding month.
+
+        monthRange builds its bounds with Date.UTC, so this clamps in UTC too; a
+        local-midnight clamp would leave the same defect displaced by the host's
+        offset, which is a worse bug because it only appears on some machines.
+
+        The upper bound is clamped for the same reason at the other end. That
+        one is latent rather than observed: the fixture's +1h tail would land in
+        the following month if this ran late on the last day of one.
+
+        A gate that reports the calendar rather than the code. See D-16.
+      */
+      const windowNow = new Date();
+      const utcMonthStart = new Date(Date.UTC(windowNow.getUTCFullYear(), windowNow.getUTCMonth(), 1));
+      const utcMonthEnd = new Date(Date.UTC(windowNow.getUTCFullYear(), windowNow.getUTCMonth() + 1, 1));
+      const syntheticStart = new Date(
+        Math.max(windowNow.getTime() - (23 * 60 * 60 * 1000), utcMonthStart.getTime()),
+      );
+      const syntheticEnd = new Date(
+        Math.min(windowNow.getTime() + (60 * 60 * 1000), utcMonthEnd.getTime() - 1000),
+      );
+      const syntheticSpanMs = syntheticEnd.getTime() - syntheticStart.getTime();
       const contacts = Array.from({ length: 50 }, (_, index) => ({
         id: `bleed_24h_contact_${index}`,
         organizationId: orgC.organizationId,
@@ -2589,7 +2619,7 @@ async function databaseAudits() {
           direction: 'INBOUND',
           status: 'DELIVERED',
           body: `24h message ${index}`,
-          timestamp: new Date(syntheticStart.getTime() + Math.floor((index / 500) * 24 * 60 * 60 * 1000)),
+          timestamp: new Date(syntheticStart.getTime() + Math.floor((index / 500) * syntheticSpanMs)),
         };
       });
       await raw.contact.createMany({ data: contacts });

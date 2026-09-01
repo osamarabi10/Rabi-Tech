@@ -916,18 +916,68 @@ Together E6 and E7 close the same gap from two ends: E6 makes what an edition
 granted a matter of record, E7 makes what a change will cost visible before it
 is made.
 
-### Not landed: the channel narrowing
+### The channel model, as shipped
 
-The product story is that STANDARD is the tier for customers without a Meta
-WhatsApp Business Account, and that everything above it is Meta-only. The data
-does not say that — E5d widened every edition to both channel kinds so that
-turning enforcement on would not withdraw Meta from existing subscribers.
+| Edition | Channels |
+|---|---|
+| FREE | `OPENWA` + `WHATSAPP_CLOUD` |
+| STANDARD | `OPENWA` + `WHATSAPP_CLOUD` |
+| GROWTH | `WHATSAPP_CLOUD` |
+| BUSINESS | `WHATSAPP_CLOUD` |
+| ENTERPRISE | `WHATSAPP_CLOUD` |
 
-Narrowing GROWTH, BUSINESS and ENTERPRISE to `WHATSAPP_CLOUD` was prepared and
-**not applied.** The pre-flight count is not zero: `ostudio` is on ENTERPRISE by
-tier, by `planOverride` and by a live ACTIVE subscription, and holds an ACTIVE
-OpenWA channel. Applying the narrowing would stop a working channel for a live
-subscriber, which is an owner's decision and not a data correction. See D-13.
+**STANDARD is the tier for customers who do not have a Meta WhatsApp Business
+Account**, and it is the only paid edition allowing OpenWA. Everything above it
+is Meta-only, because those customers bring their own WABA and token. FREE
+allows both so that a trial can start without a WABA.
+
+E5d had widened every edition to both kinds on purpose, so that switching
+enforcement on would not withdraw Meta from anyone who had it. Migration
+`20260929090000_plan_channel_narrowing` is the other half, and its UPDATE is
+guarded on the row still holding exactly the pair E5d shipped, so an owner who
+has since edited an edition's channels from the console keeps that decision.
+
+**What narrowing does not do, which is worth knowing before a real customer
+meets it.** Enforcement lives at the connect paths only —
+`POST /channels/meta/connect` and `POST /channels/active`. Nothing on the send
+path reads `allowedChannels`. So an organization on a narrowed edition with an
+already-ACTIVE OpenWA channel keeps sending: the row is untouched, the channel
+is not disconnected, and no message is refused. What it loses is the ability to
+select OPENWA again once it has switched away. **It is a one-way exit, not an
+outage** — which is the first real evidence of what D-13's cliff does to someone
+already connected, and materially gentler than "their number stops working."
+
+Verified against `ostudio`, which is test data: still ENTERPRISE, still holding
+`OPENWA` at status `ACTIVE`, still sending, and now unable to re-select it.
+
+The narrowing also armed D-15: the refusal names the *cheapest* edition granting
+a channel, which for OpenWA is FREE, so an ENTERPRISE customer is told to
+"upgrade to Free." Correct refusal, absurd advice. Recorded, not fixed.
+
+### The drift that nothing can report (D-14)
+
+Worth stating here because it is the phase's sharpest remaining edge.
+`applyPlanLimits` copies an edition's numbers into `OrganizationConfig` at
+activation, and `effectiveLimits` reads those columns unless a live
+`planOverride` exists. So the five metered usage limits are **a snapshot from
+the subscriber's last activation, not the current catalogue**. Everything else
+reaches them on the next cache refresh.
+
+The asymmetry catches people because both halves read as limits on the same
+screen:
+
+| Live on refresh | Frozen until next activation |
+|---|---|
+| name, price, **seats** (`usersLimit`) | active contacts, outbound messages |
+| flags, channels, campaign pacing | campaign sends, AI tokens in/out |
+
+`detectQuotaDrift` sees this divergence and is *required to stay silent about
+it*: an edition edit is treated as a new baseline rather than drift, because
+otherwise raising one limit would report every organization on that edition as
+drifted, and a detector that always fires is one nobody reads. Re-applying
+limits on edit was considered and rejected as stomping per-subscriber overrides.
+So the one thing that could report it must not, and there is no other signal.
+E6 is what closes this.
 
 ### The door is still closed
 
