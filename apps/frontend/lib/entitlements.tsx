@@ -27,16 +27,19 @@ export type Entitlements = {
 /** Features that differ by plan. Add here, not scattered through components. */
 export type GatedFeature = 'broadcasts' | 'customDomain' | 'whiteLabel' | 'autoGateway';
 
-/**
- * Cheapest plan that unlocks each feature — shown in the upsell so the user
- * learns what to buy, not merely that they cannot proceed.
- */
-const REQUIRES: Record<GatedFeature, string> = {
-  broadcasts: 'Growth',
-  autoGateway: 'Growth',
-  customDomain: 'Business',
-  whiteLabel: 'Business',
-};
+/*
+  The map that used to live here is gone.
+
+  It read { broadcasts: 'Growth', customDomain: 'Business', ... } - names
+  written when the ladder was fixed in a TypeScript constant, and nothing kept
+  them true once an owner could move a capability from the console. The server
+  has derived the same answer from the catalogue since E5a, so the upsell on a
+  locked button could disagree with the refusal the server gives when the user
+  follows it.
+
+  The answer now comes from the billing summary, computed once from the
+  published ladder. The two can no longer differ, because there is only one.
+*/
 
 const Ctx = createContext<Entitlements>({
   loading: true,
@@ -83,7 +86,13 @@ export function EntitlementsProvider({ children }: { children: ReactNode }) {
     plan: summary ? { code: summary.plan.code, name: summary.plan.name } : null,
     limits,
     seats: summary?.seats ?? null,
-    requiredPlanFor: (feature) => (can(feature) ? null : REQUIRES[feature] ?? null),
+    /*
+      Null means two different things and the caller must handle both: the
+      feature is already available, or no published edition grants it at all.
+      Neither is a plan name, and rendering "Upgrade to null" is the failure
+      this returns null to prevent.
+    */
+    requiredPlanFor: (feature) => (can(feature) ? null : summary?.featureUpgrades?.[feature] ?? null),
     can,
   };
 

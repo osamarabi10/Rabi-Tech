@@ -1557,6 +1557,20 @@ export type PlanEntitlements = {
 export type BillingSummary = {
   plan: { code: string; name: string; monthlyPriceCents: number };
   entitlements: PlanEntitlements;
+  /**
+   * Cheapest published edition granting each gated feature, by name.
+   *
+   * Derived server-side from the catalogue, so the upsell on a locked control
+   * and the refusal the server gives cannot disagree. Null means no published
+   * edition grants it - render that as "no upgrade unlocks this", never as a
+   * plan name.
+   */
+  featureUpgrades?: {
+    broadcasts: string | null;
+    autoGateway: string | null;
+    customDomain: string | null;
+    whiteLabel: string | null;
+  };
   subscription: {
     status: string;
     planCode: string;

@@ -11,8 +11,18 @@ import { formatDate } from '@/lib/format-time';
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
 import { useResource } from '@/lib/async-resource';
 
-/** Highest plan needs no upsell; everyone else gets an upgrade path. */
-const TOP_PLAN = 'ENTERPRISE';
+/*
+  "Top of the ladder" is a position, not a name.
+
+  This was the literal 'ENTERPRISE'. That was true of the shipped five and
+  stopped being a safe assumption the moment editions became owner-editable and
+  orderable: an owner adding a tier above Enterprise, or reordering the ladder,
+  would leave Enterprise subscribers with no upgrade path offered and the new
+  top tier offered an upgrade to itself.
+
+  summary.plans is getEditions(), which is ordered by sortOrder with code
+  breaking ties, so the last entry is the top rung by definition.
+*/
 
 /**
  * Cents to a display string, or null when the currency is unknown.
@@ -95,8 +105,15 @@ export function SubscriptionCard() {
     );
   }
 
-  const { plan, seats, subscription, invoices, quotaDrift, organization, commercial } = resource.data;
-  const canUpgrade = plan.code !== TOP_PLAN;
+  const { plan, plans, seats, subscription, invoices, quotaDrift, organization, commercial } = resource.data;
+  /*
+    Fails open on an unknown catalogue: if plans is empty the top rung is
+    undefined, canUpgrade stays true, and the user is offered an upgrade path
+    rather than silently denied one. Consistent with the rest of this UI, where
+    the server is the real gate and a missing answer must not hide a control.
+  */
+  const topOfLadder = plans.length ? plans[plans.length - 1].code : null;
+  const canUpgrade = plan.code !== topOfLadder;
   const discounted = commercial.isOverridden
     && commercial.discountPercent !== null
     && commercial.effectivePriceCents !== commercial.listPriceCents;

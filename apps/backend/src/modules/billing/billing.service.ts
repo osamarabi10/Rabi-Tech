@@ -1125,6 +1125,38 @@ export async function getBillingSummary(organizationId: string) {
       monthlyPriceCents: effective.listPriceCents,
     },
     entitlements: plan,
+    /*
+      The cheapest published edition that grants each gated feature, by name.
+
+      This replaces a hardcoded map in the frontend that read
+      `{ broadcasts: 'Growth', customDomain: 'Business', ... }`. Those strings
+      were written when the ladder was fixed in a constant, and nothing kept
+      them true afterwards: an owner moving broadcasts to Business from the
+      console would leave the upsell still saying Growth, and the server's own
+      402 refusals - which have derived this from the catalogue since E5a -
+      would disagree with the button that led the user there.
+
+      Derived here so there is one answer. Sent with the summary rather than
+      waiting for a 402, because the UI needs it *before* the attempt: it
+      renders a locked control that says what to buy, and a reactive payload
+      cannot label a button nobody has pressed yet.
+
+      An offer read - getEditions() is already filtered to what is on sale and
+      ordered by ladder position, so "cheapest that grants it" is the first
+      match. Null means no published edition grants it at all, which the
+      caller must render as "no upgrade unlocks this" rather than as a name.
+    */
+    featureUpgrades: (() => {
+      const published = getEditions();
+      const cheapest = (grants: (edition: PlanEntitlements) => boolean) =>
+        published.find(grants)?.name ?? null;
+      return {
+        broadcasts: cheapest((e) => e.monthlyCampaignSendsLimit === null || e.monthlyCampaignSendsLimit > 0),
+        autoGateway: cheapest((e) => e.autoProvisionGateway),
+        customDomain: cheapest((e) => e.customDomain),
+        whiteLabel: cheapest((e) => e.whiteLabel),
+      };
+    })(),
     subscription: detail.subscription,
     organization: detail.organization,
     seats: {
