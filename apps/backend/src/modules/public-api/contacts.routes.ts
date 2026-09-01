@@ -16,6 +16,7 @@ import { requireScope } from '../api-tokens/api-token.middleware';
 import { parseContactRef } from './identifier';
 import { CONTACT_INCLUDE, serializeContact } from './serialize';
 import { emitWebhook } from '../webhooks/webhook-dispatch.service';
+import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
 
 /**
  * `/api/v1/contacts` — the contact surface of the public API.
@@ -366,6 +367,27 @@ router.patch('/:identifier', requireScope('contacts:write'), async (req, res) =>
         from: previousStage,
         to: payload.lifecycleStage,
       });
+      // And the workflow engine, which can now react to a stage change rather
+      // than only write and test one.
+      void dispatchWorkflowEvent({
+        triggerType: 'LIFECYCLE_UPDATED',
+        contactId: contact.id,
+        payload: { from: previousStage, to: payload.lifecycleStage },
+      }).catch(() => {});
+    }
+
+    // One event per changed field, narrowed by slug so a workflow watching one
+    // field is not woken by every unrelated edit.
+    for (const field of fields) {
+      const slug = (await prisma.customFieldDefinition.findFirst({
+        where: { id: field.definitionId }, select: { slug: true },
+      }))?.slug;
+      if (!slug) continue;
+      void dispatchWorkflowEvent({
+        triggerType: 'CONTACT_FIELD_UPDATED',
+        contactId: contact.id,
+        payload: { field: slug, value: field.value },
+      }).catch(() => {});
     }
     return send(res, req, updated);
   } catch (err) { return fail(res, req, err, 'PATCH /contacts/:identifier'); }
@@ -504,6 +526,15 @@ router.post('/:identifier/tags', requireScope('tags:write'), async (req, res) =>
 
     const updated = await prisma.contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });
     void emitWebhook('contact.tagged', { contactId: contact.id, tags: wanted, source: 'api' });
+    // One event per tag: a workflow narrows on a single tag name, so a batch
+    // carrying three of them has to arrive as three events or two are lost.
+    for (const name of wanted) {
+      void dispatchWorkflowEvent({
+        triggerType: 'TAG_ADDED',
+        contactId: contact.id,
+        payload: { tag: name },
+      }).catch(() => {});
+    }
     return send(res, req, updated);
   } catch (err) { return fail(res, req, err, 'POST /contacts/:identifier/tags'); }
 });
@@ -521,7 +552,16 @@ router.delete('/:identifier/tags/:tag', requireScope('tags:write'), async (req, 
     // Removing a tag the contact does not have is not an error — a retrying
     // client must be able to converge without special-casing "already gone".
     if (tag) {
-      await prisma.contactTag.deleteMany({ where: { contactId: contact.id, tagId: tag.id } });
+      const { count } = await prisma.contactTag.deleteMany({ where: { contactId: contact.id, tagId: tag.id } });
+      // Only when something was actually removed. A retrying client calling
+      // this twice must not fire the trigger twice.
+      if (count > 0) {
+        await dispatchWorkflowEvent({
+          triggerType: 'TAG_REMOVED',
+          contactId: contact.id,
+          payload: { tag: String(req.params.tag) },
+        }).catch(() => {});
+      }
     }
 
     const updated = await prisma.contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });

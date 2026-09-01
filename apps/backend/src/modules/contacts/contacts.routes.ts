@@ -654,6 +654,26 @@ router.delete('/:id/tags/:tagId', requirePermission('contact:create'), async (re
     const { count } = await prisma.contactTag.deleteMany({ where: { contactId: contact.id, tagId: tag.id } });
     if (!count) return res.status(404).json({ error: 'Tag assignment not found' });
     await auditLog({ userId: req.user!.id, action: 'contact.tag-removed', resource: 'contact', resourceId: contact.id, changes: { before: { tagId: tag.id, tagName: tag.name } }, ipAddress: req.ip, userAgent: req.get('user-agent') });
+
+    /*
+      TAG_REMOVED was a declared trigger that nothing dispatched.
+
+      The workflow executor emitted it when a *workflow* removed a tag, so the
+      trigger appeared to work in testing and never fired for the case anyone
+      builds it for: an agent removing a tag in the inbox. An author wired "when
+      VIP is removed, notify the manager", removed the tag by hand, and watched
+      nothing happen — with no error, because a workflow that never matched
+      looks identical to one whose conditions were not met.
+
+      Found by verify-workflow-p2, which asserts every declared trigger has
+      somewhere that fires it.
+    */
+    await dispatchWorkflowEvent({
+      triggerType: 'TAG_REMOVED',
+      contactId: contact.id,
+      payload: { tag: tag.name },
+    }).catch(() => {});
+
     res.sendStatus(204);
   } catch (err: any) {
     res.status(400).json({ error: String(err?.message || err) });

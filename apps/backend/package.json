@@ -15,6 +15,7 @@
     "test:public-api": "npm run build && node scripts/verify-public-api.js",
     "test:webhooks": "npm run build && node scripts/verify-webhooks.js",
     "test:csv": "npm run build && node scripts/verify-csv-safety.js",
+    "test:workflow-p2": "npm run build && node scripts/verify-workflow-p2.js",
     "test:inbox-views": "npm run build && node scripts/inbox-views-check.js",
     "backup:now": "npm run build && node scripts/run-backup.js",
     "test:snooze": "npm run build && node scripts/verify-snooze-wake.js",

@@ -53,6 +53,28 @@ function matchesTrigger(
     return Boolean(tag) && String(event.payload?.tag || '').toLowerCase() === tag;
   }
 
+  /*
+    Lifecycle narrowing is OPTIONAL, field narrowing is REQUIRED.
+
+    The asymmetry is deliberate. "The funnel changed at all" is a real
+    automation — a general notifier, a report hook — so an unnarrowed lifecycle
+    trigger fires on any move. There is no equivalent reading of "any custom
+    field changed": a contact import touching twenty fields on ten thousand rows
+    would wake every such workflow two hundred thousand times, so a field
+    trigger with no field configured matches nothing rather than everything.
+  */
+  if (triggerType === 'LIFECYCLE_UPDATED') {
+    const stage = String(config.trigger?.stage || '').trim().toLowerCase();
+    if (!stage) return true;
+    return String(event.payload?.to || '').toLowerCase() === stage;
+  }
+
+  if (triggerType === 'CONTACT_FIELD_UPDATED') {
+    const field = String(config.trigger?.field || '').trim().toLowerCase();
+    if (!field) return false;
+    return String(event.payload?.field || '').toLowerCase() === field;
+  }
+
   return true;
 }
 

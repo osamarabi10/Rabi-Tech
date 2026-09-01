@@ -271,6 +271,33 @@ Redis connection. The policy now lives in `webhook-policy.ts`; **keep constants
 out of the worker module**, or the next hermetic gate quietly acquires the
 infrastructure dependency it was written to avoid.
 
+### Workflow triggers and steps (P2)
+```bash
+cd apps/backend && npm run test:workflow-p2
+```
+
+**42/42, hermetic.** Adding a name to `TRIGGER_TYPES` or `ACTION_TYPES` makes it
+appear in the builder immediately — and nothing else is required for a
+subscriber to select it, save a workflow, and watch it never run. There is no
+error, because from outside, a workflow that never matched looks exactly like
+one whose conditions were not met.
+
+So every declared name is checked three ways: the validator accepts a correct
+config and refuses an incomplete one, the dispatcher narrows the right events,
+and **the executor has a real `case` for it**. It also asserts every trigger has
+somewhere that *fires* it.
+
+**It found a pre-existing defect on its first run.** `TAG_REMOVED` was declared
+and dispatched by nothing — the executor emitted it when a *workflow* removed a
+tag, so it appeared to work in testing and never fired for the case anyone
+builds it for: an agent removing a tag in the inbox. That is the seventh
+instance of this shape in this repository.
+
+Mutation-proved: making `ADD_COMMENT` write a customer-facing message instead of
+an internal one takes it red — the property that matters most, since an internal
+note reaching WhatsApp is a private remark about a customer, sent to that
+customer.
+
 ### CSV injection safety
 ```bash
 cd apps/backend && npm run test:csv

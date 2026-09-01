@@ -15,6 +15,28 @@ export const TRIGGER_TYPES = [
   'TAG_ADDED',
   'TAG_REMOVED',
   'OUT_OF_HOURS',
+  /**
+   * A contact moved to a different lifecycle stage.
+   *
+   * Closes a loop the engine had left open. `SET_LIFECYCLE_STAGE` could write a
+   * stage and `CONTACT_LIFECYCLE_IS` could test one, but nothing could *react*
+   * to a change — so advancing a contact to "Customer" could not start the
+   * onboarding that exists precisely for that moment.
+   *
+   * Optional `stage` on the trigger narrows it to one destination. Absent, it
+   * fires on any move, which is what a general "the funnel changed" automation
+   * wants.
+   */
+  'LIFECYCLE_UPDATED',
+  /**
+   * A custom field changed.
+   *
+   * The generic hook the other contact triggers are special cases of. Narrowed
+   * by `field` (a slug) so a workflow watching "order_status" is not woken by
+   * every unrelated edit — an unnarrowed version would run every workflow on
+   * every import row.
+   */
+  'CONTACT_FIELD_UPDATED',
 ] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
@@ -69,6 +91,31 @@ export const ACTION_TYPES = [
   'ASK_QUESTION',
   'CLOSE_CONVERSATION',
   /**
+   * Reopen a resolved thread, or leave an open one alone.
+   *
+   * Respond.io's own rule is worth copying exactly: *"sending a message from
+   * the workflow will not automatically open the conversation"*. Without this
+   * step, a workflow that answers a resolved thread leaves it resolved — the
+   * customer gets a reply and the thread stays out of the queue, so nobody sees
+   * what they say next.
+   *
+   * Goes through `reopenConversation`, which advances `openedAt` and starts a
+   * new episode rather than blanking the resolution. A bare status write would
+   * leave the thread reporting a closure that no longer describes it.
+   */
+  'OPEN_CONVERSATION',
+  /**
+   * Leave an internal note on the thread.
+   *
+   * Attribution is the whole design question, and it is the same one the public
+   * API answered: a note is addressed to colleagues, and automation has no name
+   * to sign one with. The public API requires an `authorId`; a workflow cannot
+   * ask for one, so the note is written unattributed and the UI shows it as
+   * automation — which is honest, and different from a note signed by a person
+   * who did not write it.
+   */
+  'ADD_COMMENT',
+  /**
    * The only action that contains other actions.
    *
    * Top-level `conditions` gate the whole run: fail one and nothing happens.
@@ -105,7 +152,24 @@ export type WorkflowAction = {
 export const MAX_BRANCH_DEPTH = 3;
 
 export type WorkflowConfig = {
-  trigger?: { keyword?: string; tag?: string };
+  trigger?: {
+    keyword?: string;
+    tag?: string;
+    /**
+     * LIFECYCLE_UPDATED: the destination stage, by name. Optional — absent
+     * means any move, which is what a general "the funnel changed" automation
+     * wants.
+     */
+    stage?: string;
+    /**
+     * CONTACT_FIELD_UPDATED: the field slug. **Required** for that trigger, and
+     * the asymmetry with `stage` is deliberate: there is no useful reading of
+     * "any custom field changed". An import touching twenty fields across ten
+     * thousand rows would wake such a workflow two hundred thousand times, so an
+     * unnarrowed field trigger matches nothing rather than everything.
+     */
+    field?: string;
+  };
   conditions?: WorkflowCondition[];
   actions: WorkflowAction[];
 };
@@ -364,6 +428,17 @@ function validateAction(
       // CONVERSATION_CLOSED auto-reply the subscriber already edits in settings.
       break;
 
+    case 'OPEN_CONVERSATION':
+      // Nothing to configure either. Reopening is unconditional — the executor
+      // reports "already open" rather than failing when there is nothing to do.
+      break;
+
+    case 'ADD_COMMENT':
+      // A comment with no body is a row in the thread saying nothing, which an
+      // agent then has to read to discover it says nothing.
+      requireText(action.body, 'comment text', errors, path);
+      break;
+
     default:
       break;
   }
@@ -436,6 +511,18 @@ export function validateWorkflowConfig(
   }
   if (triggerType === 'TAG_ADDED' || triggerType === 'TAG_REMOVED') {
     requireText(config.trigger?.tag, 'a tag name', errors, 'trigger');
+  }
+  /*
+    CONTACT_FIELD_UPDATED must name a field; LIFECYCLE_UPDATED need not name a
+    stage.
+
+    The dispatcher already refuses an unnarrowed field trigger at match time, so
+    this is the second half of the same rule: without it an author could save a
+    workflow that looks configured, sits in the list looking live, and can never
+    fire. Refusing at save is where they find out.
+  */
+  if (triggerType === 'CONTACT_FIELD_UPDATED') {
+    requireText(config.trigger?.field, 'a contact field', errors, 'trigger');
   }
 
   validateConditions(config.conditions, errors, 'conditions');

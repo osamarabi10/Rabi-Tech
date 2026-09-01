@@ -11,6 +11,9 @@ import { assertSafeWebhookUrl, BlockedUrlError } from './outbound-url';
 import { recordDelivery, webhookIdentity } from '../webhooks/webhook-log.service';
 import { DEFAULT_ANSWER_TIMEOUT_MINUTES } from './workflow-schema';
 import type { WorkflowAction, WorkflowCondition, WorkflowConfig } from './workflow-schema';
+import { getIO, SocketEvents } from '../../socket';
+import { socketRoom } from '../../socket/rooms';
+import { reopenConversation } from '../conversations/conversation-lifecycle.service';
 
 /**
  * The workflow executor.
@@ -475,6 +478,67 @@ async function runAction(
       // how an agent handled you; a thread closed by a rule had no handling to
       // rate, and surveying those fills the score with answers about nothing.
       return entry(stepIndex, action.type, 'ok', 'resolved');
+    }
+
+    case 'OPEN_CONVERSATION': {
+      if (!context.conversationId) return entry(stepIndex, action.type, 'skipped', 'no conversation');
+
+      /*
+        Only a resolved thread is reopened. reopenConversation already returns
+        `changed: false` on one that is open, so calling it unconditionally is
+        safe — but reporting "reopened" for a thread that was never closed would
+        put a misleading line in the run log, which is the surface an author
+        debugs from.
+      */
+      const result = await reopenConversation(context.conversationId);
+      return entry(
+        stepIndex,
+        action.type,
+        'ok',
+        result.changed ? 'reopened' : 'already open',
+      );
+    }
+
+    case 'ADD_COMMENT': {
+      if (!context.conversationId) return entry(stepIndex, action.type, 'skipped', 'no conversation');
+
+      const body = interpolate(String(action.body || '').trim(), {
+        ...context.payload,
+      }).slice(0, 4000);
+      if (!body) return entry(stepIndex, action.type, 'skipped', 'empty comment');
+
+      /*
+        Written directly rather than through sendOutboundMessage. That function
+        exists for the gateway, the response clock and the auto-close
+        reschedule; a comment touches none of them — it is never transmitted and
+        must never mark a thread as answered.
+
+        `sentById` stays null. A workflow has no person to sign a note with, and
+        attributing it to whoever happened to author the workflow would put
+        their name on something they did not write.
+      */
+      const comment = await prisma.message.create({
+        data: {
+          organizationId: getTenantId(),
+          conversationId: context.conversationId,
+          direction: 'OUTBOUND',
+          body,
+          isInternal: true,
+          isAuto: true,
+          autoType: 'workflow-comment',
+          status: 'SENT',
+        },
+      });
+
+      // The agent watching the thread sees it arrive. A note nobody is shown is
+      // a note nobody reads.
+      try {
+        getIO()
+          .to(socketRoom.conversation(getTenantId(), context.conversationId))
+          .emit(SocketEvents.NEW_MESSAGE, { conversationId: context.conversationId, message: comment });
+      } catch { /* no socket in a worker */ }
+
+      return entry(stepIndex, action.type, 'ok', 'comment added');
     }
 
     case 'IF_ELSE': {
