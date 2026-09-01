@@ -11,7 +11,7 @@ import {
   getTrialPlanCode,
   trialDeadlineFrom,
 } from './trial.service';
-import { getPaymentProvider } from './provider-registry';
+import { getPaymentProvider, paymentProviderFor } from './provider-registry';
 // ENTRY_PAID_PLAN_CODE is deliberately no longer imported here. It was used for
 // exactly one thing in this file — guessing a plan when a payment event named
 // none — and that guess is now a park in MANUAL_REVIEW. It remains in plans.ts
@@ -533,7 +533,23 @@ export async function cancelCurrentSubscription(organizationId: string): Promise
       orderBy: { createdAt: 'desc' },
     });
     if (!subscription) return;
-    if (subscription.subscriptionRef) await getPaymentProvider().cancelSubscription(subscription.subscriptionRef);
+    /*
+      Cancelled through the provider that created the row, not the one
+      configured now.
+
+      These are not the same the moment PAYMENT_PROVIDER changes, and the
+      database currently holds subscriptions created under `manual` whose
+      subscriptionRef is a synthetic `manual_subscription_*` string. Handing
+      that to Stripe means nothing to Stripe: the call errors, and if it were
+      ever made not to error the local row would read CANCELED while the real
+      subscription kept billing.
+
+      A subscription is a relationship with one provider and it outlives the
+      environment variable. An unregistered name throws — see the registry.
+    */
+    if (subscription.subscriptionRef) {
+      await paymentProviderFor(subscription.provider).cancelSubscription(subscription.subscriptionRef);
+    }
     await prisma.subscription.update({
       where: { id: subscription.id },
       data: { status: 'CANCELED', canceledAt: new Date(), cancelAtPeriodEnd: false },
