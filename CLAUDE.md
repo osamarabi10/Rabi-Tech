@@ -79,15 +79,27 @@ cd apps/backend && npx tsc --noEmit -p .
 cd apps/backend && npm run test:tenancy
 ```
 
-The gate uses a disposable PostgreSQL schema and must stay **green (122/122)**. Treat a red gate as a release blocker, not a known issue.
+The gate uses a disposable PostgreSQL schema and must stay **green (125/125)**. Treat a red gate as a release blocker, not a known issue.
 
-It was recorded here as 67/67 for a long time and is not: the count grew as the
-harness gained coverage rather than because anything was double-counted.
-Conversation-lifecycle and closure-reporting checks arrived with the
-Conversation Operations release, and edition coverage with the owner-controlled
-edition ladder. Two gates were also found non-functional on this machine and
-repaired, so the number that replaced 67 is not comparable to it without that
-context — see §8 of `docs/RESPONDIO-PARITY-CHECKPOINT.md`.
+It was recorded here as 67/67, then 122/122, and neither was wrong when it was
+written: the count grows as the harness gains coverage rather than because
+anything is double-counted. Conversation-lifecycle and closure-reporting checks
+arrived with the Conversation Operations release, edition coverage with the
+owner-controlled edition ladder, and three more when the Editions phase closed —
+archiving an edition without orphaning its subscribers, the ladder's ordering
+and tie-breaking, and the create path exercised against a closed code space. Two
+gates were also found non-functional on this machine and repaired, so the number
+that replaced 67 is not comparable to it without that context — see §8 and §6f
+of `docs/RESPONDIO-PARITY-CHECKPOINT.md`.
+
+**Read the printed summary line, never the exit code alone.** A command list
+exits with the status of its *last* command, so anything appended to a gate —
+an `echo`, a `tail` — replaces the gate's answer with its own. This harness
+prints `N/N checks passed` for exactly that reason. Three separate defects in
+this repository were gates reporting on their environment rather than on the
+code; see D-5, D-10, D-12, D-16 and the pattern above them in
+[docs/KNOWN-DEFECTS.md](docs/KNOWN-DEFECTS.md). **A gate is green only when it
+was watched to run.**
 
 **The catalogue must be loaded before the checks run.** The harness performs
 the same load the server's boot gate does, because `getEdition` no longer falls

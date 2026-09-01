@@ -979,6 +979,37 @@ limits on edit was considered and rejected as stomping per-subscriber overrides.
 So the one thing that could report it must not, and there is no other signal.
 E6 is what closes this.
 
+### Evidence, measured 2026-09-01
+
+- Backend isolation and usage harness: **`125/125`**, exit 0, run alone. Three
+  checks added by this phase: archiving an edition without orphaning its
+  subscribers, the ladder's ordering and tie-breaking, and the create path
+  exercised against a closed code space — the last by deleting `STANDARD`,
+  rebuilding it through the endpoint and restoring it, so the create body is
+  genuinely executed rather than only refused.
+- Platform finance ledger: **`17/17`**, exit 0, run in a shell with
+  `DATABASE_URL` explicitly unset — which is the check that matters for D-12,
+  because the same gate failed outright in that shell before the fix.
+- Backend `tsc` + Prisma constructor lint: pass. Frontend `tsc --noEmit`,
+  i18n completeness, mojibake, production build: pass.
+- Container images rebuilt: `rabitech-backend` fresh, `rabitech-frontend` from
+  cache (no frontend source changed in this phase).
+- Playwright browser matrix: **not run — unavailable without
+  `RABITECH_E2E_SESSION`.** Recorded as unavailable rather than green, because
+  a gate nobody watched run is not evidence.
+- Verified backups, both confirmed readable with `pg_restore -l` at 1056
+  objects: `pre-e5-closeout-20260901-010036.dump`, and
+  `pre-channel-narrowing-20260901-084806.dump` taken immediately before the
+  only migration this closeout applied.
+
+The harness first returned `124/125` on a check unrelated to editions, and the
+cause is worth recording: the usage reconciliation fixture spanned `now − 23h`
+while the metric it was compared against sums the calendar month in UTC, so on
+the first of a month part of the fixture fell outside the window. It failed at
+71.4% against a 1% tolerance on code that had passed five consecutive runs the
+day before. Fixed and recorded as D-16 — the fourth instance of the pattern this
+phase named, and the cleanest specimen of it.
+
 ### The door is still closed
 
 `CREATABLE_PLAN_CODES` in `platform.routes.ts` holds exactly the original five
