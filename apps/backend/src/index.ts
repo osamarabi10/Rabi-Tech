@@ -99,6 +99,18 @@ app.use(cors({ origin: corsOriginCallback, credentials: true }));
 // why it had no limiter at all: the general /api backstop never reached it.
 // Signature verification is cheap per request and unbounded in aggregate, which
 // is the shape of a CPU-burn target even though the endpoint is authenticated.
+/**
+ * @auth-exempt /api/billing/webhook
+ * @category    2
+ * @scope       modules/billing/stripe.provider.ts::constructEvent
+ *              -> modules/billing/billing.service.ts::runAsPlatform
+ * @reason      The payment provider's webhook. Authenticated by a signature over
+ *              the raw body rather than by a session, and it resolves the
+ *              subscriber from the event before entering platform scope. Note
+ *              the path: it begins with /api and is nonetheless registered above
+ *              the /api auth middleware, so it never reaches it. That is the
+ *              whole reason this annotation exists here rather than there.
+ */
 app.post('/api/billing/webhook', LIMITS.webhook, express.raw({ type: '*/*', limit: '1mb' }), billingWebhookHandler);
 // Meta Cloud API webhooks are registered HERE, ahead of express.json, because
 // the X-Hub-Signature-256 check must run over the exact bytes Meta signed. A
@@ -107,13 +119,41 @@ app.post('/api/billing/webhook', LIMITS.webhook, express.raw({ type: '*/*', limi
 //
 // Mounted before the parser also means the /webhooks rate limiter registered
 // further down never sees these requests, so the limit is applied explicitly.
+/**
+ * @auth-exempt /webhooks/meta
+ * @category    1
+ * @reason      Meta's subscription handshake, and nothing else. It compares
+ *              hub.verify_token against a configured value and echoes
+ *              hub.challenge back. It reads no table, enters no scope and
+ *              returns only the string it was handed, so there is genuinely
+ *              nothing here to scope to.
+ */
 app.get('/webhooks/meta', LIMITS.webhook, metaWebhookVerifyHandler);
+/**
+ * @auth-exempt /webhooks/meta
+ * @category    2
+ * @scope       webhooks/meta.webhook.ts::runAsPlatform
+ *              -> webhooks/meta.webhook.ts::runAsOrganization
+ * @reason      Inbound messages from the WhatsApp Cloud API. Authenticated by
+ *              X-Hub-Signature-256 over the exact bytes Meta signed, which is
+ *              why it is registered ahead of express.json — a reserialised body
+ *              is a different string. The tenant is resolved from the
+ *              phone_number_id in platform scope, then entered explicitly.
+ */
 app.post('/webhooks/meta', LIMITS.webhook, express.raw({ type: '*/*', limit: '1mb' }), metaWebhookHandler);
 // WhatsApp webhooks may include large base64 media payloads
 app.use(express.json({ limit: '50mb' }));
 // Request logging and correlation IDs
 app.use(requestLoggingMiddleware);
 
+/**
+ * @auth-exempt /health
+ * @category    1
+ * @reason      Liveness and dependency status for load balancers and the
+ *              deployment scripts, which have no credential to present and must
+ *              be able to ask before anything is configured. It reports whether
+ *              dependencies answer, never what they contain.
+ */
 // Health check — detailed service status
 app.get('/health', async (_, res) => {
   const checks: Record<string, 'ok' | 'error' | 'warning'> = {};
@@ -179,6 +219,18 @@ app.get('/health', async (_, res) => {
   });
 });
 
+/**
+ * @auth-exempt /api/network
+ * @category    4
+ * @auth        verifyToken
+ * @reason      LAN topology for the dashboard's own connection hints. It is
+ *              authenticated — the addresses are not something to hand out —
+ *              but it reads no tenant-owned row and therefore has no scope to
+ *              enter. Category 4 exists for exactly this shape, and the gate
+ *              asserts the claim by requiring that this handler touch no
+ *              database at all: the moment it reads a table, "no tenant data"
+ *              becomes false and it must be recategorised.
+ */
 // LAN access info — requires auth
 app.get('/api/network', verifyToken, (req, res) => {
   // This endpoint leaks LAN topology — require authentication
@@ -206,6 +258,16 @@ async function verifyBearerTokenForRoute(req: express.Request, res: express.Resp
 // Stream WhatsApp media (images/audio/video/files) from OpenWA so the dashboard
 // can load it from any device on the LAN, not just the machine running OpenWA.
 // Requires authentication via Bearer token OR valid signed URL token.
+/**
+ * @auth-exempt /media-proxy
+ * @category    2
+ * @scope       index.ts::verifyBearerTokenForRoute -> index.ts::runAsOrganization
+ * @reason      Streams WhatsApp media so the dashboard can load it from any
+ *              device on the LAN. Two credentials are accepted — a bearer token
+ *              or a signed media URL — and one of them must verify before
+ *              anything is fetched. The upstream fetch runs inside the owning
+ *              organization's scope.
+ */
 app.get('/media-proxy', async (req, res) => {
   const url = req.query.url as string | undefined;
   const mediaType = req.query.type as string | undefined;
@@ -266,6 +328,15 @@ app.get('/media-proxy', async (req, res) => {
 
 // Fetch media for a specific WhatsApp message by session + message ID (lazy proxy)
 // Requires authentication via Bearer token OR valid signed URL token.
+/**
+ * @auth-exempt /media-proxy/message
+ * @category    2
+ * @scope       index.ts::verifyBearerTokenForRoute -> index.ts::runAsOrganization
+ * @reason      The same as /media-proxy, addressed by message id rather than by
+ *              URL. Same two credentials, and it additionally confirms the
+ *              message belongs to the scope it is read in — a signed token for
+ *              one message must not fetch another.
+ */
 app.get('/media-proxy/message', async (req, res) => {
   const { session, msgId, type, token } = req.query as { session?: string; msgId?: string; type?: string; token?: string };
 
@@ -334,7 +405,22 @@ app.get('/media-proxy/message', async (req, res) => {
   }
 });
 
-// Webhook (no auth)
+/**
+ * @auth-exempt /
+ * @category    2
+ * @scope       webhooks/openwa.webhook.ts::runAsOrganization
+ * @reason      The OpenWA gateway's inbound webhook, mounted at the root
+ *              because its own router owns the full path
+ *              (/webhooks/openwa/:webhookToken). The token in that path is a
+ *              per-channel secret held only by the gateway, not a public
+ *              identifier — which is what makes this category 2 rather than the
+ *              widget redirect's category 3. It is looked up to find the
+ *              channel, and the request runs in that channel's organization.
+ *
+ *              The old comment here read "no auth", which was true of this
+ *              middleware and false of the endpoint, and is the kind of note
+ *              that makes a reader stop looking.
+ */
 app.use('/', webhookRouter);
 
 // SECURITY: rate limits run before auth so a flood of bad credentials is rejected

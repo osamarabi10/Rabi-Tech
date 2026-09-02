@@ -50,6 +50,32 @@
  * The category-2/3 chain check is the one that covers the actual invariant, and
  * check 9 covers what category 3 adds. The rest is bookkeeping.
  *
+ * ## Coverage, and how it was wrong
+ *
+ * This gate originally read only the `/api` auth middleware and reported "7
+ * exempt paths" as though that were the unauthenticated surface. It was not.
+ * `app.use('/', webhookRouter)` is mounted outside `/api`, so the middleware
+ * never runs for it and the gate had no opinion about it — a coverage claim
+ * that was quietly incomplete, which is worse than one that is openly partial.
+ *
+ * Checks 10 to 12 close that. Every route registered where the middleware
+ * cannot reach it needs the same annotation, and **the annotated set must equal
+ * the found set, both ways** — that equality is what makes this a coverage
+ * guarantee rather than one more list somebody has to remember to update.
+ *
+ * Two ways a route escapes, and the second is nastier: its path may simply not
+ * begin with `/api`, or it may begin with `/api` and be registered *above* the
+ * middleware, which answers first because Express runs handlers in registration
+ * order. `/api/billing/webhook` and `/api/network` are both the second kind and
+ * read as protected precisely because of their prefix.
+ *
+ * **Category 4 — authenticated, no tenant data** exists for `/api/network`:
+ * genuinely authenticated, but touching no tenant-owned row, so there is no
+ * scope to enter and categories 1 to 3 all misdescribe it. Its claim is checked
+ * rather than accepted — the handler must name an auth primitive and must not
+ * reach the database, so the moment it reads a table the annotation is a lie
+ * and the gate says so.
+ *
  * ## What this check cannot see
  *
  * It reads source, so it can prove a scope call exists on the path and cannot
@@ -314,10 +340,185 @@ check('8 · everything not exempted still goes through verifyToken into a tenant
   /verifyToken\s*\(/.test(tail) && /runAsOrganization\s*\(/.test(tail),
   'the fallback branch no longer authenticates — every unlisted route would be open');
 
+/*
+  ── Surfaces that never reach the middleware at all ──────────────────────────
+
+  The gate above reads the /api auth middleware and reports on its exemptions.
+  Until now that was presented as full coverage of the unauthenticated surface,
+  and it was not: `app.use('/', webhookRouter)` is mounted outside /api, so the
+  middleware never runs for it and the gate had no opinion about it. The
+  previous commit's "7 exempt paths" was a coverage claim about a set that
+  excluded, silently, every route registered elsewhere.
+
+  Two ways a route escapes the middleware, and the second is the nastier:
+
+    1. Its path does not begin with /api, so the middleware never matches.
+    2. Its path *does* begin with /api, but it is registered **above** the
+       middleware — Express runs handlers in registration order, so it answers
+       first. `/api/billing/webhook` and `/api/network` are both like this, and
+       they read as protected precisely because of their prefix.
+
+  So the rule is not "outside the /api prefix". It is "never reaches the
+  middleware", which is what the two clauses below compute.
+
+  Rate-limiter mounts are excluded, and only those whose arguments are nothing
+  but LIMITS entries. They register no handler and always call next().
+*/
+const REGISTRATION = /^app\.(use|get|post|put|patch|delete|all)\(\s*'([^']+)'\s*(.*)$/;
+const ONLY_LIMITERS = /^(?:LIMITS\.\w+\s*,\s*)*LIMITS\.\w+\s*\)\s*;?\s*$/;
+
+const outsideSites = [];
+for (let i = 0; i < lines.length; i++) {
+  const m = lines[i].match(REGISTRATION);
+  if (!m) continue;
+  const [, , routePath, rest] = m;
+  // The path is followed by ", handler..." — drop the separator before deciding
+  // whether what remains is only rate limiters.
+  const args = rest.trim().replace(/^,\s*/, '');
+  if (ONLY_LIMITERS.test(args)) continue;                // a limiter, not a handler
+  const beforeMiddleware = i < startIndex;
+  const outsideApiPrefix = !routePath.startsWith('/api');
+  if (!outsideApiPrefix && !beforeMiddleware) continue;   // the middleware covers it
+  if (i === startIndex) continue;                        // the middleware itself
+  outsideSites.push({ index: i, routePath });
+}
+
+check('scan: found the registrations that bypass the middleware',
+  outsideSites.length >= 5,
+  'found ' + outsideSites.length + ' — too few to be this file; the parser has drifted');
+
+/** Same adjacency rule as the middleware branches: the annotation sits directly above. */
+function annotationAboveLine(lineIndex) {
+  let i = lineIndex - 1;
+  // A one-line // comment may sit between the block and the route.
+  while (i >= 0 && (lines[i].trim() === '' || /^\s*\/\/ /.test(lines[i]))) i -= 1;
+  if (i < 0 || !/^\s*\*\/\s*$/.test(lines[i])) return null;
+  const end = i;
+  while (i >= 0 && !/^\s*\/\*\*\s*$/.test(lines[i])) i -= 1;
+  if (i < 0) return null;
+  return { text: lines.slice(i, end + 1) };
+}
+
+const outsideAnnotated = [];
+const outsideMissing = [];
+for (const site of outsideSites) {
+  const found = annotationAboveLine(site.index);
+  if (!found) { outsideMissing.push('index.ts:' + (site.index + 1) + '  ' + site.routePath); continue; }
+  outsideAnnotated.push({ ...site, tags: parseAnnotation(found.text) });
+}
+
+check('10 · every route that bypasses the middleware carries an annotation',
+  outsideMissing.length === 0,
+  outsideMissing.join('; '));
+
+/*
+  The coverage guarantee, and the reason this is not simply another list to
+  maintain: the annotated set must equal the found set, checked both ways. A new
+  router mounted outside /api fails because nothing annotates it; an annotation
+  whose route was deleted fails because nothing matches it.
+*/
+const matchedAnnotationLines = new Set(outsideAnnotated.map((e) => e.index));
+const orphanAnnotations = [];
+for (let i = 0; i < startIndex; i++) {
+  // Only `/** */` blocks count. The middleware's own header is a `/* */` block
+  // that documents the vocabulary and names @auth-exempt without being one.
+  if (!/^\s*\/\*\*\s*$/.test(lines[i])) continue;
+  let end = i;
+  while (end < startIndex && !/^\s*\*\/\s*$/.test(lines[end])) end += 1;
+  const block = lines.slice(i, end + 1);
+  if (!block.some((l) => /@auth-exempt\b/.test(l))) { i = end; continue; }
+
+  let next = end + 1;
+  while (next < lines.length && (lines[next].trim() === '' || /^\s*\/\/ /.test(lines[next]))) next += 1;
+  if (!matchedAnnotationLines.has(next)) {
+    orphanAnnotations.push('index.ts:' + (i + 1) + ' annotates ' + (lines[next] || '').trim().slice(0, 50));
+  }
+  i = end;
+}
+
+/*
+  Deliberately the orphan direction only. Check 10 already covers a route with
+  no annotation; folding both into one condition made a single fault report as
+  two failures, which pads the count and misleads anyone reading the mutation
+  that produced it. Together the two checks are the equality — separately each
+  names one side of it.
+*/
+check('11 · no annotation is left above a route that no longer bypasses the middleware',
+  orphanAnnotations.length === 0,
+  orphanAnnotations.join('; '));
+
+const outsideProblems = [];
+for (const entry of outsideAnnotated) {
+  const at = 'index.ts:' + (entry.index + 1) + ' (' + entry.routePath + ')';
+  const category = entry.tags.category;
+  const reason = (entry.tags.reason || '').trim();
+
+  if (!/^[1234]$/.test(category || '')) {
+    outsideProblems.push(at + ' category=' + JSON.stringify(category || null));
+    continue;
+  }
+  if (reason.length < 40) outsideProblems.push(at + ' reason is ' + reason.length + ' chars');
+  if (entry.tags['auth-exempt'] !== entry.routePath) {
+    outsideProblems.push(at + ' declares ' + JSON.stringify(entry.tags['auth-exempt'] || null));
+  }
+
+  if (category === '2' || category === '3') {
+    const scope = entry.tags.scope || '';
+    const links = scope.split('->').map((s) => s.trim()).filter(Boolean);
+    if (links.length === 0) { outsideProblems.push(at + ' is category ' + category + ' and declares no @scope'); continue; }
+    const last = links[links.length - 1].split('::').map((s) => s.trim());
+    if (!SCOPE_PRIMITIVES.includes(last[1])) {
+      outsideProblems.push(at + ' chain ends in ' + last[1] + ', not a scope primitive');
+      continue;
+    }
+    const abs = path.join(SRC, last[0]);
+    if (!fs.existsSync(abs)) { outsideProblems.push(at + ' names ' + last[0] + ', which does not exist'); continue; }
+    if (!new RegExp('\\b' + last[1] + '\\s*\\(').test(fs.readFileSync(abs, 'utf8'))) {
+      outsideProblems.push(at + ' declares scope via ' + last[1] + ' in ' + last[0] + ', but nothing there calls it');
+    }
+  }
+
+  /*
+    Category 4 — authenticated, but touching no tenant-owned data, so there is
+    no scope to enter. The claim is only honest while it stays true, so it is
+    checked rather than accepted: the handler must name an auth primitive, and
+    must not reach the database. The moment it reads a table the annotation is
+    a lie and this goes red.
+  */
+  if (category === '4') {
+    if (!entry.tags.auth) { outsideProblems.push(at + ' is category 4 and declares no @auth'); continue; }
+    // The handler's own body, not a fixed window. A fixed window ran past the
+    // end of this route into the next one and reported its database access as
+    // this route's — the check was reading the wrong handler.
+    let bodyEnd = entry.index + 1;
+    while (bodyEnd < lines.length && !/^app\./.test(lines[bodyEnd]) && !/^\/\*\*/.test(lines[bodyEnd])) bodyEnd += 1;
+    const body = lines.slice(entry.index, bodyEnd).join('\n');
+    if (!new RegExp('\\b' + entry.tags.auth + '\\b').test(body)) {
+      outsideProblems.push(at + ' declares @auth ' + entry.tags.auth + ', which the handler does not use');
+    }
+    if (/\bprisma\./.test(body) || /runAsOrganization|runAsPlatform/.test(body)) {
+      outsideProblems.push(at + ' is category 4 but touches tenant data — it needs a scope, and a different category');
+    }
+  }
+}
+
+check('12 · every bypassing route declares a category the code supports',
+  outsideProblems.length === 0,
+  outsideProblems.join('; '));
+
+const byCategory = (set, c) => set.filter((e) => e.tags.category === c).length;
+
 console.log('');
-console.log('Checked ' + annotated.length + ' exempt paths ('
-  + annotated.filter((e) => e.tags.category === '1').length + ' public, '
+console.log('Checked ' + (annotated.length + outsideAnnotated.length)
+  + ' surfaces reachable without the /api auth middleware, in index.ts:');
+console.log('  ' + annotated.length + ' exemptions inside it ('
+  + byCategory(annotated, '1') + ' public, '
   + (category2Count - category3Count) + ' scoped elsewhere, '
-  + category3Count + ' public tenant-derived) in index.ts.');
+  + category3Count + ' public tenant-derived)');
+console.log('  ' + outsideAnnotated.length + ' registered outside it ('
+  + byCategory(outsideAnnotated, '1') + ' public, '
+  + byCategory(outsideAnnotated, '2') + ' scoped elsewhere, '
+  + byCategory(outsideAnnotated, '3') + ' public tenant-derived, '
+  + byCategory(outsideAnnotated, '4') + ' authenticated without tenant data)');
 console.log(passed + '/' + (passed + failed) + ' checks passed.');
 if (failed > 0) process.exitCode = 1;
