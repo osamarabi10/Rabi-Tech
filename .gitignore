@@ -6,6 +6,15 @@
 *.pem
 *.key
 
+# Machine-local Claude Code approvals. It records the literal commands approved
+# on one machine, so it accumulates whatever credentials those commands carried
+# — while tracked it held `dev-admin-key` and a live webhook secret, in a public
+# repository. Nothing in it is shared project knowledge.
+#
+# `.claude/skills/` beside it is the opposite and stays tracked: it is guidance
+# every clone should have, and it carries no credentials.
+.claude/settings.local.json
+
 # Local operational scratch: live Postgres data files, a bundled pgsql
 # install, connection secrets (pgpass.txt), and run logs that can contain
 # phone numbers and message bodies. None of this is project source.
