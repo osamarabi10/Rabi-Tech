@@ -787,3 +787,92 @@ export async function closureReport(period: Period): Promise<ClosureReport> {
     summaries: { withSummary, withoutSummary: total - withSummary },
   };
 }
+
+/**
+ * Where a cohort of contacts stands in the pipeline.
+ *
+ * A **cohort**, not a snapshot, and the distinction is the whole report. This
+ * answers "of the contacts we gained in this period, where are they now" — so
+ * it is scoped by `Contact.createdAt` like every other tab on the page, and a
+ * contact acquired last year sitting at Customer today is deliberately not in a
+ * thirty-day funnel. The alternative, a live snapshot of every contact ever,
+ * ignores the period control the operator just set and answers a question they
+ * did not ask.
+ *
+ * Same reconciliation contract as closureReport: `stages + lost + unassigned`
+ * must equal `total`. A funnel whose parts do not sum to its own intake is
+ * worse than no funnel, because the drop-off it appears to show is arithmetic
+ * rather than behaviour.
+ *
+ * `unassigned` is the reason that contract needs stating. Contacts predating
+ * the lifecycle feature carry no stage, and dropping them would silently shrink
+ * the top of the funnel and inflate every conversion rate computed from it.
+ *
+ * There is deliberately no orphan bucket. `Contact.lifecycleStage` stores the
+ * stage *name* rather than an id, which would normally make stale values
+ * possible — but both paths that could produce one are already closed: renaming
+ * a stage cascades to its contacts in the same transaction, and deleting one is
+ * refused until its contacts are reassigned or cleared. A name that matches no
+ * stage is therefore not reachable, and inventing a bucket for it would suggest
+ * the guarantee is weaker than it is.
+ */
+export type FunnelStageRow = {
+  name: string;
+  count: number;
+  kind: string;
+  isWon: boolean;
+  color: string | null;
+  emoji: string | null;
+};
+
+export type LifecycleFunnel = {
+  /** Intake for the period: every contact created in it. */
+  total: number;
+  /** ACTIVE stages in pipeline order — the funnel itself. */
+  stages: FunnelStageRow[];
+  /** LOST stages: recorded drop-off, with the reason. */
+  lost: FunnelStageRow[];
+  /** Created in the period but never given a stage. */
+  unassigned: number;
+};
+
+export async function lifecycleFunnel(period: Period): Promise<LifecycleFunnel> {
+  const where = { createdAt: within(period) };
+
+  const [total, grouped, stages] = await Promise.all([
+    prisma.contact.count({ where }),
+    // The [organizationId, lifecycleStage] index covers this grouping.
+    prisma.contact.groupBy({ by: ['lifecycleStage'], where, _count: { _all: true } }),
+    prisma.lifecycleStage.findMany({
+      orderBy: { orderIndex: 'asc' },
+      select: { name: true, kind: true, isWon: true, color: true, emoji: true },
+    }),
+  ]);
+
+  const counts = new Map<string, number>();
+  let unassigned = 0;
+  for (const row of grouped) {
+    if (row.lifecycleStage === null) unassigned += row._count._all;
+    else counts.set(row.lifecycleStage, row._count._all);
+  }
+
+  // Driven by the stage list, not by the groupBy: a configured stage nobody has
+  // reached yet is a real part of the funnel and must show as zero rather than
+  // vanish. A funnel that renders only its occupied steps hides exactly the
+  // step where everyone is dropping out.
+  const rows = stages.map((stage) => ({
+    name: stage.name,
+    count: counts.get(stage.name) ?? 0,
+    kind: stage.kind,
+    isWon: stage.isWon,
+    color: stage.color,
+    emoji: stage.emoji,
+  }));
+
+  return {
+    total,
+    stages: rows.filter((row) => row.kind === 'ACTIVE'),
+    lost: rows.filter((row) => row.kind !== 'ACTIVE'),
+    unassigned,
+  };
+}

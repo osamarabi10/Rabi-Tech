@@ -306,6 +306,69 @@ function staticAudits() {
     kindComparisons.join(', '),
   );
 
+  /*
+    Every analytics report must be reachable from the product.
+
+    This is the check that was missing. `/api/analytics/closures` was written,
+    permission-gated, covered by this very harness, and had no screen that could
+    call it — for months. Nothing failed, because nothing was looking: a report
+    with no consumer is indistinguishable from a report nobody happened to open,
+    and the type system cannot tell them apart either.
+
+    The state document lists "every new endpoint has a frontend reference" among
+    the gates. It was not one. This is it.
+
+    Deliberately a literal grep over the UI for each route path, for the same
+    reason the capability check above is: the alternative is a principle in a
+    document, and a document does not fail a build.
+
+    An endpoint with no consumer is not automatically wrong — but it has to be
+    *said*, here, with a reason. Silence is what let closures rot.
+  */
+  const analyticsSource = fs.readFileSync(
+    path.join(ROOT, 'src', 'modules', 'analytics', 'analytics.routes.ts'), 'utf8');
+  const analyticsPaths = [...analyticsSource.matchAll(/router\.get\('(\/[a-z0-9/:._-]*)'/gi)]
+    .map((m) => m[1])
+    // Parameterised routes are reached by building the path, so a literal grep
+    // cannot see them. Their parents are covered above.
+    .filter((p) => !p.includes(':'));
+
+  /** Endpoints knowingly without a UI, and why. Each one is a decision. */
+  const ANALYTICS_WITHOUT_UI = {
+    '/agents': 'superseded by /team, which adds filters and search; fetchAgentPerformance is dead and awaiting a decision to remove it',
+  };
+
+  const uiSource = [];
+  for (const dir of uiDirs) {
+    const full = path.join(frontendRoot, dir);
+    if (!fs.existsSync(full)) continue;
+    for (const file of walk(full)) {
+      if (/\.(?:ts|tsx)$/.test(file)) uiSource.push(fs.readFileSync(file, 'utf8'));
+    }
+  }
+  const uiBlob = uiSource.join('\n');
+
+  const unreachableReports = analyticsPaths.filter((p) => {
+    if (Object.prototype.hasOwnProperty.call(ANALYTICS_WITHOUT_UI, p)) return false;
+    return !uiBlob.includes(`/api/analytics${p}`);
+  });
+
+  record(
+    'audit: every analytics report is reachable from the product, or listed as deliberately not',
+    unreachableReports.length === 0,
+    unreachableReports.map((p) => `/api/analytics${p}`).join(', '),
+  );
+
+  // The allowlist has to stay honest too. An entry for a route that no longer
+  // exists is a stale excuse, and the next reader would take it as current.
+  const staleExcuses = Object.keys(ANALYTICS_WITHOUT_UI)
+    .filter((p) => !analyticsPaths.includes(p));
+  record(
+    'audit: no stale entry in the analytics no-UI allowlist',
+    staleExcuses.length === 0,
+    staleExcuses.join(', '),
+  );
+
   const openwaWebhookSource = fs.readFileSync(
     path.join(ROOT, 'src', 'webhooks', 'openwa.webhook.ts'), 'utf8');
   const metaWebhookSource = fs.readFileSync(

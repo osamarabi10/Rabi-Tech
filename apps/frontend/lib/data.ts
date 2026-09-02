@@ -2239,6 +2239,48 @@ export async function fetchClosureReport(range: ReportRange): Promise<ClosureRep
   return data;
 }
 
+/**
+ * Where a cohort of contacts stands in the pipeline.
+ *
+ * **A distribution, not a cumulative funnel**, and the difference is not
+ * cosmetic. A contact holds exactly one stage and no stage history is kept, so
+ * these counts say *where contacts are now* — not how many ever reached each
+ * step. Rendering them as a conversion funnel with step-to-step rates would
+ * invent a number the data cannot support: a contact now at Customer is absent
+ * from Lead, so "Lead → Contacted" would read as a drop-off that never
+ * happened.
+ *
+ * The one conversion figure that *is* honest is the won stage against the
+ * period's intake, because both sides of that ratio are real.
+ *
+ * `stages` arrives in pipeline order and must be rendered in it — sorting by
+ * count would destroy the only thing that makes it a pipeline. Stages nobody
+ * has reached are included at zero, because an empty step is exactly where the
+ * reader needs to look.
+ *
+ * `stages + lost + unassigned` reconciles to `total`.
+ */
+export type FunnelStageRow = {
+  name: string;
+  count: number;
+  kind: string;
+  isWon: boolean;
+  color: string | null;
+  emoji: string | null;
+};
+
+export type LifecycleFunnel = {
+  total: number;
+  stages: FunnelStageRow[];
+  lost: FunnelStageRow[];
+  unassigned: number;
+};
+
+export async function fetchLifecycleFunnel(range: ReportRange): Promise<LifecycleFunnel> {
+  const { data } = await api.get('/api/analytics/lifecycle', { params: range });
+  return data;
+}
+
 // ---------- lifecycle stages ----------
 
 /**

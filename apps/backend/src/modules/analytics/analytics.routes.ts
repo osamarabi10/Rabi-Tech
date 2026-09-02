@@ -7,6 +7,7 @@ import {
   campaignPerformance,
   campaignRepliedContactWhere,
   closureReport,
+  lifecycleFunnel,
   firstResponseStats,
   gatewayReport,
   hourOfDayHeatmap,
@@ -155,6 +156,29 @@ router.get('/closures', requirePermission('analytics:read'), async (req, res) =>
     res.json({ period, ...report });
   } catch (err) {
     logger.error('analytics closures failed', {
+      error: String(err),
+      requestId: (req as any).id,
+    });
+    res.status(500).json({ error: 'فشل جلب التقرير', requestId: (req as any).id });
+  }
+});
+
+/**
+ * Lifecycle funnel for the contacts gained in the period.
+ *
+ * Scoped by contact creation date, so it reads as a cohort — "of what we
+ * gained, where did it get to" — rather than a snapshot that would ignore the
+ * period control entirely. See lifecycleFunnel for the reconciliation contract.
+ */
+router.get('/lifecycle', requirePermission('analytics:read'), async (req, res) => {
+  const period = parsePeriod(req.query as Record<string, unknown>);
+  if (isPeriodError(period)) return res.status(400).json({ error: period.error });
+
+  try {
+    const funnel = await lifecycleFunnel(period);
+    res.json({ period, ...funnel });
+  } catch (err) {
+    logger.error('analytics lifecycle failed', {
       error: String(err),
       requestId: (req as any).id,
     });

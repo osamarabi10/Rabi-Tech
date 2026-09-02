@@ -2010,6 +2010,14 @@ const D: Dict = {
   "مسار عمل": { he: "תהליך עבודה", en: "Workflow" },
   "واجهة برمجية": { he: "ממשק תכנות", en: "API" },
   "دمج": { he: "מיזוג", en: "Merge" },
+  // Lifecycle funnel. "Reached the final stage" rather than "converted": the
+  // won stage is whatever the workspace named it, and the report has no
+  // standing to call someone else's pipeline a conversion.
+  "دورة حياة العميل": { he: "מחזור חיי הלקוח", en: "Customer lifecycle" },
+  "وصلوا للمرحلة النهائية": { he: "הגיעו לשלב הסופי", en: "Reached the final stage" },
+  "بدون مرحلة": { he: "ללא שלב", en: "No stage" },
+  "التوزيع على المراحل": { he: "התפלגות לפי שלבים", en: "Distribution across stages" },
+  "أسباب الخروج": { he: "סיבות יציאה", en: "Drop-off reasons" },
   "تعذر تحميل الاشتراك": { he: "לא ניתן לטעון את המנוי", en: "Could not load the subscription" },
   "تعذر تحميل تفاصيل الاشتراك. تحقق من الاتصال وحاول مرة أخرى.": { he: "לא ניתן לטעון את פרטי המנוי. בדקו את החיבור ונסו שוב.", en: "The subscription details could not be loaded. Check the connection and try again." },
   "لا يوجد اشتراك": { he: "אין מנוי", en: "No subscription" },

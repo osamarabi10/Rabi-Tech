@@ -6,6 +6,7 @@ import { CampaignRepliesPanel } from '@/components/reports/campaign-replies-pane
 import {
   fetchCampaignsReport,
   fetchClosureReport,
+  fetchLifecycleFunnel,
   fetchConversationsReport,
   fetchGatewayReport,
   fetchOverviewReport,
@@ -15,6 +16,8 @@ import {
   fetchWebhookReport,
   type CampaignReportRow,
   type ClosureReport,
+  type FunnelStageRow,
+  type LifecycleFunnel,
   type ConversationsReport,
   type DrilldownMetric,
   type GatewayReport,
@@ -64,7 +67,7 @@ import { ErrorState } from '@/components/ui/operational-state';
  * make the slowest one the cost of the page.
  */
 
-type TabKey = 'overview' | 'conversations' | 'team' | 'campaigns' | 'closures' | 'gateway' | 'webhooks';
+type TabKey = 'overview' | 'conversations' | 'team' | 'campaigns' | 'lifecycle' | 'closures' | 'gateway' | 'webhooks';
 
 const BUCKET_LABEL: Record<string, string> = {
   under_5m: 'أقل من ٥ دقائق',
@@ -133,6 +136,7 @@ export default function ReportsPage() {
   const [gateway, setGateway] = useState<GatewayReport | null>(null);
   const [webhooks, setWebhooks] = useState<WebhookReport | null>(null);
   const [closures, setClosures] = useState<ClosureReport | null>(null);
+  const [lifecycle, setLifecycle] = useState<LifecycleFunnel | null>(null);
   const [liveSessions, setLiveSessions] = useState<Session[]>([]);
 
   const [teams, setTeams] = useState<Team[]>([]);
@@ -169,6 +173,7 @@ export default function ReportsPage() {
         setGateway(report);
         setLiveSessions(live);
       }
+      if (tab === 'lifecycle') setLifecycle(await fetchLifecycleFunnel(query));
       if (tab === 'closures') setClosures(await fetchClosureReport(query));
       if (tab === 'webhooks') setWebhooks(await fetchWebhookReport(query));
     } catch {
@@ -187,6 +192,7 @@ export default function ReportsPage() {
     { key: 'conversations', label: 'المحادثات' },
     { key: 'team', label: 'الفريق' },
     { key: 'campaigns', label: 'الحملات' },
+    { key: 'lifecycle', label: 'دورة حياة العميل' },
     { key: 'closures', label: 'الإغلاقات' },
     { key: 'gateway', label: 'حالة القناة' },
     { key: 'webhooks', label: 'الويب هوك' },
@@ -270,6 +276,7 @@ export default function ReportsPage() {
           {tab === 'gateway' && (
             <GatewayTab report={gateway} sessions={liveSessions} loading={loading} />
           )}
+          {tab === 'lifecycle' && <LifecycleTab report={lifecycle} loading={loading} />}
           {tab === 'closures' && <ClosuresTab report={closures} loading={loading} />}
           {tab === 'webhooks' && <WebhooksTab report={webhooks} loading={loading} />}
         </div>
@@ -771,6 +778,82 @@ const DIRECTION_LABEL: Record<string, string> = {
  * needs to know first — a silent discrepancy is how a wrong number gets quoted
  * to a customer.
  */
+/**
+ * Where the contacts gained in this period now stand.
+ *
+ * Deliberately **not** drawn as a conversion funnel. A contact holds one stage
+ * and no history is kept, so a step-to-step rate would be fabricated: someone
+ * now at Customer is absent from Lead, and the gap between them would read as
+ * drop-off that never occurred. What the data supports is a distribution, so a
+ * distribution is what this draws.
+ *
+ * The single honest conversion number is the won stage over the period's
+ * intake — both sides of that ratio are real — and it is the only one shown.
+ *
+ * Pipeline order is preserved rather than sorted by count, because the order
+ * *is* the pipeline; and stages nobody has reached are kept at zero, since an
+ * empty step is precisely where the reader should be looking.
+ */
+function LifecycleTab({ report, loading }: { report: LifecycleFunnel | null; loading: boolean }) {
+  const { t } = useT();
+  if (!report) return loading ? <Loading /> : <EmptyNote />;
+
+  const stageSum = report.stages.reduce((s, r) => s + r.count, 0);
+  const lostSum = report.lost.reduce((s, r) => s + r.count, 0);
+  const reconciles = stageSum + lostSum + report.unassigned === report.total;
+
+  const won = report.stages.find((s) => s.isWon);
+  const pct = (n: number) => (report.total === 0 ? 0 : Math.round((n / report.total) * 100));
+
+  const label = (row: FunnelStageRow) => (row.emoji ? `${row.emoji} ${row.name}` : row.name);
+
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <MetricTile label={t('جهات اتصال جديدة')} value={report.total.toLocaleString()} />
+        <MetricTile
+          label={t('وصلوا للمرحلة النهائية')}
+          value={won ? won.count.toLocaleString() : '—'}
+          hint={won ? `${pct(won.count)}%` : undefined}
+        />
+        <MetricTile
+          label={t('بدون مرحلة')}
+          value={report.unassigned.toLocaleString()}
+          hint={`${pct(report.unassigned)}%`}
+        />
+      </div>
+
+      {!reconciles && (
+        <p className="mt-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-caption text-warning">
+          {t('تفاصيل هذا التقرير لا تطابق الإجمالي. لا تعتمد عليه حتى تتم مراجعته.')}
+        </p>
+      )}
+
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <ReportCard title={t('التوزيع على المراحل')}>
+          {/* Order is the pipeline. The unassigned bucket rides along so the
+              bars account for every contact counted above them. */}
+          <DistributionBars
+            buckets={[
+              ...report.stages.map((row) => ({ label: label(row), count: row.count })),
+              ...(report.unassigned > 0
+                ? [{ label: t('بدون مرحلة'), count: report.unassigned }]
+                : []),
+            ]}
+            labelFor={(l) => l}
+          />
+        </ReportCard>
+        <ReportCard title={t('أسباب الخروج')}>
+          <DistributionBars
+            buckets={report.lost.map((row) => ({ label: label(row), count: row.count }))}
+            labelFor={(l) => l}
+          />
+        </ReportCard>
+      </div>
+    </>
+  );
+}
+
 function ClosuresTab({ report, loading }: { report: ClosureReport | null; loading: boolean }) {
   const { t } = useT();
   if (!report) return loading ? <Loading /> : <EmptyNote />;
