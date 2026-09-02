@@ -32,7 +32,7 @@ import {
  */
 
 const router = Router();
-router.use(verifyToken, requireAdmin, requirePermission('system:config'));
+router.use(verifyToken, requireAdmin, requirePermission('system:config'), requirePermission('integration:manage'));
 
 /** Enough tokens for real integration work; few enough that the list stays readable. */
 const MAX_LIVE_TOKENS = 20;

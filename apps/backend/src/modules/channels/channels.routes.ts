@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { auditLog } from '../../lib/audit';
-import { requireAdmin } from '../../middleware/rbac.middleware';
+import { requireAdmin, requirePermission } from '../../middleware/rbac.middleware';
 import { ChannelKind } from './channel.types';
 import { channelCapabilities, isChannelSendError, setActiveChannelKind } from './channel.service';
 import { verifyToken } from '../auth/auth.middleware';
@@ -97,12 +97,12 @@ router.get('/media/:organizationId/:storageKey', async (req, res) => {
 router.use(verifyToken);
 
 /** The organization's Meta channel, or null. Never includes the access token. */
-router.get('/meta', requireAdmin, async (_req, res) => {
+router.get('/meta', requireAdmin, requirePermission('integration:manage'), async (_req, res) => {
   const channel = await getMetaChannel();
   res.json({ channel });
 });
 
-router.post('/meta/connect', requireAdmin, async (req: any, res) => {
+router.post('/meta/connect', requireAdmin, requirePermission('integration:manage'), async (req: any, res) => {
   const refused = await channelRefusal(req.user!.organizationId, 'WHATSAPP_CLOUD');
   if (refused) {
     return res.status(402).json({
@@ -166,7 +166,7 @@ router.post('/meta/connect', requireAdmin, async (req: any, res) => {
   });
 });
 
-router.delete('/meta', requireAdmin, async (req: any, res) => {
+router.delete('/meta', requireAdmin, requirePermission('integration:manage'), async (req: any, res) => {
   const removed = await disconnectMetaChannel();
   if (removed) {
     await auditLog({
@@ -213,7 +213,7 @@ router.get('/capabilities', async (_req, res) => {
  * A switch, not a toggle: exactly one channel is active afterwards, and the
  * transaction behind it is why a send in flight never sees zero.
  */
-router.post('/active', requireAdmin, async (req: any, res) => {
+router.post('/active', requireAdmin, requirePermission('integration:manage'), async (req: any, res) => {
   const kind = String(req.body?.kind || '') as ChannelKind;
   if (kind !== 'OPENWA' && kind !== 'WHATSAPP_CLOUD') {
     return res.status(400).json({ error: 'نوع القناة غير معروف.', code: 'CHANNEL_KIND_UNKNOWN' });

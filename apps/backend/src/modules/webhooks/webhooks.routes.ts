@@ -29,7 +29,7 @@ import {
  */
 
 const router = Router();
-router.use(verifyToken, requireAdmin, requirePermission('system:config'));
+router.use(verifyToken, requireAdmin, requirePermission('system:config'), requirePermission('integration:manage'));
 
 /** Theirs is 35 per workspace; matched rather than guessed at. */
 const MAX_ENDPOINTS = 35;

@@ -537,6 +537,7 @@ router.get('/users', async (req, res) => {
         restrictDataExport: true,
         restrictContactDeletion: true,
         restrictWorkspaceSettings: true,
+        restrictIntegrations: true,
         maskPhoneAndEmail: true,
         createdAt: true,
         authSessions: {
@@ -750,7 +751,7 @@ router.patch('/users/:id', requireAdmin, requirePermission('user:update'), async
       name, email, password, role, phone, isActive, primaryTeamId, teamIds,
       restrictContactVisibility, contactVisibilityScope, restrictCalls,
       restrictWorkflows, maskPhoneAndEmail,
-      restrictDataExport, restrictContactDeletion, restrictWorkspaceSettings,
+      restrictDataExport, restrictContactDeletion, restrictWorkspaceSettings, restrictIntegrations,
     } = req.body;
 
     /*
@@ -772,7 +773,7 @@ router.patch('/users/:id', requireAdmin, requirePermission('user:update'), async
       role, isActive,
       restrictContactVisibility, contactVisibilityScope, restrictCalls,
       restrictWorkflows, maskPhoneAndEmail,
-      restrictDataExport, restrictContactDeletion, restrictWorkspaceSettings,
+      restrictDataExport, restrictContactDeletion, restrictWorkspaceSettings, restrictIntegrations,
     };
     const editingOwnAccess = req.params.id === req.user!.id
       && Object.values(ACCESS_FIELDS).some((value) => value !== undefined);
@@ -843,6 +844,7 @@ router.patch('/users/:id', requireAdmin, requirePermission('user:update'), async
     if (restrictDataExport !== undefined) data.restrictDataExport = restrictDataExport === true;
     if (restrictContactDeletion !== undefined) data.restrictContactDeletion = restrictContactDeletion === true;
     if (restrictWorkspaceSettings !== undefined) data.restrictWorkspaceSettings = restrictWorkspaceSettings === true;
+    if (restrictIntegrations !== undefined) data.restrictIntegrations = restrictIntegrations === true;
 
     const user = await prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({

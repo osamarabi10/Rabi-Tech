@@ -15,6 +15,15 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { ar?: string; he: string; en: string }>;
 
 const D: Dict = {
+  /* ── Per-user restrictions ── */
+  "Restrict data export": { ar: "منع تصدير البيانات", he: "הגבלת ייצוא נתונים", en: "Restrict data export" },
+  "Prevent this user from exporting contacts.": { ar: "امنع هالمستخدم من تصدير جهات الاتصال.", he: "מנע ממשתמש זה לייצא אנשי קשר.", en: "Prevent this user from exporting contacts." },
+  "Restrict contact deletion": { ar: "منع حذف جهات الاتصال", he: "הגבלת מחיקת אנשי קשר", en: "Restrict contact deletion" },
+  "Prevent this user from deleting contacts.": { ar: "امنع هالمستخدم من حذف جهات الاتصال.", he: "מנע ממשתמש זה למחוק אנשי קשר.", en: "Prevent this user from deleting contacts." },
+  "Restrict workspace settings": { ar: "منع إعدادات المساحة", he: "הגבלת הגדרות מרחב העבודה", en: "Restrict workspace settings" },
+  "Prevent this user from changing workspace settings or managing team members.": { ar: "امنع هالمستخدم من تغيير إعدادات المساحة أو إدارة أعضاء الفريق.", he: "מנע ממשתמש זה לשנות הגדרות או לנהל חברי צוות.", en: "Prevent this user from changing workspace settings or managing team members." },
+  "Restrict integrations": { ar: "منع التكاملات", he: "הגבלת אינטגרציות", en: "Restrict integrations" },
+  "Prevent this user from connecting channels, creating API keys, or adding webhooks.": { ar: "امنع هالمستخدم من ربط القنوات أو إنشاء مفاتيح API أو إضافة ويب هوكس.", he: "מנע ממשתמש זה לחבר ערוצים, ליצור מפתחות API או להוסיף וובהוקים.", en: "Prevent this user from connecting channels, creating API keys, or adding webhooks." },
   /* ── Conversation collaborators ── */
   "مشاركين": { he: "משתתפים", en: "Collaborators" },
   "مشترك فيها": { he: "שיחות שאני משתתף בהן", en: "Collaborations" },

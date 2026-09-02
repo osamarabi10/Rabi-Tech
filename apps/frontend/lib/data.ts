@@ -266,6 +266,10 @@ export type SystemUser = {
   contactVisibilityScope?: 'TEAM' | 'SELF';
   restrictCalls?: boolean;
   restrictWorkflows?: boolean;
+  restrictDataExport?: boolean;
+  restrictContactDeletion?: boolean;
+  restrictWorkspaceSettings?: boolean;
+  restrictIntegrations?: boolean;
   maskPhoneAndEmail?: boolean;
   createdAt: string;
 };
@@ -1136,6 +1140,10 @@ export async function updateSystemUser(id: string, input: {
   contactVisibilityScope?: 'TEAM' | 'SELF';
   restrictCalls?: boolean;
   restrictWorkflows?: boolean;
+  restrictDataExport?: boolean;
+  restrictContactDeletion?: boolean;
+  restrictWorkspaceSettings?: boolean;
+  restrictIntegrations?: boolean;
   maskPhoneAndEmail?: boolean;
 }): Promise<SystemUser> {
   const { data } = await api.patch(`/api/system/users/${id}`, input);

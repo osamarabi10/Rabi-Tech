@@ -64,6 +64,15 @@ const ROLE_PERMISSIONS: Record<string, Set<Role>> = {
 
   // System
   'system:config': new Set(['ADMIN']),
+  /*
+    Integration settings: channels, API keys, webhooks.
+
+    A named operation rather than bare requireAdmin, and that is the whole
+    point — the note below recorded that a restriction keyed on an operation no
+    route consults is declared and unenforced. This is the operation those
+    routes now consult.
+  */
+  'integration:manage': new Set(['ADMIN']),
 };
 
 /**
@@ -123,11 +132,23 @@ const USER_RESTRICTIONS = [
     still create admins has not been restricted from anything.
   */
   { flag: 'restrictWorkspaceSettings', operations: ['system:config', 'user:create', 'user:update', 'user:delete', 'user:list'], code: 'USER_SETTINGS_RESTRICTED', message: 'Workspace settings are restricted for this user' },
+  /*
+    Integrations, the seventh and last of theirs we lacked.
+
+    Deliberately NOT including 'system:config'. An admin restricted from
+    integrations should still reach general workspace settings — conflating the
+    two would make this restriction a second, blunter copy of the one above,
+    and an admin who may not connect a channel can perfectly well rename the
+    workspace.
+  */
+  { flag: 'restrictIntegrations', operations: ['integration:manage'], code: 'USER_INTEGRATION_RESTRICTED', message: 'Integration settings are restricted for this user' },
 ] as const;
 
 /*
-  Integration settings — channels, gateways, webhooks — has NO restriction here,
-  and that is a finding rather than an omission.
+  RESOLVED as of P1. Kept because the reasoning is the reusable part.
+
+  Integration settings had no restriction here, and that was a finding rather
+  than an omission:
 
   There is no `channel:`, `webhook:` or `integration:` operation in the table
   above. Those routes guard with `requireAdmin` directly rather than through
@@ -138,8 +159,12 @@ const USER_RESTRICTIONS = [
 
   Shipping `restrictIntegrationSettings` as a column and a checkbox that quietly
   did nothing would have been worse than not shipping it. Closing it properly
-  means moving those routes onto named operations first, which is its own piece
-  of work and is recorded in TODO.md rather than half-done here.
+  meant moving those routes onto named operations first.
+
+  That is what happened: P1 built the API-token and webhook routes through
+  `requirePermission`, the channel routes moved onto `integration:manage` in the
+  same change, and `restrictIntegrations` above keys on that operation. The
+  restriction now withdraws something.
 */
 
 export type UserRestrictions = Partial<Record<(typeof USER_RESTRICTIONS)[number]['flag'], boolean>>;

@@ -21,6 +21,7 @@ export interface JwtPayload {
   restrictDataExport?: boolean;
   restrictContactDeletion?: boolean;
   restrictWorkspaceSettings?: boolean;
+  restrictIntegrations?: boolean;
   maskPhoneAndEmail?: boolean;
 }
 
@@ -165,6 +166,7 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
                   restrictDataExport: true,
                   restrictContactDeletion: true,
                   restrictWorkspaceSettings: true,
+                  restrictIntegrations: true,
                   maskPhoneAndEmail: true,
                   organization: {
                     select: {
@@ -201,6 +203,7 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
           restrictDataExport: true,
           restrictContactDeletion: true,
           restrictWorkspaceSettings: true,
+          restrictIntegrations: true,
           maskPhoneAndEmail: true,
         },
       });
@@ -254,6 +257,7 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
         restrictDataExport: user.restrictDataExport,
         restrictContactDeletion: user.restrictContactDeletion,
         restrictWorkspaceSettings: user.restrictWorkspaceSettings,
+        restrictIntegrations: user.restrictIntegrations,
         maskPhoneAndEmail: user.maskPhoneAndEmail,
       };
       next();

@@ -61,6 +61,22 @@ const CASES = [
     keeps: ['contact:read', 'conversation:read', 'campaign:send', 'workflow:manage'],
   },
   {
+    /*
+      The seventh restriction, and the one that was deliberately withheld until
+      a route could enforce it. The note in rbac.middleware.ts recorded why: a
+      restriction keyed on an operation nothing consults is declared and
+      unenforced, which is the shape this repo has shipped repeatedly.
+
+      `system:config` is in `keeps` on purpose. An admin restricted from
+      integrations should still reach general workspace settings — conflating
+      them would make this a blunter copy of restrictWorkspaceSettings.
+    */
+    flag: 'restrictIntegrations',
+    role: 'ADMIN',
+    removes: ['integration:manage'],
+    keeps: ['system:config', 'contact:read', 'conversation:read', 'user:list'],
+  },
+  {
     flag: 'restrictWorkflows',
     role: 'SUPERVISOR',
     removes: ['workflow:manage', 'workflow:view'],

@@ -1041,6 +1041,13 @@ model User {
   restrictDataExport          Boolean                @default(false)
   restrictContactDeletion     Boolean                @default(false)
   restrictWorkspaceSettings   Boolean                @default(false)
+  /// The seventh restriction, and the last of theirs we lacked.
+  ///
+  /// Withheld until P1, because the note in rbac.middleware.ts was right: a
+  /// restriction keyed on an operation no route consults is declared and
+  /// unenforced. API tokens and webhooks now guard through requirePermission,
+  /// and the channel routes move onto a named operation with it.
+  restrictIntegrations        Boolean                @default(false)
   maskPhoneAndEmail           Boolean                @default(false)
   createdAt                   DateTime               @default(now())
   updatedAt                   DateTime               @updatedAt

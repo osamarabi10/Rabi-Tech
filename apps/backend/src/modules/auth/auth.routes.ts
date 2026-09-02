@@ -514,6 +514,7 @@ router.get('/me', verifyToken, async (req, res) => {
         restrictDataExport: true,
         restrictContactDeletion: true,
         restrictWorkspaceSettings: true,
+        restrictIntegrations: true,
         maskPhoneAndEmail: true,
         isAway: true,
         organizationId: true,
