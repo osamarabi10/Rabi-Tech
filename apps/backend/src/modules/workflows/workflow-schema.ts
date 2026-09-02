@@ -37,6 +37,31 @@ export const TRIGGER_TYPES = [
    * every import row.
    */
   'CONTACT_FIELD_UPDATED',
+  /**
+   * Fired by a subscriber's own software, through the public API.
+   *
+   * This is the trigger P1 existed to make possible. Without it an integration
+   * can read and write, but cannot start an automation — so anything that
+   * happens in their system (an order ships, a payment clears) can only reach
+   * the workspace as a message somebody has to read.
+   *
+   * Addressed by workflow id and authorised by an API token carrying
+   * `workflows:trigger`. Deliberately not a secret URL: a per-workflow token in
+   * a path ends up in access logs, proxy logs and browser history, which is
+   * exactly what the bearer scheme exists to avoid.
+   */
+  'INCOMING_WEBHOOK',
+  /**
+   * Fired by an agent, from the conversation they are looking at.
+   *
+   * The cheapest of the new triggers and the one that changes daily work most:
+   * it turns a workflow into a button. An agent who would otherwise apply four
+   * tags, set a stage and assign a team does one thing instead.
+   *
+   * Carries no operand of its own — the agent's choice IS the operand. Narrowing
+   * would mean an agent picking a shortcut and it silently not applying.
+   */
+  'SHORTCUT',
 ] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
@@ -125,6 +150,20 @@ export const ACTION_TYPES = [
    * path instead of ending the run.
    */
   'IF_ELSE',
+  /*
+    The two below are declared and REFUSED AT SAVE until the canvas exists.
+
+    They are real steps in Respond.io and both turn a list into a graph, which a
+    flat form builder cannot render: a jump target is a position, and there are
+    no stable positions in a list somebody is reordering. Declaring them without
+    the canvas would put two entries in the builder that produce a validation
+    error on save — worse than absent.
+
+    They are here rather than nowhere so the refusal can name them, and so the
+    gate can assert the refusal exists. See validateAction.
+  */
+  'JUMP_TO',
+  'TRIGGER_WORKFLOW',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
@@ -185,7 +224,31 @@ export type WorkflowConfig = {
 export const HTTP_METHODS = ['GET','POST','PUT','PATCH','DELETE'] as const;
 export type HttpMethod = (typeof HTTP_METHODS)[number];
 
-export const MAX_ACTIONS = 20;
+/**
+ * Steps per workflow, counted across branches.
+ *
+ * Raised from 20 to match Respond.io's published 100. The original bound was
+ * about worker occupancy, and that reasoning still holds — but it is bounded
+ * either way, and 20 was low enough to be hit by an ordinary onboarding
+ * sequence. The two steps that could genuinely hold a worker, `WAIT_DELAY` and
+ * `ASK_QUESTION`, both yield it rather than blocking, so the ceiling that
+ * matters is the run deadline below, not the step count.
+ */
+export const MAX_ACTIONS = 100;
+
+/**
+ * How long one run may live, from creation to completion.
+ *
+ * Respond.io's is seven days and it is the right kind of limit: without one, a
+ * run that pauses on a question nobody answers, or on a delay whose job was
+ * lost, stays RUNNING forever — occupying nothing, but appearing in every
+ * report as a workflow still in progress, indefinitely.
+ *
+ * Enforced when a run resumes rather than by a sweep: a run that never resumes
+ * costs nothing, and one that does is checked at the only moment the answer
+ * could have changed.
+ */
+export const MAX_RUN_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_CONDITIONS = 10;
 
 /** Longest a WAIT_DELAY may pause. Beyond a week, a workflow is a scheduler. */
@@ -437,6 +500,25 @@ function validateAction(
       // A comment with no body is a row in the thread saying nothing, which an
       // agent then has to read to discover it says nothing.
       requireText(action.body, 'comment text', errors, path);
+      break;
+
+    /*
+      Refused until the canvas exists.
+
+      Both turn a list into a graph. A jump target is a *position*, and a flat
+      builder has no stable positions — reordering one step silently repoints
+      every jump past it. `WAIT_DELAY` and `ASK_QUESTION` are already refused
+      inside branches for the same class of reason: resuming addresses a
+      top-level index, which cannot name a position inside a branch.
+
+      Refusing by name here, rather than leaving them out of the type, is what
+      lets the message say *why* and name when they arrive.
+    */
+    case 'JUMP_TO':
+    case 'TRIGGER_WORKFLOW':
+      errors.push(
+        `${path}: "${action.type}" needs the workflow canvas and cannot be saved from the form builder yet`,
+      );
       break;
 
     default:

@@ -276,7 +276,7 @@ infrastructure dependency it was written to avoid.
 cd apps/backend && npm run test:workflow-p2
 ```
 
-**42/42, hermetic.** Adding a name to `TRIGGER_TYPES` or `ACTION_TYPES` makes it
+**52/52, hermetic.** Adding a name to `TRIGGER_TYPES` or `ACTION_TYPES` makes it
 appear in the builder immediately — and nothing else is required for a
 subscriber to select it, save a workflow, and watch it never run. There is no
 error, because from outside, a workflow that never matched looks exactly like
@@ -292,6 +292,12 @@ and dispatched by nothing — the executor emitted it when a *workflow* removed 
 tag, so it appeared to work in testing and never fired for the case anyone
 builds it for: an agent removing a tag in the inbox. That is the seventh
 instance of this shape in this repository.
+
+An action either has a real executor branch **or is provably refused at save**.
+`JUMP_TO` and `TRIGGER_WORKFLOW` are declared with no branch on purpose — both
+need the canvas — so the gate asserts the refusal and that no branch exists to
+reach. An action with neither would fall through to default and report "did
+nothing", which an author reads as "my condition was false".
 
 Mutation-proved: making `ADD_COMMENT` write a customer-facing message instead of
 an internal one takes it red — the property that matters most, since an internal

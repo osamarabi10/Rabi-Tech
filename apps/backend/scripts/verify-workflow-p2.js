@@ -52,7 +52,10 @@ function main() {
   for (const action of ['OPEN_CONVERSATION', 'ADD_COMMENT']) {
     check(`${action} is an action`, ACTION_TYPES.includes(action));
   }
-  check('seven triggers now', TRIGGER_TYPES.length === 7, TRIGGER_TYPES.length);
+  for (const trigger of ['INCOMING_WEBHOOK', 'SHORTCUT']) {
+    check(`${trigger} is a trigger`, TRIGGER_TYPES.includes(trigger));
+  }
+  check('nine triggers now', TRIGGER_TYPES.length === 9, TRIGGER_TYPES.length);
   check('no duplicate trigger names', new Set(TRIGGER_TYPES).size === TRIGGER_TYPES.length);
   check('no duplicate action names', new Set(ACTION_TYPES).size === ACTION_TYPES.length);
 
@@ -120,9 +123,34 @@ function main() {
     run log shows the step was reached and says it did nothing, which reads as
     "the condition was false" rather than "this feature does not exist".
   */
+  /*
+    Two actions are declared and deliberately have NO executor branch: JUMP_TO
+    and TRIGGER_WORKFLOW need the canvas, and both turn a list into a graph that
+    a flat builder cannot render. They are declared so the validator can refuse
+    them BY NAME and say when they arrive.
+
+    So the rule is not weakened for them, it is replaced: an action either has a
+    real branch, or is provably refused at save. An action with neither would
+    reach the executor, fall through to default, and report "did nothing" — which
+    an author reads as "my condition was false", not "this feature is missing".
+  */
+  const REFUSED_UNTIL_CANVAS = ['JUMP_TO', 'TRIGGER_WORKFLOW'];
+
   for (const action of ACTION_TYPES) {
+    if (REFUSED_UNTIL_CANVAS.includes(action)) continue;
     check(`the executor has a branch for ${action}`,
       executorSource.includes(`case '${action}'`), 'no case in the compiled executor');
+  }
+
+  for (const action of REFUSED_UNTIL_CANVAS) {
+    const result = validateWorkflowConfig('CONVERSATION_CREATED', { actions: [{ type: action }] });
+    check(`${action} is refused at save`, result.valid === false);
+    check(`  …and the message says why`,
+      result.errors.some((e) => /canvas/i.test(e)), result.errors.join(' | '));
+    // It must ALSO have no executor branch — a refused action that the executor
+    // would happily run is one migration away from being reachable.
+    check(`  …and has no executor branch to reach`,
+      !executorSource.includes(`case '${action}'`));
   }
 
   /*

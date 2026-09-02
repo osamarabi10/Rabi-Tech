@@ -7,6 +7,7 @@ import contactRoutes from './contacts.routes';
 import conversationRoutes from './conversations.routes';
 import messagingRoutes from './messaging.routes';
 import workspaceRoutes from './workspace.routes';
+import workflowRoutes from './workflows.routes';
 
 /**
  * `/api/v1` — the public API.
@@ -40,6 +41,7 @@ router.use(messagingRoutes);
 // Discovery endpoints hang off the root: they describe the workspace, not one
 // resource inside it.
 router.use(workspaceRoutes);
+router.use('/workflows', workflowRoutes);
 router.use('/conversations', conversationRoutes);
 
 /**

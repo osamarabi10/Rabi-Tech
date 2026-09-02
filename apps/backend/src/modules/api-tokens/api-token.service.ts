@@ -52,6 +52,14 @@ export const API_SCOPES = [
   'tags:read',
   'tags:write',
   'workspace:read',
+  /*
+    Starting an automation is strictly more powerful than reading.
+
+    A workflow can send messages, reassign threads and move lifecycle stages, so
+    triggering one is not covered by any read scope and must be granted
+    deliberately. Appended, so no token issued before today holds it.
+  */
+  'workflows:trigger',
 ] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 

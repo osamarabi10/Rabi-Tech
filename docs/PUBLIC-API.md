@@ -68,7 +68,8 @@ never everything.
 | `messages:send` | Send a message to a contact or into a thread |
 | `tags:read` | `GET /tags` |
 | `tags:write` | Apply and remove tags |
-| `workspace:read` | `GET /me` |
+| `workspace:read` | `GET /me`, discovery endpoints |
+| `workflows:trigger` | Start a workflow |
 
 `contacts:write` does **not** carry `tags:write`, and it does **not** carry
 `contacts:delete`. A sync job that writes contact fields rarely needs to reshape
@@ -141,6 +142,33 @@ Lifecycle stages are ordered by the workspace's own sequence, not alphabetically
 alphabetical would put Customer before Lead. `kind` matters: `ACTIVE` stages form
 the funnel, `LOST` stages record drop-off, and an integration advancing a contact
 must not walk into a `LOST` stage by iterating the list.
+
+### `POST /workflows/:id/trigger` · `workflows:trigger`
+
+Start an automation the workspace already built, from your own software.
+
+```json
+{ "contact": "phone:+972501234567",
+  "data": { "orderId": "A-1024", "status": "shipped" } }
+```
+
+Returns **202** — the run is queued, not finished. Reporting 200 for work that
+has not happened is how a caller concludes an automation completed when it is
+three steps from starting.
+
+Only workflows whose trigger is **Incoming Webhook** can be fired this way. One
+built for a keyword or a tag would run without the context it was written
+against, do nothing useful, and look broken — so that is a `409`, not a silent
+no-op.
+
+`data` values reach message steps as interpolation variables, which is what
+makes this more than a remote button: *"your order {{orderId}} shipped"* needs
+the order id, and the workspace has no other way to know it. Fifty keys, scalars
+only.
+
+`workflows:trigger` is its own scope. A workflow can send messages, reassign
+threads and move lifecycle stages, so triggering one is not covered by any read
+scope — and being new, no token issued before it existed can hold it.
 
 ### `GET /me` · `workspace:read`
 

@@ -7,6 +7,7 @@ import { requirePermission } from '../../middleware/rbac.middleware';
 import { getEdition } from '../billing/editions.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { validateWorkflowConfig, workflowVocabulary } from './workflow-schema';
+import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
 
 /**
  * Workflow CRUD.
@@ -183,6 +184,85 @@ router.patch('/:id', requirePermission('workflow:manage'), async (req, res) => {
     res.json(workflow);
   } catch (err) {
     fail(res, err, 'Workflow update failed');
+  }
+});
+
+/**
+ * GET /api/workflows/shortcuts — the workflows an agent may fire by hand.
+ *
+ * Guarded by `workflow:view`, not `workflow:manage`. Running a shortcut is not
+ * editing automation: an agent who may not build a workflow may absolutely use
+ * one somebody built for them, and requiring manage would put this behind a
+ * permission most agents correctly lack.
+ */
+router.get('/shortcuts', requirePermission('workflow:view'), async (_req, res) => {
+  try {
+    const shortcuts = await prisma.workflow.findMany({
+      where: { triggerType: 'SHORTCUT', isActive: true },
+      select: { id: true, name: true, description: true },
+      orderBy: { name: 'asc' },
+      take: 50,
+    });
+    res.json({ shortcuts });
+  } catch (err: any) {
+    logger.error('Failed to list shortcuts', { error: err?.message, requestId: (_req as any).id });
+    res.status(500).json({ error: 'تعذّر جلب الاختصارات' });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/run — an agent fires a workflow on a conversation.
+ *
+ * The trigger that turns a workflow into a button. An agent who would otherwise
+ * apply four tags, set a stage and assign a team does one thing instead — which
+ * is the change to daily work, more than any single step is.
+ *
+ * Only `SHORTCUT` workflows. Firing a keyword or tag workflow by hand would run
+ * it without the context it was written against: its first step assumes a
+ * matched keyword or a named tag, neither of which exists here, so it would do
+ * nothing useful and look broken.
+ */
+router.post('/:id/run', requirePermission('workflow:view'), async (req, res) => {
+  try {
+    const workflow = await prisma.workflow.findFirst({
+      where: { id: String(req.params.id) },
+      select: { id: true, name: true, isActive: true, triggerType: true },
+    });
+    if (!workflow) return res.status(404).json({ error: 'الأتمتة غير موجودة' });
+    if (workflow.triggerType !== 'SHORTCUT') {
+      return res.status(409).json({ error: 'هذي الأتمتة مش اختصار' });
+    }
+    if (!workflow.isActive) return res.status(409).json({ error: 'الأتمتة متوقفة' });
+
+    const conversationId = String(req.body?.conversationId || '').trim();
+    if (!conversationId) return res.status(400).json({ error: 'المحادثة مطلوبة' });
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: conversationId },
+      select: { id: true, contactId: true },
+    });
+    if (!conversation) return res.status(404).json({ error: 'محادثة غير موجودة' });
+
+    const started = await dispatchWorkflowEvent({
+      triggerType: 'SHORTCUT',
+      contactId: conversation.contactId,
+      conversationId: conversation.id,
+      // Who pressed it. A shortcut is a deliberate human act and the run log is
+      // where "who did this to my conversation" gets answered.
+      payload: { workflowId: workflow.id, byUserId: req.user!.id, byUserName: req.user!.name },
+    });
+
+    logger.info('Workflow shortcut fired', {
+      workflowId: workflow.id,
+      conversationId: conversation.id,
+      byUserId: req.user!.id,
+      started,
+    });
+
+    res.status(202).json({ accepted: true, runs: started });
+  } catch (err: any) {
+    logger.error('Failed to run shortcut', { error: err?.message, requestId: (req as any).id });
+    res.status(500).json({ error: 'تعذّر تشغيل الاختصار' });
   }
 });
 

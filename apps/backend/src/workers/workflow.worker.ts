@@ -6,6 +6,7 @@ import { gatewayQueueConnection } from './gateway-provisioning.queue';
 import { collectTriggeredRuns, type TriggerEvent } from '../modules/workflows/workflow-dispatcher';
 import { runWorkflowActions } from '../modules/workflows/workflow-executor';
 import type { WorkflowConfig } from '../modules/workflows/workflow-schema';
+import { MAX_RUN_DURATION_MS } from '../modules/workflows/workflow-schema';
 
 /**
  * Workflow execution queue.
@@ -88,7 +89,7 @@ export function startWorkflowWorker(): Worker | null {
       return runAsOrganization(data.organizationId, async () => {
         const execution = await prisma.workflowExecution.findUnique({
           where: { id: data.executionId },
-          select: { id: true, status: true, contactId: true, conversationId: true, depth: true, awaitingUntil: true },
+          select: { id: true, status: true, contactId: true, conversationId: true, depth: true, awaitingUntil: true, createdAt: true },
         });
         if (!execution) return { skipped: 'execution missing' };
         if (execution.status === 'COMPLETED' || execution.status === 'FAILED') {
@@ -134,6 +135,35 @@ export function startWorkflowWorker(): Worker | null {
           // resume path sets RUNNING before enqueuing. Continuing here would
           // skip the question and carry on as though it had been answered.
           return { skipped: 'awaiting a reply' };
+        }
+
+        /*
+          The run deadline, checked on resume rather than by a sweep.
+
+          Without it, a run that pauses on a question nobody answers — or on a
+          delay whose job was lost — stays RUNNING forever. It occupies nothing,
+          which is why this went unnoticed, but it appears in every report as a
+          workflow still in progress, indefinitely, and a supervisor counting
+          open automations counts ghosts.
+
+          Here rather than in a sweep because a run that never resumes costs
+          nothing, and one that does is being checked at the only moment the
+          answer could have changed.
+        */
+        if (execution.createdAt.getTime() + MAX_RUN_DURATION_MS < Date.now()) {
+          await prisma.workflowExecution.update({
+            where: { id: data.executionId },
+            data: {
+              status: 'TIMED_OUT',
+              awaitingUntil: null,
+              error: 'the run exceeded the seven-day limit',
+            },
+          });
+          logger.info('Workflow run expired', {
+            executionId: data.executionId,
+            workflowId: data.workflowId,
+          });
+          return { skipped: 'run older than the deadline' };
         }
 
         const workflow = await prisma.workflow.findUnique({
