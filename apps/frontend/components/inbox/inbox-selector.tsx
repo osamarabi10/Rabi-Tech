@@ -68,7 +68,7 @@ import { cn } from '@/lib/utils';
  */
 
 export type InboxScope =
-  | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' | 'mentions' | 'snoozed' | 'blocked' }
+  | { kind: 'system'; value: 'all' | 'mine' | 'unassigned' | 'mentions' | 'snoozed' | 'blocked' | 'collaborating' }
   | { kind: 'lifecycle'; value: string }
   | { kind: 'team'; value: string }
   /** A saved view. `value` is its id. */
@@ -166,6 +166,19 @@ export function scopeMatches(
   if (scope.kind === 'lifecycle') return conv.lifecycleStage === scope.value;
   if (scope.kind === 'team') return conv.teamId === scope.value;
   if (scope.value === 'mine') return conv.assigneeId === ctx.currentUserId;
+  /*
+    Collaborations: threads I am on but do not own.
+
+    Deliberately excludes the ones assigned to me. "Mine" already holds those,
+    and a thread appearing in both makes the two counts add up to more than the
+    inbox contains — which is the bug that made the snoozed exclusion necessary
+    in the first place.
+  */
+  if (scope.value === 'collaborating') {
+    return !!ctx.currentUserId
+      && conv.assigneeId !== ctx.currentUserId
+      && conv.collaboratorIds.includes(ctx.currentUserId);
+  }
   if (scope.value === 'unassigned') return !conv.assigneeId;
   if (scope.value === 'mentions') return ctx.mentioned.has(conv.id);
   return true;

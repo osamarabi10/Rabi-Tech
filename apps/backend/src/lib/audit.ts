@@ -114,7 +114,13 @@ export async function auditConversation(
     // looked at this" and "somebody decided it waits until Tuesday" look the
     // same from outside.
     | 'snoozed'
-    | 'unsnoozed',
+    | 'unsnoozed'
+    // Who else can act on this thread, and who let them. Worth a trail for the
+    // same reason assignment is: a collaborator can do everything the assignee
+    // can, so "how did this person get access to my conversation" has to be
+    // answerable after the fact.
+    | 'collaborator-added'
+    | 'collaborator-removed',
   ipAddress?: string,
   userAgent?: string
 ) {

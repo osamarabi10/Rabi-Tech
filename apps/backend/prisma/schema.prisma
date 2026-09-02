@@ -93,6 +93,7 @@ model Organization {
   authSessions            AuthSession[]
   apiTokens               ApiToken[]
   webhookEndpoints        WebhookEndpoint[]
+  conversationCollaborators ConversationCollaborator[]
   weeklyRecapRecipients   WeeklyRecapRecipient[]
   userInvitations         UserInvitation[]
 
@@ -604,6 +605,12 @@ model PasswordResetToken {
 }
 
 model OrganizationConfig {
+  /// Whether an @mention also adds the mentioned person as a collaborator.
+  ///
+  /// A preference rather than a rule: on a small team a mention means "come
+  /// help", on a large one it means "for your information". Defaults false —
+  /// a mention that silently grants people a thread surprises whoever wrote it.
+  mentionAddsCollaborator Boolean @default(false)
   organizationId               String          @id
   itSessionName                String          @default("it-support")
   marketingSessionName         String          @default("marketing")
@@ -1052,6 +1059,8 @@ model User {
   authSessions          AuthSession[]
   apiTokens             ApiToken[]             @relation("ApiTokenCreatedBy")
   webhookEndpoints      WebhookEndpoint[]      @relation("WebhookEndpointCreatedBy")
+  collaboratingOn       ConversationCollaborator[] @relation("CollaboratorUser")
+  collaboratorsAdded    ConversationCollaborator[] @relation("CollaboratorAddedBy")
   weeklyRecapMembership WeeklyRecapRecipient[]
 
   // Composite unique: one identity per org
@@ -1438,6 +1447,7 @@ model Conversation {
   /// Who snoozed it. Denormalised so the activity entry stays readable after
   /// the user is deleted.
   snoozedByName       String?
+  collaborators       ConversationCollaborator[]
   labels              String[]           @default([])
   pendingMenuChoice   String?
   createdAt           DateTime           @default(now())
@@ -1483,6 +1493,38 @@ model ConversationCategory {
 
 /// One immutable close episode. Categories and actors are snapshotted so
 /// reports remain readable after a category is deleted or a user is renamed.
+/// Somebody working a conversation who is not its assignee.
+///
+/// A thread has exactly one assignee and real work rarely does. A billing
+/// question that needs the technical lead, a complaint a manager is reading
+/// along on — today both are handled by reassigning, which loses the original
+/// owner, or by @mentioning and hoping, which notifies once and leaves no state.
+///
+/// ## Their removal rule, copied whole
+///
+/// *"Any collaborator or the assignee can remove a collaborator — there's no
+/// restriction on who can remove whom."* A permission model here is friction
+/// with no benefit: the people on a thread are the people who can see who else
+/// is on it, and nobody outside it cares.
+model ConversationCollaborator {
+  organizationId String
+  conversationId String
+  userId         String
+  /// Nullable: a workflow or an @mention can add somebody, and neither is a user.
+  addedById      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  user         User         @relation("CollaboratorUser", fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  addedBy      User?        @relation("CollaboratorAddedBy", fields: [addedById, organizationId], references: [id, organizationId], onDelete: SetNull)
+
+  /// The pair is the identity — one person is on a thread once. A surrogate id
+  /// would allow duplicates and make the nine-collaborator cap meaningless.
+  @@id([organizationId, conversationId, userId])
+  @@index([organizationId, userId])
+}
+
 model ConversationClosure {
   id             String                    @id @default(cuid())
   organizationId String

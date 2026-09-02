@@ -109,6 +109,16 @@ export function InboxScopeMenu({
           ...(convs.some((conv) => conv.contactBlocked)
             ? [{ scope: { kind: 'system', value: 'blocked' } as InboxScope, label: t('محظورة') }]
             : []),
+          /*
+            Collaborations — threads this person is on but does not own.
+
+            Offered only when there is one, on the same rule as the rest: a
+            permanent empty row on a workspace that has never used collaborators
+            explains a feature nobody adopted.
+          */
+          ...(convs.some((conv) => conv.collaboratorIds.length > 0)
+            ? [{ scope: { kind: 'system', value: 'collaborating' } as InboxScope, label: t('مشترك فيها') }]
+            : []),
         ] as Array<{ scope: InboxScope; label: string }>
       ).map((option) => ({ ...option, count: countWhere(option.scope) })),
     },

@@ -215,6 +215,10 @@ router.get('/', async (req, res) => {
         session: true,
         team: { select: { id: true, name: true, slug: true, color: true } },
         assignee: { select: { id: true, name: true } },
+        // Ids only. The Collaborations scope asks "am I on this", which is a
+        // membership test — pulling names for every thread in the list to answer
+        // a boolean would cost a join per row for data the list never renders.
+        collaborators: { select: { userId: true } },
         messages: {
           orderBy: { timestamp: 'desc' },
           take: 1,
@@ -721,6 +725,119 @@ router.patch('/:id', requirePermission('conversation:resolve'), async (req, res)
 });
 
 // PATCH /api/conversations/:id/labels — replace the labels array
+/**
+ * Collaborators — everyone working this thread who is not its assignee.
+ *
+ * ## Nine, matching theirs
+ *
+ * A cap rather than none, because a thread everybody is on is a thread nobody
+ * owns: the assignee stops being meaningful, and the Collaborations inbox turns
+ * into a second copy of All. Nine is generous enough that the limit is never
+ * the reason somebody was left off.
+ *
+ * ## Anyone on the thread can remove anyone
+ *
+ * Their rule, copied whole: *"Any collaborator or the assignee can remove a
+ * collaborator — there's no restriction on who can remove whom."* A permission
+ * model here is friction with no benefit. The people on a thread are the people
+ * who can see who else is on it, and nobody outside it cares.
+ */
+const MAX_COLLABORATORS = 9;
+
+router.get('/:id/collaborators', async (req, res) => {
+  try {
+    const rows = await prisma.conversationCollaborator.findMany({
+      where: { conversationId: req.params.id },
+      select: {
+        userId: true,
+        createdAt: true,
+        user: { select: { id: true, name: true, role: true } },
+        addedBy: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    res.json(rows.map((row) => ({
+      id: row.user.id,
+      name: row.user.name,
+      role: row.user.role,
+      addedBy: row.addedBy,
+      addedAt: row.createdAt,
+    })));
+  } catch (err: any) {
+    logger.error('Failed to list collaborators', { error: err?.message, requestId: (req as any).id });
+    res.status(500).json({ error: 'تعذّر جلب المشاركين' });
+  }
+});
+
+router.post('/:id/collaborators', requirePermission('conversation:create'), async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || '').trim();
+    if (!userId) return res.status(400).json({ error: 'المستخدم مطلوب' });
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id },
+      select: { id: true, assignedToId: true },
+    });
+    if (!conversation) return res.status(404).json({ error: 'محادثة غير موجودة' });
+
+    // Composite FKs would refuse a user from another workspace anyway; a 400
+    // naming the problem beats a 500 carrying a constraint name to a log.
+    const user = await prisma.user.findFirst({ where: { id: userId, isActive: true }, select: { id: true, name: true } });
+    if (!user) return res.status(400).json({ error: 'المستخدم غير موجود أو غير مفعّل' });
+
+    /*
+      The assignee is not a collaborator.
+
+      They already have the thread; adding them would put the same person in two
+      roles, count against the nine, and show them twice in the panel. Refused
+      with an explanation rather than silently ignored, so the UI can say why.
+    */
+    if (conversation.assignedToId === userId) {
+      return res.status(409).json({ error: 'هذا المستخدم هو المسؤول عن المحادثة أصلاً' });
+    }
+
+    const count = await prisma.conversationCollaborator.count({ where: { conversationId: conversation.id } });
+    if (count >= MAX_COLLABORATORS) {
+      return res.status(409).json({ error: `الحد الأقصى ${MAX_COLLABORATORS} مشاركين` });
+    }
+
+    const organizationId = req.user!.organizationId;
+    await prisma.conversationCollaborator.upsert({
+      where: {
+        organizationId_conversationId_userId: { organizationId, conversationId: conversation.id, userId },
+      },
+      create: { organizationId, conversationId: conversation.id, userId, addedById: req.user!.id },
+      // Already there: not an error. A retrying client, or two agents adding the
+      // same person at once, must converge rather than fail.
+      update: {},
+    });
+
+    await auditConversation(req.user!.id, conversation.id, 'collaborator-added', req.ip, req.get('user-agent'));
+    res.status(201).json({ ok: true });
+  } catch (err: any) {
+    logger.error('Failed to add collaborator', { error: err?.message, requestId: (req as any).id });
+    res.status(500).json({ error: 'تعذّر إضافة المشارك' });
+  }
+});
+
+router.delete('/:id/collaborators/:userId', requirePermission('conversation:create'), async (req, res) => {
+  try {
+    // No check on WHO is removing: their rule, and the right one. Anyone on the
+    // thread can remove anyone, and a permission model here would be friction
+    // with no benefit.
+    const result = await prisma.conversationCollaborator.deleteMany({
+      where: { conversationId: req.params.id, userId: req.params.userId },
+    });
+    if (result.count === 0) return res.status(404).json({ error: 'المشارك غير موجود' });
+
+    await auditConversation(req.user!.id, req.params.id, 'collaborator-removed', req.ip, req.get('user-agent'));
+    res.json({ ok: true });
+  } catch (err: any) {
+    logger.error('Failed to remove collaborator', { error: err?.message, requestId: (req as any).id });
+    res.status(500).json({ error: 'تعذّر إزالة المشارك' });
+  }
+});
+
 router.patch('/:id/labels', requirePermission('conversation:create'), async (req, res) => {
   try {
     const { labels } = req.body;

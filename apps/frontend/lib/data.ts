@@ -67,6 +67,15 @@ export type Conv = {
    */
   contactBlocked: boolean;
   /**
+   * Everyone working this thread who is not its assignee.
+   *
+   * Ids only — the Collaborations inbox asks "am I on this", a membership test.
+   * Names are fetched per conversation when the panel opens; pulling them for
+   * every row to answer a boolean would cost a join per row for data the list
+   * never renders.
+   */
+  collaboratorIds: string[];
+  /**
    * Direction of the most recent message.
    *
    * The Unreplied filter is built on this. It cannot be derived from
@@ -513,6 +522,8 @@ export async function startConversation(input: {
     // A thread an agent just started: the contact cannot be blocked (the start
     // route refuses that) and the only message is the agent's own.
     contactBlocked: !!data.contact?.blockedAt,
+    // A thread just started by an agent has nobody else on it yet.
+    collaboratorIds: [],
     lastMsgDirection: 'out',
     sessionPhone: data.session?.phoneNumber ?? null,
     labels: data.labels ?? [],
@@ -553,6 +564,7 @@ export async function fetchConversations(
     firstResponseAt: c.firstResponseAt ?? null,
     autoCloseAt: c.autoCloseAt ?? null,
     contactBlocked: !!c.contact?.blockedAt,
+    collaboratorIds: (c.collaborators ?? []).map((row: any) => row.userId),
     // The include takes the single newest message; an empty thread has none.
     lastMsgDirection: c.messages?.[0]
       ? (c.messages[0].direction === 'INBOUND' ? 'in' : 'out')
@@ -2754,4 +2766,34 @@ export async function fetchWorkflowShortcuts(): Promise<WorkflowShortcut[]> {
 export async function runWorkflowShortcut(id: string, conversationId: string): Promise<number> {
   const { data } = await api.post(`/api/workflows/${id}/run`, { conversationId });
   return data.runs ?? 0;
+}
+
+/* ── Conversation collaborators (inbox) ───────────────────────────────────── */
+
+/**
+ * Someone working a thread who is not its assignee.
+ *
+ * Their rule, copied whole: *any collaborator or the assignee can remove a
+ * collaborator — there is no restriction on who can remove whom*. A permission
+ * model here is friction with no benefit.
+ */
+export type Collaborator = {
+  id: string;
+  name: string;
+  role: string;
+  addedBy: { id: string; name: string } | null;
+  addedAt: string;
+};
+
+export async function fetchCollaborators(conversationId: string): Promise<Collaborator[]> {
+  const { data } = await api.get(`/api/conversations/${conversationId}/collaborators`);
+  return data;
+}
+
+export async function addCollaborator(conversationId: string, userId: string): Promise<void> {
+  await api.post(`/api/conversations/${conversationId}/collaborators`, { userId });
+}
+
+export async function removeCollaborator(conversationId: string, userId: string): Promise<void> {
+  await api.delete(`/api/conversations/${conversationId}/collaborators/${userId}`);
 }

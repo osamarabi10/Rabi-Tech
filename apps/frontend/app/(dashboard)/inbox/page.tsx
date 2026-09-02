@@ -28,6 +28,8 @@ import {
   AlarmClock,
   AlarmClockOff,
   Reply,
+  UsersRound,
+  UserPlus,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -50,6 +52,10 @@ import {
   fetchInboxConfig,
   fetchInboxViews,
   sendReply as apiSendReply,
+  fetchCollaborators,
+  addCollaborator,
+  removeCollaborator,
+  type Collaborator,
   fetchWorkflowShortcuts,
   runWorkflowShortcut,
   type WorkflowShortcut,
@@ -258,6 +264,22 @@ export default function InboxPage() {
   */
   const [shortcuts, setShortcuts] = useState<WorkflowShortcut[]>([]);
   const [firingShortcut, setFiringShortcut] = useState<string | null>(null);
+  /*
+    Collaborators on the open thread.
+
+    Fetched per conversation rather than carried on the list: the list needs
+    only "am I on this", which `collaboratorIds` answers, and pulling names for
+    every row to render a panel that shows one thread's would be a join per row
+    for data the list never displays.
+  */
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const [collabBusy, setCollabBusy] = useState(false);
+
+  const loadCollaborators = useCallback(async (conversationId: string) => {
+    try { setCollaborators(await fetchCollaborators(conversationId)); }
+    catch { setCollaborators([]); }
+  }, []);
+
 
   /**
    * Which queue is being looked at, as opposed to which status it is in.
@@ -336,6 +358,12 @@ export default function InboxPage() {
   const [reply, setReply] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<SnippetAttachment[]>([]);
   useEffect(() => { setPendingAttachments([]); }, [selId]);
+  // Cleared first, so switching threads never shows the previous one's
+  // collaborators while the new list is in flight.
+  useEffect(() => {
+    setCollaborators([]);
+    if (selId) void loadCollaborators(selId);
+  }, [selId, loadCollaborators]);
   const [sendError, setSendError] = useState<string | null>(null);
   const replyError = reply.length > 3000 ? t('الرسالة طويلة جداً') : null;
   const [search, setSearch] = useState('');
@@ -1029,6 +1057,37 @@ export default function InboxPage() {
     } finally {
       setFiringShortcut(null);
     }
+  };
+
+  const handleAddCollaborator = async (userId: string) => {
+    if (!selId) return;
+    setCollabBusy(true);
+    try {
+      await addCollaborator(selId, userId);
+      await loadCollaborators(selId);
+      // The list carries ids for the Collaborations scope, so it has to learn
+      // about this too or that inbox disagrees with the panel beside it.
+      setConvs((p) => p.map((c) => c.id === selId
+        ? { ...c, collaboratorIds: [...new Set([...c.collaboratorIds, userId])] }
+        : c));
+      toast.success(t('تمت إضافة المشارك'));
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || t('تعذّر إضافة المشارك'));
+    } finally { setCollabBusy(false); }
+  };
+
+  const handleRemoveCollaborator = async (userId: string) => {
+    if (!selId) return;
+    setCollabBusy(true);
+    try {
+      await removeCollaborator(selId, userId);
+      await loadCollaborators(selId);
+      setConvs((p) => p.map((c) => c.id === selId
+        ? { ...c, collaboratorIds: c.collaboratorIds.filter((id) => id !== userId) }
+        : c));
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || t('تعذّر إزالة المشارك'));
+    } finally { setCollabBusy(false); }
   };
 
   const handleSnooze = async (hours: number | null) => {
@@ -1810,6 +1869,56 @@ export default function InboxPage() {
                   feature nobody configured; when this appears it is because
                   there is something to run.
                 */}
+                {/*
+                  Collaborators. Always offered — unlike shortcuts, which depend
+                  on the workspace having configured some, anyone can add a
+                  colleague to any thread, so hiding the control until one exists
+                  would hide the only way to create the first.
+                */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={collabBusy}>
+                      <UsersRound className="h-3 w-3" />
+                      {t('مشاركين')}
+                      {collaborators.length > 0 && (
+                        <span className="rounded-full bg-muted px-1 text-micro">{collaborators.length}</span>
+                      )}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64">
+                    {collaborators.map((person) => (
+                      <DropdownMenuItem
+                        key={person.id}
+                        onSelect={(e) => { e.preventDefault(); void handleRemoveCollaborator(person.id); }}
+                        className="justify-between gap-2"
+                      >
+                        <span className="truncate" dir="auto">{person.name}</span>
+                        {/* Anyone on the thread can remove anyone — their rule,
+                            and the right one. A permission model here is
+                            friction with no benefit. */}
+                        <X className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                      </DropdownMenuItem>
+                    ))}
+                    {collaborators.length > 0 && <div className="my-1 h-px bg-border" />}
+                    {/* techs is the workspace's agent list, already loaded for
+                        the assignee picker. The assignee is excluded: they
+                        already have the thread, and adding them would show the
+                        same person in two roles. */}
+                    {techs
+                      .filter((agent) => agent.id !== sel.assigneeId
+                        && !collaborators.some((person) => person.id === agent.id))
+                      .slice(0, 20)
+                      .map((agent) => (
+                        <DropdownMenuItem
+                          key={agent.id}
+                          onSelect={(e) => { e.preventDefault(); void handleAddCollaborator(agent.id); }}
+                        >
+                          <UserPlus className="size-3 text-muted-foreground" aria-hidden />
+                          <span className="truncate" dir="auto">{agent.name}</span>
+                        </DropdownMenuItem>
+                      ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 {shortcuts.length > 0 && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

@@ -15,6 +15,12 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { ar?: string; he: string; en: string }>;
 
 const D: Dict = {
+  /* ── Conversation collaborators ── */
+  "مشاركين": { he: "משתתפים", en: "Collaborators" },
+  "مشترك فيها": { he: "שיחות שאני משתתף בהן", en: "Collaborations" },
+  "تمت إضافة المشارك": { he: "המשתתף נוסף", en: "Collaborator added" },
+  "تعذّر إضافة المشارك": { he: "לא ניתן להוסיף את המשתתף", en: "Could not add the collaborator" },
+  "تعذّر إزالة المشارك": { he: "לא ניתן להסיר את המשתתף", en: "Could not remove the collaborator" },
   /* ── Workflow shortcuts ── */
   "اختصارات": { he: "קיצורי דרך", en: "Shortcuts" },
   "تم تشغيل الاختصار": { he: "קיצור הדרך הופעל", en: "Shortcut started" },
