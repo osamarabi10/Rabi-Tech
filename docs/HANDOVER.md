@@ -98,7 +98,9 @@ none work. The gates now check:
 - every action has an executor branch **or is provably refused at save**
 - every refused action is absent from the *served* vocabulary
 - every API scope is required by some endpoint
-- every new endpoint has a frontend reference
+- every analytics report is reachable from the UI, or listed as deliberately not
+  (added 2026-09-02 — this bullet described a gate that did not exist; see §9)
+- the executor calls the gateway exactly once, from inside the consent check
 
 **Source assertions cannot see behaviour.** `verify-collaborators.js` first
 asserted `if (shouldAdd)` appeared in the source; mutating the compiled output
@@ -142,10 +144,10 @@ issuing five separate requests is a different act, bounded by the rate limiter.
 
 ```bash
 cd apps/backend
-npm run test:tenancy          # 128  — isolation; a red gate is a release blocker
+npm run test:tenancy          # 130  — isolation; a red gate is a release blocker
 npm run test:public-api       # 141  — over HTTP against a booted server
 npm run test:api-tokens       #  90
-npm run test:workflow-p2      #  71
+npm run test:workflow-p2      #  75
 npm run test:webhooks         #  52
 npm run test:restrictions     #  51
 npm run test:csv              #  30
