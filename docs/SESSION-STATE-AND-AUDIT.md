@@ -227,19 +227,28 @@ between a rule and a test.
 
 ### The second pattern: the instrument could not see the property
 
-**Five instances now, in two sub-shapes.** Each is a check that passed while
-proving nothing, and in every one the cause was the same: **the thing doing the
-checking was structurally incapable of seeing the thing it was checking.** Not a
-wrong assertion — a right assertion pointed at an artifact where the property
-does not exist.
+**Six instances now, in three sub-shapes.** In every one the cause is the same:
+**the thing doing the checking was structurally incapable of seeing the thing it
+was checking.** Not a wrong assertion — a right assertion aimed somewhere the
+property does not exist.
 
-The two sub-shapes are worth separating, because they need different habits:
+The three sub-shapes are worth separating, because they need different habits:
 
 - **(a) The check pointed at the wrong artifact** — instances 1, 2, 3, 4. The
   assertion is fine; the thing it reads cannot contain the answer.
 - **(b) The probe never reached its target** — instance 5. The assertion is
   fine and so is the artifact; the *mutation meant to test it* landed somewhere
   else, so the green proved nothing and looked like proof.
+- **(c) The right file, the wrong extent** — instance 6. The artifact is
+  correct and the boundaries are not, so the check reads code belonging to
+  something else and reports on that instead.
+
+**One correction to how this category was first written.** It was described as
+"a check that passed while proving nothing", and that is the *dangerous*
+symptom, not the defining one. Instance 6 produced a false **red**: it accused
+`/api/network` of touching tenant data that belonged to a different handler
+entirely. The defect is the misaiming; whether it surfaces as a false green or a
+false red is luck. False greens are worse only because nobody investigates them.
 
 1. **A source assertion reading `dist/` for a cast.** `verify-workflow-p2` was
    written to refuse `as never`, the token that silenced D-31. It read the
@@ -286,16 +295,50 @@ The two sub-shapes are worth separating, because they need different habits:
    list where the defect was in the act of verification rather than in the
    thing verified — which is why it gets its own rule below.
 
+6. **A check reading the right file over the wrong extent.** The category-4
+   assertion in `verify-auth-exemptions` must prove that an *authenticated, no
+   tenant data* route touches no database. It read a fixed **forty lines** from
+   the annotation — which ran off the end of `/api/network`, into the next
+   handler, and found `runAsOrganization` there. It then reported
+   `/api/network` as touching tenant data, which is code it does not contain.
+
+   The file was right. The assertion was right. Only the boundaries were wrong,
+   and a boundary is exactly the sort of thing a reviewer's eye slides over: a
+   fixed window looks like a reasonable heuristic until the thing being measured
+   is shorter or longer than the guess. It is now bounded by the handler's
+   actual extent — from the registration to the next top-level registration.
+
+   Two smaller faults in the same commit had the same flavour and are worth a
+   line each: the rate-limiter exclusion did not account for the comma between a
+   route's path and its arguments, so every limiter mount was reported as an
+   unannotated route; and the orphan-annotation count matched `@auth-exempt`
+   anywhere above the middleware, including **the header comment that documents
+   the annotation vocabulary**, so it found nine annotations for eight routes. A
+   check that reads its own documentation as data is the same defect in
+   miniature.
+
 **How each was actually caught, since none was caught by reading:** (1) and (2)
 by mutation — making the check fail on purpose, which is the only thing that
 distinguishes a check that works from a check that is merely green. (3) by
 cloning `origin/main` into a temp directory and running the gate there, which is
 the only vantage point from which a working-tree-only defect is visible. (4) by
 asking what the gate would do if the file it parses moved out from under it.
-(5) by noticing a green where red was expected, and chasing it.
+(5) by noticing a green where red was expected, and chasing it. (6) by running
+the check the moment it was written, before believing it — it accused a route of
+something the route plainly does not do, and the accusation was specific enough
+to be checked in seconds.
 
 **The rule.** Before trusting a check, ask what the thing doing the checking is
 structurally incapable of seeing.
+
+**The third rule, which instance 6 adds.** *Bound what a check reads by the
+thing it is checking, never by a guess at its size.* A fixed window — forty
+lines, a hundred characters, the rest of the file — is a boundary chosen without
+reference to the subject, and it is right only until the subject changes length.
+Where the artifact has real edges, find them: the next declaration, the matching
+brace, the end of the block. Where it does not, that absence is itself the
+finding, and a check that cannot say where its subject ends cannot say what is
+in it.
 
 **The second rule, which instance 5 adds and which is not the same thing.**
 *Verify that the mutation actually landed before trusting what the gate says

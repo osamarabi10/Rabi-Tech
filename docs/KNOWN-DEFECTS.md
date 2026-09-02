@@ -1506,3 +1506,138 @@ deleting its digest is precisely how it reappears.
 what it has been told, so a brand-new secret pasted into a tracked file passes
 cleanly. This stops known values recurring. It is not a general secret detector,
 and treating it as one would be the next version of this defect.
+
+---
+
+## D-35 · Eight routes never reach the auth middleware, and two of them look like they do — GATED
+
+**Gated 2026-09-02** in `f8df25f3`. No route changed; what changed is that the
+gate can now see them.
+
+**What was wrong.** `test:auth-exemptions` read the `/api` auth middleware and
+reported "7 exempt paths", then "8", as though that were the unauthenticated
+surface of the product. It was not. Eight further routes never reach that
+middleware at all, and the gate had no opinion about any of them — a coverage
+claim that was quietly incomplete, which is worse than one that is openly
+partial, because it stops the next person looking.
+
+They escape in two different ways, and **the second is the one that matters**:
+
+| Route | How it escapes |
+|---|---|
+| `app.use('/', webhookRouter)` | Path is not under `/api` |
+| `GET /webhooks/meta`, `POST /webhooks/meta` | Path is not under `/api` |
+| `GET /health` | Path is not under `/api` |
+| `GET /media-proxy`, `GET /media-proxy/message` | Path is not under `/api` |
+| **`POST /api/billing/webhook`** | **Under `/api`, registered *above* the middleware** |
+| **`GET /api/network`** | **Under `/api`, registered *above* the middleware** |
+
+Express runs handlers in registration order. Those last two answer before the
+middleware is ever consulted, and they **read as protected precisely because of
+the `/api` prefix** — which is the trap. Both are in fact fine: the billing
+webhook verifies a provider signature and enters platform scope, and
+`/api/network` requires a token and touches no tenant data. That they are fine
+is not the point. Nothing was checking, and nothing would have noticed if they
+were not.
+
+**The rule, and why it is worth stating precisely.** The property is **"never
+reaches the middleware"**, not "outside the `/api` prefix". A gate built on the
+prefix — which is the obvious way to write it, and the way the instruction that
+prompted this was originally framed — would keep missing exactly the two cases
+that most need catching, because their whole problem is that the prefix lies.
+
+**What the gate does now.** Every bypassing route carries the same annotation an
+exempt path does, and **the annotated set must equal the found set, checked in
+both directions.** A router mounted elsewhere fails for having no annotation; an
+annotation fails when its route moves or is deleted. That equality is the
+coverage guarantee — without it this would be one more list somebody has to
+remember to update.
+
+A fourth category was added here too — *authenticated, no tenant data* — because
+it is what `/api/network` actually is, and categories 1 to 3 all misdescribe it. It is checked rather
+than accepted — the handler must name an auth primitive and must not reach the
+database — so the moment it reads a table the annotation is a lie and the gate
+says so.
+
+**Still uncovered, and named rather than left implicit.** The gate reads
+`index.ts` only. A route registered inside a router file, on a `Router()` rather
+than on `app`, is invisible to it — the same blindness one level down. The eight
+above were found by reading `index.ts` by hand.
+
+---
+
+## D-36 · A stale containerised backend is eating jobs from the shared dev queue — WORKED AROUND, NOT FIXED
+
+**Found 2026-09-02** while building `test:growth-widgets`. **The fix is not
+done.**
+
+**What happens.** A backend running in a container on port 3000 is subscribed to
+the same BullMQ queue as everything else on this machine. When the growth-widget
+gate queued an inbound message and waited for the result, *that* container
+consumed the job and processed it — from an older build with no attribution
+columns — and created the contact itself. The gate then read a contact stamped
+`UNKNOWN` and reported the feature broken.
+
+It was not broken. The job had been stolen, by a consumer nobody remembered was
+running, executing code from before the feature existed.
+
+**Why it was hard to see.**
+
+- It is a **race, not a failure**. Two consumers were subscribed; roughly half
+  the jobs went to the right one. A gate that fails half the time reads as
+  flaky, and flaky reads as "run it again".
+- The stolen job produced a **plausible wrong answer** rather than an error.
+  `UNKNOWN` is a real value with a real meaning, so nothing looked malformed.
+- **Docker's CLI is wedged** (D-3), so the container could not be listed,
+  inspected or stopped. Its existence was inferred from port 3000 answering
+  while no host process for this repository was running.
+
+**What was done, and it is a workaround.** The gate now processes the inbound
+message **in its own process** rather than queueing it — standing up a throwaway
+Socket.io server, because the inbound path calls `getIO()` after writing the
+contact. That makes this one gate immune. It does nothing for anything else that
+uses the queue.
+
+**The real fix, which is not done.** Namespace the development queue per process
+or per build — a queue-name prefix from the git SHA or a per-run identifier — so
+a stale consumer **physically cannot** take a live worker's jobs. Until that
+exists, any developer running the compose stack alongside a local backend is
+sharing a queue with a build they are not looking at, and the failure mode is a
+plausible wrong answer roughly half the time.
+
+---
+
+## D-37 · A run that finished in six seconds looked hung for eleven minutes
+
+**Beside D-33**, which is the same lesson from the other direction: there, a
+timeout was reported as a crash; here, a completed run was indistinguishable
+from a stuck one.
+
+**What happened.** `verify-growth-widgets` was launched and produced **no output
+for eleven minutes**. It had in fact finished in about six seconds. Two things
+combined:
+
+1. **A Redis handle held the event loop open.** Requiring the worker module
+   opens a BullMQ connection that never closes on its own, so the process stays
+   alive after the last check has run. Nothing was happening; the process simply
+   would not exit.
+2. **Node block-buffers stdout when it is piped.** Every `[PASS]` line was
+   written and none was flushed, because the process that would flush them on
+   exit had not exited. Redirecting to a log produced an empty log.
+
+**The cost was not the eleven minutes.** It was the diagnosis: the silence was
+attributed to a directory walk descending into `node_modules`, and that walk was
+changed. The change was a genuine improvement and **fixed nothing**, because the
+run had already cleared every structural check within two seconds of starting.
+The comment in the file now says so explicitly, rather than implying a fix that
+did not happen.
+
+**Fixed** by exiting explicitly once the summary is printed. The script says why
+in a comment, because "why does this call `process.exit`" is otherwise the sort
+of line somebody deletes as untidy.
+
+**The general shape, worth carrying:** a long-running process producing no
+output is not evidence of work. Before diagnosing a hang, establish that the
+process is *doing* something — otherwise the fix will land on whatever was
+plausible rather than on whatever was true. This is instance 5 of §4 in a
+different costume: a conclusion drawn without confirming the probe.

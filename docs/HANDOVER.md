@@ -222,7 +222,8 @@ npm run test:csv              #  30
 npm run test:meta-templates   #  41  — registered; the cap added seven checks
 npm run test:collaborators    #  14  — registered 2026-09-02, see §4
 npm run test:secrets          #  12  — no compromised credential in a tracked file
-npm run test:auth-exemptions  #  11  — every auth exemption declares why it is safe
+npm run test:auth-exemptions  #  16  — over 16 surfaces: 8 in the middleware, 8 outside it
+npm run test:growth-widgets   #  17  — attribution, end to end; boots a server
 
 cd apps/frontend
 npm run check:i18n            # every t() key translated in he + en
@@ -247,14 +248,26 @@ values from `verify-secrets.ts`'s own `KNOWN_WEAK` (parsed, not copied) where
 they are assigned to a credential key in a config file, plus
 `ALLOW_INSECURE_SECRETS` shipping as `1`. See §7.1 and D-34.
 
-`test:auth-exemptions` covers `index.ts`'s unauthenticated-route list, where the
-invariant is that **exemption from that middleware must never mean exemption
-from tenant scope.** Every exempt branch declares a category — 1 genuinely
-public, 2 scoped elsewhere — with a reason in prose, and category 2 declares the
-chain that establishes scope, which is checked to exist and to end in a real
-`runAsOrganization` or `runAsPlatform` call. Deliberately **not** a snapshot of
-the path list: that would go red on every legitimate edit and still could not
-tell a safe addition from a dangerous one.
+`test:auth-exemptions` covers every surface reachable without the `/api` auth
+middleware, where the invariant is that **exemption from that middleware must
+never mean exemption from tenant scope.** Sixteen checks over **16 surfaces: 8
+exemptions inside the middleware and 8 registered outside or above it.** Each
+declares a category with a reason in prose — 1 genuinely public, 2 scoped
+elsewhere, 3 public but tenant-derived, 4 authenticated with no tenant data —
+and categories 2 and 3 declare the chain that establishes scope, checked to
+exist and to end in a real `runAsOrganization` or `runAsPlatform` call.
+
+Deliberately **not** a snapshot of the path list: that would go red on every
+legitimate edit and still could not tell a safe addition from a dangerous one.
+What makes it a coverage guarantee instead is set equality — the annotated set
+must equal the found set, checked both ways, so a new router mounted elsewhere
+fails for having no annotation and an annotation fails when its route moves.
+
+**What it still cannot see, and it is the same blindness one level down.** It
+reads `index.ts` and nothing else. A route registered inside a *router* file —
+on a `Router()` rather than on `app` — is invisible to it, exactly as the
+outside mounts were invisible before D-35. The eight it now covers were found by
+reading `index.ts` by hand; nothing has done that for the router files.
 
 **Your first run on a fresh clone will look like it has hung. It has not.**
 `test:tenancy` boots the backend through `ts-node/register/transpile-only`,
