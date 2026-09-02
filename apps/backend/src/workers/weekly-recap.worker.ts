@@ -13,6 +13,36 @@ type RecapStats = {
   outboundMessages: number;
 };
 
+/**
+ * Whether a week produced nothing worth an email.
+ *
+ * ## Why suppression matters more than the numbers in it
+ *
+ * A dormant workspace otherwise receives a Monday email of five zeros, every
+ * week, forever. The cost is not the send — it is that the recipient learns the
+ * channel carries nothing, and then does not read the one that reports a real
+ * week. A recap nobody opens is worse than no recap, because it also spends the
+ * attention the next one needed.
+ *
+ * ## What counts as all-zero, precisely
+ *
+ * All five of our metrics at zero: no contact arrived, no conversation opened,
+ * none was resolved, and no message moved in either direction. Those cover
+ * every way a workspace can be used, so all five at zero means genuinely
+ * nothing happened — not "nothing we chose to measure".
+ *
+ * Deliberately **not** "the interesting ones are zero". Suppressing on a subset
+ * would hide a week where the only activity was the thing the subset omitted,
+ * and the recipient would have no way to know an email was withheld.
+ */
+export function isSilentWeek(stats: RecapStats): boolean {
+  return stats.newContacts === 0
+    && stats.newConversations === 0
+    && stats.resolvedConversations === 0
+    && stats.inboundMessages === 0
+    && stats.outboundMessages === 0;
+}
+
 export const weeklyRecapQueue = new Queue('weekly-recap', {
   connection: gatewayQueueConnection,
   defaultJobOptions: {
@@ -135,6 +165,25 @@ export async function queueDueWeeklyRecaps(now = new Date()): Promise<{ workspac
 
     dueWorkspaces += 1;
     const stats = await recapStats(workspace.id, now);
+
+    /*
+      Nothing happened, so nothing is sent.
+
+      Checked after the stats rather than before, because "was this week
+      silent" is only answerable once they are computed — and the query is one
+      round of counts, not a cost worth avoiding.
+
+      Logged rather than silent: a workspace that stops receiving recaps should
+      be explainable from our side without asking whether the worker ran.
+    */
+    if (isSilentWeek(stats)) {
+      logger.info('Weekly recap suppressed: no activity', {
+        organizationId: workspace.id,
+        recipients: workspace.weeklyRecapRecipients.length,
+      });
+      continue;
+    }
+
     for (const recipient of workspace.weeklyRecapRecipients) {
       const copy = recapCopy(recipient.user.locale, workspace.name, stats);
       const queued = await queueMail({

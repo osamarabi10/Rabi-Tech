@@ -2733,9 +2733,21 @@ export async function deleteWebhookEndpoint(id: string): Promise<void> {
  * other number on it. These come from the constants the upload handlers reject
  * with.
  */
+/**
+ * Files one composed message may carry.
+ *
+ * Mirrored here rather than awaited from `/api/system/limits`, deliberately:
+ * this guards a keystroke-time interaction, and a control that waits on a
+ * request to know whether it may accept a file is a control that accepts one
+ * before the answer arrives. The server refuses the declared count regardless,
+ * so the two disagreeing costs a rejected send rather than an over-sized one.
+ */
+export const MAX_FILES_PER_MESSAGE = 5;
+
 export type SystemLimits = {
   files: { key: string; bytes: number; count?: number }[];
   contactImport: { rows: number };
+  filesPerMessage?: number;
 };
 
 export async function fetchSystemLimits(): Promise<SystemLimits> {

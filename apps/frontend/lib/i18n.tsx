@@ -15,6 +15,9 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { ar?: string; he: string; en: string }>;
 
 const D: Dict = {
+  /* ── Per-message file cap ── */
+  "الحد الأقصى ٥ ملفات بالرسالة الوحدة": { he: "עד 5 קבצים בהודעה אחת", en: "Up to 5 files per message" },
+  "تم إرفاق أول ٥ ملفات — الباقي ببعتوا برسالة تانية": { he: "צורפו 5 הקבצים הראשונים — את השאר שלחו בהודעה נוספת", en: "The first 5 files were attached — send the rest in another message" },
   /* ── Per-user restrictions ── */
   "Restrict data export": { ar: "منع تصدير البيانات", he: "הגבלת ייצוא נתונים", en: "Restrict data export" },
   "Prevent this user from exporting contacts.": { ar: "امنع هالمستخدم من تصدير جهات الاتصال.", he: "מנע ממשתמש זה לייצא אנשי קשר.", en: "Prevent this user from exporting contacts." },

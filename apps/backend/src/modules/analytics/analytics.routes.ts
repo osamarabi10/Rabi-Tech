@@ -18,6 +18,7 @@ import {
 } from './reporting.service';
 import { webhookReport } from './webhook-report.service';
 import { WEBHOOK_LOG_RETENTION_DAYS } from '../webhooks/webhook-log.service';
+import { workspaceOffsetMinutes } from '../../utils/workspace-offset';
 
 const router = Router();
 router.use(verifyToken);
@@ -71,12 +72,19 @@ function parseFilters(query: Record<string, unknown>): ReportFilters {
   return { teamId, sessionId };
 }
 
-/** Minutes east of UTC, as `Date.getTimezoneOffset()` inverted. Bounded to real zones. */
-function parseUtcOffset(query: Record<string, unknown>): number {
-  const raw = Number(query.utcOffsetMinutes);
-  if (!Number.isFinite(raw)) return 0;
-  return Math.max(-840, Math.min(840, Math.trunc(raw)));
-}
+/*
+  The client's `utcOffsetMinutes` is now ignored.
+
+  It is still accepted on the query string, because a deployed frontend keeps
+  sending it and rejecting the parameter would 400 every report during a
+  rollout. It simply no longer decides anything: the offset comes from the
+  workspace's own timezone, so two managers in different countries see the same
+  numbers for the same week.
+
+  The parameter should be dropped from the client and then from here. Until
+  both, ignoring it is the behaviour, and this comment is why the reader will
+  not find where it is used.
+*/
 
 /**
  * Reporting API (M7).
@@ -115,7 +123,9 @@ router.get('/conversations', requirePermission('analytics:read'), async (req, re
       resolutionStats(period, filters),
       hourOfDayHeatmap(
         period,
-        parseUtcOffset(req.query as Record<string, unknown>),
+        // The workspace's clock, resolved at the period's end so a report run
+        // during DST reads the offset that was in force for most of it.
+        await workspaceOffsetMinutes(period.to),
         filters,
         req.user!.organizationId,
       ),

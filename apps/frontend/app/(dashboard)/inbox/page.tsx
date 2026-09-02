@@ -52,6 +52,7 @@ import {
   fetchInboxConfig,
   fetchInboxViews,
   sendReply as apiSendReply,
+  MAX_FILES_PER_MESSAGE,
   fetchCollaborators,
   addCollaborator,
   removeCollaborator,
@@ -892,6 +893,13 @@ export default function InboxPage() {
   const handleSend = async () => {
     setSendError(null);
     if (!reply.trim() && pendingAttachments.length === 0) { setSendError(t('أدخل رسالة')); return; }
+    // Last line before the loop that issues one request per file. The server
+    // refuses the declared count too; this is what stops the agent getting
+    // halfway through a batch before hearing about it.
+    if (pendingAttachments.length > MAX_FILES_PER_MESSAGE) {
+      setSendError(t('الحد الأقصى ٥ ملفات بالرسالة الوحدة'));
+      return;
+    }
     if (!sel) { setSendError(t('اختر محادثة')); return; }
     if (replyError) { setSendError(replyError); return; }
     const body = reply;
@@ -1018,7 +1026,20 @@ export default function InboxPage() {
       agentName: currentUser?.name || '',
     });
     setReply(rendered);
-    setPendingAttachments(tpl.attachments || []);
+    /*
+      Truncated at the cap rather than refused.
+
+      A saved reply may legitimately carry more files than one message may send
+      — MAX_SNIPPET_FILES and the per-message cap are different limits. Refusing
+      the insertion outright would make a valid snippet unusable; taking the
+      first five and saying so lets the agent send the rest in a second message,
+      which is what they would do anyway.
+    */
+    const incoming = tpl.attachments || [];
+    if (incoming.length > MAX_FILES_PER_MESSAGE) {
+      toast.info(t('تم إرفاق أول ٥ ملفات — الباقي ببعتوا برسالة تانية'));
+    }
+    setPendingAttachments(incoming.slice(0, MAX_FILES_PER_MESSAGE));
     setShortCodeMatches([]);
   };
 

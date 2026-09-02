@@ -31,6 +31,7 @@ import { issueUserInvitation } from './user-invitations.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { getEdition } from '../billing/editions.service';
 import { channelGrantRefusal } from '../channels/channel-entitlement';
+import { MAX_FILES_PER_MESSAGE } from '../conversations/message-limits';
 
 const router = Router();
 router.use(verifyToken);
@@ -480,6 +481,10 @@ router.get('/limits', async (_req, res) => {
       { key: 'brandingAsset', bytes: 2 * 1024 * 1024 },
     ],
     contactImport: { rows: MAX_IMPORT_ROWS },
+    // Surfaced so the composer can prevent rather than refuse: an agent who is
+    // told the limit while attaching does not discover it after writing the
+    // message.
+    filesPerMessage: MAX_FILES_PER_MESSAGE,
   });
 });
 

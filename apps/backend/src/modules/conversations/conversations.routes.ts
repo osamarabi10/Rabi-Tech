@@ -35,6 +35,8 @@ import {
   rescheduleConversationAutoClose,
 } from './conversation-lifecycle.service';
 import { OutboundSendError, sendOutboundMessage } from './outbound-message.service';
+import { MAX_COLLABORATORS_PER_CONVERSATION } from './collaborator-limits';
+import { MAX_FILES_PER_MESSAGE } from './message-limits';
 
 const router = Router();
 router.use(verifyToken);
@@ -405,6 +407,33 @@ router.post('/:id/reply', requirePermission('conversation:create'), async (req, 
       return res.status(400).json({ error: 'الرسالة لا يمكن أن تكون فارغة' });
     }
 
+    /*
+      The per-message file cap, enforced against the batch the client declares.
+
+      This route carries ONE media item per request — the composer loops and
+      sends N of them — so there is no single request holding five files for a
+      server to count. That is worth stating plainly rather than pretending
+      otherwise: the cap is declared by the caller as `attachmentCount`, and
+      refused here when it exceeds the limit.
+
+      What that genuinely prevents is the console exceeding it, including with a
+      modified client, because the count travels with every request in the batch
+      and any one of them over the limit fails the whole send. What it does not
+      prevent is a direct API caller issuing five separate single-file requests —
+      which is not the same act, and is bounded by the rate limiter instead.
+
+      Absent the field entirely, nothing is refused: an older client that does
+      not send it must keep working.
+    */
+    const declaredCount = Number(req.body?.attachmentCount);
+    if (Number.isFinite(declaredCount) && declaredCount > MAX_FILES_PER_MESSAGE) {
+      return res.status(400).json({
+        error: `الحد الأقصى ${MAX_FILES_PER_MESSAGE} ملفات بالرسالة الوحدة`,
+        code: 'TOO_MANY_ATTACHMENTS',
+        limit: MAX_FILES_PER_MESSAGE,
+      });
+    }
+
     const conv = await prisma.conversation.findUnique({
       where: { id: req.params.id },
       include: {
@@ -742,7 +771,9 @@ router.patch('/:id', requirePermission('conversation:resolve'), async (req, res)
  * model here is friction with no benefit. The people on a thread are the people
  * who can see who else is on it, and nobody outside it cares.
  */
-const MAX_COLLABORATORS = 9;
+// Imported, not redefined: the @mention path enforces the same ceiling, and a
+// cap defined twice is a cap one door can drift from.
+const MAX_COLLABORATORS = MAX_COLLABORATORS_PER_CONVERSATION;
 
 router.get('/:id/collaborators', async (req, res) => {
   try {
