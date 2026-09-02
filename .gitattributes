@@ -1,0 +1,68 @@
+# Line endings, decided here rather than by each machine's git config.
+#
+# Without this file, `core.autocrlf` decides — and it is true on the machines
+# this repo is developed on, so a fresh Windows checkout materialises CRLF while
+# the index holds LF. That is not cosmetic. Two gate assertions matched a bare
+# `\n` against file contents and therefore passed in a working tree and failed
+# on a clean clone of the same commit: the check was reporting on how the
+# repository had been checked out, not on the code. See 1e3900f9.
+#
+# The index is already uniformly LF (587/587 tracked files at the time of
+# writing), so this changes no content — `git add --renormalize .` reports zero
+# modified files. What it changes is the working directory on the next
+# checkout, which is the thing that was wrong.
+#
+# The `\r?\n` fixes in the gate scripts are deliberately kept. They are
+# redundant once this file is honoured, and they cover the two cases it does
+# not: a clone made before these attributes existed, and any file type the
+# rules below happen to miss.
+
+* text=auto eol=lf
+
+# ── must be CRLF ─────────────────────────────────────────────────────────────
+# cmd.exe's parser is genuinely line-ending sensitive; a batch file with LF-only
+# endings misbehaves around labels and multi-line blocks. `scripts/allow-lan.cmd`
+# is the one such file today. `.bat` is listed alongside it because the next one
+# will not necessarily be a `.cmd`.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# PowerShell parses LF perfectly well, so this is not a correctness rule — it is
+# a "change nothing that already works" rule. All three scripts here
+# (allow-lan, start-gateway-provisioner, install-gateway-provisioner-task) are
+# Windows-only deployment helpers that have always been CRLF in the working
+# directory. There is no benefit to flipping them and a small, dull risk in
+# doing so.
+*.ps1   text eol=crlf
+
+# ── must be LF ───────────────────────────────────────────────────────────────
+# None are tracked today. Listed because a shell script that acquires CRLF fails
+# with `bad interpreter: /bin/sh^M`, which is an unpleasant thing to debug and a
+# trivial thing to prevent.
+*.sh    text eol=lf
+
+# ── generated: normalised, but not worth reading as a diff ───────────────────
+# The three package-lock.json files.
+#
+# Deliberately `-diff` rather than `binary`. They are text, they are already LF,
+# and marking them binary would freeze their line endings and make a dependency
+# change unreviewable. `-diff` keeps the normalisation and suppresses only the
+# thousands of lines of diff nobody reads.
+package-lock.json  text eol=lf -diff
+
+# ── binary: never normalised ─────────────────────────────────────────────────
+# None of these are tracked today, and they are listed for one specific reason:
+# `.tools/backups/*.dump` exists on disk and is gitignored. If one is ever
+# force-added, normalising a custom-format pg_dump would corrupt it silently —
+# the file would still restore-check until the moment it did not.
+*.dump  binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.pdf   binary
