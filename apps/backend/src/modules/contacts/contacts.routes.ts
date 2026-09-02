@@ -512,6 +512,59 @@ router.put('/contact-fields/view', requireSupervisor, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/contacts/blocked — the Blocked inbox.
+ *
+ * Blocking already worked; there was nowhere to see the result. A moderation
+ * control whose outcome is invisible is one an operator cannot audit, cannot
+ * undo, and stops trusting.
+ *
+ * **Contacts, not conversations, and that is the point.** The existing
+ * `blocked` inbox scope filters the conversation list by `contact.blockedAt`,
+ * so it can only ever show someone who already had a thread. A number blocked
+ * before it ever wrote — which is the ordinary case for a nuisance caller —
+ * appeared nowhere at all. This reads the contact table, so it lists everyone
+ * who is blocked whether or not they have a conversation.
+ *
+ * Registered above `/:id/*` for the usual reason: a literal path must be
+ * matched before a parameterised one, or `blocked` is read as an id.
+ *
+ * `blockedBy` is denormalised into a name here rather than returned as an id.
+ * The row has to answer "who blocked this number, and why" without a second
+ * request, and it must stay readable after that user is deleted.
+ */
+router.get('/blocked', requirePermission('contact:read'), async (_req, res) => {
+  try {
+    const rows = await prisma.contact.findMany({
+      where: { blockedAt: { not: null } },
+      orderBy: { blockedAt: 'desc' },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        blockedAt: true,
+        blockedReason: true,
+        blockedBy: { select: { name: true } },
+        _count: { select: { conversations: true } },
+      },
+    });
+
+    res.json(rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      phone: row.phone,
+      blockedAt: row.blockedAt,
+      blockedReason: row.blockedReason,
+      blockedByName: row.blockedBy?.name ?? null,
+      // Whether there is history behind this number, so the row can say
+      // "blocked before they ever wrote" rather than implying a thread exists.
+      conversationCount: row._count.conversations,
+    })));
+  } catch (err) {
+    res.status(500).json({ error: String((err as Error).message || err) });
+  }
+});
+
 router.get('/:id/tags', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: req.params.id, ...contactAccessWhere(req.user!) }, select: { id: true } });

@@ -175,10 +175,41 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
   }
 });
 
+/**
+ * The four sort modes.
+ *
+ * Newest and Oldest order by last activity, which is what a person means by
+ * "newest conversation" — the one that just moved, not the one opened most
+ * recently.
+ *
+ * Longest and Shortest order by how long the thread has existed, using
+ * `openedAt`. That column starts the *current* episode and is advanced by a
+ * reopen, so it measures the age of the conversation as it now stands rather
+ * than of a closed episode from months ago.
+ *
+ * **What this is not, said here rather than left to be discovered.** For a
+ * resolved thread, "longest" most likely means handling duration —
+ * `resolvedAt - openedAt`. Prisma cannot order by an expression, so that needs
+ * raw SQL or a stored duration column, and the column is a schema change. This
+ * ranks resolved threads by age instead.
+ *
+ * No new index. `openedAt` already carries `[organizationId, openedAt]` and
+ * `lastMessageAt` is covered by the inbox list index.
+ */
+function conversationOrder(sort: unknown) {
+  switch (sort) {
+    case 'oldest': return { lastMessageAt: 'asc' as const };
+    case 'longest': return { openedAt: 'asc' as const };
+    case 'shortest': return { openedAt: 'desc' as const };
+    default: return { lastMessageAt: 'desc' as const };
+  }
+}
+
+
 // GET /api/conversations
 router.get('/', async (req, res) => {
   try {
-    const { teamId, status, search, activeOnly } = req.query;
+    const { teamId, status, search, activeOnly, unreplied, sort } = req.query;
     const user = req.user!;
 
     const hideResolved = activeOnly !== 'false' && !status;
@@ -194,6 +225,33 @@ router.get('/', async (req, res) => {
         ...conversationAccessWhere(user),
         ...(hideResolved ? { status: { not: 'RESOLVED' } } : {}),
         ...(status ? { status: status as any } : {}),
+        /*
+          Unreplied: no team response yet.
+
+          The predicate is the one that already decides whether a send arms the
+          auto-close timer — see `outbound-message.service.ts`, which calls
+          `markSuccessfulHumanOutbound` under `if (!input.isAuto)`. Writing a
+          second definition here is how two of them drift until "unreplied" and
+          "idle" disagree about the same thread.
+
+          Deliberately NOT `lastHumanOutboundAt: null`, which looks like exactly
+          this and is not. That column is only written when auto-close is
+          *enabled*, so on a workspace with the feature switched off every
+          thread would report as unreplied. The column is a side effect of a
+          feature; the messages are the fact.
+
+          `isAuto` covers auto-replies, broadcasts and workflow sends, because
+          the caller sets it for precisely those — so none of them count as a
+          reply, which is the same rule `test:tenancy` asserts for the
+          auto-close timer. An API send carries no user and *does* count, on
+          purpose: it is the subscriber's own software answering for them.
+
+          Internal notes are excluded because they never reach the customer, so
+          a thread with only an internal note on it is still unanswered.
+        */
+        ...(unreplied === 'true'
+          ? { messages: { none: { direction: 'OUTBOUND' as const, isInternal: false, isAuto: false } } }
+          : {}),
         ...teamFilter,
         ...(search ? {
           AND: [
@@ -231,7 +289,7 @@ router.get('/', async (req, res) => {
           },
         },
       },
-      orderBy: { lastMessageAt: 'desc' },
+      orderBy: conversationOrder(sort),
     });
 
     res.json(user.maskPhoneAndEmail ? maskConversationContacts(convs) : convs);

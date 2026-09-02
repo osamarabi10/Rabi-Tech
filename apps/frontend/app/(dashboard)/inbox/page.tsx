@@ -30,6 +30,10 @@ import {
   Reply,
   UsersRound,
   UserPlus,
+  ArrowDownUp,
+  ShieldOff,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -44,6 +48,7 @@ import { avatarColor, STATUS_CONFIG } from '@/lib/constants';
 import {
   defaultSessionName,
   fetchConversations,
+  type ConversationSort,
   fetchMessages,
   fetchOlderMessages,
   fetchAgents,
@@ -125,6 +130,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
+import { BlockedContactsList } from '@/components/inbox/blocked-contacts-list';
 import { messageDir } from '@/lib/text-direction';
 import { EmptyState } from '@/components/empty-state';
 import { formatTimeOfDay } from '@/lib/format-time';
@@ -243,20 +249,6 @@ export default function InboxPage() {
   const { t } = useT();
   const [convFilter, setConvFilter] = useState<ConvStatus>('all');
   /*
-    Unreplied: the customer wrote last and nobody has answered.
-
-    A toggle rather than a status tab, because it composes with the statuses
-    rather than replacing them — "open AND unreplied" is the question a
-    supervisor actually asks, and a sixth tab would make the two mutually
-    exclusive.
-
-    Built on the direction of the newest message, not on firstResponseAt. Those
-    answer different questions: firstResponseAt is whether anyone EVER replied,
-    and a thread answered last week then written to again this morning is
-    unreplied while having one.
-  */
-  const [unrepliedOnly, setUnrepliedOnly] = useState(false);
-  /*
     Workflow shortcuts an agent can fire on the open thread.
 
     Loaded once rather than per conversation: the list is per workspace and
@@ -335,6 +327,42 @@ export default function InboxPage() {
    * the short one would quietly break links that are already out there.
    */
   const params = useSearchParams();
+
+  /*
+    Unreplied: no team response on this thread, ever.
+
+    A toggle rather than a status tab, because it composes with the statuses
+    rather than replacing them — "open AND unreplied" is the question a
+    supervisor actually asks, and a sixth tab would make the two mutually
+    exclusive.
+
+    **The definition changed on 2026-09-03 and the previous one is worth
+    recording.** This used to filter client-side on the newest message being
+    inbound — "the customer wrote last" — with the stated argument that a
+    thread answered last week and written to again this morning is awaiting a
+    reply while having had one. That argument is sound and it answers a
+    different question: *needs attention now*, not *never answered*.
+
+    The parity target is respond.io's, which is threads lacking a team
+    response at all, so the filter now runs on the server against the message
+    rows. It reuses the predicate that decides whether a send arms the
+    auto-close timer — outbound, not internal, not automatic — rather than a
+    second definition that can drift from it.
+
+    The cost is real: a thread answered once and then written to again no
+    longer appears here. If "awaiting a reply now" is wanted as well, it is a
+    second filter and not a redefinition of this one.
+  */
+  const [unrepliedOnly, setUnrepliedOnly] = useState(params.get('unreplied') === '1');
+  /*
+    Sort mode, and it lives in the URL for the same reason the scope does: a
+    supervisor who sorts by longest-waiting and sends the link should have the
+    recipient see the same list.
+  */
+  const [sortMode, setSortMode] = useState<ConversationSort>(() => {
+    const raw = params.get('sort');
+    return raw === 'oldest' || raw === 'longest' || raw === 'shortest' ? raw : 'newest';
+  });
   const requestedConvId = params.get('conversation') ?? params.get('conv');
 
   /** The tenant’s pipeline, for the header chip and the contact panel. */
@@ -553,6 +581,21 @@ export default function InboxPage() {
     }
   };
 
+  /*
+    Both live in the URL, and both refetch.
+
+    replaceState rather than a router push: this is a view preference, not a
+    navigation, and pushing would fill the back button with sort changes so
+    that leaving the inbox took six presses.
+  */
+  useEffect(() => {
+    const next = new URLSearchParams(window.location.search);
+    if (unrepliedOnly) next.set('unreplied', '1'); else next.delete('unreplied');
+    if (sortMode !== 'newest') next.set('sort', sortMode); else next.delete('sort');
+    const query = next.toString();
+    window.history.replaceState(null, '', query ? `?${query}` : window.location.pathname);
+  }, [unrepliedOnly, sortMode]);
+
   // ── Data loading ────────────────────────────────────────────────────────────
   const loadConvs = useCallback(async (keepSel = false, filter: ConvStatus = convFilter, forceLoad = false) => {
     if (!forceLoad && isSearchMode) return; // don't overwrite search results
@@ -561,7 +604,7 @@ export default function InboxPage() {
       // for "conversations resolved this month" links almost entirely to
       // threads the default filter hides.
       const includeResolved = filter === 'resolved' || filter === 'all' || !!requestedConvId;
-      const list = await fetchConversations({ includeResolved });
+      const list = await fetchConversations({ includeResolved, unreplied: unrepliedOnly, sort: sortMode });
       setConvs(list);
       setFirstLoad(false);
       if (!keepSel) {
@@ -589,7 +632,7 @@ export default function InboxPage() {
       // list looks like it is still working when it has already given up.
       setFirstLoad(false);
     }
-  }, [convFilter, isSearchMode, requestedConvId]);
+  }, [convFilter, isSearchMode, requestedConvId, unrepliedOnly, sortMode]);
 
   /**
    * Leave server-side search and put the normal list back.
@@ -1183,7 +1226,9 @@ export default function InboxPage() {
       if (convFilter === 'mine') return c.assigneeId === currentUser?.id;
       return true; // 'all'
     })
-    .filter((c) => !unrepliedOnly || c.lastMsgDirection === 'in')
+    // No client-side unreplied filter: the server applies it, against the
+    // message rows rather than against the one message the list happens to
+    // carry. Filtering here as well would silently narrow the server result.
     .filter((c) => !search.trim() || c.name.includes(search) || c.phone.includes(search))
     .filter((c) => !labelFilter || c.labels.includes(labelFilter));
 
@@ -1332,21 +1377,50 @@ export default function InboxPage() {
                 >
                   <Reply className="size-3.5 rtl:-scale-x-100" aria-hidden />
                   {t('بدون رد')}
-                  {(() => {
-                    const count = convs.filter((c) =>
-                      isRealConversation(c)
-                      && scopeMatches(c, scope, scopeCtx)
-                      && c.lastMsgDirection === 'in').length;
-                    return count > 0 ? (
-                      <span className={cn(
-                        'rounded-full px-1 text-micro',
-                        unrepliedOnly ? 'bg-primary/15 font-semibold text-primary' : 'bg-muted',
-                      )}>
-                        {count}
-                      </span>
-                    ) : null;
-                  })()}
+                  {/*
+                    The count is shown only while the filter is on.
+
+                    It used to be computed client-side with the old rule. The
+                    server owns the definition now, so off-state the client
+                    genuinely does not know the number — and a count that is
+                    approximately right on a moderation surface is worse than
+                    no count, because it will be read as exact.
+                  */}
+                  {unrepliedOnly && (
+                    <span className="rounded-full bg-primary/15 px-1 text-micro font-semibold text-primary">
+                      {convs.filter((c) => isRealConversation(c) && scopeMatches(c, scope, scopeCtx)).length}
+                    </span>
+                  )}
                 </button>
+
+                {/*
+                  The four sort modes, as a select rather than four buttons.
+
+                  A native select is deliberate here: this row already carries
+                  the status tabs and the unreplied toggle, and four more
+                  buttons at 375px would push the toggle off the edge. A
+                  select also gets keyboard and screen-reader behaviour for
+                  free that a custom menu has to re-earn.
+
+                  Longest and Shortest rank by how long the thread has
+                  existed. The label says "waiting" rather than "duration"
+                  because for a resolved thread this is age, not handling
+                  time — see conversationOrder in conversations.routes.ts.
+                */}
+                <label className="flex shrink-0 items-center gap-1">
+                  <span className="sr-only">{t('ترتيب المحادثات')}</span>
+                  <ArrowDownUp className="size-3.5 text-muted-foreground" aria-hidden />
+                  <select
+                    value={sortMode}
+                    onChange={(e) => setSortMode(e.target.value as ConversationSort)}
+                    className="rounded-md border border-border bg-transparent px-1.5 py-1 text-caption font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <option value="newest">{t('الأحدث')}</option>
+                    <option value="oldest">{t('الأقدم')}</option>
+                    <option value="longest">{t('الأطول انتظارًا')}</option>
+                    <option value="shortest">{t('الأقصر انتظارًا')}</option>
+                  </select>
+                </label>
               </div>
 
               <div
@@ -1467,6 +1541,20 @@ export default function InboxPage() {
 
         {/* List */}
         <ScrollArea className="flex-1">
+          {/*
+            The Blocked scope shows contacts, not conversations.
+
+            It used to filter this same conversation list by
+            `contact.blockedAt`, which can only ever show a blocked person who
+            already had a thread — and the ordinary reason to block a number is
+            that it will not stop writing, which often means blocking it before
+            any thread exists. Those people were invisible on the one screen
+            that exists to show them.
+          */}
+          {scope.kind === 'system' && scope.value === 'blocked' ? (
+            <BlockedContactsList />
+          ) : (
+          <>
           {firstLoad && <ConversationListSkeleton />}
 
           {!firstLoad && filtered.length === 0 && (
@@ -1562,6 +1650,33 @@ export default function InboxPage() {
                     </div>
                   )}
                   <div className="flex items-center justify-between gap-1">
+                    {/*
+                      Direction, as an arrow AND a colour — never colour alone.
+
+                      The release gates forbid colour-only status, and this is
+                      the case they were written for: a blue dot and an orange
+                      dot are the same dot to a viewer who cannot tell them
+                      apart, and direction is scanned rather than read. The
+                      arrow points the way the message travelled, the tint
+                      reinforces it for everyone else, and the accessible name
+                      says it in words for anyone using neither.
+
+                      Flipped under rtl: an arrow meaning "outbound" must point
+                      away from the reader, and away is the other side in two
+                      of our three languages.
+                    */}
+                    {c.lastMsgDirection && (
+                      <span className="flex shrink-0 items-center">
+                        {c.lastMsgDirection === 'out' ? (
+                          <ArrowUpRight className="size-3.5 text-sky-600 rtl:-scale-x-100 dark:text-sky-400" aria-hidden />
+                        ) : (
+                          <ArrowDownLeft className="size-3.5 text-amber-600 rtl:-scale-x-100 dark:text-amber-400" aria-hidden />
+                        )}
+                        <span className="sr-only">
+                          {c.lastMsgDirection === 'out' ? t('آخر رسالة صادرة') : t('آخر رسالة واردة')}
+                        </span>
+                      </span>
+                    )}
                     {rowDensity.showPreview ? (
                       <span
                         className={cn('truncate text-caption text-muted-foreground', rowDensity.preview)}
@@ -1581,6 +1696,8 @@ export default function InboxPage() {
             );
           })}
 
+          </>
+          )}
         </ScrollArea>
       </div>
 
@@ -1815,21 +1932,37 @@ export default function InboxPage() {
                     {t('Auto-close')}: <bdi dir="ltr">{new Date(sel.autoCloseAt).toLocaleString()}</bdi>
                   </span>
                 )}
-                {sel.status !== 'RESOLVED' && (
+                {/*
+                  A blocked contact's thread cannot be opened or closed, and the
+                  controls are absent rather than present and refusing.
+
+                  A button that exists and rejects teaches an agent that the
+                  product is broken; a button that is missing with a stated
+                  reason teaches them the rule. The notice below is the reason,
+                  and it is why this is not simply hiding things: an empty
+                  toolbar is indistinguishable from a permissions problem.
+                */}
+                {sel.contactBlocked && (
+                  <span className="flex h-7 items-center gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 text-caption text-destructive">
+                    <ShieldOff className="size-3.5" aria-hidden />
+                    {t('جهة اتصال محظورة — لا يمكن فتح المحادثة أو إغلاقها')}
+                  </span>
+                )}
+                {sel.status !== 'RESOLVED' && !sel.contactBlocked && (
                   <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-success border-success/30 hover:bg-success/15"
                     onClick={() => setShowCloseConfirm(true)}>
                     <CheckCircle2 className="h-3 w-3" />
                     {t('حل')}
                   </Button>
                 )}
-                {sel.status === 'OPEN' && (
+                {sel.status === 'OPEN' && !sel.contactBlocked && (
                   <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-warning border-warning/30 hover:bg-warning/15"
                     onClick={handleSetPending}>
                     <Clock className="h-3 w-3" />
                     {t('معلق')}
                   </Button>
                 )}
-                {sel.status === 'PENDING' && (
+                {sel.status === 'PENDING' && !sel.contactBlocked && (
                   <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-primary border-primary/20 hover:bg-primary/10"
                     onClick={() => { updateConversation(sel.id, { status: 'OPEN' }).then(() => { setConvs((p) => p.map((c) => c.id === sel.id ? { ...c, status: 'OPEN' } : c)); }); }}>
                     {t('إعادة فتح')}

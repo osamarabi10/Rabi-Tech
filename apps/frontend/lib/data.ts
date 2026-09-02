@@ -534,12 +534,19 @@ export async function startConversation(input: {
   };
 }
 
+/** The four sort modes the inbox offers. Newest is the default everywhere. */
+export type ConversationSort = 'newest' | 'oldest' | 'longest' | 'shortest';
+
 export async function fetchConversations(
-  opts?: { includeResolved?: boolean }
+  opts?: { includeResolved?: boolean; unreplied?: boolean; sort?: ConversationSort },
 ): Promise<Conv[]> {
   const { data } = await api.get('/api/conversations', {
     params: {
       activeOnly: opts?.includeResolved ? 'false' : 'true',
+      // Sent only when set, so the default request is byte-identical to what
+      // it was and the server keeps owning what "no sort given" means.
+      ...(opts?.unreplied ? { unreplied: 'true' } : {}),
+      ...(opts?.sort && opts.sort !== 'newest' ? { sort: opts.sort } : {}),
     },
   });
   return data.map((c: any): Conv => ({
@@ -950,6 +957,23 @@ export async function updateContact(id: string, input: Partial<Contact>): Promis
 export async function blockContact(id: string, reason?: string): Promise<Contact> {
   const { data } = await api.post(`/api/contacts/${id}/block`, reason ? { reason } : {});
   return mapContact(data);
+}
+
+/** A row in the Blocked inbox. */
+export type BlockedContact = {
+  id: string;
+  name: string | null;
+  phone: string;
+  blockedAt: string;
+  blockedReason: string | null;
+  blockedByName: string | null;
+  /** Zero means the number was blocked before it ever wrote. */
+  conversationCount: number;
+};
+
+export async function fetchBlockedContacts(): Promise<BlockedContact[]> {
+  const { data } = await api.get('/api/contacts/blocked');
+  return data;
 }
 
 export async function unblockContact(id: string): Promise<Contact> {
