@@ -221,6 +221,8 @@ npm run test:restrictions     #  51
 npm run test:csv              #  30
 npm run test:meta-templates   #  41  — registered; the cap added seven checks
 npm run test:collaborators    #  14  — registered 2026-09-02, see §4
+npm run test:secrets          #  12  — no compromised credential in a tracked file
+npm run test:auth-exemptions  #  11  — every auth exemption declares why it is safe
 
 cd apps/frontend
 npm run check:i18n            # every t() key translated in he + en
@@ -231,6 +233,28 @@ npx tsc --noEmit && npx next build
 `test:public-api` boots a real server. If it prints `[ENV]` there is **no
 summary line** — deliberately. A run that could not start has tested nothing
 and must not print a number that looks like it did.
+
+**`test:secrets` and `test:auth-exemptions` are the two cheap ones.** Neither
+needs a database, a build, or a booted server — both read source and finish in
+about a second, so there is no excuse for not running them on any clone.
+
+`test:secrets` asks one question: *is a compromised credential in the public
+repository?* Its file list is `git ls-files`, never a filesystem walk, so a
+local `.env` is correctly invisible and a tracked `.env.example` is not. It
+matches known-compromised values repo-wide by SHA-256 digest — the digest, so
+the gate can recognise a secret it does not itself contain — plus known-weak
+values from `verify-secrets.ts`'s own `KNOWN_WEAK` (parsed, not copied) where
+they are assigned to a credential key in a config file, plus
+`ALLOW_INSECURE_SECRETS` shipping as `1`. See §7.1 and D-34.
+
+`test:auth-exemptions` covers `index.ts`'s unauthenticated-route list, where the
+invariant is that **exemption from that middleware must never mean exemption
+from tenant scope.** Every exempt branch declares a category — 1 genuinely
+public, 2 scoped elsewhere — with a reason in prose, and category 2 declares the
+chain that establishes scope, which is checked to exist and to end in a real
+`runAsOrganization` or `runAsPlatform` call. Deliberately **not** a snapshot of
+the path list: that would go red on every legitimate edit and still could not
+tell a safe addition from a dangerous one.
 
 **Your first run on a fresh clone will look like it has hung. It has not.**
 `test:tenancy` boots the backend through `ts-node/register/transpile-only`,
@@ -283,6 +307,28 @@ Nothing engineering does substitutes for these.
    credentials, but there is more surface standing behind them than when this
    item was written, and every day they stay valid is a day the rotation was
    still outstanding.
+
+   **A third credential joined the list on 2026-09-02, and it was worse than
+   the other two.** `.claude/settings.local.json` was tracked. Inside its
+   recorded permission entries were the literal `dev-admin-key` on **12 lines**
+   and a live **OpenWA webhook secret on 2** — a real, generated secret rather
+   than a known-weak default, in a public repository. Nobody decided to publish
+   it; a broad `git add` swept the file in and it then accumulated whatever
+   credentials the approved commands happened to carry. See D-34.
+
+   Untracked in `61f082f7` with `git rm --cached` and added to `.gitignore`.
+   The working copy is deliberately kept — it holds this machine's approvals.
+
+   **Untracking removed nothing from history.** Both values in that file are
+   permanently public and need rotating **at the source**: a new OpenWA API key
+   and a new webhook secret, issued from the gateway, not edited out of a file.
+   Nothing in the repository can undo this and no further commit will change it.
+
+   `test:secrets` now fails if either value reappears in any tracked file, and
+   it went red on the real thing before the fix — 4 hits for the webhook secret,
+   12 for `dev-admin-key`. **After rotation the digests stay in `COMPROMISED`.**
+   A rotated secret is still a secret that must never come back, and deleting
+   its digest is how it comes back.
 2. **Payment provider.** Activation is automatic, checkout is stubbed. The
    product cannot take money.
 3. **Domain, TLS, VPS.** Not reachable by a customer.

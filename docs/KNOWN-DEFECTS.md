@@ -1444,3 +1444,65 @@ application code, both out of scope for that commit. Its wording is verified by
 reading, not by running. **Treat it as untested until something exercises it.**
 A message nobody has seen fire is a message that has never been checked for
 being wrong.
+
+---
+
+## D-34 · A machine-local approval log was tracked, and collected credentials — UNTRACKED, NOT UNDONE
+
+**Untracked 2026-09-02** in `61f082f7`. **The exposure is permanent.**
+
+**What was wrong.** `.claude/settings.local.json` was a tracked file in a public
+repository. It records the literal shell commands approved on one machine, so
+over time it accumulated whatever credentials those commands carried:
+
+| | |
+|---|---|
+| `dev-admin-key` | **12 lines** |
+| OpenWA webhook secret | **2 lines** (4 token occurrences) |
+| File | 9,922 bytes, 84 tracked lines |
+
+The second one is the serious half. `dev-admin-key` is a known-weak default that
+`verify-secrets.ts` already publishes in its own denylist and that a dozen
+documents name deliberately. The webhook secret was a real generated value.
+
+**Nobody decided any of this**, which is the point. It is the same shape as
+`9a458795`, where `git add apps/backend/prisma` swept a migration into main: a
+file entered the index once, by a broad add, and then quietly grew. There was no
+moment where someone chose to publish a credential — which is exactly why no
+amount of care at the moment of committing would have caught it.
+
+**Why the existing guard could not have caught it.** `verify-secrets.ts` refuses
+to boot on a weak credential, and it reads `process.env`. That is the running
+machine. The leak was in the tree. The guard was answering a different question,
+correctly, the entire time — and answering it well enough that its existence
+made the repository *feel* covered.
+
+**The fix that matters is the gate, not the untracking.** Untracking removes one
+file from one commit onward. `test:secrets` (12 checks, `verify-secret-scan.js`)
+asks the durable question — *is a compromised credential in the public
+repository?* — over `git ls-files`, and it went red on the real thing before the
+fix, naming file and line for all 16 findings.
+
+Three details of that gate are load-bearing:
+
+- **The compromised value is stored as a SHA-256 digest, not as itself.**
+  Writing the leaked secret into the gate would have moved it from one tracked
+  file to another and left it exactly as public — untracking it in the same
+  commit that re-committed it.
+- **The denylist is parsed from `verify-secrets.ts`, not copied**, so the two
+  cannot drift. The parse is then asserted three ways, because an unguarded
+  parse returning `[]` would make every check below pass while checking nothing.
+  Renaming the Set turns four checks red rather than reporting green.
+- **A self-test runs the detector against a planted control value on every run**,
+  so the tokenise–hash–match path is proved before it is trusted.
+
+**What is still outstanding, and it is not engineering.** Both values are
+permanently public. They require rotation **at the source** — a new OpenWA API
+key and a new webhook secret. **After rotation, leave the digests in
+`COMPROMISED`.** A rotated secret is still one that must never reappear, and
+deleting its digest is precisely how it reappears.
+
+**What the gate cannot see**, stated in its own header: a denylist only knows
+what it has been told, so a brand-new secret pasted into a tracked file passes
+cleanly. This stops known values recurring. It is not a general secret detector,
+and treating it as one would be the next version of this defect.

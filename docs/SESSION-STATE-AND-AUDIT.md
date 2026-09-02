@@ -227,11 +227,19 @@ between a rule and a test.
 
 ### The second pattern: the instrument could not see the property
 
-Three instances, and three is what turns coincidence into a category. Each is a
-check that passed while proving nothing, and in every one the cause was the
-same: **the thing doing the checking was structurally incapable of seeing the
-thing it was checking.** Not a wrong assertion — a right assertion pointed at an
-artifact where the property does not exist.
+**Five instances now, in two sub-shapes.** Each is a check that passed while
+proving nothing, and in every one the cause was the same: **the thing doing the
+checking was structurally incapable of seeing the thing it was checking.** Not a
+wrong assertion — a right assertion pointed at an artifact where the property
+does not exist.
+
+The two sub-shapes are worth separating, because they need different habits:
+
+- **(a) The check pointed at the wrong artifact** — instances 1, 2, 3, 4. The
+  assertion is fine; the thing it reads cannot contain the answer.
+- **(b) The probe never reached its target** — instance 5. The assertion is
+  fine and so is the artifact; the *mutation meant to test it* landed somewhere
+  else, so the green proved nothing and looked like proof.
 
 1. **A source assertion reading `dist/` for a cast.** `verify-workflow-p2` was
    written to refuse `as never`, the token that silenced D-31. It read the
@@ -254,14 +262,50 @@ artifact where the property does not exist.
    **the ordinary tool for "what changed?" reports nothing.** No amount of
    looking at diffs would have found it.
 
+4. **A gate whose denylist source was renamed, checking nothing.**
+   `verify-secret-scan` parses `KNOWN_WEAK` out of `verify-secrets.ts` rather
+   than copying it, so the two lists cannot drift. But an unguarded parse
+   returns `[]` when the Set is renamed or restructured — and a scan against an
+   empty denylist finds nothing, reports green, and is indistinguishable from a
+   repository with no weak credentials in it. Caught before it shipped, by
+   asking what the file would do if its one external dependency moved. It now
+   asserts the parse matched, that it yielded a plausible count, and that it
+   still contains its anchors; renaming the Set turns four checks red.
+
+5. **A mutation that missed its target — and so proved nothing.** While proving
+   `verify-auth-exemptions`, the mutation meant to break the fallback branch
+   used a plain `String.replace` for `verifyToken(req, res, () => {`. That
+   replaces the **first** occurrence, and there is an earlier one in a different
+   middleware **294 lines above** the fallback. The mutation edited a route that
+   the gate does not examine; the gate reported 11/11, entirely correctly,
+   because nothing it looks at had changed.
+
+   Read carelessly that says *the check is broken*. The truth was the opposite:
+   the check was fine and **the probe was broken**. Retargeted with
+   `lastIndexOf`, it goes red as it should. This is the only instance in the
+   list where the defect was in the act of verification rather than in the
+   thing verified — which is why it gets its own rule below.
+
 **How each was actually caught, since none was caught by reading:** (1) and (2)
 by mutation — making the check fail on purpose, which is the only thing that
 distinguishes a check that works from a check that is merely green. (3) by
 cloning `origin/main` into a temp directory and running the gate there, which is
-the only vantage point from which a working-tree-only defect is visible.
+the only vantage point from which a working-tree-only defect is visible. (4) by
+asking what the gate would do if the file it parses moved out from under it.
+(5) by noticing a green where red was expected, and chasing it.
 
 **The rule.** Before trusting a check, ask what the thing doing the checking is
 structurally incapable of seeing.
+
+**The second rule, which instance 5 adds and which is not the same thing.**
+*Verify that the mutation actually landed before trusting what the gate says
+about it.* The existing rule says a green check means nothing until you have
+watched it go red. This one says the watching itself can fail: a mutation that
+does not touch what it claims to touch produces a green that looks exactly like
+a passing test and is worth nothing. **A green where you expected red is a
+finding to chase, not a result to accept** — the cheapest version is to confirm
+the edited line is the line you meant, before drawing any conclusion from what
+the gate reports.
 
 The corollaries are cheap and worth stating: a check on a *source* property
 (a cast, a comment, an import) must read source; a check on a *runtime*

@@ -4,9 +4,16 @@
 [RESPONDIO-PARITY-ROADMAP.md](RESPONDIO-PARITY-ROADMAP.md), which sequences the
 work; this one is the exhaustive inventory it was sequenced from.
 
-Compiled 1 September 2026 from `respond-io-as-documented.md` — a survey of ~130
-first-party Respond.io pages plus their OpenAPI 3.0 specification — checked
-against this codebase at the enforcement point.
+Compiled 1 September 2026 from a survey of ~130 first-party Respond.io pages
+plus their OpenAPI 3.0 specification, checked against this codebase at the
+enforcement point. **The method, the surfaces read, and what that survey does
+and does not establish are recorded in
+[RESPONDIO-SOURCES.md](RESPONDIO-SOURCES.md).**
+
+The survey document itself is deliberately not in this repository — it is a
+detailed competitor teardown and this repository is public. Until 2026-09-02
+this preamble cited it by filename alone, which meant a clean clone could not
+check the sourcing of a single claim below. That is what the sources file fixes.
 
 **Legend**
 `✓` we have it · `≈` partial, gap named · `✗` absent · `★` **we are ahead** ·
@@ -78,7 +85,7 @@ sharing.**
 | Audio transcription | Yes | `✗` (P7) |
 | Delivery status | Sent / Delivered / Read / Failed | `✓` |
 | Link previews | Supported channels | `✗` |
-| Channel switcher | Yes | `—` single channel by design |
+| Channel switcher | Yes | `—` single channel by design — see also multichannel growth widgets in §10, which is `—` for the same reason |
 
 ### Contact details pane
 
@@ -122,7 +129,7 @@ whom."* A permission model there is friction with no benefit.
 | | Theirs | Ours |
 |---|---|---|
 | States | Open · Closed · Snoozed (3) | `★` OPEN · PENDING · RESOLVED · AWAITING_CLIENT (4) |
-| Opening sources | 8: User, Contact, Workflow, API, Zapier, Make, Paid Ads, Growth Widget | `≈` Contact, Workflow, User — no API/Zapier/Make/Ads/Widget |
+| Opening sources | 8: User, Contact, Workflow, API, Zapier, Make, Paid Ads, Growth Widget | `✗` **we record none of the eight.** There is no `openingSource` column on `Conversation` at all. Three — Contact, Workflow, User — are *reconstructible* from which code path created the row, which is not the same as stored and cannot be queried, filtered or reported on |
 | Closing sources | 8–9 incl. Bot, AI Agent, n8n, **Blocked** | `✓` MANUAL, AUTO_CLOSE, WORKFLOW, API, MERGE |
 | Merge/delete do **not** close | Explicit non-fire rule | `✓` same |
 | Auto-close config | Default 24h · min 30 min · max 14 days | `✓` min 30 / max 20160 |
@@ -133,8 +140,29 @@ whom."* A permission model there is friction with no benefit.
 | Default categories | General Inquiry, Sales Inquiry, Payment Issue, Others | `≈` tenant-defined |
 | Category rename | **Cannot be renamed** — delete and recreate | `★` ours renames with a cascade |
 
-**Gap:** opening sources we cannot record (API, Zapier, Make, Ads, Widget) —
-all downstream of P1.
+**Gap:** opening sources. This row read `≈ Contact, Workflow, User` until
+2026-09-02 and that overstated us — it described what is *inferable from which
+code path ran*, not a column. `grep` for the concept across the backend returns
+nothing. The gap is all eight, not five.
+
+**Deferred by design, not overlooked:** `ConversationOpeningSource`. Declaring
+an eight-member enum to close this cell would leave **five members with no
+producer** — API, Zapier, Make, Paid Ads and Growth Widget are all downstream of
+integrations this platform does not have — and that is precisely the
+declared-but-unreachable defect this repository has now found ten times. Closing
+a documentation cell is not worth manufacturing the eleventh instance of its own
+signature defect.
+
+Attribution is also the wrong shape for a conversation. A contact is acquired
+once; conversations recur. When Growth Widgets lands, where it came from belongs
+on `Contact` as write-once first-touch, and an opening-source enum can follow
+later carrying **only the members something actually writes**.
+
+Note what is *not* being copied here: `JUMP_TO` in §05 is declared, filtered from
+the served vocabulary, and refused at save — deliberately unreachable behind a
+guard. Applying that mechanism here would mean declaring `GROWTH_WIDGET` and
+refusing it, which is the same defect with an excuse attached. Nothing is
+declared. **This record lives in this document only.**
 
 ---
 
@@ -397,7 +425,7 @@ Their workspace settings index lists **18** articles. Ours has 10 screens.
 | Teams | **Max 200; one team per user** | `≈` ours allows many teams per user |
 | Channels | *"Only Owners can connect Channels"* | `✓` `/settings/channels` |
 | Integrations | Developer API, Dialogflow, Zapier, Make, Sheets | `✗` **none** |
-| Growth Widgets | Embeddable, campaign attribution, branding toggle | `✗` |
+| Growth Widgets | Embeddable, campaign attribution, branding toggle | `✗` — except the **multichannel** widget type, which is `—`; see below |
 | Contact Fields | 8 types, visibility, Owner-only delete | `✓` |
 | Lifecycle | 20 max, default, reorder | `✓` |
 | Conversations | Auto-close, closing notes, categories, mention toggle | `✓` |
@@ -410,6 +438,27 @@ Their workspace settings index lists **18** articles. Ours has 10 screens.
 | **Data Export** | Separate module, 4 types, 365-day range | `✗` |
 | Notifications | | `★` ours has a dedicated screen |
 | Meta templates | | `★` ours has a dedicated screen |
+
+**Growth Widgets, and the one sub-type that is not a gap.** Respond.io names
+four classes — single-channel, multichannel, QR code, chat link — and their own
+documentation never enumerates the full catalogue, so there is no published list
+to be measured against. The row above stays `✗`: we have no widget model, no
+`sourceUrl`, no referrer and no attribution field on `Contact`.
+
+**Multichannel is `—`, the seventh deliberate non-build.** It is not deferred,
+it is inapplicable. Our channel set is WhatsApp on two transports — `OPENWA` and
+`WHATSAPP_CLOUD`, with `allowedChannels` defaulting to `["OPENWA"]` — and the
+channel switcher in §02 is already `—` *single channel by design*. A multichannel
+widget is a picker offering channels we have decided not to have. Building it
+would mean either shipping a chooser with one option, or acquiring channels to
+justify a widget, which is the tail wagging the dog.
+
+The other three classes remain real gaps, and they are not equal. A **chat link**
+is the cheapest thing that carries real attribution and works identically on both
+transports, because the pre-filled text rides in the message body. A **QR code**
+is a rendering of the same primitive. The **embeddable single-channel widget** is
+by far the largest and the least reversible — a script tag on someone else's page
+cannot be recalled, versioned unilaterally, or fixed for whoever cached it.
 
 **Organisation settings** — theirs has 8 pages across a two-level org/workspace
 model with 4 org roles. Ours has a **platform-owner console** (`/platform/*`:
@@ -506,10 +555,18 @@ revocation or scoping; no webhook event log; no API versioning policy.
 |---|---|---|
 | `★` **We are ahead** | **21** | consent, empty-segment refusal, auto-close gating, thread-preserving reopen, reply metrics, quiet hours, audit logs, editions-as-data, 5 roles, richer filter DSL, digits-only phone storage, tag provenance, opt-out surviving import, template fail-closed, lifecycle inboxes, category rename, free send rates, explicit schedule timezone, notifications screen, Meta templates screen, composite tenant FKs |
 | `✓` Match | ~45 | |
-| `≈` Partial | ~40 | |
-| `✗` Absent | ~35 | |
-| `—` Deliberate | 6 | calls, tasks, channel switcher, Chats/Calls tabs, one-team-per-user, AI Objective |
+| `≈` Partial | ~39 | |
+| `✗` Absent | ~36 | |
+| `—` Deliberate | 7 | calls, tasks, channel switcher, Chats/Calls tabs, one-team-per-user, AI Objective, **multichannel growth widgets** |
 
 **The absent set concentrates in four places:** the developer platform (13),
 workflows (17 triggers and steps), AI (all of 06), and reporting tabs (4).
 Everything else is small and cumulative.
+
+**Two corrections on 2026-09-02, and the arithmetic follows them.** §03's
+opening-sources row moved `≈ → ✗` — it claimed three of eight when there is no
+`openingSource` column at all, so `≈` drops by one and `✗` gains one. And
+multichannel growth widgets became the seventh `—`: inapplicable rather than
+missing, for the same reason the channel switcher already was. The Growth
+Widgets row in §10 stays `✗`, because the module as a whole is genuinely absent
+— only that one sub-type is a decision.
