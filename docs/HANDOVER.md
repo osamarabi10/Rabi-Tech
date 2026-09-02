@@ -203,9 +203,123 @@ Nothing engineering does substitutes for these.
 
 ## 8 · Where to start
 
+0. **Read §9 too.** It was added after the rest and carries two traps §1–§8
+   cannot warn you about: the auto-loading skill whose schema instruction
+   springs §1's trap, and the fact that every documented backup procedure here
+   runs through a Docker daemon that is currently hung. §9 has the way round
+   both.
 1. Read §1 and confirm the tree matches. If it does not, **stop and ask** —
    somebody has committed or reverted since this was written.
 2. Ask whether to push `b5b97a10` and whether to commit item B.
 3. Then pick from §6. Nothing there depends on conversation you do not have;
    the code is the authority, and it has been right every time it disagreed
    with a plan.
+
+---
+
+## 9 · Added 2026-09-02 — findings from a session that changed no code
+
+This section exists because the findings below were discovered *after* §1–§8
+were written, in a session that deliberately wrote nothing else. Two of them
+are traps; one is an unblock; one is a decision that cannot be recovered from
+the code.
+
+### Docker's daemon is wedged, and it does not stop you taking a backup
+
+`docker ps` exits 124 on a 10-second bound. `Docker Desktop` and two
+`com.docker.backend` processes are alive, so the daemon is **hung, not dead**.
+This is D-3 recurring for the third time.
+
+**The database is unaffected and still reachable.** Port 15432 answers and the
+server reports `PostgreSQL 15.19`.
+
+That matters because **every backup procedure this repo documents runs through
+`docker exec`** — CLAUDE.md, the rollback procedure in
+RESPONDIO-PARITY-CHECKPOINT.md, every dump taken during the invoice and
+editions phases. With the daemon hung, all of them fail, and the reasonable
+conclusion is "I cannot take a backup, so I must stop."
+
+You can. **PostgreSQL 17 client tooling is installed on this host**, just not on
+PATH:
+
+```bash
+PGBIN="/c/Program Files/PostgreSQL/17/bin"
+PW=$(grep -m1 '^POSTGRES_PASSWORD=' .env | cut -d= -f2- | tr -d '\r')
+
+PGPASSWORD="$PW" "$PGBIN/pg_dump.exe" \
+  -h 127.0.0.1 -p 15432 -U admin -d rabitech -Fc -f pre-change.dump
+
+PGPASSWORD="$PW" "$PGBIN/pg_restore.exe" -l pre-change.dump   # verify, always
+```
+
+Client 17 against server 15 is the supported direction. `psql.exe` and
+`pg_restore.exe` are in the same directory, so the whole rollback procedure in
+RESPONDIO-PARITY-CHECKPOINT.md works without Docker — substitute the `psql`
+invocation and drop the `docker exec` prefix.
+
+**There is no current dump.** The last verified one predates several commits.
+Take one before anything that writes.
+
+### The `rabitech-guide` skill will spring §1's trap
+
+`.claude/skills/rabitech-guide` loads **automatically** for any session touching
+files under `RabiTech V5/`. A fresh session gets it whether or not it opens
+`docs/`.
+
+Its schema-change instruction reads:
+
+> hand-write the SQL migration … then `docker compose exec backend npx prisma
+> migrate deploy`
+
+Followed literally against the tree described in §1, that applies
+`20260930090000_standard_trial_gateway` — the uncommitted migration in item A —
+because `migrate deploy` takes **every** pending migration and offers no way to
+select one. Its supporting code is uncommitted and the committed harness
+asserts the opposite, so the result is a red `test:tenancy`, or worse a green
+one locally that fails on a clean checkout.
+
+That is precisely what `9a458795` reverted.
+
+The skill is not wrong; it predates the tree being dirty. Two ways to close it,
+neither done here because both are the owner's call:
+
+- Add one line to the skill's schema section — *"run `git status` first;
+  `migrate deploy` applies every pending migration, including uncommitted
+  ones"* — pointing at §1.
+- Or land/park item A so the trap has nothing to spring. Same shape as parking
+  `growth-wip` during the invoice phase: its own branch, fully recoverable,
+  tree clean afterwards.
+
+### A decision was made that the code cannot tell you
+
+The owner asked to switch the database to MongoDB, pasting an Atlas connection
+string. That was **declined and replaced**, not executed. The reasons are
+recorded here because nothing in the repo shows a path not taken:
+
+- 75 Prisma migrations, Postgres enums, CHECK constraints, `BigInt` and
+  `String[]` columns — none port.
+- The composite tenant foreign keys `[id, organizationId]` on every tenant
+  table are *the* isolation boundary. CLAUDE.md states it: "the database
+  rejects a cross-tenant write — app-level checks are not the boundary." Mongo
+  has no foreign keys, so switching would delete that boundary.
+- `test:tenancy` is built on disposable Postgres schemas and would not run.
+- `INSERT … ON CONFLICT DO UPDATE … RETURNING` is what makes invoice numbering
+  atomic and non-reusable — the whole point of the invoice integrity phase.
+
+**What the owner actually wanted was a hosted database rather than local
+Docker** — chosen explicitly when the options were put to them. That is a
+managed **PostgreSQL** (Neon, Supabase, RDS), which is a `DATABASE_URL` change
+plus a dump-and-restore, and keeps every gate working. Atlas is Mongo-only and
+cannot serve it.
+
+**This work is approved and not started.** Nothing has been done toward it.
+
+### What this session did and did not do
+
+Did: verified repo state, diagnosed the wedged daemon, found the host client
+tooling, confirmed the database reachable over TCP, read the skill, wrote this
+section.
+
+**Did not:** change any code, run any migration, take any dump, or touch the 15
+uncommitted files. The tree in §1 should be exactly as described, plus this
+file.
