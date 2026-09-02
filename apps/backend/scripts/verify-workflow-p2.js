@@ -215,6 +215,85 @@ function main() {
   check('  …attributed to no user, because automation has no name to sign with',
     !commentBranch.includes('sentById:') || commentBranch.includes('sentById: null'));
 
+  // ── the executor's shape, as something that fails ────────────────────────
+  /*
+    The executor is a switch, so every safety property it has is per-case. Its
+    three rules are enforced by convention — call the right helper — and a case
+    that does not call it is silently exempt. That is not a hypothetical: it is
+    D-30 and D-31, both found by review rather than by any gate, and the audit
+    document names this shape as the reason.
+
+    These checks do not change the shape. They make the convention fail out
+    loud when it is broken, which is the difference between a rule and a test.
+    A future case that sends its own message, or silences its own type error,
+    stops being a code review away from a consent breach.
+  */
+
+  /*
+    Rule 1, as a chokepoint. Consent is checked inside sendToContact, so the
+    property "a workflow cannot outrun consent" is really "nothing else sends".
+    D-30 was a second send path — a local helper that looked like plumbing —
+    which skipped the consent check without touching it.
+
+    The count is what matters, not the location: one import, one call. A second
+    call site is exactly the defect, whatever it is named or wherever it sits.
+  */
+  /*
+    Read against the *compiled* output, like every behavioural check in this
+    file: a call that survives to dist is a call that runs. `ChannelService.x`
+    compiles to `channel_service_1.ChannelService.x`, so the match allows the
+    namespace prefix rather than assuming the source spelling.
+  */
+  const gatewayCalls = executorSource.match(/ChannelService\.\w+/g) || [];
+  check('consent: the executor calls the gateway exactly once',
+    gatewayCalls.length === 1,
+    `${gatewayCalls.length} call sites: ${gatewayCalls.join(', ')}`);
+
+  // Bounded by the next function declaration, so "inside sendToContact" means
+  // inside it and not merely somewhere after it.
+  const sendStart = executorSource.indexOf('async function sendToContact');
+  const sendEnd = executorSource.indexOf('function ', executorSource.indexOf('\n', sendStart));
+  const sendToContactBody = executorSource.slice(sendStart, sendEnd === -1 ? undefined : sendEnd);
+  check('  …from inside sendToContact, where consent is decided',
+    sendStart !== -1
+      && sendToContactBody.includes('ChannelService.')
+      && sendToContactBody.includes('OPTED_OUT'),
+    'the single gateway call must sit with the consent check, not merely near it');
+
+  /*
+    These two read the TypeScript, not dist, and that is not an oversight.
+
+    A cast is erased by compilation, so `as never` cannot be found in the
+    compiled output at all — a check for it there would pass forever while
+    proving nothing. The property is a source property, so the source is what
+    gets read.
+
+    `as never` is not a style complaint. It is the exact token that silenced the
+    type error naming D-31, and the defect it hid let a workflow write any
+    column on Contact, `organizationId` included. A cast that suppresses the
+    compiler's objection to a dynamic write is the compiler being right.
+
+    Matched with word boundaries because the substring also occurs inside
+    ordinary prose — "a thread that was never closed" contains it — and a gate
+    that fails on its own comments teaches people to stop reading it.
+  */
+  const executorTs = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'modules', 'workflows', 'workflow-executor.ts'), 'utf8');
+
+  check('no `as never` silences a type error in the executor',
+    !/\bas\s+never\b/.test(executorTs),
+    'the D-31 write used exactly this cast to compile');
+
+  /*
+    And the write itself. A computed property key on contact.update is how an
+    author-supplied field name becomes a column name. The supported path writes
+    CustomFieldValue keyed by a looked-up definition id, which cannot name a
+    Contact column at all.
+  */
+  check('no workflow action writes a computed column name onto Contact',
+    !/prisma\.contact\.update\([\s\S]{0,400}?\[\s*(?:String\()?\w/.test(executorTs),
+    'data: { [field]: value } on contact.update is the D-31 shape');
+
   console.log('');
   console.log(passed + '/' + (passed + failed) + ' checks passed.');
   if (failed > 0) process.exitCode = 1;
