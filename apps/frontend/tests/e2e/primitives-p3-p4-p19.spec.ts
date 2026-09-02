@@ -298,7 +298,13 @@ for (const width of WIDTHS) {
           toast stays visible and names what is still true.
         */
         if (width >= 768) {
-          await expect(page.getByRole('button', { name: /إعادة المحاولة|retry|ניסיון חוזר/i }).first()).toBeVisible();
+          // Same 10s budget as the message assertion above, and for the same
+          // reason: the failed-undo toast replaces a loading toast, so the
+          // message and its action do not appear in the same frame. The
+          // default 5s made this pass alone and fail one case in thirty-six
+          // under load — a flaky green, which is worth less than a narrowed one.
+          await expect(page.getByRole('button', { name: /إعادة المحاولة|retry|ניסיון חוזר/i }).first())
+            .toBeVisible({ timeout: 10_000 });
         }
 
         /*

@@ -65,22 +65,36 @@ export type ChannelRailChannel = {
 };
 
 export type ChannelRailDestination = {
-  key: string;
-  label: string;
+  key: 'overview' | 'capabilities' | 'templates';
   href: string;
-  /** Present when the destination exists but cannot be used yet. */
-  disabledReason?: string;
+  /** True when the destination exists but cannot be used yet; the reason is resolved at render. */
+  disabledReason?: true;
 };
 
-const STATUS: Record<
-  ChannelRailChannel['status'],
-  { icon: typeof CheckCircle2; label: string; className: string }
-> = {
-  CONNECTED: { icon: CheckCircle2, label: 'متصلة', className: 'text-emerald-600 dark:text-emerald-400' },
-  CONNECTING: { icon: Loader2, label: 'جارٍ الاتصال', className: 'text-amber-600 dark:text-amber-400' },
-  DISCONNECTED: { icon: AlertTriangle, label: 'غير متصلة', className: 'text-destructive' },
-  INACTIVE: { icon: CircleSlash, label: 'معطّلة', className: 'text-muted-foreground' },
+const STATUS: Record<ChannelRailChannel['status'], { icon: typeof CheckCircle2; className: string }> = {
+  CONNECTED: { icon: CheckCircle2, className: 'text-emerald-600 dark:text-emerald-400' },
+  CONNECTING: { icon: Loader2, className: 'text-amber-600 dark:text-amber-400' },
+  DISCONNECTED: { icon: AlertTriangle, className: 'text-destructive' },
+  INACTIVE: { icon: CircleSlash, className: 'text-muted-foreground' },
 };
+
+/*
+  Status text resolved by a switch of literal t() calls rather than read from
+  a table.
+
+  A `label` field in STATUS is a string check:i18n cannot see: it follows
+  literal arguments, so `t(state.label)` checks nothing and the translation
+  can simply be absent. A switch costs four lines and puts every string back
+  under the gate.
+*/
+function statusLabel(status: ChannelRailChannel['status'], t: (key: string) => string): string {
+  switch (status) {
+    case 'CONNECTED': return t('متصلة');
+    case 'CONNECTING': return t('جارٍ الاتصال');
+    case 'DISCONNECTED': return t('غير متصلة');
+    case 'INACTIVE': return t('معطّلة');
+  }
+}
 
 /**
  * Destinations for one channel, by transport.
@@ -91,23 +105,31 @@ const STATUS: Record<
 export function destinationsFor(channel: ChannelRailChannel, basePath: string): ChannelRailDestination[] {
   const q = `${basePath}?channel=${encodeURIComponent(channel.id)}`;
   const shared: ChannelRailDestination[] = [
-    { key: 'overview', label: 'نظرة عامة', href: q },
-    { key: 'capabilities', label: 'القدرات', href: `${q}&section=capabilities` },
+    { key: 'overview', href: q },
+    { key: 'capabilities', href: `${q}&section=capabilities` },
   ];
 
   if (channel.capabilities.supportsTemplates) {
     // Only meaningful once the channel is actually connected.
     shared.push({
       key: 'templates',
-      label: 'قوالب Meta',
       href: `${q}&section=templates`,
       ...(channel.status === 'CONNECTED'
         ? {}
-        : { disabledReason: 'تتوفر القوالب بعد اكتمال اتصال القناة' }),
+        : { disabledReason: true as const }),
     });
   }
 
   return shared;
+}
+
+/** Destination text, literal per case for the same reason as statusLabel. */
+function destinationLabel(key: ChannelRailDestination['key'], t: (k: string) => string): string {
+  switch (key) {
+    case 'overview': return t('نظرة عامة');
+    case 'capabilities': return t('القدرات');
+    case 'templates': return t('قوالب Meta');
+  }
 }
 
 export function ChannelRail({
@@ -129,9 +151,9 @@ export function ChannelRail({
   const selected = channels.find((c) => c.id === selectedChannelId) ?? null;
 
   const addAction = addDisabledReason
-    ? { label: 'إضافة قناة', disabledReason: addDisabledReason }
+    ? { label: t('إضافة قناة'), disabledReason: addDisabledReason }
     : onAddChannel
-      ? { label: 'إضافة قناة', onClick: onAddChannel }
+      ? { label: t('إضافة قناة'), onClick: onAddChannel }
       : undefined;
 
   return (
@@ -148,7 +170,7 @@ export function ChannelRail({
           use — which is the point of extracting it.
         */}
         <RailGroup
-          label="القنوات"
+          label={t('القنوات')}
           items={channels}
           count={channels.length}
           collapsible
@@ -156,6 +178,7 @@ export function ChannelRail({
           addAction={addAction}
           renderItem={(channel) => {
             const state = STATUS[channel.status];
+            const stateText = statusLabel(channel.status, t);
             const StateIcon = state.icon;
             const KindIcon = channel.capabilities.supportsTemplates ? Cloud : MessageCircle;
             const active = channel.id === selectedChannelId;
@@ -179,7 +202,7 @@ export function ChannelRail({
                   className={cn('size-3.5 shrink-0', state.className, channel.status === 'CONNECTING' && 'animate-spin')}
                   aria-hidden
                 />
-                <span className="sr-only">{t(state.label)}</span>
+                <span className="sr-only">{stateText}</span>
               </Link>
             );
           }}
@@ -187,10 +210,12 @@ export function ChannelRail({
 
         {selected && (
           <RailGroup
-            label="إعدادات القناة"
+            label={t('إعدادات القناة')}
             items={destinationsFor(selected, basePath)}
             itemKey={(destination) => destination.key}
             renderItem={(destination) => {
+              const label = destinationLabel(destination.key, t);
+              const reason = t('تتوفر القوالب بعد اكتمال اتصال القناة');
               if (destination.disabledReason) {
                 /*
                   Present, disabled, and explained. This destination exists for
@@ -201,11 +226,11 @@ export function ChannelRail({
                 return (
                   <span
                     aria-disabled="true"
-                    title={t(destination.disabledReason)}
+                    title={reason}
                     className="flex min-h-9 cursor-not-allowed items-center gap-2.5 whitespace-nowrap rounded-md px-3 text-caption font-medium text-muted-foreground/60 lg:mb-px lg:min-h-[34px]"
                   >
-                    <span>{t(destination.label)}</span>
-                    <span className="sr-only">{t(destination.disabledReason)}</span>
+                    <span>{label}</span>
+                    <span className="sr-only">{reason}</span>
                   </span>
                 );
               }
@@ -214,7 +239,7 @@ export function ChannelRail({
                   href={destination.href}
                   className="flex min-h-9 items-center gap-2.5 whitespace-nowrap rounded-md px-3 text-caption font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:mb-px lg:min-h-[34px]"
                 >
-                  <span>{t(destination.label)}</span>
+                  <span>{label}</span>
                 </Link>
               );
             }}

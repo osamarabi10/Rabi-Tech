@@ -227,12 +227,12 @@ between a rule and a test.
 
 ### The second pattern: the instrument could not see the property
 
-**Six instances now, in three sub-shapes.** In every one the cause is the same:
+**Seven instances now, in four sub-shapes.** In every one the cause is the same:
 **the thing doing the checking was structurally incapable of seeing the thing it
 was checking.** Not a wrong assertion — a right assertion aimed somewhere the
 property does not exist.
 
-The three sub-shapes are worth separating, because they need different habits:
+The four sub-shapes are worth separating, because they need different habits:
 
 - **(a) The check pointed at the wrong artifact** — instances 1, 2, 3, 4. The
   assertion is fine; the thing it reads cannot contain the answer.
@@ -242,6 +242,11 @@ The three sub-shapes are worth separating, because they need different habits:
 - **(c) The right file, the wrong extent** — instance 6. The artifact is
   correct and the boundaries are not, so the check reads code belonging to
   something else and reports on that instead.
+- **(d) Coverage contingent on code structure** — instance 7, and the one that
+  does not belong with the others. The check is correct **and** aimed correctly.
+  Nothing about it is wrong at any point. Its *reach* simply depends on how the
+  code happens to be written, so ordinary refactoring shrinks it — silently,
+  without ever failing, over months.
 
 **One correction to how this category was first written.** It was described as
 "a check that passed while proving nothing", and that is the *dangerous*
@@ -317,6 +322,38 @@ false red is luck. False greens are worse only because nobody investigates them.
    check that reads its own documentation as data is the same defect in
    miniature.
 
+7. **A check whose coverage shrinks under refactoring, without ever failing.**
+   `check:i18n` matches literal `t()` arguments. That is the right thing to
+   match and it is aimed at the right files. But move a literal into a constant
+   and pass the constant — `t(item.label)` — and the string leaves the checker's
+   view entirely. Nothing fails. The gate keeps printing green over a smaller
+   set, and the number it is green over is not reported anywhere.
+
+   Thirty-seven strings shipped untranslated across two commits this way. The
+   earlier explanation was that a prompt's gate list omitted the frontend
+   checks, which was true and is not the cause — **running `check:i18n` on those
+   commits would not have found them either.** A probe found 98 dynamic call
+   sites across 41 files, all invisible.
+
+   **The refactor that reduces coverage is usually the good refactor, which is
+   why nobody looks.** The largest single contributor was extracting `RailGroup`
+   so a rail could be shared instead of copied — correct design, and it moved
+   thirteen labels out of the checker's sight, two of which were untranslated in
+   English and Hebrew for a week without a gate noticing. Nobody re-examines
+   coverage after a change that improves the code.
+
+   This is why it is its own sub-shape. Every other instance here is a check
+   that was wrong somewhere. This one is right everywhere and still loses ground
+   — so "is the check correct?" is the wrong question to ask of it, and the
+   right one is "what does it still see, and is that number moving?"
+
+   **The fix is to make the invisible visible rather than to widen the check.**
+   Non-literal calls are now counted and must each be accounted for: a seeded
+   backlog for the untriaged, an exemption with a reason for the examined, both
+   counted separately in the summary line so the number moves in public. A
+   backlog going down is progress; a pile of exemptions is a graveyard that
+   reads as a decision.
+
 **How each was actually caught, since none was caught by reading:** (1) and (2)
 by mutation — making the check fail on purpose, which is the only thing that
 distinguishes a check that works from a check that is merely green. (3) by
@@ -326,7 +363,9 @@ asking what the gate would do if the file it parses moved out from under it.
 (5) by noticing a green where red was expected, and chasing it. (6) by running
 the check the moment it was written, before believing it — it accused a route of
 something the route plainly does not do, and the accusation was specific enough
-to be checked in seconds.
+to be checked in seconds. (7) by asking, after two commits of missing
+translations, why running the checker on them would not have helped — the
+explanation everyone had was true and insufficient.
 
 **The rule.** Before trusting a check, ask what the thing doing the checking is
 structurally incapable of seeing.

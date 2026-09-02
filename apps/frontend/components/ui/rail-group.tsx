@@ -3,7 +3,6 @@
 import { useId, useState } from 'react';
 import Link from 'next/link';
 import { ChevronDown, Plus } from 'lucide-react';
-import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 /**
@@ -27,6 +26,19 @@ import { cn } from '@/lib/utils';
  *   says `0` next to a group is telling the user something false about why the
  *   group is there.
  * - `addAction` undefined → no button.
+ *
+ * ## It does not translate, deliberately
+ *
+ * Every label, reason and action name arrives already translated. This began
+ * as `t(label)`, which is invisible to `check:i18n` — the checker follows
+ * literal arguments, so a string passed in as a variable is not checked
+ * anywhere and its translation can simply be missing. Two of the settings
+ * rail's group labels were untranslated in English and Hebrew for exactly
+ * that reason.
+ *
+ * Pushing translation to the caller puts each literal back inside a t() call
+ * the checker can see. A shared primitive that translates is a primitive that
+ * hides its callers' strings.
  *
  * ## Omitted when empty
  *
@@ -63,7 +75,6 @@ export function RailGroup<T>({
   addAction?: RailGroupAddAction;
   className?: string;
 }) {
-  const { t } = useT();
   const reactId = useId();
   const headingId = `rail-group-${reactId}`;
   const navId = `rail-group-nav-${reactId}`;
@@ -121,20 +132,20 @@ export function RailGroup<T>({
                 className={cn('size-3 shrink-0 transition-transform', !expanded && '-rotate-90 rtl:rotate-90')}
                 aria-hidden
               />
-              <span>{t(label)}</span>
+              <span>{label}</span>
               {countNode}
             </button>
           ) : (
             <h2 id={headingId} className="flex flex-1 items-center">
-              <span>{t(label)}</span>
+              <span>{label}</span>
               {countNode}
             </h2>
           )}
-          {addAction && <AddAction action={addAction} groupLabel={t(label)} />}
+          {addAction && <AddAction action={addAction} groupLabel={label} />}
         </div>
       ) : (
         <h2 id={headingId} className={headingClasses}>
-          {t(label)}
+          {label}
           {countNode}
         </h2>
       )}
@@ -142,7 +153,7 @@ export function RailGroup<T>({
       <nav
         id={navId}
         className={cn('flex gap-1 lg:block', collapsible && !expanded && 'lg:hidden')}
-        aria-label={t(label)}
+        aria-label={label}
       >
         {items.map((item, index) => (
           <RailGroupItem key={itemKey(item, index)}>{renderItem(item, index)}</RailGroupItem>
@@ -162,14 +173,13 @@ function RailGroupItem({ children }: { children: React.ReactNode }) {
 }
 
 function AddAction({ action, groupLabel }: { action: RailGroupAddAction; groupLabel: string }) {
-  const { t } = useT();
   const shared =
     'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
   // The accessible name names the group, because "Add" alone in a rail of
   // several groups does not say add what, and a screen reader reads the button
   // without the heading beside it.
-  const name = `${t(action.label)} — ${groupLabel}`;
+  const name = `${action.label} — ${groupLabel}`;
 
   if ('disabledReason' in action) {
     /*
@@ -192,14 +202,14 @@ function AddAction({ action, groupLabel }: { action: RailGroupAddAction; groupLa
 
   if ('href' in action) {
     return (
-      <Link href={action.href} aria-label={name} title={t(action.label)} className={shared}>
+      <Link href={action.href} aria-label={name} title={action.label} className={shared}>
         <Plus className="size-3.5" aria-hidden />
       </Link>
     );
   }
 
   return (
-    <button type="button" onClick={action.onClick} aria-label={name} title={t(action.label)} className={shared}>
+    <button type="button" onClick={action.onClick} aria-label={name} title={action.label} className={shared}>
       <Plus className="size-3.5" aria-hidden />
     </button>
   );

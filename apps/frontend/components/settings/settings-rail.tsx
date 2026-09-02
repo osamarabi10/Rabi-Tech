@@ -24,28 +24,29 @@ import { RailGroup } from '@/components/ui/rail-group';
   nav entry is indistinguishable from a broken one.
 */
 type SettingsRailItem = { href: string; label: string; icon: LucideIcon };
+type SettingsRailGroupId = 'personal' | 'general' | 'users' | 'channels' | 'inbox' | 'data';
 
-const GROUPS: { label: string; items: SettingsRailItem[] }[] = [
+const GROUPS: { id: SettingsRailGroupId; items: SettingsRailItem[] }[] = [
   {
-    label: 'شخصي',
+    id: 'personal',
     items: [
       { href: '/settings', label: 'الملف الشخصي', icon: UserRound },
       { href: '/settings/notifications', label: 'إعدادات الإشعارات', icon: Bell },
     ],
   },
   {
-    label: 'عام',
+    id: 'general',
     items: [{ href: '/settings/general', label: 'معلومات المؤسسة', icon: Building2 }],
   },
   {
-    label: 'المستخدمون والصلاحيات',
+    id: 'users',
     items: [
       { href: '/settings/users', label: 'أعضاء الفريق', icon: Users },
       { href: '/settings/teams', label: 'الفرق', icon: ContactRound },
     ],
   },
   {
-    label: 'القنوات والتكاملات',
+    id: 'channels',
     items: [
       { href: '/settings/channels', label: 'القنوات', icon: Cable },
       { href: '/settings/meta-templates', label: 'قوالب Meta', icon: FileText },
@@ -55,7 +56,7 @@ const GROUPS: { label: string; items: SettingsRailItem[] }[] = [
     ],
   },
   {
-    label: 'صندوق الوارد',
+    id: 'inbox',
     items: [
       { href: '/settings/conversations', label: 'Conversations', icon: MessageCircleMore },
       { href: '/settings/contact-fields', label: 'Contact fields', icon: Braces },
@@ -67,7 +68,7 @@ const GROUPS: { label: string; items: SettingsRailItem[] }[] = [
     ],
   },
   {
-    label: 'البيانات والملفات',
+    id: 'data',
     items: [
       { href: '/contacts/import', label: 'استيراد جهات الاتصال', icon: FileUp },
       { href: '/settings/files', label: 'الملفات', icon: Paperclip },
@@ -77,6 +78,25 @@ const GROUPS: { label: string; items: SettingsRailItem[] }[] = [
 
 export function SettingsRail() {
   const { t } = useT();
+
+  /*
+    Group labels resolved here, as literal t() calls.
+
+    They used to live as bare strings in GROUPS and be translated inside
+    RailGroup via t(group.label). check:i18n follows literal arguments, so a
+    label passed as a variable is not checked anywhere — and two of these
+    were shipped untranslated in English and Hebrew without any gate
+    noticing. A lookup keyed by id keeps the grouping data separate from the
+    text while putting every string back where the checker can see it.
+  */
+  const GROUP_LABELS: Record<SettingsRailGroupId, string> = {
+    personal: t('شخصي'),
+    general: t('عام'),
+    users: t('المستخدمون والصلاحيات'),
+    channels: t('القنوات والتكاملات'),
+    inbox: t('صندوق الوارد'),
+    data: t('البيانات والملفات'),
+  };
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const query = searchParams.toString();
@@ -121,8 +141,8 @@ export function SettingsRail() {
         */}
         {GROUPS.map((group) => (
           <RailGroup
-            key={group.label}
-            label={group.label}
+            key={group.id}
+            label={GROUP_LABELS[group.id]}
             items={group.items}
             itemKey={(item) => item.href}
             renderItem={(item) => {
