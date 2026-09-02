@@ -1,8 +1,16 @@
 # Handover — read this before touching anything
 
 Written 2026-09-02 for a session that has none of the preceding conversation.
-The working tree is **not clean** and some of what is in it is not yours to
-commit. Read §1 before running any git command.
+
+**The working tree is clean.** It was not when this was written — §1 described
+sixteen uncommitted files across two unrelated bodies of work, and most of this
+document exists because of them. Both landed on 2026-09-02: item A as
+`ef4842e5`, item B as `1f652be7`. Nothing is uncommitted now.
+
+§1 is kept as history rather than deleted. The incident it describes —
+`9a458795`, a migration swept into main by `git add apps/backend/prisma` — is
+still the reason the staging rules in §3 exist, and those rules have not
+relaxed.
 
 Longer background: [SESSION-STATE-AND-AUDIT.md](SESSION-STATE-AND-AUDIT.md) —
 what was built, every defect found, the recurring failure pattern, and the
@@ -10,7 +18,16 @@ ranked risks.
 
 ---
 
-## 1 · The tree right now — the part that will bite you
+## 1 · The tree as it was — historical, and still the reason for §3
+
+> **Resolved 2026-09-02.** Everything below describes a tree that no longer
+> exists. Item A landed as `ef4842e5` (ten paths, staged by name; `test:tenancy`
+> 130/130 before and after) and item B as `1f652be7` (seven paths, with the
+> per-24h recipient cap enforced; `test:meta-templates` 41/41). The tree is
+> clean.
+>
+> It is kept because the rules in §3 were paid for here, and a rule whose
+> reason has been deleted is one the next person talks themselves out of.
 
 **GitHub `main` is at `3f041e92`. Local `HEAD` is one commit ahead.**
 
@@ -86,8 +103,12 @@ rather than by messaging tier. Nothing models it, nothing surfaces it, and
 believe the cap work is done. A broadcast to 5,000 contacts from an unverified
 number stops after the 250th with no explanation anywhere in the product.
 
-The owner asked for template sending and the cap work in **one commit**; that
-has not happened.
+The owner asked for template sending and the cap work in **one commit**. That
+happened on 2026-09-02 as `1f652be7`: template sending landed **with the
+messaging tier limit enforced**, and `test:meta-templates` went 34 → 41.
+
+**The unverified-business ceiling is still not implemented.** It is the second
+cap above, and satisfying the first does not satisfy it.
 
 ---
 
@@ -103,11 +124,24 @@ command, so anything appended replaces the gate's answer. Four defects in this
 repo were gates reporting on their environment — D-5, D-10, D-12, D-16, and a
 fifth in §5 of the audit doc.
 
-**Assert reachability, not just correctness.** Nine instances of
+**Assert reachability, not just correctness.** **Ten** instances of
 *declared-but-unreachable* have been found here. A trigger with no dispatch
 site, a scope no endpoint requires, an action with no executor branch, a
 setting nothing reads — all compile, all pass tests, all appear in the UI, and
-none work. The gates now check:
+none work.
+
+The tenth is `TemplateSendSource.CAMPAIGN` (`meta-template-send.service.ts`):
+the union declares `MANUAL | CAMPAIGN | WORKFLOW | API` and only `MANUAL` is
+ever passed. It is the mildest of the ten — a placeholder for a path not yet
+built, rather than a feature claiming to work — and it is counted anyway,
+because the number is what makes the pattern legible. Nine reads as a run of
+bad luck; ten reads as a shape.
+
+It also exposes a gap in the gates below: they check routes, triggers, actions
+and scopes, and **nothing checks enum members**. A possible extension, noted and
+deliberately not built.
+
+The gates now check:
 
 - every workflow trigger has a `dispatchWorkflowEvent` call site
 - every action has an executor branch **or is provably refused at save**
@@ -138,11 +172,10 @@ especially — Respond.io has no documented opt-out mechanism at all.
 
 ## 4 · Known loose ends
 
-**`verify-collaborators.js` is not registered.** Run it with
-`node scripts/verify-collaborators.js`. Add
-`"test:collaborators": "npm run build && node scripts/verify-collaborators.js"`
-to `package.json` **once item B lands**, since that file already carries
-uncommitted changes.
+~~**`verify-collaborators.js` is not registered.**~~ **Closed 2026-09-02.**
+Registered as `npm run test:collaborators`, 14/14. It was waiting on item B
+only because `package.json` carried that item's uncommitted changes; item B
+landed as `1f652be7` and the file was clean.
 
 **`utcOffsetMinutes` is still accepted and ignored** on the analytics query
 string, so a deployed frontend does not 400 mid-rollout. Drop it from the
@@ -166,8 +199,8 @@ npm run test:workflow-p2      #  75
 npm run test:webhooks         #  52
 npm run test:restrictions     #  51
 npm run test:csv              #  30
-npm run test:meta-templates   #  34  — only after item B is committed
-node scripts/verify-collaborators.js   # 14 — unregistered, see §4
+npm run test:meta-templates   #  41  — registered; the cap added seven checks
+npm run test:collaborators    #  14  — registered 2026-09-02, see §4
 
 cd apps/frontend
 npm run check:i18n            # every t() key translated in he + en
@@ -185,7 +218,7 @@ and must not print a number that looks like it did.
 
 | | |
 |---|---|
-| **Meta 250-caps** | **Two caps, both 250, different denominators.** The per-24h messaging tier limit (`maxUniqueRecipientsPer24h` — modelled, surfaced, unenforced, D-24) and the per-broadcast unverified-business ceiling (not modelled at all, absent from D-24). Finish item B with both, one commit — see §2 |
+| **Meta 250-caps** | **(a) landed** in `1f652be7` — the per-24h messaging tier limit is enforced in `sendMetaTemplate` from `maxUniqueRecipientsPer24h`, counting distinct recipients with `releasedAt: null` inside a rolling window. D-24 is closed. **(b) still open** — the per-broadcast unverified-business ceiling is a different denominator, modelled nowhere, and belongs to the broadcast path. **When that path is built:** refuse-per-recipient-and-continue, not halt. `assertWithinRecipientCap` returns early for a recipient already inside the window, so halting on the first refusal would also refuse sends that were permitted. The campaign worker's existing split is the precedent — a rolling cap resets, so it behaves like `QuotaExceededError` (`pending`), not like a capability (`failed`) |
 | **WhatsApp ceilings** | Messaging tiers and quality rating. **The second tier's ceiling is an open question, not a known number.** respond.io's messaging-limits page says 250→2K→10K→100K (2K twice); their promotional page says 1K once — a conflict inside one vendor's own docs, and neither page is authoritative about Meta. `meta.adapter.ts:23` maps `TIER_1K → 1000`. `TIER_1K` appears to be Meta's own enum string rather than something invented here, so the discrepancy is more likely in the *ceiling* than in the *name* — Meta has changed the number attached to that tier before. **Meta's own documentation settles this; ours does not.** Check there before relying on either number, and do not "correct" the adapter from a vendor page |
 | **Small tail** | Unmerge, import tags, default segments, typing indicators, link previews, merge card, 4 sort modes |
 | **Settings** | Data Export (async job, 7-day expiry), Growth Widgets |
@@ -330,10 +363,25 @@ on this alone — here is the full list, verified 2026-09-02.
  M CLAUDE.md
 ```
 
-Whether `CLAUDE.md` belongs to A, to B, or to neither is not recoverable from
-the file. **Diff it before staging either item**, or it rides along into a
-commit it does not belong to — which is the §1 failure mode exactly, just with
-a documentation file instead of a migration.
+> **This paragraph was wrong, and is corrected here rather than deleted** — the
+> mistake is more instructive than the conclusion. It said `CLAUDE.md`'s
+> ownership was "not recoverable from the file". It was recoverable, from the
+> diff, in about a minute.
+>
+> **It belongs to item B.** One hunk, `@@ -279,0 +280,26 @@`, documenting the
+> `test:meta-templates` gate — refusal ordering, the deliberate `assertSendable`
+> bypass, the mutation-proof note. Zero occurrences of any item A term
+> (`trial`, `autoProvisionGateway`, `STANDARD`, `gateway-provisioning`); item B
+> terms present.
+>
+> And §1 had it right the whole time: its item B list names
+> `CLAUDE.md (gate docs)`. So §9 was not filling a gap, it was **contradicting
+> §1** — and §1 won. It landed with item B in `1f652be7`, which is where it
+> belonged.
+>
+> The rule that survives is still the right one: **diff a file before staging
+> it**. What changes is the reason — not because ownership is unknowable, but
+> because it is knowable and worth thirty seconds of looking.
 
 **Plus `AGENTS.md` — the seventeenth, and expected.**
 
@@ -368,15 +416,26 @@ one locally that fails on a clean checkout.
 
 That is precisely what `9a458795` reverted.
 
-The skill is not wrong; it predates the tree being dirty. Two ways to close it,
-neither done here because both are the owner's call:
+The skill is not wrong; it predates the tree being dirty.
+
+> **Disarmed 2026-09-02, by the second of the two options below.** Item A landed
+> as `ef4842e5`, so there is **no pending uncommitted migration left for
+> `migrate deploy` to sweep**. `prisma migrate status` reports the database up
+> to date, and the skill's instruction is now safe to follow literally.
+>
+> The trap was in the *tree*, never in the skill — which is why landing the work
+> closed it and no edit to the skill was needed. It returns the moment another
+> migration sits uncommitted, so the first option below is still worth doing as
+> a standing guard rather than a fix.
+
+Two ways it could have been closed, the second of which is what happened:
 
 - Add one line to the skill's schema section — *"run `git status` first;
   `migrate deploy` applies every pending migration, including uncommitted
-  ones"* — pointing at §1.
+  ones"* — pointing at §1. **Still not done, and still worth doing.**
 - Or land/park item A so the trap has nothing to spring. Same shape as parking
   `growth-wip` during the invoice phase: its own branch, fully recoverable,
-  tree clean afterwards.
+  tree clean afterwards. **This is what happened.**
 
 ### A decision was made that the code cannot tell you
 
@@ -413,7 +472,20 @@ uncommitted files. The only tracked file this session changed is this one.
 
 ---
 
-## 10 · The database is ahead of `main`, so `main` is red
+## 10 · The database was ahead of `main` — resolved 2026-09-02
+
+> **Resolved by `ef4842e5`.** The migration was already applied to the
+> development database while the committed code still said `false`; landing
+> item A supplied the missing half, so the repository and the database now
+> agree. The `130/130` run *after* that commit was the first in this whole
+> session that described the **committed** state rather than a working tree
+> that disagreed with it.
+>
+> **Both rules below still hold and are not historical.** The split can recur
+> the moment anyone applies a migration whose code is uncommitted, which is
+> exactly how this one arose.
+
+
 
 Found 2026-09-02 while checking whether a new commit stood on its own. It does;
 this does not.

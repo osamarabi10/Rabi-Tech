@@ -247,7 +247,8 @@ triggers and two steps as missing that exist. Counts below are read from
 Tag Added · Tag Removed · Out of Hours · Lifecycle Updated ·
 Contact Field Updated · Incoming Webhook · Shortcut.
 
-**Still missing:** Manual Trigger · Click-to-Chat Ads · TikTok Ads · Call Ended.
+**Still missing:** Manual Trigger · Click-to-Chat Ads · TikTok Ads · Call Ended ·
+**Conversation Closed**.
 
 **Still missing steps:** Close-with-category · Google Sheets · Meta CAPI ·
 TikTok events · Date & Time as a *step* (ours is a condition only).
@@ -260,11 +261,20 @@ reachable. A jump target is a position, and a flat builder has no stable
 positions — reordering one step would silently repoint every jump past it. They
 arrive with the canvas.
 
-> **Arithmetic note.** Their 11 against our 9 leaves 2, but the pre-correction
-> list named 8 missing triggers against our 5 — which totals 13, not 11. Either
-> two of ours are not in their 11, or the old list over-counted. The four names
-> above are the ones the source document actually attributes to them and we do
-> not have; the discrepancy in the old figure is not reproduced here.
+> **Arithmetic, resolved.** The note that stood here left the sum open. It
+> closes once two things are noticed: not every trigger of ours has a
+> counterpart, and one of theirs answers to two of ours.
+>
+> - **Five missing**, not four — Conversation Closed was absent from the list.
+> - **Two of ours have no counterpart:** Keyword Matched and Out of Hours.
+>   Neither appears in their catalogue at all.
+> - **Two of ours collapse into one of theirs:** our Tag Added and Tag Removed
+>   are their single *Contact Tag Updated*.
+>
+> So: 9 − 2 with no counterpart = 7, of which Tag Added/Removed count once
+> against theirs = **6 shared**. 6 shared + 5 missing = **11**. Their number and
+> ours reconcile exactly, and the `≈` in the table above is the right symbol —
+> the gap is five triggers, not two.
 
 **Where ours is ahead:** `ASK_QUESTION` normalises Arabic-Indic digits and
 stores phone answers digits-only to match the inbound path; the field is
@@ -335,8 +345,8 @@ ships D-30 and D-31 again.
 | Template edit limits | 10 per 30 days, 1 per 24h on approved | `✗` |
 | **Nine template statuses** | Processing, In Review, Approved, Rejected, Flagged, Paused, Disabled, Appeal, Reinstated | `★` ours requires `APPROVED` and **fails closed on all others** — handles nine without enumerating them |
 | Quality rating | High / Medium / Low + Restricted | `✗` |
-| **Messaging tiers** | 250 → 2K → 10K → 100K → unlimited per 24h; limits only go up | `✗` **not modelled** |
-| Unverified cap | **250 unique contacts per broadcast** | `✗` **a hard ceiling on P12 nothing here mentions** |
+| **Messaging tier limit** | 250 → 2K → 10K → 100K → unlimited **per rolling 24h**, business-initiated only; limits only go up | `✓` **enforced** since `1f652be7` — `maxUniqueRecipientsPer24h` is read from the published capability and refuses in `sendMetaTemplate`, counting distinct recipients with `releasedAt: null`. The ladder's second rung is disputed; see §13 and HANDOVER §6 |
+| **Unverified cap** | **250 unique contacts per broadcast** — a different denominator, lifted by business verification rather than by tier | `✗` **still a hard ceiling on P12 that nothing mentions.** Modelled nowhere. Enforcing the tier limit above does **not** cover it, and the two were previously one row here, which is how they came to be read as one cap |
 | Product paths | API · Coexistence · Cloud API | `≈` OpenWA + Cloud API modelled |
 
 ---
@@ -349,7 +359,8 @@ closures.
 
 | Tab | Ours |
 |---|---|
-| Lifecycle funnel | `✗` |
+| Lifecycle funnel | `✓` shipped in `554ab792`. A **distribution**, not a cumulative funnel — a contact holds one stage and no history is kept, so step-to-step rates would be fabricated. The won stage over the period's intake is the one honest conversion figure |
+| **Closures** | `✓` shipped in `2b34e99c` — named in the prose above but missing from this table. `★` no counterpart of theirs; category, source and summary coverage, every breakdown reconciling to the total |
 | Calls | `—` |
 | Conversations | `✓` |
 | Responses | `≈` we have first-response; theirs adds assignment-to-response |
@@ -471,10 +482,10 @@ the first paying customer, because changing it afterwards changes bills.
 | Auth | Bearer, max 10 tokens/workspace, workspace-wide, **no expiry or scoping** | Bearer, 20 tokens, **scoped + expiring + revocable**, masking inherited from creator | `★` |
 | Identifiers | `id:` `email:` `phone:` | Same grammar, prefix required | `✓` |
 | Listing | `POST /contact/list`, 13 operators | `POST /contacts/list`, our richer DSL | `★` |
-| Rate limit | **5 req/s per method + path** | 5/s per method+path, + a 600/min backstop | `✓` |
+| Rate limit | **Unsettled — their own docs give three answers.** Their prose says the limit is *organization-level*; the section below it says *per method + path*; and every OpenAPI 429 example shows `X-RateLimit-Limit: 10`, not 5. Nothing here reconciles them | **5/s per method + path, plus a 600/min per-credential backstop.** Asserted, not inferred — this is what the middleware does | `—` **no parity claim.** A `✓` here would assert we matched a number that may not be theirs |
 | Pagination | Cursor; default 10, max 100 (50 messages) | Same, messages capped at 50 | `✓` |
 | Errors | …/429/**449**/500/502/504 | 449 `workspace_provisioning`, with Retry-After | `✓` |
-| Webhooks | 11 events, HMAC-SHA256, retries 30/60/90s, auto-off 30 errors/30 min, **35 endpoints/org** | 11 events, HMAC **over timestamp+body**, same retries, same auto-off, 35 endpoints | `★` signing |
+| Webhooks | **11 events** on their developer hub; their help centre lists **10**, omitting Lifecycle Updated. Taking 11: the developer hub is the API reference and the help centre is a written-for-humans subset, so an omission there is the likelier error than an invention here. Plus HMAC-SHA256, retries 30/60/90s, auto-off 30 errors/30 min, **35 endpoints/org** | 11 events, HMAC **over timestamp+body**, same retries, same auto-off, 35 endpoints | `★` signing |
 | Webhook delivery log | **None — open feature request against them** | Full log: status, latency, attempt, response body, test button | `★` |
 | SDK | `@respond-io/typescript-sdk` | — | `✗` |
 | MCP | Self-hosted + hosted | — | `✗` |
