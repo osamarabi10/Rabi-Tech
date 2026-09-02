@@ -203,11 +203,12 @@ Nothing engineering does substitutes for these.
 
 ## 8 · Where to start
 
-0. **Read §9 too.** It was added after the rest and carries two traps §1–§8
-   cannot warn you about: the auto-loading skill whose schema instruction
-   springs §1's trap, and the fact that every documented backup procedure here
-   runs through a Docker daemon that is currently hung. §9 has the way round
-   both.
+0. **Read §9 too.** It was added after the rest and carries three things §1–§8
+   cannot tell you: the auto-loading skill whose schema instruction springs
+   §1's trap, the fact that every documented backup procedure here runs through
+   a Docker daemon that is currently hung (with the way round it), and a
+   corrected file list — **the tree has 16 uncommitted files, not 15**, so do
+   not stop at step 1 below on the count alone.
 1. Read §1 and confirm the tree matches. If it does not, **stop and ask** —
    somebody has committed or reverted since this was written.
 2. Ask whether to push `b5b97a10` and whether to commit item B.
@@ -257,8 +258,64 @@ Client 17 against server 15 is the supported direction. `psql.exe` and
 RESPONDIO-PARITY-CHECKPOINT.md works without Docker — substitute the `psql`
 invocation and drop the `docker exec` prefix.
 
-**There is no current dump.** The last verified one predates several commits.
-Take one before anything that writes.
+**A current verified dump now exists**, taken this way:
+
+```
+.tools/backups/rabitech-20260902-105013.dump   1.85 MB
+.tools/backups/rabitech-20260902-105013.txt    what it contains, and how to restore it
+```
+
+`.tools/backups/` is gitignored, so it is durable on this machine and never
+committed. `pg_restore -l` returns exit 0 and 1087 objects — 132 table-data
+entries, 238 FK constraints (the composite tenant keys that *are* the isolation
+boundary), 55 types (the enums). It captured 91 applied migrations, 5 editions,
+3 organizations, 2 subscriptions, 33 contacts, 98 messages, 0 invoices, 0
+receipts.
+
+The `.txt` beside it records all of that plus the restore command, so a future
+session can tell what a dump holds without restoring it to find out.
+
+### §1's file count is off by one — the tree has 16, not 15
+
+§8 step 1 says to confirm the tree matches §1 and **stop and ask** if it does
+not. It does not: `git status --porcelain` returns **16** entries. Do not stop
+on this alone — here is the full list, verified 2026-09-02.
+
+**Item A — trial-gateway (owner's), 9:**
+
+```
+?? apps/backend/prisma/migrations/20260930090000_standard_trial_gateway/
+?? apps/backend/src/modules/channels/channel-entitlement.ts
+ M apps/backend/src/modules/billing/billing.service.ts
+ M apps/backend/src/modules/billing/plans.ts
+ M apps/backend/src/modules/billing/trial.service.ts
+ M apps/backend/src/workers/gateway-provisioning.worker.ts
+ M apps/backend/src/modules/platform/platform.routes.ts
+ M apps/backend/scripts/tenancy-bleed-harness.js
+ M apps/frontend/app/platform/editions/page.tsx
+```
+
+**Item B — Meta template sending, 6:**
+
+```
+?? apps/backend/src/modules/meta-templates/meta-template-send.service.ts
+?? apps/backend/scripts/verify-meta-template-send.js
+ M apps/backend/src/modules/meta-templates/meta-templates.routes.ts
+ M apps/backend/src/modules/channels/meta.client.ts
+ M apps/backend/package.json
+ M docs/RESPONDIO-PARITY-MATRIX.md
+```
+
+**Unattributed, 1 — this is the sixteenth:**
+
+```
+ M CLAUDE.md
+```
+
+Whether `CLAUDE.md` belongs to A, to B, or to neither is not recoverable from
+the file. **Diff it before staging either item**, or it rides along into a
+commit it does not belong to — which is the §1 failure mode exactly, just with
+a documentation file instead of a migration.
 
 ### The `rabitech-guide` skill will spring §1's trap
 
@@ -316,10 +373,9 @@ cannot serve it.
 
 ### What this session did and did not do
 
-Did: verified repo state, diagnosed the wedged daemon, found the host client
-tooling, confirmed the database reachable over TCP, read the skill, wrote this
-section.
+Did: verified repo state and found §1's count off by one, diagnosed the wedged
+daemon, found the host client tooling, took and verified the backup above, read
+the skill, wrote this section.
 
-**Did not:** change any code, run any migration, take any dump, or touch the 15
-uncommitted files. The tree in §1 should be exactly as described, plus this
-file.
+**Did not:** change any application code, run any migration, or touch the 16
+uncommitted files. The only tracked file this session changed is this one.
