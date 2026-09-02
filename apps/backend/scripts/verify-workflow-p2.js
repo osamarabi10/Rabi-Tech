@@ -24,6 +24,7 @@ const {
   TRIGGER_TYPES,
   ACTION_TYPES,
   validateWorkflowConfig,
+  workflowVocabulary,
 } = require('../dist/modules/workflows/workflow-schema');
 
 let passed = 0;
@@ -152,6 +153,30 @@ function main() {
     check(`  …and has no executor branch to reach`,
       !executorSource.includes(`case '${action}'`));
   }
+
+  /*
+    The builder renders whatever the vocabulary serves, so a refused action
+    appearing there is a control that always fails on save.
+
+    This is the assertion that keeps the refusal honest in both directions: the
+    validator must reject them, AND the builder must never offer them. Getting
+    only the first right produces exactly the dead control the refusal was meant
+    to avoid.
+  */
+  const vocabulary = workflowVocabulary();
+  for (const action of REFUSED_UNTIL_CANVAS) {
+    check(`the builder is not offered ${action}`,
+      !vocabulary.actions.includes(action),
+      'it is in the served vocabulary and will fail on save');
+  }
+  for (const action of ACTION_TYPES) {
+    if (REFUSED_UNTIL_CANVAS.includes(action)) continue;
+    check(`the builder IS offered ${action}`, vocabulary.actions.includes(action));
+  }
+  check('every served trigger is a real trigger',
+    vocabulary.triggers.every((t) => TRIGGER_TYPES.includes(t)));
+  check('the served step ceiling is 100', vocabulary.limits.maxActions === 100,
+    vocabulary.limits.maxActions);
 
   /*
     Every trigger must have somewhere that FIRES it. A trigger nothing dispatches

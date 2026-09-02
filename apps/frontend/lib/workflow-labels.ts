@@ -15,6 +15,10 @@ export const TRIGGER_LABELS: Record<string, string> = {
   TAG_ADDED: 'إضافة وسم',
   TAG_REMOVED: 'إزالة وسم',
   OUT_OF_HOURS: 'خارج ساعات العمل',
+  LIFECYCLE_UPDATED: 'تغيّرت مرحلة العميل',
+  CONTACT_FIELD_UPDATED: 'تغيّر حقل في جهة الاتصال',
+  INCOMING_WEBHOOK: 'استدعاء من برنامج خارجي',
+  SHORTCUT: 'اختصار يشغّله الموظف',
 };
 
 export const CONDITION_LABELS: Record<string, string> = {
@@ -39,6 +43,8 @@ export const ACTION_LABELS: Record<string, string> = {
   WAIT_DELAY: 'انتظار',
   IF_ELSE: 'إذا / وإلا',
   CLOSE_CONVERSATION: 'إغلاق المحادثة',
+  OPEN_CONVERSATION: 'إعادة فتح المحادثة',
+  ADD_COMMENT: 'إضافة ملاحظة داخلية',
   ASK_QUESTION: 'طرح سؤال',
 };
 
@@ -56,7 +62,7 @@ export const RUN_STATUS_LABELS: Record<string, string> = {
 };
 
 /** Which extra input each action needs. Drives the builder's fields. */
-export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template' | 'tag' | 'customField' | 'url' | 'minutes' | 'branch' | 'question' | 'lifecycleStage' | 'none'> = {
+export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template' | 'tag' | 'customField' | 'url' | 'minutes' | 'branch' | 'question' | 'lifecycleStage' | 'comment' | 'none'> = {
   ASSIGN_TEAM: 'team',
   ASSIGN_USER: 'user',
   SEND_MESSAGE: 'text',
@@ -78,6 +84,18 @@ export const ACTION_FIELDS: Record<string, 'team' | 'user' | 'text' | 'template'
   // two limits. Reusing 'customField' would give it the field picker and drop
   // the question, which is the part the customer actually sees.
   ASK_QUESTION: 'question',
+  // Reopening takes no operand; the executor reports "already open" rather
+  // than failing when there is nothing to reopen.
+  OPEN_CONVERSATION: 'none',
+  /*
+    Its own kind, though it renders the same textarea as 'text'.
+
+    Not because the widget differs — it does not — but because the placeholder
+    does. 'text' prompts with "message text", and an author writing an internal
+    note needs to be told, at the moment they type it, that this one is not sent
+    to the customer. That distinction is the whole point of the step.
+  */
+  ADD_COMMENT: 'comment',
 };
 
 export const triggerLabel = (value: string) => TRIGGER_LABELS[value] || value;

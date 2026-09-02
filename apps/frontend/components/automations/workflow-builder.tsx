@@ -709,6 +709,19 @@ function ActionOperand({
       />
     );
   }
+  if (kind === 'comment') {
+    return (
+      <Textarea
+        rows={2}
+        value={String(action.body ?? '')}
+        onChange={(e) => onChange({ ...action, body: e.target.value })}
+        // Says what it is at the moment it is typed. An author who believes
+        // this reaches the customer writes something different from one who
+        // knows it does not.
+        placeholder={t('ملاحظة داخلية — ما بتوصل العميل')}
+      />
+    );
+  }
   return <div className={cn('self-center text-caption text-muted-foreground')}>{t('بدون إعدادات')}</div>;
 }
 

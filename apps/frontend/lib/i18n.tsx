@@ -15,6 +15,14 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { ar?: string; he: string; en: string }>;
 
 const D: Dict = {
+  /* ── Workflow P2 vocabulary ── */
+  "ملاحظة داخلية — ما بتوصل العميل": { he: "הערה פנימית — לא נשלחת ללקוח", en: "Internal note — not sent to the customer" },
+  "تغيّرت مرحلة العميل": { he: "שלב הלקוח השתנה", en: "Lifecycle stage changed" },
+  "تغيّر حقل في جهة الاتصال": { he: "שדה באיש הקשר השתנה", en: "Contact field updated" },
+  "استدعاء من برنامج خارجي": { he: "קריאה מתוכנה חיצונית", en: "Incoming webhook" },
+  "اختصار يشغّله الموظف": { he: "קיצור דרך שהנציג מפעיל", en: "Agent shortcut" },
+  "إعادة فتح المحادثة": { he: "פתיחה מחדש של השיחה", en: "Reopen conversation" },
+  "إضافة ملاحظة داخلية": { he: "הוספת הערה פנימית", en: "Add internal note" },
   /* ── Inbox: unreplied + blocked ── */
   "بدون رد": { he: "ללא מענה", en: "Unreplied" },
   "محظورة": { he: "חסומות", en: "Blocked" },

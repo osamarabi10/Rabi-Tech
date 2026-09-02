@@ -165,6 +165,19 @@ export const ACTION_TYPES = [
   'JUMP_TO',
   'TRIGGER_WORKFLOW',
 ] as const;
+
+/**
+ * Steps the form builder must not offer.
+ *
+ * The vocabulary below is *served* to the builder, so anything in
+ * `ACTION_TYPES` appears as a choice the moment it is declared. These two are
+ * declared for the validator's benefit — so a refusal can name them — and
+ * offering them would put two entries in the builder that produce a validation
+ * error on save. A control that always fails is worse than an absent one, and
+ * Respond.io's own guidance for this pair is the same: they belong to the
+ * canvas, not to a list.
+ */
+export const CANVAS_ONLY_ACTIONS: readonly ActionType[] = ['JUMP_TO', 'TRIGGER_WORKFLOW'];
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 export type WorkflowCondition = { type: ConditionType; value?: string; field?: string };
@@ -632,7 +645,9 @@ export function workflowVocabulary() {
   return {
     triggers: TRIGGER_TYPES,
     conditions: CONDITION_TYPES,
-    actions: ACTION_TYPES,
+    // Minus the canvas-only pair: the builder renders whatever this returns, and
+    // an option that cannot be saved is a control that always fails.
+    actions: ACTION_TYPES.filter((action) => !CANVAS_ONLY_ACTIONS.includes(action)),
     httpMethods: HTTP_METHODS,
     // Served rather than mirrored in the client, for the same reason the rest of
     // this vocabulary is: the server is the only thing that can reject an
