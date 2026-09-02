@@ -409,8 +409,20 @@ function staticAudits() {
   if (!/mediaFileName:\s*payload\.mediaFileName/.test(openwaWebhookSource)) {
     filenameHandoffFailures.push('OpenWA filename is not queued');
   }
+  /*
+    `\r?\n`, not `\n`, and this is not pedantry.
+
+    With a bare `\n` this assertion passed in a working tree and failed on a
+    fresh clone of the same commit. `core.autocrlf=true` gives a Windows
+    checkout CRLF, so the comma is followed by `\r` and the pattern misses —
+    the file is byte-identical once normalised. The check was reporting on how
+    the repository had been checked out, not on the code.
+
+    That is the D-5 / D-10 / D-12 / D-16 family, and it is invisible from the
+    working tree by construction: the only way to see it was a clean clone.
+  */
   if (!/mediaFileName\s*=\s*stored\.fileName\s*\|\|\s*mediaFileName/.test(metaWebhookSource)
-    || !/\n\s*mediaFileName,\n\s*fromMe: false/.test(metaWebhookSource)) {
+    || !/\r?\n\s*mediaFileName,\r?\n\s*fromMe: false/.test(metaWebhookSource)) {
     filenameHandoffFailures.push('Meta filename is not queued');
   }
   if (!/mediaFileName:\s*hasMedia\s*\?\s*mediaFileName\s*:\s*null/.test(incomingWorkerSource)) {
@@ -437,9 +449,50 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * How long the spawned backend gets to start answering.
+ *
+ * Was 50 attempts at 200ms — about ten seconds — and that is not enough for a
+ * first run. The backend starts through `ts-node/register/transpile-only`,
+ * which transpiles the whole source tree in process and caches nothing to
+ * disk, so on a fresh clone with a cold file cache it exceeds ten seconds and
+ * the harness gave up on a process that was working correctly.
+ *
+ * Measured rather than guessed: a *warm* boot is 4.7s in a fresh clone and
+ * 5.7s in this working tree. The cold first run is what overran, so the budget
+ * is set to sixty seconds — roughly ten times the warm boot, which leaves room
+ * for a cold cache on a slower machine while still failing in a reasonable
+ * time when the backend is genuinely broken.
+ */
+const BACKEND_READY_TIMEOUT_MS = Number(process.env.HARNESS_BACKEND_READY_MS || 60_000);
+
+/**
+ * Wait for the spawned backend, and say which way it failed.
+ *
+ * The two failure modes need different words because they need different
+ * responses. A process that **exited** has a reason in its output and is a
+ * code problem. A process still **running** but not yet answering is a slow
+ * start, and the answer is a longer budget or a faster machine — not
+ * debugging. The old message, "backend did not become ready", read as a crash
+ * for both, which sent the first reader of it looking for a defect that was
+ * not there.
+ *
+ * This is the inverse of §5's rule for `test:public-api`: there, a run that
+ * could not start must not print a number that looks like it did. Here, a run
+ * that timed out must not print words that look like a crash.
+ */
 async function waitForBackend(baseUrl, token, child) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`backend exited with code ${child.exitCode}`);
+  const startedAt = Date.now();
+  let attempts = 0;
+
+  while (Date.now() - startedAt < BACKEND_READY_TIMEOUT_MS) {
+    if (child.exitCode !== null) {
+      throw new Error(
+        `backend exited with code ${child.exitCode} after ${Date.now() - startedAt}ms — `
+        + 'it started and stopped, so this is a failure to boot rather than a slow one',
+      );
+    }
+    attempts += 1;
     try {
       const response = await fetch(`${baseUrl}/api/contacts`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -449,7 +502,16 @@ async function waitForBackend(baseUrl, token, child) {
     } catch {}
     await sleep(200);
   }
-  throw new Error('backend did not become ready');
+
+  const elapsed = Date.now() - startedAt;
+  if (child.exitCode !== null) {
+    throw new Error(`backend exited with code ${child.exitCode} after ${elapsed}ms`);
+  }
+  throw new Error(
+    `backend did not answer within ${elapsed}ms across ${attempts} attempts, and is STILL RUNNING `
+    + '— this is a timeout, not a crash. A cold ts-node transpile on a fresh clone is the usual '
+    + `cause; raise HARNESS_BACKEND_READY_MS above ${BACKEND_READY_TIMEOUT_MS} if the machine is slow.`,
+  );
 }
 
 async function httpSnapshot(baseUrl, token, fixture) {

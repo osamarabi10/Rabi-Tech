@@ -94,8 +94,12 @@ async function main() {
     collaborators would be a worse outcome than a mention that notified without
     adding.
   */
+  // `\r?\n`, for the same reason as the Meta filename assertion in the tenancy
+  // harness: a bare `\n` makes this pass on an LF working tree and fail on a
+  // CRLF checkout of identical content. Found by auditing the class after one
+  // instance surfaced, rather than waiting for this one to surface too.
   check('a failed add cannot fail the comment',
-    /catch \{[\s\S]*?\}\n\}/.test(source.slice(source.indexOf('addMentionedCollaborator'))),
+    /catch \{[\s\S]*?\}\r?\n\}/.test(source.slice(source.indexOf('addMentionedCollaborator'))),
     'the add is not wrapped');
 
   // ── removal keeps their rule ─────────────────────────────────────────────
