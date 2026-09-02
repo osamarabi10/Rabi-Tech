@@ -68,11 +68,26 @@ three paying tiers could reply and **could never start a conversation**.
 `MetaMessageTemplate` carried the note *"Only the exact string APPROVED is
 sendable in a later phase."* Item B above is that phase.
 
-**Still missing for it to be complete:** enforcement of the **250-contact
-per-24h cap** for unverified businesses. D-24 records that
-`maxUniqueRecipientsPer24h` is unenforced *only because* no business-initiated
-conversation could start. Landing template sending removes the reasoning that
-rested on. The owner asked for both in **one commit**; that has not happened.
+**Still missing for it to be complete: two caps, not one.** Both happen to be
+250, which is why they have been read here as a single thing. They are not, and
+enforcing either one does nothing about the other.
+
+**The messaging tier limit.** 250 unique customers per rolling 24 hours,
+**business-initiated only** — customer-initiated conversations are uncapped, so
+a busy inbox never approaches it. This is the one
+`maxUniqueRecipientsPer24h` implements. D-24 records it as unenforced *only
+because* no business-initiated conversation could start; landing template
+sending removes the reasoning that rested on.
+
+**The unverified-business ceiling.** 250 unique contacts **per broadcast**. A
+different limit with a different denominator, lifted by business verification
+rather than by messaging tier. Nothing models it, nothing surfaces it, and
+**D-24 does not mention it** — so a reader who satisfies D-24 will reasonably
+believe the cap work is done. A broadcast to 5,000 contacts from an unverified
+number stops after the 250th with no explanation anywhere in the product.
+
+The owner asked for template sending and the cap work in **one commit**; that
+has not happened.
 
 ---
 
@@ -170,8 +185,8 @@ and must not print a number that looks like it did.
 
 | | |
 |---|---|
-| **Meta 250-cap** | Finish item B with it, one commit |
-| **WhatsApp ceilings** | Messaging tiers 250→1K→10K→100K, quality rating |
+| **Meta 250-caps** | **Two caps, both 250, different denominators.** The per-24h messaging tier limit (`maxUniqueRecipientsPer24h` — modelled, surfaced, unenforced, D-24) and the per-broadcast unverified-business ceiling (not modelled at all, absent from D-24). Finish item B with both, one commit — see §2 |
+| **WhatsApp ceilings** | Messaging tiers and quality rating. **The second tier's ceiling is an open question, not a known number.** respond.io's messaging-limits page says 250→2K→10K→100K (2K twice); their promotional page says 1K once — a conflict inside one vendor's own docs, and neither page is authoritative about Meta. `meta.adapter.ts:23` maps `TIER_1K → 1000`. `TIER_1K` appears to be Meta's own enum string rather than something invented here, so the discrepancy is more likely in the *ceiling* than in the *name* — Meta has changed the number attached to that tier before. **Meta's own documentation settles this; ours does not.** Check there before relying on either number, and do not "correct" the adapter from a vendor page |
 | **Small tail** | Unmerge, import tags, default segments, typing indicators, link previews, merge card, 4 sort modes |
 | **Settings** | Data Export (async job, 7-day expiry), Growth Widgets |
 | **Reports** | Lifecycle funnel, Assignments, Leaderboard, Users |
@@ -319,6 +334,19 @@ Whether `CLAUDE.md` belongs to A, to B, or to neither is not recoverable from
 the file. **Diff it before staging either item**, or it rides along into a
 commit it does not belong to — which is the §1 failure mode exactly, just with
 a documentation file instead of a migration.
+
+**Plus `AGENTS.md` — the seventeenth, and expected.**
+
+```
+?? AGENTS.md
+```
+
+Added by the same commit that wrote this line, so the count depends on when you
+look: a tree checked **after** that commit shows **16**, and one checked
+between the file being written and the commit landing shows **17**.
+
+If you see 17 and the extra entry is `AGENTS.md`, nothing is wrong. **Any other
+seventeenth entry is somebody's uncommitted work — stop and ask.**
 
 ### The `rabitech-guide` skill will spring §1's trap
 
