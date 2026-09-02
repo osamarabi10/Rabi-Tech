@@ -18,6 +18,7 @@ import { getSocket } from '@/lib/socket';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { EmptyState, ErrorState, SkeletonBlock } from '@/components/ui/operational-state';
+import { notifyWithUndo } from '@/components/ui/toast';
 
 const NOTIFICATION_ICONS: Record<string, ComponentType<{ className?: string }>> = {
   NEW_MESSAGE: MessageCircle,
@@ -149,6 +150,41 @@ export function NotificationBell() {
     } else {
       setNotifications((current) => current.filter((item) => item.id !== notification.id));
     }
+
+    /*
+      P19, in `inverse` mode rather than `defer`.
+
+      The archive call has already happened by the time we are here, because
+      this handler needs its return value — the server's new unread count — to
+      update the badge. That is precisely the case the deferred mode cannot
+      serve, and precisely why the escape hatch exists.
+
+      Being inverse mode means this undo can fail, and the toast is required to
+      say so rather than vanish: `undoFailed` names what is still true, not a
+      generic apology.
+    */
+    notifyWithUndo(t('تمت أرشفة الإشعار'), {
+      undo: {
+        mode: 'inverse',
+        inverse: async () => {
+          const restoredCount = await restoreNotification(notification.id);
+          setUnread(restoredCount);
+          if (scope === 'all') {
+            setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, archivedAt: null } : item));
+          } else {
+            setNotifications((current) => [notification, ...current.filter((item) => item.id !== notification.id)]);
+          }
+        },
+      },
+      labels: {
+        undo: t('تراجع'),
+        undoing: t('جارٍ التراجع…'),
+        undone: t('تمت استعادة الإشعار'),
+        undoFailed: t('تعذّر التراجع — الإشعار ما زال مؤرشفًا'),
+        retry: t('إعادة المحاولة'),
+        commitFailed: t('تعذّر إتمام الإجراء'),
+      },
+    });
   };
 
   const handleRestore = async (notification: AppNotification) => {

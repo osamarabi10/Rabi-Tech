@@ -4,8 +4,10 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, KeyRound, MessageCircleMore, MessageSquareText, Paperclip, Link2, Plug, Tags, Users, UserRound, Webhook, Workflow } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { RailGroup } from '@/components/ui/rail-group';
 
 /*
   Grouped to mirror Respond.io's workspace settings, deliberately.
@@ -21,7 +23,9 @@ import { cn } from '@/lib/utils';
   Screens they have and we do not are absent rather than stubbed. A greyed-out
   nav entry is indistinguishable from a broken one.
 */
-const GROUPS = [
+type SettingsRailItem = { href: string; label: string; icon: LucideIcon };
+
+const GROUPS: { label: string; items: SettingsRailItem[] }[] = [
   {
     label: 'شخصي',
     items: [
@@ -69,7 +73,7 @@ const GROUPS = [
       { href: '/settings/files', label: 'الملفات', icon: Paperclip },
     ],
   },
-] as const;
+];
 
 export function SettingsRail() {
   const { t } = useT();
@@ -104,20 +108,24 @@ export function SettingsRail() {
     */
     <aside className="w-full shrink-0 border-b border-border bg-background lg:w-[248px] lg:border-b-0 lg:border-e" aria-label={t('الإعدادات')}>
       <div ref={railRef} className="flex gap-1 overflow-x-auto p-2 lg:block lg:h-full lg:overflow-y-auto lg:px-3 lg:py-5">
-        {GROUPS.filter((group) => group.items.length > 0).map((group, groupIndex) => {
-          const groupId = `settings-group-${groupIndex + 1}`;
-          return (
-          <section key={group.label} className="shrink-0 lg:mb-6" aria-labelledby={groupId}>
-            {/* Uppercase, tracked, and quieter than the items under it — a
-                group label is a signpost, not a destination. */}
-            <h2
-              id={groupId}
-              className="hidden px-3 pb-1.5 text-micro font-semibold uppercase tracking-wider text-muted-foreground/80 lg:block"
-            >
-              {t(group.label)}
-            </h2>
-            <nav className="flex gap-1 lg:block" aria-label={t(group.label)}>
-              {group.items.map((item) => {
+        {/*
+          The grouping is P4 `RailGroup` since 2026-09-02, extracted from here so
+          the channel rail could share it rather than copy it.
+
+          Nothing below changed shape. RailGroup renders the same section,
+          heading and nav, and every capability it added — collapsible, counted,
+          add action — is off unless asked for, precisely so this rail's DOM and
+          `aria-current` behaviour stay byte-identical. That is not politeness:
+          this rail is P2 and already certified, and an extraction that moved
+          the DOM would have decertified it to build P3.
+        */}
+        {GROUPS.map((group) => (
+          <RailGroup
+            key={group.label}
+            label={group.label}
+            items={group.items}
+            itemKey={(item) => item.href}
+            renderItem={(item) => {
                 const [hrefPath, suffix = ''] = item.href.split(/(?=[?#])/);
                 const active = pathname === hrefPath && (suffix ? suffix === `?${query}` : !query);
                 const Icon = item.icon;
@@ -144,11 +152,9 @@ export function SettingsRail() {
                     <span>{t(item.label)}</span>
                   </Link>
                 );
-              })}
-            </nav>
-          </section>
-          );
-        })}
+            }}
+          />
+        ))}
       </div>
     </aside>
   );

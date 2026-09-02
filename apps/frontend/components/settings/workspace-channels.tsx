@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { ChannelRail, type ChannelRailChannel } from '@/components/ui/channel-rail';
 import {
   CheckCircle2,
   Loader2,
@@ -81,6 +83,45 @@ export function WorkspaceChannels() {
   const [channelState, setChannelState] = useState<ChannelState>({ capabilities: null, code: null, message: null });
   const [confirmOpenWA, setConfirmOpenWA] = useState(false);
   const [channelRevision, setChannelRevision] = useState(0);
+  /*
+    The rail's selection lives in the URL, not in component state.
+
+    Two reasons. The routing rules require detail states to be addressable, so
+    a channel someone is configuring must survive a refresh and be shareable.
+    And the existing `selected` state drives a drawer, which is a different
+    thing from which channel the rail is scoped to — collapsing them would
+    have made opening the drawer change the rail.
+  */
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const railSelectedId = searchParams.get('channel');
+
+  const railChannels: ChannelRailChannel[] = useMemo(
+    () => sessions.map((session) => ({
+      id: session.id,
+      name: session.label || session.sessionName,
+      /*
+        Capabilities, not identity — the tenancy gate refuses the latter in a
+        frontend component, and the refusal is correct.
+
+        `sessions` only ever contains OpenWA sessions: the endpoint returns no
+        transport field because it returns nothing else. OpenWA does not do
+        Meta templates, so the capability is false here. When the Meta channel
+        joins this rail it will carry its own capabilities, and nothing in the
+        rail has to learn who either provider is.
+      */
+      capabilities: { supportsTemplates: false },
+      status: !session.isActive
+        ? 'INACTIVE'
+        : session.connectionStatus === 'CONNECTED'
+          ? 'CONNECTED'
+          : session.connectionStatus === 'UNAVAILABLE'
+            ? 'CONNECTING'
+            : 'DISCONNECTED',
+      phoneNumber: session.phoneNumber,
+    })),
+    [sessions],
+  );
 
   const load = useCallback(async (showLoader = true) => {
     if (showLoader) setLoading(true);
@@ -191,6 +232,20 @@ export function WorkspaceChannels() {
   if (failed) return <ErrorState title={t('Could not load channels')} retryLabel={t('Try again')} onRetry={load} className="m-4" />;
 
   return (
+    /*
+      P3 ChannelRail, consuming the existing selection as ?channel=<id> so the
+      detail state stays URL-addressable per the routing rules without adding a
+      route. The rail is the navigation; everything to its inline-end is the
+      channel configuration it points at.
+    */
+    <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <ChannelRail
+        channels={railChannels}
+        selectedChannelId={railSelectedId}
+        basePath="/settings/channels"
+        onAddChannel={sessions.length ? undefined : () => setConfirmOpenWA(true)}
+        addDisabledReason={sessions.length ? t('قناة واحدة لكل مساحة عمل في هذه المرحلة') : undefined}
+      />
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <SettingsHeader
       title={t('Channels')}
@@ -348,6 +403,7 @@ export function WorkspaceChannels() {
         busy={busy}
         destructive={action?.unlink !== false}
       />
+    </div>
     </div>
   );
 }
