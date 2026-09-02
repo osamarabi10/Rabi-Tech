@@ -50,6 +50,9 @@ import {
   fetchInboxConfig,
   fetchInboxViews,
   sendReply as apiSendReply,
+  fetchWorkflowShortcuts,
+  runWorkflowShortcut,
+  type WorkflowShortcut,
   startConversation,
   updateConversation,
   updateConversationLabels,
@@ -246,6 +249,15 @@ export default function InboxPage() {
     unreplied while having one.
   */
   const [unrepliedOnly, setUnrepliedOnly] = useState(false);
+  /*
+    Workflow shortcuts an agent can fire on the open thread.
+
+    Loaded once rather than per conversation: the list is per workspace and
+    rarely changes, and re-fetching it every time somebody clicks a thread would
+    put a request on the hot path of the thing agents do most.
+  */
+  const [shortcuts, setShortcuts] = useState<WorkflowShortcut[]>([]);
+  const [firingShortcut, setFiringShortcut] = useState<string | null>(null);
 
   /**
    * Which queue is being looked at, as opposed to which status it is in.
@@ -997,6 +1009,28 @@ export default function InboxPage() {
    * what an agent actually means, and asking them to pick a minute is asking
    * a question they do not have an answer to.
    */
+  /**
+   * Fire a shortcut on the open thread.
+   *
+   * Reports the run count rather than a blanket success. Zero is a real
+   * outcome — the workflow's own conditions are evaluated at dispatch, so one
+   * whose conditions do not hold starts nothing, and a success toast there
+   * would tell the agent something happened when nothing did.
+   */
+  const handleShortcut = async (shortcut: WorkflowShortcut) => {
+    if (!selId) return;
+    setFiringShortcut(shortcut.id);
+    try {
+      const runs = await runWorkflowShortcut(shortcut.id, selId);
+      if (runs > 0) toast.success(t('تم تشغيل الاختصار'));
+      else toast.info(t('الاختصار ما اشتغل — شروطه مش متحققة'));
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || t('فشل تشغيل الاختصار'));
+    } finally {
+      setFiringShortcut(null);
+    }
+  };
+
   const handleSnooze = async (hours: number | null) => {
     if (!selId) return;
     const until = hours === null ? null : new Date(Date.now() + hours * 3600_000);
@@ -1768,6 +1802,39 @@ export default function InboxPage() {
                     <Clock className="h-3 w-3" />
                     {t('انتظار العميل')}
                   </Button>
+                )}
+                {/*
+                  Shortcuts, offered only when the workspace has some.
+
+                  An empty dropdown permanently in the action bar advertises a
+                  feature nobody configured; when this appears it is because
+                  there is something to run.
+                */}
+                {shortcuts.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={!!firingShortcut}>
+                        <Zap className="h-3 w-3" />
+                        {t('اختصارات')}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="max-w-72">
+                      {shortcuts.map((shortcut) => (
+                        <DropdownMenuItem
+                          key={shortcut.id}
+                          onSelect={() => void handleShortcut(shortcut)}
+                          className="flex-col items-start gap-0.5"
+                        >
+                          <span dir="auto">{shortcut.name}</span>
+                          {shortcut.description && (
+                            <span className="text-micro text-muted-foreground" dir="auto">
+                              {shortcut.description}
+                            </span>
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
                 {sel.status === 'AWAITING_CLIENT' && (
                   <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-primary border-primary/20 hover:bg-primary/10"

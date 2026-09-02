@@ -2722,3 +2722,36 @@ export async function fetchSystemLimits(): Promise<SystemLimits> {
   const { data } = await api.get('/api/system/limits');
   return data;
 }
+
+/* ── Workflow shortcuts (P2) ──────────────────────────────────────────────── */
+
+/**
+ * A workflow an agent can fire by hand on the thread they are looking at.
+ *
+ * Listed under `workflow:view`, not `workflow:manage` — running a shortcut is
+ * not editing automation, and an agent who may not build one may absolutely use
+ * one built for them.
+ */
+export type WorkflowShortcut = {
+  id: string;
+  name: string;
+  description: string | null;
+};
+
+export async function fetchWorkflowShortcuts(): Promise<WorkflowShortcut[]> {
+  const { data } = await api.get('/api/workflows/shortcuts');
+  return data.shortcuts;
+}
+
+/**
+ * Fire one. Returns how many runs actually started.
+ *
+ * Zero is a real answer, not an error: the workflow's own conditions are
+ * evaluated at dispatch, so a shortcut whose conditions do not hold starts
+ * nothing. Reporting that honestly is better than a success toast for work that
+ * did not happen.
+ */
+export async function runWorkflowShortcut(id: string, conversationId: string): Promise<number> {
+  const { data } = await api.post(`/api/workflows/${id}/run`, { conversationId });
+  return data.runs ?? 0;
+}

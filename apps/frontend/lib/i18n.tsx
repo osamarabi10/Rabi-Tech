@@ -15,6 +15,11 @@ const RTL: Record<Locale, boolean> = { ar: true, he: true, en: false };
 type Dict = Record<string, { ar?: string; he: string; en: string }>;
 
 const D: Dict = {
+  /* ── Workflow shortcuts ── */
+  "اختصارات": { he: "קיצורי דרך", en: "Shortcuts" },
+  "تم تشغيل الاختصار": { he: "קיצור הדרך הופעל", en: "Shortcut started" },
+  "الاختصار ما اشتغل — شروطه مش متحققة": { he: "קיצור הדרך לא רץ — התנאים שלו לא התקיימו", en: "Shortcut did not run — its conditions were not met" },
+  "فشل تشغيل الاختصار": { he: "הפעלת קיצור הדרך נכשלה", en: "Could not start the shortcut" },
   /* ── Workflow P2 vocabulary ── */
   "ملاحظة داخلية — ما بتوصل العميل": { he: "הערה פנימית — לא נשלחת ללקוח", en: "Internal note — not sent to the customer" },
   "تغيّرت مرحلة العميل": { he: "שלב הלקוח השתנה", en: "Lifecycle stage changed" },
