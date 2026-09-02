@@ -228,16 +228,21 @@ export function WorkspaceChannels() {
     ? channelProblemCopy(channelState.code, t)
     : null;
 
-  if (loading) return <LayoutSkeleton label={t('Loading channels')} className="m-4" />;
-  if (failed) return <ErrorState title={t('Could not load channels')} retryLabel={t('Try again')} onRetry={load} className="m-4" />;
+  /*
+    The rail is hoisted above the loading and error branches, deliberately.
 
-  return (
-    /*
-      P3 ChannelRail, consuming the existing selection as ?channel=<id> so the
-      detail state stays URL-addressable per the routing rules without adding a
-      route. The rail is the navigation; everything to its inline-end is the
-      channel configuration it points at.
-    */
+    It used to sit inside the tree those two early-returns skip, so a failed
+    load replaced the whole surface — content *and* navigation — with a retry
+    button. That is not a rendering detail: navigation that disappears when
+    content fails strands the user on a dead end, with no way to reach anything
+    else in the section except the browser's back button. The rail is wayfinding
+    and does not depend on the request that failed, so it has no business being
+    inside its failure path.
+
+    Its own data can be empty, and an empty rail is correct while loading — the
+    group is omitted when it has no items, so nothing renders a hollow shell.
+  */
+  const shell = (content: React.ReactNode) => (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
       <ChannelRail
         channels={railChannels}
@@ -246,6 +251,23 @@ export function WorkspaceChannels() {
         onAddChannel={sessions.length ? undefined : () => setConfirmOpenWA(true)}
         addDisabledReason={sessions.length ? t('قناة واحدة لكل مساحة عمل في هذه المرحلة') : undefined}
       />
+      {content}
+    </div>
+  );
+
+  if (loading) return shell(<LayoutSkeleton label={t('Loading channels')} className="m-4 flex-1" />);
+  if (failed) {
+    return shell(
+      <ErrorState
+        title={t('Could not load channels')}
+        retryLabel={t('Try again')}
+        onRetry={load}
+        className="m-4 flex-1"
+      />,
+    );
+  }
+
+  return shell(
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <SettingsHeader
       title={t('Channels')}
@@ -403,7 +425,6 @@ export function WorkspaceChannels() {
         busy={busy}
         destructive={action?.unlink !== false}
       />
-    </div>
     </div>
   );
 }

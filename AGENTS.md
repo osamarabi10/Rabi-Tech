@@ -50,10 +50,43 @@ works, **scope** governs what you are allowed to touch.
 
 Design rules do not catch the failures this repository actually has. These do.
 
+- **The default gate set always runs.** Not the gates a prompt happens to list —
+  all of these, every time:
+
+  ```
+  cd apps/backend    npm run test:tenancy   test:public-api   test:auth-exemptions
+                     test:secrets           test:growth-widgets
+                     test:meta-templates    test:collaborators
+  cd apps/frontend   npm run check:i18n     check:mojibake
+  both               npx tsc --noEmit
+  ```
+
+  A prompt may exclude one, and the exclusion must be **stated and reasoned** in
+  the report — never silent, and never by omission.
+
+  This exists because thirty-seven untranslated strings shipped across two
+  commits whose prompts enumerated only the backend gates. Nothing was broken
+  and no gate was wrong; the list simply did not mention `check:i18n`, so it did
+  not run. **Whoever writes the list becomes a single point of failure that the
+  gates cannot compensate for**, and a default that must be opted out of is the
+  only structure that survives an incomplete instruction.
+
 - **A check is trusted only after it has been made to fail.** Break the thing
   the check exists to catch, watch the gate name it, restore, and verify the
   restored file is byte-identical. A green gate that has never gone red is an
   untested assertion.
+
+- **And prove the control: it must go green on the correctly-formed case.**
+  Making a gate go red is half the proof. The other half is a case that *should*
+  pass and does, because a check that is red for everything is as useless as one
+  that is green for everything — and it is far more convincing, since a failure
+  looks like diligence.
+
+  Both directions, or neither is evidence. The version of this that bites is a
+  guard whose own requirement hides its subject: a rule demanding a route sit
+  inside an environment guard, checked by a parser that only recognises routes
+  at column zero, is always red for correct code and would have been "proved" by
+  a red mutation alone.
 
 - **Read the summary line.** A gate is green only when you watched
   `N/N checks passed` print. A command list exits with the status of its last

@@ -94,7 +94,18 @@ export function RailGroup<T>({
       {/* Uppercase, tracked, and quieter than the items under it — a
           group label is a signpost, not a destination. */}
       {collapsible || addAction ? (
-        <div className={cn(headingClasses, 'flex items-center justify-between gap-1 pb-1.5')}>
+        /*
+          `hidden lg:flex`, not `headingClasses` plus `flex`.
+
+          The plain heading is `hidden … lg:block`, and layering `flex` on top of
+          that leaves two display utilities fighting: which one wins depends on
+          Tailwind's emission order rather than on anything written here, so the
+          row was attached but not reliably visible and the disclosure could not
+          be clicked. One display utility per breakpoint, chosen deliberately.
+        */
+        <div className={cn(
+          'hidden items-center justify-between gap-1 px-3 pb-1.5 text-micro font-semibold uppercase tracking-wider text-muted-foreground/80 lg:flex',
+        )}>
           {collapsible ? (
             <button
               type="button"
