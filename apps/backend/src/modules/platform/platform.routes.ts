@@ -1418,7 +1418,29 @@ router.get('/editions', requirePlatformOwner, async (_req, res) => {
   */
   const withOffer = editions.map((edition) => {
     const offer = editionOfferability(edition.allowedChannels);
-    return { ...edition, offerable: offer.offerable, unavailableReason: offer.reasonCode, unavailableDetail: offer.reason };
+    /*
+      An edition that provisions a gateway it does not permit.
+
+      autoProvisionGateway builds an OpenWA gateway at activation;
+      allowedChannels decides whether the workspace may use one. Nothing keeps
+      the two in step, and E5g moved allowedChannels without revisiting the
+      flag - so GROWTH, BUSINESS and ENTERPRISE each had a gateway built for
+      every subscriber that their own edition forbids them to pair. See D-27.
+
+      Surfaced rather than corrected here: both fields are the owner's to set,
+      and silently flipping one because it disagrees with the other would undo a
+      deliberate choice. Provisioning now refuses the combination, so the
+      gateway is no longer built; this is what tells the owner why.
+    */
+    const provisionsForbiddenChannel =
+      edition.autoProvisionGateway && !edition.allowedChannels.includes('OPENWA');
+    return {
+      ...edition,
+      offerable: offer.offerable,
+      unavailableReason: offer.reasonCode,
+      unavailableDetail: offer.reason,
+      provisionsForbiddenChannel,
+    };
   });
   res.json({ editions: withOffer, notEnforced: [] });
 });

@@ -21,6 +21,7 @@ import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitle
 import { getEdition, getEditions, getEditionEditedAt } from './editions.service';
 import { resolveEntitlements } from './entitlements.resolver';
 import { editionOfferability } from '../channels/channel-viability';
+import { channelGrantRefusal } from '../channels/channel-entitlement';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
 import { seedLifecycleStages } from '../lifecycle/lifecycle.service';
 
@@ -521,6 +522,36 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
     const planCode = normalizePlanCode(active?.planCode || organization.tier || 'FREE');
     if (!isPaidPlan(planCode) && !explicitAdminRequest) return false;
     const channel = organization.channels[0];
+
+    /*
+      Do not build a gateway the edition forbids.
+
+      GROWTH, BUSINESS and ENTERPRISE carry autoProvisionGateway: true with
+      allowedChannels: ['WHATSAPP_CLOUD'], so before this check every workspace
+      on them had an OpenWA gateway built automatically - a real resource,
+      reaching AWAITING_QR, pairable, and sendable through, because nothing
+      downstream asked about the edition. See D-27.
+
+      Checked here rather than only at the QR endpoint because provisioning
+      happens unattended: the gateway is built at activation whether or not a
+      human ever opens the pairing screen, and a resource nobody may use should
+      not be built in the first place.
+
+      channelGrantRefusal grandfathers a channel that is already ACTIVE, so this
+      cannot disconnect a live workspace - it only stops new ones. Existing
+      subscribers on a Meta-only edition with a working OpenWA channel keep it.
+    */
+    const forbidden = await channelGrantRefusal(organizationId, 'OPENWA');
+    if (forbidden) {
+      logger.warn('Gateway provisioning refused: the edition does not permit this channel', {
+        organizationId,
+        planCode,
+        kind: 'OPENWA',
+        reason,
+      });
+      return false;
+    }
+
     if (!channel || ['ACTIVE', 'AWAITING_QR', 'PROVISIONING'].includes(channel.provisioningState)) return false;
     await prisma.organization.update({ where: { id: organizationId }, data: { status: 'PROVISIONING' } });
     await queueGatewayAction(organizationId, 'provision');

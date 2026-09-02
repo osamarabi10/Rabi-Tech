@@ -1,6 +1,6 @@
 import { SubscriptionStatus } from '@prisma/client';
 import { prisma } from '../../prisma';
-import { ENTRY_PAID_PLAN_CODE, isPaidPlan, normalizePlanCode, type PlanCode } from './plans';
+import { isPaidPlan, normalizePlanCode, type PlanCode } from './plans';
 
 /**
  * The free trial: full access for a fixed window, then a paywall.
@@ -77,8 +77,21 @@ export async function setTrialHours(hours: number, updatedBy: string | null): Pr
 }
 
 const TRIAL_PLAN_KEY = 'billing.trialPlan';
-/** The shared commercial default; see ENTRY_PAID_PLAN_CODE in plans.ts. */
-const TRIAL_PLAN_DEFAULT: PlanCode = ENTRY_PAID_PLAN_CODE;
+/**
+ * STANDARD, and deliberately no longer ENTRY_PAID_PLAN_CODE.
+ *
+ * The two were the same constant until the E5g channel narrowing pulled them
+ * apart. ENTRY_PAID_PLAN_CODE is GROWTH - the cheapest edition the product
+ * wants to sell - and GROWTH now permits WHATSAPP_CLOUD only. A trial there
+ * was provisioned an OpenWA gateway its own edition forbids, which is the
+ * contradiction recorded as D-26 and the reason trials appeared to work while
+ * Meta was unconfigured: they were running on a channel nothing enforced.
+ *
+ * STANDARD permits both kinds, so a trial on it gets a channel its edition
+ * allows. The entry *paid* plan is unchanged; only what a trial runs on moved.
+ * They are separate commercial questions and this line is where they part.
+ */
+const TRIAL_PLAN_DEFAULT: PlanCode = 'STANDARD';
 
 /**
  * Which plan a trial actually runs on.

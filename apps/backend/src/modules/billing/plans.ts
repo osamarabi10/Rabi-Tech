@@ -180,7 +180,14 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyAiTokensOutLimit: null,
     campaignRateMax: 1,
     campaignRateDurationMs: 1_500,
-    autoProvisionGateway: false,
+    /*
+      True since the trial moved here. STANDARD permits OPENWA, so a gateway
+      provisioned under it is one this edition actually allows - which is the
+      property GROWTH could not satisfy once E5g narrowed it to
+      WHATSAPP_CLOUD only. A trial has to be able to connect a number, and
+      the edition it runs on has to permit the channel it connects.
+    */
+    autoProvisionGateway: true,
     customDomain: false,
     whiteLabel: false,
     maskContactDetails: false,

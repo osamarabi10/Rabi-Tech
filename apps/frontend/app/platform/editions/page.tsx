@@ -39,6 +39,8 @@ type Edition = {
   offerable?: boolean;
   unavailableReason?: string | null;
   unavailableDetail?: string | null;
+  /** autoProvisionGateway is on while allowedChannels excludes OPENWA. */
+  provisionsForbiddenChannel?: boolean;
   pricingModel: 'FREE' | 'FIXED' | 'NEGOTIATED';
   billingInterval: 'MONTHLY' | 'YEARLY';
   sortOrder: number;
@@ -348,6 +350,18 @@ export default function PlatformEditions() {
                     Without the detail line an owner sees an active edition
                     missing from the pricing page and reads it as a bug.
                   */}
+                  {/*
+                    Two switches on this screen that contradict each other. Shown
+                    where they are set, because a defect file is not somewhere an
+                    owner looks before flipping a toggle.
+                  */}
+                  {edition.provisionsForbiddenChannel && (
+                    <span className="block text-sm text-warning">
+                      Auto-provisions a WhatsApp gateway, but this edition does not permit the
+                      {' '}OpenWA channel — so the gateway is no longer built. Either allow OPENWA,
+                      {' '}or turn off gateway provisioning.
+                    </span>
+                  )}
                   {edition.offerable === false && (
                     <span className="block text-sm text-warning">
                       Not sellable — {edition.unavailableDetail || 'the channels it permits cannot be operated'}.

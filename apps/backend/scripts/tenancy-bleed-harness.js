@@ -4342,7 +4342,18 @@ async function databaseAudits() {
       assert.equal(standard.whiteLabel, false);
       assert.equal(standard.customDomain, false);
       assert.equal(standard.maskContactDetails, false);
-      assert.equal(standard.autoProvisionGateway, false);
+      /*
+        True since the trial moved to STANDARD. It was false while the trial ran
+        on GROWTH, and that pairing was the D-26 contradiction: GROWTH permits
+        WHATSAPP_CLOUD only, so a trial there was provisioned an OpenWA gateway
+        its own edition forbids. STANDARD permits both kinds, so the gateway it
+        now provisions is one this edition allows.
+
+        'Messaging only' still holds - that is about broadcasts and white-label,
+        asserted above, not about whether a number can be connected at all. An
+        edition nobody can connect a number to is not a messaging tier.
+      */
+      assert.equal(standard.autoProvisionGateway, true);
 
       /*
         Custom fields and workflows used to be asserted at zero here, on the
@@ -4782,6 +4793,44 @@ async function databaseAudits() {
       }
     });
 
+    await check('billing: a trial lands on an edition that permits the channel it is provisioned', async () => {
+      const { refreshEditions, getEdition } = require('../src/modules/billing/editions.service');
+      const { getTrialPlanCode } = require('../src/modules/billing/trial.service');
+
+      /*
+        The invariant behind D-26. A trial is provisioned an OpenWA gateway
+        whenever its plan carries autoProvisionGateway, and allowedChannels
+        decides whether that workspace may ever pair one. When the two disagree
+        the trial gets a gateway its own edition forbids - which is what GROWTH
+        did after E5g, and why trials appeared to work while Meta was
+        unconfigured: they were running on a channel nothing enforced.
+
+        Stated as a property of whatever the trial plan happens to be, not as
+        'the trial plan is STANDARD'. Moving it again is a commercial decision
+        and this check must not be the thing that blocks it; what it forbids is
+        moving it somewhere incoherent.
+      */
+      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      const trialPlan = await runAsPlatform('bleed-trial-plan', () => getTrialPlanCode());
+      const edition = getEdition(trialPlan);
+
+      assert.ok(edition, `the trial plan ${trialPlan} must resolve in the catalogue`);
+      if (edition.autoProvisionGateway) {
+        assert.ok(
+          edition.allowedChannels.includes('OPENWA'),
+          `${trialPlan} provisions an OpenWA gateway but does not permit the OPENWA channel, so a trial would be given a channel its edition forbids`,
+        );
+      }
+
+      // And the trial must still grant a connection at all, which is the reason
+      // getTrialPlanCode refuses to run a trial on an unpaid plan.
+      assert.equal(
+        edition.autoProvisionGateway,
+        true,
+        `${trialPlan} grants no gateway, so a trial on it cannot connect a WhatsApp number`,
+      );
+    });
+
     await check('billing: the edition ladder is ordered, and ties resolve the same way every time', async () => {
       const { refreshEditions, getEditions } = require('../src/modules/billing/editions.service');
 
@@ -4899,6 +4948,20 @@ async function databaseAudits() {
         first person to widen CREATABLE_PLAN_CODES would be the first person to
         execute it - on the one action this system cannot take back.
       */
+      /*
+        Clear this run's own trial fixtures first.
+
+        STANDARD is the trial plan since D-26 was resolved, so the signup checks
+        earlier in this file leave subscriptions on it - which trips the guard
+        below that exists to stop a plan being deleted out from under real
+        subscribers. The schema is disposable and these rows are fixtures this
+        harness created itself, so removing them is the same fixture cleanup
+        setTierGoverned already does.
+
+        The guard is not weakened: it still runs, after the cleanup, and still
+        fails if anything unexpected is subscribed.
+      */
+      await raw.subscription.deleteMany({ where: { planCode: 'STANDARD' } });
       const subscribed = await raw.subscription.count({ where: { planCode: 'STANDARD' } });
       assert.equal(subscribed, 0, 'STANDARD must have no subscribers for this check to be safe to run');
 
