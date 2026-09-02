@@ -3,6 +3,8 @@ import { auditLog } from '../../lib/audit';
 import { permissionsForRole, requireAdmin, requirePermission } from '../../middleware/rbac.middleware';
 import { verifyToken } from '../auth/auth.middleware';
 import { MetaApiError } from '../channels/meta.client';
+import { sendMetaTemplate, TemplateSendError } from './meta-template-send.service';
+import logger from '../../lib/logger';
 import {
   archiveMetaTemplate,
   createMetaTemplateDraft,
@@ -135,6 +137,45 @@ router.post('/:id/archive', requirePermission('campaign:create'), async (req: an
     return res.json(template);
   } catch (error) {
     return errorResponse(res, error);
+  }
+});
+
+/**
+ * POST /api/meta-templates/:id/send — start a conversation.
+ *
+ * The one send that does not require the customer to have written first, and
+ * therefore the only way a Meta-only workspace can initiate anything at all.
+ *
+ * Guarded by `conversation:create` rather than a template permission: what this
+ * does is message a customer, and that is the permission that governs messaging
+ * a customer. A separate one would let somebody who may not send a message send
+ * the one kind that reaches people who never wrote in.
+ */
+router.post('/:id/send', requirePermission('conversation:create'), async (req, res) => {
+  try {
+    const contactId = String(req.body?.contactId || '').trim();
+    if (!contactId) return res.status(400).json({ error: 'جهة الاتصال مطلوبة' });
+
+    const variables = Array.isArray(req.body?.variables)
+      ? req.body.variables.map((value: unknown) => String(value ?? ''))
+      : [];
+
+    const result = await sendMetaTemplate({
+      templateId: String(req.params.id),
+      contactId,
+      variables,
+      source: 'MANUAL',
+    });
+
+    res.status(202).json(result);
+  } catch (err: any) {
+    if (err instanceof TemplateSendError) {
+      // The code travels with the message so the composer can react - an
+      // opted-out contact and a rejected template need different UI.
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    logger.error('Template send failed', { error: err?.message, requestId: (req as any).id });
+    res.status(500).json({ error: 'تعذّر إرسال القالب' });
   }
 });
 

@@ -328,6 +328,79 @@ export async function sendTextMessage(
   );
 }
 
+/**
+ * A component in an outbound template send.
+ *
+ * Meta's shape, not a friendlier one. The body's `parameters` fill `{{1}}`,
+ * `{{2}}` positionally, and header/button components carry their own. Modelling
+ * it faithfully rather than inventing a nicer object matters here: the template
+ * was approved in Meta's shape, and a translation layer that gets a position
+ * wrong produces a send Meta rejects — which costs the number's quality rating,
+ * not just an error.
+ */
+/**
+ * Distinct from `MetaTemplateComponent` above, and deliberately so.
+ *
+ * That one describes a template's **structure** — the header format, the body
+ * text with its `{{1}}` placeholders, the buttons — and is what submit, import
+ * and polling exchange with Meta. This one supplies **values** at send time.
+ *
+ * Conflating them would be a real modelling error rather than a tidiness one:
+ * a definition has `text`, a send has `parameters`, and a type that accepts
+ * both lets a caller send a template definition as though it were a set of
+ * values. Meta rejects that, and a rejected send costs the number's quality
+ * rating.
+ */
+export type MetaTemplateSendComponent = {
+  type: 'header' | 'body' | 'button';
+  sub_type?: string;
+  index?: string;
+  parameters?: Array<Record<string, unknown>>;
+};
+
+/**
+ * Send an approved template.
+ *
+ * ## Why this is the only way to start a conversation
+ *
+ * Meta permits free-form messages only inside the 24-hour window that opens
+ * when the customer writes. Outside it — which includes *every contact who has
+ * never written* — an approved template is the sole permitted message. Without
+ * this call a Meta-only workspace can reply and can never initiate: no
+ * onboarding, no notification, no re-engagement, no broadcast to a cold list.
+ *
+ * That is not a missing convenience. GROWTH, BUSINESS and ENTERPRISE are
+ * `['WHATSAPP_CLOUD']` only, so it was a ceiling on the three paying tiers.
+ */
+export async function sendTemplateMessage(
+  phoneNumberId: string,
+  accessToken: string,
+  to: string,
+  templateName: string,
+  languageCode: string,
+  components: MetaTemplateSendComponent[] = [],
+): Promise<MetaSendResponse> {
+  return call<MetaSendResponse>(
+    accessToken,
+    'post',
+    `/${encodeURIComponent(phoneNumberId)}/messages`,
+    undefined,
+    {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: toMetaRecipient(to),
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        // Omitted entirely when empty. Meta rejects `components: []` on a
+        // template that declares no variables, which is most of them.
+        ...(components.length ? { components } : {}),
+      },
+    },
+  );
+}
+
 export async function sendMediaMessage(
   phoneNumberId: string,
   accessToken: string,

@@ -277,6 +277,32 @@ Redis connection. The policy now lives in `webhook-policy.ts`; **keep constants
 out of the worker module**, or the next hermetic gate quietly acquires the
 infrastructure dependency it was written to avoid.
 
+### Meta template sending
+```bash
+cd apps/backend && npm run test:meta-templates
+```
+
+**34/34, hermetic** — no network, and no send is ever attempted.
+
+**This closed the gap that made three paying tiers unusable.** Meta permits
+free-form messages only inside the 24-hour window that opens when the *customer*
+writes. Outside it — which includes every contact who has never written — an
+approved template is the only permitted message. There was no template send
+path, and `GROWTH`, `BUSINESS` and `ENTERPRISE` are `['WHATSAPP_CLOUD']` only,
+so those three tiers could reply and could **never initiate**.
+
+**The gate is mostly about refusal ordering.** A rejected send is not free: it
+depresses the number's quality rating, which governs its messaging tier. So
+approved-status, blocking, opt-out, variable count and channel presence are all
+asserted to be checked *before* the provider call, by comparing their positions
+in the compiled output.
+
+This is the one send that deliberately bypasses `assertSendable`. A template is
+the documented exemption; routing it through the service-window check would
+refuse the one message type that exists to be sent when the window is shut.
+
+Mutation-proved: removing the opt-out refusal takes it red.
+
 ### Workflow triggers and steps (P2)
 ```bash
 cd apps/backend && npm run test:workflow-p2

@@ -223,27 +223,48 @@ all downstream of P1.
 
 ## 05 · Workflows
 
-| | Theirs | Ours |
-|---|---|---|
-| **Triggers** | **11** | **5** |
-| **Steps** | **19** | **10** |
-| Conditions | 11 categories, 18 operators | 6 |
-| Branches | **9 + Else**, conditions 10 per branch | 1 level, `IF_ELSE` |
-| Steps per workflow | 100 | 20 actions |
-| Workflows per workspace | 150 | plan-gated |
-| Total execution time | **7 days** | unbounded |
-| Draft / Published / Stopped | Editing requires stopped; enrolled contacts ejected on stop | `≈` active/inactive only |
-| Re-entry | *"A Contact cannot re-enter a Workflow they are currently enrolled in"* | `≈` 60-second window — **but `ASK_QUESTION` can hold a run open for 7 days** |
-| Testing | Built in | `✗` |
-| Import/export | 100 steps, ≤400 KB | `✗` |
-| Templates | 31 pre-built | `✗` |
+**Corrected 2 September 2026 against the code.** This section was compiled
+before P2 shipped and understated us on six rows — it still listed four
+triggers and two steps as missing that exist. Counts below are read from
+`workflow-schema.ts`, not from a plan.
 
-**Missing triggers:** Lifecycle Updated · Contact Field Updated · Shortcut ·
-Incoming Webhook · Manual Trigger · Click-to-Chat Ads · TikTok Ads · Call Ended.
+| | Theirs | Ours | |
+|---|---|---|---|
+| **Triggers** | **11** | **9** | `≈` |
+| **Steps** | **19** | **15 usable** (17 declared, 2 refused by design) | `≈` |
+| Conditions | 11 categories, 18 operators | 6 | `≈` |
+| Branches | **9 + Else**, conditions 10 per branch | nesting `MAX_BRANCH_DEPTH = 3`, `MAX_CONDITIONS = 10` | `≈` |
+| Steps per workflow | 100 | **100** (`MAX_ACTIONS`) | `✓` |
+| Workflows per workspace | 150 | plan-gated | `≈` |
+| Total execution time | **7 days** | **7 days** (`MAX_RUN_DURATION_MS`) | `✓` |
+| Draft / Published / Stopped | Editing requires stopped; enrolled contacts ejected on stop | `≈` active/inactive only |  |
+| Re-entry | *"A Contact cannot re-enter a Workflow they are currently enrolled in"* | 60-second window; a run can no longer outlive the 7-day deadline | `≈` |
+| Testing | Built in | `✗` | |
+| Import/export | 100 steps, ≤400 KB | `✗` | |
+| Templates | 31 pre-built | `✗` | |
 
-**Missing steps:** Jump To · Trigger Another Workflow · Add Comment · Open
-Conversation · Close-with-category · Google Sheets · Meta CAPI · TikTok events ·
-Date & Time as a *step* (ours is a condition only).
+**The nine triggers we have:** Conversation Created · Keyword Matched ·
+Tag Added · Tag Removed · Out of Hours · Lifecycle Updated ·
+Contact Field Updated · Incoming Webhook · Shortcut.
+
+**Still missing:** Manual Trigger · Click-to-Chat Ads · TikTok Ads · Call Ended.
+
+**Still missing steps:** Close-with-category · Google Sheets · Meta CAPI ·
+TikTok events · Date & Time as a *step* (ours is a condition only).
+
+**Refused by design, not missing:** `JUMP_TO` and `TRIGGER_WORKFLOW`. Both are
+declared in `ACTION_TYPES` so the validator can name them, **filtered out of the
+served vocabulary** so the builder never offers them, and **refused at save** by
+name with a message saying why. Neither has an executor branch, so neither is
+reachable. A jump target is a position, and a flat builder has no stable
+positions — reordering one step would silently repoint every jump past it. They
+arrive with the canvas.
+
+> **Arithmetic note.** Their 11 against our 9 leaves 2, but the pre-correction
+> list named 8 missing triggers against our 5 — which totals 13, not 11. Either
+> two of ours are not in their 11, or the old list over-counted. The four names
+> above are the ones the source document actually attributes to them and we do
+> not have; the discrepancy in the old figure is not reproduced here.
 
 **Where ours is ahead:** `ASK_QUESTION` normalises Arabic-Indic digits and
 stores phone answers digits-only to match the inbound path; the field is
