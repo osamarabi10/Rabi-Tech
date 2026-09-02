@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef } from 'react';
-import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, KeyRound, MessageCircleMore, MessageSquareText, Paperclip, Plug, Tags, Users, UserRound, Webhook, Workflow } from 'lucide-react';
+import { Bell, Braces, Building2, Cable, ContactRound, FileUp, FileText, GitBranch, KeyRound, MessageCircleMore, MessageSquareText, Paperclip, Link2, Plug, Tags, Users, UserRound, Webhook, Workflow } from 'lucide-react';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -58,6 +58,7 @@ const GROUPS = [
       { href: '/settings/lifecycle', label: 'مراحل العميل', icon: GitBranch },
       { href: '/settings/snippets', label: 'الردود الجاهزة', icon: MessageSquareText },
       { href: '/settings/tags', label: 'Tags', icon: Tags },
+      { href: '/settings/growth-widgets', label: 'أدوات النمو', icon: Link2 },
       { href: '/settings/general#auto-replies', label: 'الأتمتة', icon: Workflow },
     ],
   },

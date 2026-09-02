@@ -108,6 +108,9 @@ model Organization {
 
   emailOutbox EmailOutbox[]
 
+  growthWidgets GrowthWidget[]
+  widgetClicks  WidgetClick[]
+
   @@index([overrideExpiresAt])
 }
 
@@ -982,6 +985,40 @@ enum MarketingConsent {
   OPTED_OUT
 }
 
+/// How a Contact was acquired. Every member has a code path that produces it —
+/// a member nothing writes is the declared-but-unreachable defect this
+/// repository has found ten times, and an acquisition source nothing stamps
+/// would be the eleventh.
+///
+/// `UNKNOWN` means exactly one thing: **this row predates attribution.** It is
+/// deliberately not a catch-all. `DIRECT` is the different fact that we looked
+/// and found nothing, and IMPORT and API exist so that neither collapses back
+/// into "we don't know" — a contact imported today would otherwise be
+/// permanently UNKNOWN, because how a row was created is not recorded anywhere
+/// and cannot be recovered by backfill.
+enum AcquisitionSource {
+  /// Produced by: the migration's column default, for rows that already existed.
+  UNKNOWN
+  /// Produced by: incoming-message.worker.ts, create branch, no widget token present.
+  DIRECT
+  /// Produced by: incoming-message.worker.ts, create branch, a click token matched and was claimed.
+  GROWTH_WIDGET
+  /// Produced by: contacts/import.service.ts.
+  IMPORT
+  /// Produced by: public-api/contacts.routes.ts.
+  API
+}
+
+/// Widget classes we build. `CHAT_LINK` is the only member because it is the
+/// only one with a producer; QR_CODE arrives with its renderer and not before.
+///
+/// Multichannel is absent permanently rather than pending: this platform is
+/// single-channel by design, so a multichannel widget would offer channels we
+/// have decided not to have. See §10 of the parity matrix.
+enum GrowthWidgetType {
+  CHAT_LINK
+}
+
 enum AutoReplyKind {
   WELCOME
   OUT_OF_HOURS
@@ -1214,6 +1251,7 @@ model WhatsappSession {
   team          Team?          @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
   conversations Conversation[]
   campaigns     Campaign[]
+  growthWidgets GrowthWidget[]
 
   // Composite unique constraints: session name and phone per org
   @@unique([id, organizationId])
@@ -1244,6 +1282,26 @@ model Contact {
   /// How consent last changed: keyword | agent | import | api.
   consentSource    String?
   consentUpdatedAt DateTime?
+
+  /// ── Acquisition, first-touch and write-once ──────────────────────────────
+  ///
+  /// Where this contact came from, stamped when the row is created and never
+  /// updated afterwards. A contact is acquired once; conversations recur, which
+  /// is why this lives here and not on Conversation.
+  ///
+  /// Write-once is not a stylistic choice. Attribution that is not captured at
+  /// the moment of contact is gone permanently — the browser that knew the
+  /// referrer made one request and never returns — so overwriting first-touch
+  /// on a later click would destroy the only record of it.
+  acquisitionSource      AcquisitionSource @default(UNKNOWN)
+  /// The widget, when one was matched. Null for every other source.
+  acquisitionWidgetId    String?
+  /// `utm_campaign` from the click, promoted out of WidgetClick so contacts can
+  /// be filtered and reported on without a join, and so it survives click
+  /// pruning. Named for the parameter it holds: `Campaign` in this schema is an
+  /// outbound broadcast, and the two must never be confused.
+  acquisitionUtmCampaign String?
+  acquisitionAt          DateTime?
   /// Blocked from reaching this workspace.
   ///
   /// Deliberately NOT `isArchived` and NOT a delete. Archiving hides a contact
@@ -1274,6 +1332,8 @@ model Contact {
   contactTags        ContactTag[]
   customFieldValues  CustomFieldValue[]
   consentEvents      ConsentEvent[]
+  acquisitionWidget  GrowthWidget?        @relation(fields: [acquisitionWidgetId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  widgetClicks       WidgetClick[]
 
   // Composite unique: phone per org
   @@unique([id, organizationId])
@@ -2229,4 +2289,84 @@ model InboxView {
 
   @@unique([id, organizationId])
   @@index([organizationId, ownerId, sortOrder])
+}
+
+/// A shareable link that produces attributed contacts.
+///
+/// The token here is **public and not a credential**. It is meant to be printed,
+/// embedded and shared; everyone holding it is supposed to hold it. It
+/// identifies a widget, and the widget determines the tenant — which is why the
+/// redirect that reads it is category 3 in index.ts rather than category 2.
+model GrowthWidget {
+  id             String           @id @default(cuid())
+  organizationId String
+  name           String
+  type           GrowthWidgetType @default(CHAT_LINK)
+  /// The public identifier in the redirect URL. Globally unique so the redirect
+  /// can resolve a tenant from it without being told which tenant to look in.
+  publicToken    String           @unique
+  /// The WhatsApp number the visitor is handed off to.
+  sessionId      String
+  /// Text pre-filled into the visitor's composer, before the click marker is
+  /// appended. They can edit or delete it, which is why attribution through
+  /// this route is best-effort by construction.
+  prefillText    String           @default("")
+  isArchived     Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  session      WhatsappSession @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  clicks       WidgetClick[]
+  contacts     Contact[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, isArchived])
+}
+
+/// One visit to a widget link, and the only place the browser's knowledge is
+/// ever recorded.
+///
+/// `sourceUrl`, `referrer` and the UTM values exist for exactly one HTTP
+/// request. If they are not written here they are not recoverable from
+/// anywhere, by anyone, ever — there is no vendor to ask and no later moment.
+///
+/// Most rows are never claimed. That is expected: most clicks do not become
+/// contacts, and the endpoint that writes them is unauthenticated, so the count
+/// is inflatable by anyone. Contacts are the trustworthy denominator; clicks
+/// are context.
+model WidgetClick {
+  id             String   @id @default(cuid())
+  organizationId String
+  widgetId       String
+  /// The per-click nonce carried in the visitor's pre-filled message. Per click
+  /// rather than per widget: sourceUrl, referrer and UTM vary per visitor, so a
+  /// per-widget token could never carry them through to the contact.
+  clickToken     String
+  sourceUrl      String?
+  referrer       String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+  /// Set once, when an inbound message carried this token. A claimed click is
+  /// never re-claimed: the join is a table lookup for an unclaimed row, never a
+  /// pattern match on the message body.
+  claimedByContactId String?
+  claimedAt          DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  widget       GrowthWidget @relation(fields: [widgetId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  /// Cascade rather than SetNull, and not only because a composite FK cannot
+  /// null one half of itself while `organizationId` stays required. Deleting a
+  /// contact is an erasure, and this row holds the referrer and landing page of
+  /// that person's visit. Erasing them should take it with it.
+  claimedBy    Contact?     @relation(fields: [claimedByContactId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, clickToken])
+  @@index([organizationId, widgetId, createdAt])
 }

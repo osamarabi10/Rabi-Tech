@@ -23,6 +23,7 @@ import { dispatchWorkflowEvent } from './workflow.worker';
 import { resumeAwaitingWorkflows } from '../modules/workflows/answer-resume.service';
 import { coordinationKey, withFifoRedisLock } from '../lib/redis-coordination';
 import { emitWebhook } from '../modules/webhooks/webhook-dispatch.service';
+import { extractClickTokens } from '../modules/growth-widgets/widget-token';
 
 // Redis connection config (same as campaign worker)
 const redisUrl = new URL(process.env.REDIS_URL || 'redis://localhost:6379');
@@ -124,12 +125,75 @@ async function processInboundMessage(data: {
     .replace(/@lid$/i, '')
     .replace(/^(\+)/, '');   // strip leading + so +972... and 972... match the same row
 
+  /*
+    Growth-widget attribution, resolved before the upsert because a new contact
+    has to be created carrying it — there is no second chance to stamp it.
+
+    The claim is a **table lookup**, never a pattern match. `extractClickTokens`
+    only produces candidates that have the shape of a marker; whether any of
+    them means anything is decided here, by finding an unclaimed row. Trusting
+    the body would let a customer type `#gw_` and ten characters to assign
+    themselves to whichever campaign they liked.
+
+    `claimedByContactId: null` in the where clause is what makes a token
+    single-use. A marker forwarded to a friend, or pasted into a second chat,
+    finds nothing.
+  */
+  const claimableClick = await (async () => {
+    const candidates = extractClickTokens(body || '');
+    if (candidates.length === 0) return null;
+    return prisma.widgetClick.findFirst({
+      where: { clickToken: { in: candidates }, claimedByContactId: null },
+      select: { id: true, widgetId: true, utmCampaign: true },
+    });
+  })();
+
   // Find or create contact
   const contact = await prisma.contact.upsert({
     where: { organizationId_phone: { organizationId, phone: normalizedPhone } },
-    create: { organizationId, phone: normalizedPhone, ...(contactName ? { name: contactName } : {}) },
+    create: {
+      organizationId,
+      phone: normalizedPhone,
+      ...(contactName ? { name: contactName } : {}),
+      /*
+        First-touch, and deliberately only in `create`.
+
+        Putting any of this in `update` would do two damaging things: overwrite
+        the acquisition of a contact who came back through a second link, and
+        break the `createdAt === updatedAt` detector below, which is how this
+        worker knows a contact is new without spending a second query on every
+        inbound message.
+
+        DIRECT and UNKNOWN are different facts and must not merge. DIRECT means
+        we looked for a marker and there was none. UNKNOWN, the column default,
+        means the row predates attribution entirely.
+      */
+      ...(claimableClick
+        ? {
+          acquisitionSource: 'GROWTH_WIDGET' as const,
+          acquisitionWidgetId: claimableClick.widgetId,
+          acquisitionUtmCampaign: claimableClick.utmCampaign,
+          acquisitionAt: new Date(),
+        }
+        : { acquisitionSource: 'DIRECT' as const, acquisitionAt: new Date() }),
+    },
     update: { ...(contactName ? { name: contactName } : {}) },
   });
+
+  /*
+    Claim the click whether or not the contact was new.
+
+    If they were already a contact, first-touch above is untouched — acquisition
+    happens once — but the click still led to this conversation and the funnel
+    should say so. Recording it is how "this widget produced traffic from people
+    who already knew us" stays visible instead of looking like nothing happened.
+  */
+  if (claimableClick) {
+    await prisma.widgetClick.update({
+      where: { id: claimableClick.id },
+      data: { claimedByContactId: contact.id, claimedAt: new Date() },
+    });
+  }
 
   /*
     A brand new contact, and the most common way one appears: a stranger writes

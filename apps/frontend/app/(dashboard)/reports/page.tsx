@@ -6,6 +6,7 @@ import { CampaignRepliesPanel } from '@/components/reports/campaign-replies-pane
 import {
   fetchCampaignsReport,
   fetchClosureReport,
+  fetchSourcesReport,
   fetchLifecycleFunnel,
   fetchConversationsReport,
   fetchGatewayReport,
@@ -16,6 +17,7 @@ import {
   fetchWebhookReport,
   type CampaignReportRow,
   type ClosureReport,
+  type SourcesReport,
   type FunnelStageRow,
   type LifecycleFunnel,
   type ConversationsReport,
@@ -67,7 +69,7 @@ import { ErrorState } from '@/components/ui/operational-state';
  * make the slowest one the cost of the page.
  */
 
-type TabKey = 'overview' | 'conversations' | 'team' | 'campaigns' | 'lifecycle' | 'closures' | 'gateway' | 'webhooks';
+type TabKey = 'overview' | 'conversations' | 'team' | 'campaigns' | 'lifecycle' | 'closures' | 'sources' | 'gateway' | 'webhooks';
 
 const BUCKET_LABEL: Record<string, string> = {
   under_5m: 'أقل من ٥ دقائق',
@@ -137,6 +139,7 @@ export default function ReportsPage() {
   const [webhooks, setWebhooks] = useState<WebhookReport | null>(null);
   const [closures, setClosures] = useState<ClosureReport | null>(null);
   const [lifecycle, setLifecycle] = useState<LifecycleFunnel | null>(null);
+  const [sources, setSources] = useState<SourcesReport | null>(null);
   const [liveSessions, setLiveSessions] = useState<Session[]>([]);
 
   const [teams, setTeams] = useState<Team[]>([]);
@@ -175,6 +178,7 @@ export default function ReportsPage() {
       }
       if (tab === 'lifecycle') setLifecycle(await fetchLifecycleFunnel(query));
       if (tab === 'closures') setClosures(await fetchClosureReport(query));
+      if (tab === 'sources') setSources(await fetchSourcesReport(query));
       if (tab === 'webhooks') setWebhooks(await fetchWebhookReport(query));
     } catch {
       setFailed(true);
@@ -194,6 +198,7 @@ export default function ReportsPage() {
     { key: 'campaigns', label: 'الحملات' },
     { key: 'lifecycle', label: 'دورة حياة العميل' },
     { key: 'closures', label: 'الإغلاقات' },
+    { key: 'sources', label: 'مصادر العملاء' },
     { key: 'gateway', label: 'حالة القناة' },
     { key: 'webhooks', label: 'الويب هوك' },
   ];
@@ -278,6 +283,7 @@ export default function ReportsPage() {
           )}
           {tab === 'lifecycle' && <LifecycleTab report={lifecycle} loading={loading} />}
           {tab === 'closures' && <ClosuresTab report={closures} loading={loading} />}
+          {tab === 'sources' && <SourcesTab report={sources} loading={loading} />}
           {tab === 'webhooks' && <WebhooksTab report={webhooks} loading={loading} />}
         </div>
       )}
@@ -848,6 +854,117 @@ function LifecycleTab({ report, loading }: { report: LifecycleFunnel | null; loa
             buckets={report.lost.map((row) => ({ label: label(row), count: row.count }))}
             labelFor={(l) => l}
           />
+        </ReportCard>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Where contacts came from.
+ *
+ * Attributed and unattributed sit side by side and always will. Prefill
+ * attribution is best-effort by construction: the marker travels inside a
+ * message the customer can see and delete, so a tab showing only what it
+ * captured would be read as a complete picture of acquisition when it
+ * structurally cannot be one. DIRECT, IMPORT, API and UNKNOWN are rendered as
+ * real rows at zero rather than dropped.
+ *
+ * Clicks are shown last and labelled unverified. The endpoint that records them
+ * is unauthenticated, so the number is inflatable by anyone; a contact is not,
+ * because it costs a real WhatsApp message from a real number. No conversion
+ * rate is displayed for that reason — a ratio of a trustworthy numerator to an
+ * attacker-controlled denominator would look meaningful and mean nothing.
+ */
+function SourcesTab({ report, loading }: { report: SourcesReport | null; loading: boolean }) {
+  const { t } = useT();
+  if (!report) return loading ? <Loading /> : <EmptyNote />;
+
+  const sourceLabel: Record<string, string> = {
+    GROWTH_WIDGET: 'أداة نمو',
+    DIRECT: 'مباشر',
+    IMPORT: 'استيراد',
+    API: 'واجهة برمجية',
+    UNKNOWN: 'قبل التتبّع',
+  };
+
+  const buckets = report.sources.map((row) => ({
+    label: row.source,
+    count: row.contacts,
+  }));
+
+  const bucketSum = buckets.reduce((s, b) => s + b.count, 0);
+  const reconciles =
+    bucketSum === report.totals.contacts
+    && report.totals.attributed + report.totals.unattributed === report.totals.contacts;
+
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <MetricTile label={t('عملاء جدد')} value={report.totals.contacts.toLocaleString()} />
+        <MetricTile
+          label={t('منسوبون لأداة')}
+          value={report.totals.attributed.toLocaleString()}
+        />
+        <MetricTile
+          label={t('غير منسوبين')}
+          value={report.totals.unattributed.toLocaleString()}
+        />
+      </div>
+
+      {!reconciles && (
+        <p className="mt-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-caption text-warning">
+          {t('تفاصيل هذا التقرير لا تطابق الإجمالي. لا تعتمد عليه حتى تتم مراجعته.')}
+        </p>
+      )}
+
+      <p className="mt-3 rounded-md border border-border bg-surface-2 px-3 py-2 text-caption text-muted">
+        {t('النسبة المنسوبة هي حد أدنى وليست رقمًا دقيقًا: رمز التتبّع يظهر داخل رسالة العميل ويمكنه حذفه قبل الإرسال.')}
+      </p>
+
+      <div className="mt-3">
+        <ReportCard title={t('حسب المصدر')}>
+          <DistributionBars
+            buckets={buckets}
+            labelFor={(label) => t(sourceLabel[label] ?? label)}
+          />
+        </ReportCard>
+      </div>
+
+      <div className="mt-3">
+        <ReportCard title={t('حسب الأداة')}>
+          {report.widgets.length === 0 ? (
+            <p className="px-1 py-2 text-caption text-muted">{t('لا توجد أدوات نمو بعد.')}</p>
+          ) : (
+            <table className="w-full text-body">
+              <thead>
+                <tr className="text-caption text-muted">
+                  <th className="px-2 py-1 text-start">{t('الأداة')}</th>
+                  <th className="px-2 py-1 text-start">{t('عملاء')}</th>
+                  <th className="px-2 py-1 text-start">{t('نقرات')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.widgets.map((w) => (
+                  <tr key={w.id} className="border-t border-border">
+                    <td className="px-2 py-1">
+                      {w.name}
+                      {w.archived && (
+                        <span className="ms-2 text-caption text-muted">{t('مؤرشفة')}</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1">{w.contacts.toLocaleString()}</td>
+                    <td className="px-2 py-1 text-muted">{w.clicks.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="mt-2 px-1 text-caption text-muted">
+            {t('النقرات غير موثّقة — الرابط عام ويمكن لأي شخص فتحه. اعتمد على عدد العملاء.')}
+            {' '}
+            {report.clicks.total.toLocaleString()} {t('نقرة')}, {report.clicks.claimed.toLocaleString()} {t('أنتجت محادثة')}.
+          </p>
         </ReportCard>
       </div>
     </>

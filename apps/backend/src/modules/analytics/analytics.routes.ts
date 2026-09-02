@@ -164,6 +164,75 @@ router.get('/closures', requirePermission('analytics:read'), async (req, res) =>
 });
 
 /**
+ * Where contacts came from, in the period.
+ *
+ * **Attributed and unattributed side by side, always.** Prefill attribution is
+ * best-effort by construction — the marker travels inside a message the customer
+ * can see and edit — so a report showing only what it captured would be read as
+ * a complete picture of acquisition when it structurally cannot be one. DIRECT
+ * and UNKNOWN are returned as first-class rows, not filtered out and not merged.
+ *
+ * **Clicks sit behind contacts, and are not a denominator.** The redirect that
+ * records them is unauthenticated, so anyone can inflate the number; a contact
+ * cannot be forged the same way, because it costs the sender a real WhatsApp
+ * message from a real number. That is why no conversion rate is computed here:
+ * its numerator would be trustworthy and its denominator would not, and the
+ * ratio would look meaningful while meaning nothing.
+ */
+router.get('/sources', requirePermission('analytics:read'), async (req, res) => {
+  const period = parsePeriod(req.query as Record<string, unknown>);
+  if (isPeriodError(period)) return res.status(400).json({ error: period.error });
+
+  try {
+    const where = { createdAt: { gte: period.from, lte: period.to } };
+
+    const [bySource, widgets, clickTotal, claimedTotal] = await Promise.all([
+      prisma.contact.groupBy({ by: ['acquisitionSource'], where, _count: { _all: true } }),
+      prisma.growthWidget.findMany({
+        select: {
+          id: true, name: true, isArchived: true,
+          _count: { select: { contacts: true, clicks: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.widgetClick.count({ where }),
+      prisma.widgetClick.count({ where: { ...where, claimedByContactId: { not: null } } }),
+    ]);
+
+    const counts = Object.fromEntries(bySource.map((r) => [r.acquisitionSource, r._count._all]));
+    const total = bySource.reduce((sum, r) => sum + r._count._all, 0);
+    const attributed = counts.GROWTH_WIDGET || 0;
+
+    res.json({
+      period,
+      // Every member, present even at zero. A source that disappears from the
+      // response when it has no rows reads as a source that does not exist.
+      sources: ['GROWTH_WIDGET', 'DIRECT', 'IMPORT', 'API', 'UNKNOWN'].map((key) => ({
+        source: key,
+        contacts: counts[key] || 0,
+      })),
+      totals: {
+        contacts: total,
+        attributed,
+        unattributed: total - attributed,
+      },
+      widgets: widgets.map((w) => ({
+        id: w.id, name: w.name, archived: w.isArchived,
+        contacts: w._count.contacts, clicks: w._count.clicks,
+      })),
+      // Deliberately labelled. See the header: this is context, not performance.
+      clicks: { total: clickTotal, claimed: claimedTotal, unverified: true },
+    });
+  } catch (err) {
+    logger.error('analytics sources failed', {
+      error: String(err),
+      requestId: (req as any).id,
+    });
+    res.status(500).json({ error: 'فشل جلب التقرير', requestId: (req as any).id });
+  }
+});
+
+/**
  * Lifecycle funnel for the contacts gained in the period.
  *
  * Scoped by contact creation date, so it reads as a cohort — "of what we

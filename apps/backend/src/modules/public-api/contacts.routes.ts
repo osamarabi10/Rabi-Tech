@@ -273,6 +273,9 @@ router.post('/', requireScope('contacts:write'), async (req, res) => {
         organizationId: getTenantId(),
         phone: phone.phone,
         ...contactPayload(req.body),
+        // See the note in import.service.ts: stamped, not defaulted.
+        acquisitionSource: 'API',
+        acquisitionAt: new Date(),
       },
       select: { id: true },
     });
@@ -318,7 +321,10 @@ router.put('/:identifier', requireScope('contacts:write'), async (req, res) => {
         throw new ApiError(400, `No contact matches ${ref.kind}:${ref.value}, and creating one needs a phone number — send "phone" in the body or address the contact as phone:<number>.`);
       }
       const created = await prisma.contact.create({
-        data: { organizationId: getTenantId(), phone, ...contactPayload(req.body) },
+        data: {
+          organizationId: getTenantId(), phone, ...contactPayload(req.body),
+          acquisitionSource: 'API', acquisitionAt: new Date(),
+        },
         select: { id: true },
       });
       contactId = created.id;

@@ -164,6 +164,17 @@ export const LIMITS = {
   /** Unauthenticated and enumerable by host. */
   publicBranding: rateLimit('public-branding', { max: 60, windowMs: 60_000 }),
 
+  /**
+   * The growth-widget redirect — the only unauthenticated endpoint that writes.
+   *
+   * Same shape as `publicBranding`, and a stricter reason. This one inserts a
+   * row per request, so an unbounded caller could fill a subscriber's click
+   * table and inflate their numbers. The limit bounds the flood; it does not
+   * make the count trustworthy, which is why the sources report leads with
+   * contacts and treats clicks as unverified context.
+   */
+  widgetRedirect: rateLimit('widget-redirect', { max: 60, windowMs: 60_000 }),
+
   /** Provider webhooks are legitimately bursty; this only catches a flood. */
   webhook: rateLimit('webhook', { max: 600, windowMs: 60_000 }),
 

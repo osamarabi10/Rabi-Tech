@@ -236,6 +236,12 @@ export async function importContacts(
                 marketingConsent: 'OPTED_IN',
                 consentSource: 'import',
                 consentUpdatedAt: new Date(),
+                // Stamped rather than left to default. UNKNOWN means 'this row
+                // predates attribution'; an import today knows better than that,
+                // and how a contact was created is recorded nowhere else, so a
+                // row left unstamped could never be corrected by backfill.
+                acquisitionSource: 'IMPORT',
+                acquisitionAt: new Date(),
               },
               select: { id: true },
             });

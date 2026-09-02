@@ -2234,6 +2234,41 @@ export type ClosureReport = {
   summaries: { withSummary: number; withoutSummary: number };
 };
 
+export type SourcesReport = {
+  sources: { source: string; contacts: number }[];
+  totals: { contacts: number; attributed: number; unattributed: number };
+  widgets: { id: string; name: string; archived: boolean; contacts: number; clicks: number }[];
+  /** `unverified` is not decoration — the endpoint counting clicks is unauthenticated. */
+  clicks: { total: number; claimed: number; unverified: boolean };
+};
+
+export async function fetchSourcesReport(range: ReportRange): Promise<SourcesReport> {
+  const { data } = await api.get('/api/analytics/sources', { params: range });
+  return data;
+}
+
+export type GrowthWidget = {
+  id: string; name: string; type: string; publicToken: string; url: string;
+  prefillText: string; sessionId: string; sessionName?: string | null;
+  phoneNumber?: string | null; clicks: number; contacts: number; createdAt: string;
+};
+
+export async function fetchGrowthWidgets(): Promise<GrowthWidget[]> {
+  const { data } = await api.get('/api/widgets');
+  return data;
+}
+
+export async function createGrowthWidget(input: {
+  name: string; sessionId: string; prefillText: string;
+}): Promise<GrowthWidget> {
+  const { data } = await api.post('/api/widgets', input);
+  return data;
+}
+
+export async function archiveGrowthWidget(id: string): Promise<void> {
+  await api.post(`/api/widgets/${id}/archive`);
+}
+
 export async function fetchClosureReport(range: ReportRange): Promise<ClosureReport> {
   const { data } = await api.get('/api/analytics/closures', { params: range });
   return data;

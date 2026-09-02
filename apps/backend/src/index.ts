@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import metaTemplateRoutes from './modules/meta-templates/meta-templates.routes';
+import growthWidgetRoutes from './modules/growth-widgets/growth-widgets.routes';
+import widgetRedirectRoutes from './modules/growth-widgets/widget-redirect.routes';
 import http from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -345,6 +347,7 @@ app.use('/api/billing/signup', LIMITS.signup);
 app.use('/api/auth/verify-email', LIMITS.emailVerify);
 app.use('/api/auth/resend-verification', LIMITS.emailVerify);
 app.use('/api/branding/public', LIMITS.publicBranding);
+app.use('/api/widgets/go', LIMITS.widgetRedirect);
 app.use('/webhooks', LIMITS.webhook);
 // Before the /api backstop, so a public-API request is bounded by its token
 // budget first and only then by the shared per-IP one.
@@ -369,9 +372,26 @@ app.use('/api', LIMITS.api);
 
     @auth-exempt  the path prefix, which must appear in the condition below it
     @category     1 = genuinely public · 2 = scoped elsewhere
-    @scope        category 2 only: the chain that establishes scope, checked to
-                  exist and to end in runAsOrganization or runAsPlatform
+                  3 = public, tenant-derived
+    @scope        categories 2 and 3: the chain that establishes scope, checked
+                  to exist and to end in runAsOrganization or runAsPlatform
+    @ratelimit    category 3 only: the LIMITS key, checked to exist and to be
+                  mounted on this path
     @reason       why, in prose, and never empty
+
+  **Category 3 exists because the widget redirect fits neither of the others.**
+  It is public — its token is printed on posters, so everyone holding it is
+  meant to — but it writes a tenant-owned row, which category 1 forbids. And
+  every category-2 path is *authenticated* by another mechanism, which this one
+  is not by anybody. Calling it category 2 would have passed the gate and left
+  an annotation claiming something the code does not do.
+
+  A category-3 path must satisfy four things, three of them checked:
+    1. the tenant comes from a server-side lookup, never from the request;
+    2. it enters that tenant's scope before writing;
+    3. it is rate-limited, because the caller is anonymous;
+    4. it only appends — no update, no delete.
+  Invariant 4 is why the handler lives in a file of its own.
 
   Adding a branch without an annotation fails the gate. So does an annotation
   left behind by a branch that was deleted, and so does a category-2 chain whose
@@ -387,6 +407,27 @@ app.use('/api', (req, res, next) => {
    *              exemption anybody had to argue for.
    */
   if (req.path.startsWith('/auth')) {
+    return next();
+  }
+
+  /**
+   * @auth-exempt /widgets/go/
+   * @category    3
+   * @scope       modules/growth-widgets/widget-redirect.routes.ts::runAsPlatform
+   *              -> modules/growth-widgets/widget-redirect.routes.ts::runAsOrganization
+   * @ratelimit   widgetRedirect
+   * @reason      The growth-widget redirect, and the first exempt path that
+   *              writes. It is public by design — the token is printed on
+   *              posters and embedded in pages, so everyone holding it is meant
+   *              to — but it is not category 1, because it writes a row that
+   *              belongs to a tenant. Nor is it category 2: every path there is
+   *              authenticated by another mechanism, and this token
+   *              authenticates nobody. It derives the tenant by looking the
+   *              token up, then enters that tenant's scope to append one click
+   *              row. It never updates or deletes, and it never reads an
+   *              organization id off the request.
+   */
+  if (req.path.startsWith('/widgets/go/')) {
     return next();
   }
 
@@ -520,6 +561,10 @@ app.use('/api/lifecycle-stages', lifecycleRoutes);
 app.use('/api/workflows',      workflowRoutes);
 app.use('/api/campaigns',      campaignRoutes);
 app.use('/api/meta-templates', metaTemplateRoutes);
+// The public redirect first, so /api/widgets/go/:token is matched before the
+// authenticated CRUD router ever sees it.
+app.use('/api/widgets', widgetRedirectRoutes);
+app.use('/api/widgets', growthWidgetRoutes);
 app.use('/api/system',         systemRoutes);
 app.use('/api/templates',      templateRoutes);
 app.use('/api/snippets',       snippetRoutes);
