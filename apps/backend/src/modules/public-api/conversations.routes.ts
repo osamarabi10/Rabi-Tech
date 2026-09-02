@@ -162,9 +162,20 @@ router.get('/', requireScope('conversations:read'), async (req, res) => {
 
 router.get('/:id', requireScope('conversations:read'), async (req, res) => {
   try {
-    // findFirst, not findUnique: the tenancy extension adds `organizationId` to
-    // the filter, and a unique lookup by primary key alone would be a
-    // cross-tenant read if the extension were ever bypassed.
+    /*
+      findFirst rather than findUnique, though both are safe.
+
+      The extension scopes findUnique too — it merges `organizationId` into the
+      where, and every model here carries a composite unique on
+      `(id, organizationId)` for exactly that. So this is a style choice, not a
+      security one, and an earlier comment here claimed otherwise: it said a
+      unique lookup "would be a cross-tenant read if the extension were ever
+      bypassed", which is equally true of findFirst and therefore argues nothing.
+
+      findFirst is still preferred because it returns null for a row in another
+      tenant rather than throwing on a missing compound key, which is the 404
+      this handler wants.
+    */
     const conversation = await prisma.conversation.findFirst({
       where: { id: String(req.params.id) },
       include: CONVERSATION_INCLUDE,

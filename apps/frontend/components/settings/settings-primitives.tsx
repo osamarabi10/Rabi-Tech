@@ -81,6 +81,54 @@ export function SettingsPage({
 }
 
 /**
+ * The same header language, on a screen that holds a list rather than a form.
+ *
+ * ## Why this exists instead of reusing SettingsPage
+ *
+ * `SettingsPage` centres a measured column, which is right for a form and wrong
+ * for a table: a users list or a tag list squeezed into 768px starts wrapping
+ * columns that were readable at full width, and the "fix" is then to hide
+ * columns nobody asked to lose. Respond.io's own list screens are wider than
+ * their form screens for the same reason.
+ *
+ * So the two share a header treatment and differ on width — which is the actual
+ * distinction, rather than pretending every settings screen is the same shape.
+ * The list itself stays full-bleed and scrolls under a header that does not.
+ */
+export function SettingsListPage({
+  title,
+  description,
+  action,
+  toolbar,
+  children,
+  className,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  /** Search, filters — sits below the header and above the list. */
+  toolbar?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn('flex min-h-0 flex-1 flex-col bg-background', className)}>
+      <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-5 sm:px-6">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
+          {description && (
+            <p className="mt-1 max-w-prose text-caption text-muted-foreground">{description}</p>
+          )}
+        </div>
+        {action}
+      </header>
+      {toolbar}
+      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+    </div>
+  );
+}
+
+/**
  * One titled section.
  *
  * The description under the title is the part worth copying most: it turns a

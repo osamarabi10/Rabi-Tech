@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label';
 import { ListToolbar, RowOverflowMenu } from '@/components/ui/list-primitives';
 import { EmptyState, ErrorState, LayoutSkeleton, NoResultsState } from '@/components/ui/operational-state';
 import { Textarea } from '@/components/ui/textarea';
+import { SettingsListPage } from './settings-primitives';
 
 const COLORS = ['#2563eb', '#0f766e', '#16a34a', '#ca8a04', '#ea580c', '#dc2626', '#db2777', '#7c3aed', '#64748b'];
 type TagForm = { name: string; emoji: string; colorCode: string; description: string };
@@ -88,13 +89,15 @@ export function WorkspaceTags() {
   if (loading) return <LayoutSkeleton label={t('Loading Tags')} className="m-4" />;
   if (failed) return <ErrorState title={t('Could not load Tags')} retryLabel={t('Try again')} onRetry={load} className="m-4" />;
 
-  return <div className="flex min-h-0 flex-1 flex-col bg-background">
-    <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-      <div className="min-w-0 flex-1"><h1 className="text-lg font-semibold">{t('Tags')}</h1><p className="mt-1 text-caption text-muted-foreground">{t('Organize Contacts for filters, Segments, Broadcasts, and Workflows.')}</p></div>
-      {canManage && <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Create Tag')}</Button>}
-    </header>
-    <ListToolbar searchValue={query} onSearchChange={setQuery} searchLabel={t('Search Tags')} clearSearchLabel={t('Clear search')} />
-    <div className="min-h-0 flex-1 overflow-auto">
+  return <SettingsListPage
+    title={t('Tags')}
+    description={t('Organize Contacts for filters, Segments, Broadcasts, and Workflows.')}
+    action={canManage
+      ? <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Create Tag')}</Button>
+      : undefined}
+    toolbar={<ListToolbar searchValue={query} onSearchChange={setQuery} searchLabel={t('Search Tags')} clearSearchLabel={t('Clear search')} />}
+  >
+    <div>
       {!rows.length ? <EmptyState icon={Tags} title={t('No Tags yet')} description={canManage ? t('Create the first shared Contact Tag.') : t('Tags created while working with Contacts will appear here.')} action={canManage ? <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Create Tag')}</Button> : undefined} /> : !shown.length ? <NoResultsState title={t('No Tags match this search')} clearLabel={t('Clear search')} onClear={() => setQuery('')} /> : <div className="divide-y divide-border border-b border-border">
         {shown.map((tag) => <article key={tag.id} className="grid min-h-20 gap-3 bg-card px-4 py-3 sm:grid-cols-[minmax(200px,0.9fr)_minmax(260px,1.6fr)_120px_40px] sm:items-center sm:px-6">
           <div className="flex min-w-0 items-center gap-3"><span className="size-3 shrink-0 rounded-full border border-black/10" style={{ backgroundColor: tag.colorCode || '#64748b' }} /><div className="min-w-0"><h2 className="truncate text-small font-semibold" dir="auto">{tag.emoji ? `${tag.emoji} ` : ''}{tag.name}</h2><span className="mt-1 flex items-center gap-1 font-mono text-micro text-muted-foreground" dir="ltr"><Hash className="size-3" />{tag.id}</span></div></div>
@@ -112,5 +115,5 @@ export function WorkspaceTags() {
     </DrawerBody><DrawerFooter><Button variant="outline" onClick={() => setEditorOpen(false)}>{t('Cancel')}</Button><Button onClick={() => void persist()} disabled={saving || !form.name.trim()}>{saving ? <Loader2 className="size-4 animate-spin" /> : null}{t('Save')}</Button></DrawerFooter></DrawerContent></Drawer>
 
     <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setConfirmCount(''); } }}><DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>{t('Delete Tag permanently')}</DialogTitle></DialogHeader><div className="space-y-4"><p className="text-small text-muted-foreground">{t('This removes the Tag from every Contact and may change Segments and Workflows.')}</p><div className="space-y-1.5"><Label htmlFor="tag-delete-count">{t('Enter the assigned Contact count to confirm')}: <bdi dir="ltr">{deleteTarget?.contactCount || 0}</bdi></Label><Input id="tag-delete-count" inputMode="numeric" dir="ltr" value={confirmCount} onChange={(event) => setConfirmCount(event.target.value.replace(/\D/g, ''))} /></div></div><DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>{t('Cancel')}</Button><Button variant="destructive" disabled={saving || Number(confirmCount) !== (deleteTarget?.contactCount || 0)} onClick={() => void remove()}>{saving ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}{t('Delete Tag')}</Button></DialogFooter></DialogContent></Dialog>
-  </div>;
+  </SettingsListPage>;
 }
