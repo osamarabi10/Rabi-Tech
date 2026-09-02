@@ -8,6 +8,7 @@
     "lint": "node scripts/lint-prisma-client.js",
     "test:tenancy": "node scripts/tenancy-bleed-harness.js",
     "test:secrets": "node scripts/verify-secret-scan.js",
+    "test:auth-exemptions": "node scripts/verify-auth-exemptions.js",
     "test:finance": "npm run build && node scripts/verify-finance.js",
     "test:backup-replication": "npm run build && node scripts/verify-backup-replication.js",
     "test:keywords": "npm run build && node scripts/verify-keywords.js",

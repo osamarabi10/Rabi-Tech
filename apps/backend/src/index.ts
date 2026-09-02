@@ -351,26 +351,81 @@ app.use('/webhooks', LIMITS.webhook);
 app.use('/api/v1', LIMITS.publicApi, LIMITS.publicApiTotal);
 app.use('/api', LIMITS.api);
 
-// SECURITY: Require authentication for ALL /api/* routes except /api/auth/*
-// This middleware runs before route handlers and verifies JWT
-// For organization-scoped routes, it establishes tenant context via AsyncLocalStorage
+/*
+  Authentication and tenant scope for every /api/* route.
+
+  The invariant, which matters more than the list below: **exemption from this
+  middleware must never mean exemption from tenant scope.** Some paths below are
+  genuinely public and have nothing to scope to. The rest are scoped somewhere
+  else — a bearer token, a signed URL, a platform token — and are exempt only
+  because *this* middleware would reject their credential as a malformed JWT.
+
+  Those two look identical here. Both are one `if` and one `return next()`. That
+  is the whole risk: a path added in the belief that something downstream scopes
+  it, when nothing does, is indistinguishable at a glance from a correct one.
+
+  So each branch carries a machine-checked annotation, and
+  `scripts/verify-auth-exemptions.js` (npm run test:auth-exemptions) enforces it:
+
+    @auth-exempt  the path prefix, which must appear in the condition below it
+    @category     1 = genuinely public · 2 = scoped elsewhere
+    @scope        category 2 only: the chain that establishes scope, checked to
+                  exist and to end in runAsOrganization or runAsPlatform
+    @reason       why, in prose, and never empty
+
+  Adding a branch without an annotation fails the gate. So does an annotation
+  left behind by a branch that was deleted, and so does a category-2 chain whose
+  scope call has been removed.
+*/
 app.use('/api', (req, res, next) => {
-  // Allow unauthenticated access to /api/auth (login, signup, etc.)
+  /**
+   * @auth-exempt /auth
+   * @category    1
+   * @reason      Login, signup, password reset and email verification all run
+   *              before a session exists. There is no tenant to scope to yet,
+   *              which is what makes this public by nature rather than an
+   *              exemption anybody had to argue for.
+   */
   if (req.path.startsWith('/auth')) {
     return next();
   }
 
+  /**
+   * @auth-exempt /branding/public
+   * @category    1
+   * @reason      White-label branding for the login screen, resolved from the
+   *              request hostname before anyone has signed in. It is public by
+   *              design: the logo and colours on a login page are visible to
+   *              anyone who can reach the login page. Reads only.
+   */
   if (req.path === '/branding/public' || req.path.startsWith('/branding/assets/')) {
     return next();
   }
 
-  // OpenWA downloads workspace Snippet files server-to-server. The HMAC in
-  // the URL is the authorization; requiring a browser JWT would make every
-  // attachment fail at the gateway.
+  /**
+   * @auth-exempt /snippets/assets/
+   * @category    2
+   * @scope       modules/snippets/snippets.routes.ts::verifySnippetAssetSignature
+   *              -> modules/snippets/snippets.routes.ts::runAsOrganization
+   * @reason      OpenWA downloads workspace Snippet files server-to-server. The
+   *              HMAC in the URL is the authorization; requiring a browser JWT
+   *              would make every attachment fail at the gateway. The handler
+   *              verifies the signature before it reads anything, then enters
+   *              the organization's scope explicitly.
+   */
   if (req.path.startsWith('/snippets/assets/')) {
     return next();
   }
 
+  /**
+   * @auth-exempt /billing/plans
+   * @category    1
+   * @reason      The signup funnel, which by definition runs before an account
+   *              exists: the public price list, the signup submission itself,
+   *              email verification, and polling a checkout that has not yet
+   *              produced an organization. Nothing here can be tenant-scoped
+   *              because there is not yet a tenant.
+   */
   if (
     req.path === '/billing/plans'
     || req.path === '/billing/signup'
@@ -380,19 +435,33 @@ app.use('/api', (req, res, next) => {
     return next();
   }
 
-  /*
-    The public API authenticates with a bearer token, not a session JWT, and
-    establishes its own tenant scope in `apiTokenAuth`. Falling through to
-    `verifyToken` here would reject every API token as a malformed JWT.
-
-    This is an exemption from *this* middleware only — `/api/v1` is not
-    unauthenticated. Its router calls `apiTokenAuth` before any handler, and
-    that middleware ends in `runAsOrganization` exactly like the branch below.
-  */
+  /**
+   * @auth-exempt /v1
+   * @category    2
+   * @scope       modules/public-api/index.routes.ts::apiTokenAuth
+   *              -> modules/api-tokens/api-token.middleware.ts::runAsOrganization
+   * @reason      The public API authenticates with a bearer token, not a session
+   *              JWT, and establishes its own tenant scope in `apiTokenAuth`.
+   *              Falling through to `verifyToken` here would reject every API
+   *              token as a malformed JWT. This is an exemption from *this*
+   *              middleware only — `/api/v1` is not unauthenticated. Its router
+   *              calls `apiTokenAuth` before any handler, and that middleware
+   *              ends in `runAsOrganization` exactly like the branch below.
+   */
   if (req.path === '/v1' || req.path.startsWith('/v1/')) {
     return next();
   }
 
+  /**
+   * @auth-exempt /platform
+   * @category    2
+   * @scope       index.ts::verifyPlatformToken -> index.ts::runAsPlatform
+   * @reason      The platform-owner console authenticates with a platform token
+   *              rather than a tenant JWT, and is deliberately not inside any
+   *              organization. Scope is established here, in this branch, and
+   *              is platform scope — which the tenancy harness separately
+   *              asserts can reach PlatformAuditLog and a tenant JWT cannot.
+   */
   if (req.path.startsWith('/platform')) {
     return verifyPlatformToken(req, res, () => {
       runAsPlatform(`platform-api:${req.method}:${req.path}`, () => next()).catch(() => {
@@ -401,6 +470,16 @@ app.use('/api', (req, res, next) => {
     });
   }
 
+  /**
+   * @auth-exempt /branding/organizations
+   * @category    2
+   * @scope       index.ts::verifyPlatformToken -> index.ts::runAsPlatform
+   * @reason      The platform owner editing a subscriber's branding. Same
+   *              credential and same scope as /platform, and separate from it
+   *              only because the path sits under /branding — which is exactly
+   *              why it needs its own entry: the neighbouring /branding/public
+   *              branch above is category 1, and the two must not be confused.
+   */
   if (req.path.startsWith('/branding/organizations')) {
     return verifyPlatformToken(req, res, () => {
       runAsPlatform(`platform-api:${req.method}:${req.path}`, () => next()).catch(() => {
