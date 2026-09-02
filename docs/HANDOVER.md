@@ -207,7 +207,8 @@ Nothing engineering does substitutes for these.
    cannot tell you: the auto-loading skill whose schema instruction springs
    §1's trap, the fact that every documented backup procedure here runs through
    a Docker daemon that is currently hung (with the way round it), and a
-   corrected file list — **the tree has 16 uncommitted files, not 15**, so do
+   corrected file list — **the tree has 16 uncommitted files, not 15** — and §10,
+   which explains why a clean checkout of main goes red against this database. So do
    not stop at step 1 below on the count alone.
 1. Read §1 and confirm the tree matches. If it does not, **stop and ask** —
    somebody has committed or reverted since this was written.
@@ -379,3 +380,60 @@ the skill, wrote this section.
 
 **Did not:** change any application code, run any migration, or touch the 16
 uncommitted files. The only tracked file this session changed is this one.
+
+---
+
+## 10 · The database is ahead of `main`, so `main` is red
+
+Found 2026-09-02 while checking whether a new commit stood on its own. It does;
+this does not.
+
+**`20260930090000_standard_trial_gateway` is applied to the live development
+database.** The migration file is untracked — item A in §1 — but somebody ran
+it. `_prisma_migrations` has the row, and `Plan.STANDARD.autoProvisionGateway`
+is `true`.
+
+The committed code still says `false`, in both places:
+
+```
+committed  plans.ts       autoProvisionGateway: false
+committed  harness        assert.equal(standard.autoProvisionGateway, false)
+live DB    Plan.STANDARD  true
+```
+
+So a clean checkout of `main`, run against this database, **fails four checks**:
+
+```
+[FAIL] billing: a trial signup provisions a gateway once its email is verified
+[FAIL] billing: the seeded edition catalogue matches PLAN_ENTITLEMENTS field for field
+       STANDARD.autoProvisionGateway: database has true, constant has false
+[FAIL] billing: Standard resolves end-to-end as messaging only
+[FAIL] billing: an edition can be created, and the code space stays shut
+125/129 checks passed.
+```
+
+Verified by swapping the committed `tenancy-bleed-harness.js` and `plans.ts`
+into place, running the gate, and restoring both — checksums confirmed
+identical afterwards.
+
+**Why this is worth its own section.** §5 of the state document records getting
+this exactly backwards once: a gate passed at 128/128 *because the owner's fix
+was in the working tree*, reporting on the environment rather than on what was
+committed. This is the same split seen from the other side. Anybody who checks
+out `main`, runs the release blocker, and sees four billing failures will
+reasonably assume they broke something. They did not. The tree is ahead of the
+commit, and the database is ahead of both.
+
+**It resolves itself the moment item A lands** — the working tree already has
+the matching harness and `plans.ts` changes, which is why a run *here* is
+130/130. Nothing needs fixing; item A needs deciding.
+
+**Until then, two rules.**
+
+A gate run in this working tree does **not** tell you whether `main` is green.
+If that is the question, check out the committed files and run it against them,
+the way this finding was produced.
+
+And do not "fix" the four failures by editing the committed constants. They are
+not wrong; they are simply older than the database. Editing them would commit
+half of item A by hand, which is the §1 trap wearing a different hat.
