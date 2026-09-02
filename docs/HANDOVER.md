@@ -20,14 +20,20 @@ ranked risks.
 
 ## 1 · The tree as it was — historical, and still the reason for §3
 
-> **Resolved 2026-09-02.** Everything below describes a tree that no longer
-> exists. Item A landed as `ef4842e5` (ten paths, staged by name; `test:tenancy`
-> 130/130 before and after) and item B as `1f652be7` (seven paths, with the
-> per-24h recipient cap enforced; `test:meta-templates` 41/41). The tree is
-> clean.
+> **CLOSED 2026-09-02.** Everything below describes a tree that no longer
+> exists. Item A landed as `ef4842e5` (ten paths, staged by name) and item B as
+> `1f652be7` (seven paths, with the per-24h recipient cap enforced;
+> `test:meta-templates` 41/41). The tree is clean and **`origin/main` is at
+> `343ec316`**.
 >
-> It is kept because the rules in §3 were paid for here, and a rule whose
-> reason has been deleted is one the next person talks themselves out of.
+> **Verified on a genuine fresh clone, not inferred.** `origin/main` was cloned
+> into a temp directory, installed from a cold `npm ci`, built, and run against
+> the same development database: **130/130**. Every earlier "green" in this
+> document was a working-tree run, which §10 explains cannot answer this
+> question. This one can.
+>
+> Kept because the rules in §3 were paid for here, and a rule whose reason has
+> been deleted is one the next person talks themselves out of.
 
 **GitHub `main` is at `3f041e92`. Local `HEAD` is one commit ahead.**
 
@@ -151,6 +157,20 @@ The gates now check:
   (added 2026-09-02 — this bullet described a gate that did not exist; see §9)
 - the executor calls the gateway exactly once, from inside the consent check
 
+**Ask what the check cannot see.** Three instances now of one shape: the
+instrument was structurally incapable of seeing the property it was checking.
+A source assertion read `dist/` for a cast that compilation **erases**. A cap
+check matched a string living inside the guard's own declaration, so deleting
+the call site left it green. And two regexes matched a bare `\n`, invisible to
+`git diff` because **`git diff` normalises line endings**. Each was a right
+assertion pointed at the wrong artifact.
+
+Source properties need source; runtime properties need compiled output; and
+anything the build or the VCS normalises cannot be trusted from inside the thing
+that normalises it. Full write-up in §4 of
+[SESSION-STATE-AND-AUDIT.md](SESSION-STATE-AND-AUDIT.md); the instances are
+D-32 and D-33.
+
 **Source assertions cannot see behaviour.** `verify-collaborators.js` first
 asserted `if (shouldAdd)` appeared in the source; mutating the compiled output
 to `if (true)` left it green. If a gate claims a setting *changes* something,
@@ -212,6 +232,19 @@ npx tsc --noEmit && npx next build
 summary line** — deliberately. A run that could not start has tested nothing
 and must not print a number that looks like it did.
 
+**Your first run on a fresh clone will look like it has hung. It has not.**
+`test:tenancy` boots the backend through `ts-node/register/transpile-only`,
+which transpiles the whole source tree in process and caches nothing to disk.
+Measured immediately after a cold `npm ci`: **~24 seconds to listening**, against
+**~5 seconds** once warm. The readiness budget is **60 seconds** for that
+reason.
+
+If a genuinely slow machine still overruns it, raise
+`HARNESS_BACKEND_READY_MS`. The failure now tells you which of the two things
+happened — a backend that **exited** is a code problem, one that is **still
+running** is a slow start and wants a bigger number, not debugging. See D-33;
+the timeout wording is proven, the crash wording is not.
+
 ---
 
 ## 6 · What is left
@@ -242,6 +275,14 @@ Nothing engineering does substitutes for these.
 1. **Rotate the exposed secrets.** The public repo names `dev-admin-key` and the
    shipped default database password; a MongoDB Atlas password was pasted into
    chat. **Rotation, not removal** — the history is public.
+
+   Unchanged in substance, more urgent in degree: `main` has moved from
+   `3f041e92` to `343ec316` and now carries considerably more code publicly —
+   the public API, the webhook system, Meta template sending, the platform
+   console. Nothing about that changes what has to happen to these two
+   credentials, but there is more surface standing behind them than when this
+   item was written, and every day they stay valid is a day the rotation was
+   still outstanding.
 2. **Payment provider.** Activation is automatic, checkout is stubbed. The
    product cannot take money.
 3. **Domain, TLS, VPS.** Not reachable by a customer.
@@ -472,18 +513,26 @@ uncommitted files. The only tracked file this session changed is this one.
 
 ---
 
-## 10 · The database was ahead of `main` — resolved 2026-09-02
+## 10 · The database was ahead of `main` — CLOSED 2026-09-02
 
-> **Resolved by `ef4842e5`.** The migration was already applied to the
-> development database while the committed code still said `false`; landing
-> item A supplied the missing half, so the repository and the database now
-> agree. The `130/130` run *after* that commit was the first in this whole
-> session that described the **committed** state rather than a working tree
-> that disagreed with it.
+> **Closed, and this time with the evidence rather than the inference.**
 >
-> **Both rules below still hold and are not historical.** The split can recur
-> the moment anyone applies a migration whose code is uncommitted, which is
-> exactly how this one arose.
+> `ef4842e5` supplied the missing half: the migration was already applied to the
+> development database while the committed code still said `false`. The
+> `130/130` run after that commit was the first to describe the **committed**
+> state — but it was still a working-tree run, and the rule below says a
+> working-tree run cannot answer whether `main` is green.
+>
+> So it was answered properly. `origin/main` at `343ec316`, cloned fresh into a
+> temp directory, cold `npm ci`, built, run against the same development
+> database: **130/130**, with the media-filename check named and passing. None
+> of the four billing failures this section documents.
+>
+> **Both rules below still hold and are not historical.** The split recurs the
+> moment anyone applies a migration whose code is uncommitted, which is exactly
+> how this one arose. And the clean clone earned its keep twice over — it is
+> also what exposed D-32 and D-33, two gate defects that are invisible from a
+> working tree by construction.
 
 
 

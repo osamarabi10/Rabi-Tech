@@ -1345,3 +1345,102 @@ That is worth a second look on its own: the executor's `switch` means every
 protection is per-case, so a new case starts with none of them. Not changed
 here, since restructuring the executor while adding to it is how both of these
 would have shipped — but it is the structural reason this class exists.
+
+---
+
+## D-32 · Gate regexes matched a bare `\n`, so they tested the checkout — FIXED
+
+**Fixed 2026-09-02** in `1e3900f9` (the two regexes) and `343ec316`
+(`.gitattributes`, which removes the cause). Recorded because the class is easy
+to reintroduce and impossible to see from where most people look.
+
+**What was wrong.** Two gate assertions matched a bare `\n` against whole-file
+source:
+
+```
+apps/backend/scripts/tenancy-bleed-harness.js:413
+  /\n\s*mediaFileName,\n\s*fromMe: false/
+
+apps/backend/scripts/verify-collaborators.js:98
+  /catch \{[\s\S]*?\}\n\}/
+```
+
+`core.autocrlf` is `true` on the machines this is developed on, so a fresh
+Windows checkout materialises **CRLF** while the index holds **LF**. The comma
+is then followed by `\r`, the pattern misses, and the gate fails — against a
+file that is byte-identical to the one that passes.
+
+**Why it stayed hidden.** `git diff` **normalises line endings**. The ordinary
+tool for "what is different here?" reports nothing, and the working tree, where
+everyone runs the gates, has LF. The only vantage point that shows it is a clean
+clone: `129/130` there against `130/130` here, same commit.
+
+**Only one instance had surfaced.** The `verify-collaborators` one had not, and
+would have failed the first time anyone ran that gate on a fresh checkout. It
+was found by auditing the whole class — a parser over every gate script looking
+for regex literals with a bare `\n` or the `m` flag — rather than by fixing the
+instance that happened to appear.
+
+**Checked and confirmed safe**, so the audit has a stated floor: `split(/\r?\n/)`
+(already tolerant), `[\s\S]` (matches `\r`), `indexOf('\n')` (still finds the
+second byte of a CRLF pair; the one-byte offset does not matter at either use),
+and `verify-csv-safety`'s assertions on `\r\n` (about *generated CSV output* per
+RFC 4180, not source — correct as written).
+
+**Fixed twice, deliberately.** The regexes use `\r?\n`, and `.gitattributes`
+sets `* text=auto eol=lf` so the working directory stops varying. The regex
+fixes are redundant once the attributes are honoured and are kept anyway: they
+cover a clone made before the attributes existed, and any file type the rules
+miss.
+
+**Verified on a genuine fresh clone** of `origin/main` at `343ec316`: 130/130,
+with `audit: inbound media filenames reach Message.mediaFileName on OpenWA and
+Meta` named and passing, and `meta.webhook.ts` checking out with 0 CR bytes
+where it previously had 502.
+
+---
+
+## D-33 · The harness reported a slow start as a crash — FIXED, one branch unproven
+
+**Fixed 2026-09-02** in `1e3900f9`.
+
+**What was wrong, in two parts.**
+
+*The budget.* `waitForBackend` allowed 50 attempts at 200 ms — about **10
+seconds**. The harness starts the backend through
+`ts-node/register/transpile-only`, which transpiles the whole source tree in
+process and caches nothing to disk. Measured on a genuinely cold clone,
+immediately after `npm ci`:
+
+| | |
+|---|---|
+| Cold boot | **23,789 ms** |
+| Warm boot | 4,668 ms (fresh clone) / 5,728 ms (working tree) |
+| Old budget | 10,000 ms — **below cold** |
+| New budget | 60,000 ms — clears cold with 2.5× margin |
+
+So the first run on any fresh clone abandoned a backend that was working
+correctly. It is now 60 s, overridable with `HARNESS_BACKEND_READY_MS`.
+
+*The message.* It said `backend did not become ready` for both failure modes,
+and they need different responses: a process that **exited** has a reason in its
+output and is a code problem; one still **running** is a slow start and wants a
+longer budget, not debugging. The first person to hit this went looking for a
+defect that was not there.
+
+This is the inverse of §5's rule for `test:public-api`. There, a run that could
+not start must not print a number that looks like it did. Here, a run that timed
+out must not print words that look like a crash.
+
+**One branch is unproven, and that is the honest part of this entry.** The
+timeout branch was forced with a 500 ms budget and produces:
+
+> `backend did not answer within 625ms across 3 attempts, and is STILL RUNNING`
+> `— this is a timeout, not a crash…`
+
+The **crash branch** — `exited with code N … a failure to boot rather than a
+slow one` — could not be forced without editing the harness's spawn or
+application code, both out of scope for that commit. Its wording is verified by
+reading, not by running. **Treat it as untested until something exercises it.**
+A message nobody has seen fire is a message that has never been checked for
+being wrong.

@@ -225,6 +225,50 @@ Four of the eight instances were found by those checks rather than by review, an
 two were found within minutes of my creating them. That is the difference
 between a rule and a test.
 
+### The second pattern: the instrument could not see the property
+
+Three instances, and three is what turns coincidence into a category. Each is a
+check that passed while proving nothing, and in every one the cause was the
+same: **the thing doing the checking was structurally incapable of seeing the
+thing it was checking.** Not a wrong assertion — a right assertion pointed at an
+artifact where the property does not exist.
+
+1. **A source assertion reading `dist/` for a cast.** `verify-workflow-p2` was
+   written to refuse `as never`, the token that silenced D-31. It read the
+   compiled output, as every behavioural check in that file correctly does. But
+   TypeScript **erases casts at compile time**, so `as never` cannot appear in
+   `dist` at all. The check would have passed forever, on any code, including
+   code that reintroduced the defect.
+
+2. **A cap check matching a string inside the guard's own declaration.**
+   `verify-meta-template-send` looked for `RECIPIENT_CAP_REACHED` to prove the
+   per-24h cap was enforced. That string lives in the guard's `throw`. Deleting
+   the *call site* left the guard declared, unreachable, and the gate green at
+   40/40 with the cap fully bypassed. This is the reachability pattern above,
+   written into the gate built to catch it.
+
+3. **A line-ending bug invisible to `git diff`.** Two gate regexes matched a
+   bare `\n` against file contents, so they passed on an LF working tree and
+   failed on a CRLF fresh clone of the same commit. The files were
+   byte-identical once normalised — and `git diff` normalises line endings, so
+   **the ordinary tool for "what changed?" reports nothing.** No amount of
+   looking at diffs would have found it.
+
+**How each was actually caught, since none was caught by reading:** (1) and (2)
+by mutation — making the check fail on purpose, which is the only thing that
+distinguishes a check that works from a check that is merely green. (3) by
+cloning `origin/main` into a temp directory and running the gate there, which is
+the only vantage point from which a working-tree-only defect is visible.
+
+**The rule.** Before trusting a check, ask what the thing doing the checking is
+structurally incapable of seeing.
+
+The corollaries are cheap and worth stating: a check on a *source* property
+(a cast, a comment, an import) must read source; a check on a *runtime*
+property (a call, an order) must read compiled output; a check on anything the
+build or the VCS normalises — line endings, whitespace, erased types — cannot
+be trusted from inside the environment that normalises it.
+
 ---
 
 ## 5 · Mistakes I made
