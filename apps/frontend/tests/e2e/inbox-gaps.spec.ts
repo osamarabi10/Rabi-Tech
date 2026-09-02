@@ -61,10 +61,30 @@ async function prepare(page: Page, options: DisplayOptions) {
   await page.route('**/api/conversations**', (route) => route.fulfill({ json: [] }));
 }
 
+/**
+ * No horizontal page overflow — measured at rest.
+ *
+ * The wait is not padding. The mobile navigation drawer is `fixed` and parked
+ * off-canvas with a 200ms transform transition, and a fixed element outside the
+ * viewport counts toward `documentElement.scrollWidth` while it is moving.
+ * Measured immediately after navigation this reported 51px on a page whose
+ * `body.scrollWidth` was exactly the viewport — the content fits, the drawer
+ * was mid-flight.
+ *
+ * Two tests here load the same page at the same width. The one that performed a
+ * few interactions first passed; the one that measured straight away failed.
+ * That is a property of the clock rather than of the layout, and a check whose
+ * answer depends on how quickly it got there is not measuring the page.
+ */
 async function expectNoPageOverflow(page: Page) {
-  const overflow = await page.evaluate(() =>
-    document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow, 'page scrolls horizontally').toBeLessThanOrEqual(1);
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await expect
+    .poll(
+      () => page.evaluate(() =>
+        document.documentElement.scrollWidth - document.documentElement.clientWidth),
+      { message: 'page scrolls horizontally', timeout: 5_000 },
+    )
+    .toBeLessThanOrEqual(1);
 }
 
 for (const width of WIDTHS) {

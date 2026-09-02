@@ -1331,7 +1331,22 @@ export default function InboxPage() {
                   another thing narrowing the list, so it sits apart at the end
                   rather than among the filters. */}
               <div className="flex items-center gap-1">
-              <div className="flex flex-1 gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
+               {/*
+                 min-w-0 so the tab strip can actually shrink.
+
+                 A flex child defaults to min-width:auto, which refuses to go
+                 below its content — so the strip stayed at its natural width
+                 and pushed the fixed-width controls beside it past the
+                 viewport. At 375 that was 51px of horizontal page scroll: a
+                 stripe of nothing the user can swipe to, on one of the
+                 fourteen release gates. The overflow-x-auto here was already
+                 correct and simply could not take effect.
+
+                 It appeared when the sort control was added, because that is
+                 what pushed the row over — the strip has been unable to shrink
+                 all along and nothing had needed it to.
+               */}
+              <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
                 {STATUS_TABS.map((tab) => (
                   <button
                     key={tab.key}

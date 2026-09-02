@@ -191,14 +191,39 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
 
       <aside
         className={cn(
-          'relative flex w-12 shrink-0 flex-col items-center overflow-visible',
+          'relative w-12 shrink-0 flex-col items-center overflow-visible',
           'nav-surface border-s border-nav-border',
           'fixed inset-y-0 z-50 transition-transform duration-200 md:static md:z-auto md:translate-x-0',
           // Anchored to the inline-start edge, which is the right in Arabic and
           // the left in English — the same physical position respond.io uses in
           // each direction, rather than a hardcoded side.
           'start-0',
-          open ? 'translate-x-0' : '-translate-x-full md:translate-x-0 rtl:translate-x-full rtl:md:translate-x-0',
+          /*
+            Closed below md is `hidden`, not merely translated off-canvas.
+
+            The drawer is `fixed`, so it escapes the shell's overflow-hidden —
+            a fixed element is clipped by the viewport, not by an ancestor
+            without a transform. Parked at -translate-x-full it stayed in the
+            document's scrollable area and produced 51px of horizontal page
+            scroll on every dashboard screen at 375 and 768: a stripe of
+            nothing the user can swipe to. The certification caught it.
+
+            Clipping at html would have hidden it and blinded the gate to every
+            future overflow, which is worse than the bug.
+
+            `flex` is moved out of the base string on purpose. Layering
+            `hidden` onto a base `flex` leaves two display utilities competing,
+            with the winner decided by Tailwind's emission order — the exact
+            failure recorded in AGENTS.md. One display utility per state.
+
+            The cost is the slide-in on mobile: an element mounting from
+            display:none has no previous transform to animate from. A drawer
+            that appears immediately is a fair trade for a page that does not
+            scroll sideways.
+          */
+          open
+            ? 'flex translate-x-0'
+            : 'hidden md:flex -translate-x-full md:translate-x-0 rtl:translate-x-full rtl:md:translate-x-0',
         )}
         aria-label={t('التنقل')}
       >
