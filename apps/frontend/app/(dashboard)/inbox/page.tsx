@@ -1345,8 +1345,37 @@ export default function InboxPage() {
                  It appeared when the sort control was added, because that is
                  what pushed the row over — the strip has been unable to shrink
                  all along and nothing had needed it to.
+
+                 And relative, which is what fixed the remaining 34px.
+
+                 sr-only is position:absolute, so with no positioned ancestor
+                 its containing block was the initial one — the document.
+                 Every other child of this strip overflows into the strip’s
+                 own scroll and stops there, which is why body.scrollWidth
+                 read exactly the viewport while documentElement.scrollWidth
+                 read 426: the sr-only span on the sort control was the only
+                 child leaking its position to the page, and 426 was that
+                 span’s right edge to the pixel. Under rtl the same span sat
+                 at left=-17 and the document measured 392. Both exact, which
+                 is identity rather than correlation.
+
+                 It also explains why one test passed and its neighbour failed
+                 on the same page at the same width. The passing one operated
+                 the select first; Playwright scrolled this strip to reach it,
+                 and the span came back inside the viewport before anything
+                 measured. Nothing about the page differed — only the clock.
+
+                 The sort control stays inside this strip deliberately. Moving
+                 it out beside density looked better — sorting is a view
+                 preference, not a filter — and starved the strip: this row is
+                 about 300px wide in every layout because it lives in the
+                 conversation column rather than the viewport, so the two
+                 shrink-0 groups consumed all of it and flex-1 min-w-0 took
+                 the whole deficit. Measured clientWidth 0 at 768 and 1440 and
+                 44px at 375: the status tabs were gone. That the row cannot
+                 hold four control groups is real and is not this commit.
                */}
-              <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
+              <div className="relative flex min-w-0 flex-1 gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
                 {STATUS_TABS.map((tab) => (
                   <button
                     key={tab.key}
