@@ -1994,6 +1994,22 @@ const D: Dict = {
   "استعادة": { he: "שחזור", en: "Restore" },
   "عرض الإشعارات": { he: "תצוגת התראות", en: "Notification view" },
   "تعذر تحميل الإشعارات": { he: "לא ניתן לטעון התראות", en: "Could not load notifications" },
+  // Closures report. The five source labels below reach t() through a lookup
+  // rather than as literals, so check-i18n cannot see them — a missing key
+  // falls back to itself, which reads as untranslated Arabic to a Hebrew or
+  // English operator and fails silently. Added by hand for that reason.
+  "الإغلاقات": { he: "סגירות", en: "Closures" },
+  "محادثات مغلقة": { he: "שיחות שנסגרו", en: "Conversations closed" },
+  "مع ملخص": { he: "עם סיכום", en: "With summary" },
+  "بدون ملخص": { he: "ללא סיכום", en: "Without summary" },
+  "حسب التصنيف": { he: "לפי קטגוריה", en: "By category" },
+  "بدون تصنيف": { he: "ללא קטגוריה", en: "Uncategorised" },
+  "حسب طريقة الإغلاق": { he: "לפי אופן הסגירה", en: "By how it closed" },
+  "تفاصيل هذا التقرير لا تطابق الإجمالي. لا تعتمد عليه حتى تتم مراجعته.": { he: "פירוט הדוח אינו מסתכם לסך הכולל. אל תסתמכו עליו עד לבדיקה.", en: "This report's breakdown does not sum to the total. Do not rely on it until it is checked." },
+  "إغلاق تلقائي": { he: "סגירה אוטומטית", en: "Auto-close" },
+  "مسار عمل": { he: "תהליך עבודה", en: "Workflow" },
+  "واجهة برمجية": { he: "ממשק תכנות", en: "API" },
+  "دمج": { he: "מיזוג", en: "Merge" },
   "تعذر تحميل الاشتراك": { he: "לא ניתן לטעון את המנוי", en: "Could not load the subscription" },
   "تعذر تحميل تفاصيل الاشتراك. تحقق من الاتصال وحاول مرة أخرى.": { he: "לא ניתן לטעון את פרטי המנוי. בדקו את החיבור ונסו שוב.", en: "The subscription details could not be loaded. Check the connection and try again." },
   "لا يوجد اشتراك": { he: "אין מנוי", en: "No subscription" },

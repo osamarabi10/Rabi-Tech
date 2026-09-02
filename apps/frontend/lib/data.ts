@@ -2209,6 +2209,36 @@ export async function fetchWebhookReport(range: ReportRange): Promise<WebhookRep
   return data;
 }
 
+/**
+ * How conversations were closed, and by what.
+ *
+ * `key` is nullable on the category breakdown and that is deliberate on the
+ * server: closures made without a category are real closures, and dropping them
+ * would leave a tidy list whose numbers no longer sum to `total`. The server's
+ * own contract is that **every breakdown reconciles to the total** — a report
+ * whose parts disagree with its whole is worse than no report, because it gets
+ * quoted. So the null bucket must be rendered with a label, never filtered out.
+ *
+ * `key` on the category breakdown is the category *name* snapshotted at close
+ * time, not an id, so historic reports do not change when someone tidies the
+ * category list.
+ */
+export type ClosureBreakdownRow<K> = { key: K; count: number };
+
+export type ClosureSource = 'MANUAL' | 'AUTO_CLOSE' | 'WORKFLOW' | 'API' | 'MERGE';
+
+export type ClosureReport = {
+  total: number;
+  byCategory: ClosureBreakdownRow<string | null>[];
+  bySource: ClosureBreakdownRow<ClosureSource>[];
+  summaries: { withSummary: number; withoutSummary: number };
+};
+
+export async function fetchClosureReport(range: ReportRange): Promise<ClosureReport> {
+  const { data } = await api.get('/api/analytics/closures', { params: range });
+  return data;
+}
+
 // ---------- lifecycle stages ----------
 
 /**

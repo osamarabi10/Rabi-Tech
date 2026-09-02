@@ -5,6 +5,7 @@ import { CalendarOff, Wifi, WifiOff } from 'lucide-react';
 import { CampaignRepliesPanel } from '@/components/reports/campaign-replies-panel';
 import {
   fetchCampaignsReport,
+  fetchClosureReport,
   fetchConversationsReport,
   fetchGatewayReport,
   fetchOverviewReport,
@@ -13,6 +14,7 @@ import {
   fetchTeams,
   fetchWebhookReport,
   type CampaignReportRow,
+  type ClosureReport,
   type ConversationsReport,
   type DrilldownMetric,
   type GatewayReport,
@@ -62,7 +64,7 @@ import { ErrorState } from '@/components/ui/operational-state';
  * make the slowest one the cost of the page.
  */
 
-type TabKey = 'overview' | 'conversations' | 'team' | 'campaigns' | 'gateway' | 'webhooks';
+type TabKey = 'overview' | 'conversations' | 'team' | 'campaigns' | 'closures' | 'gateway' | 'webhooks';
 
 const BUCKET_LABEL: Record<string, string> = {
   under_5m: 'أقل من ٥ دقائق',
@@ -130,6 +132,7 @@ export default function ReportsPage() {
   const [campaigns, setCampaigns] = useState<CampaignReportRow[] | null>(null);
   const [gateway, setGateway] = useState<GatewayReport | null>(null);
   const [webhooks, setWebhooks] = useState<WebhookReport | null>(null);
+  const [closures, setClosures] = useState<ClosureReport | null>(null);
   const [liveSessions, setLiveSessions] = useState<Session[]>([]);
 
   const [teams, setTeams] = useState<Team[]>([]);
@@ -166,6 +169,7 @@ export default function ReportsPage() {
         setGateway(report);
         setLiveSessions(live);
       }
+      if (tab === 'closures') setClosures(await fetchClosureReport(query));
       if (tab === 'webhooks') setWebhooks(await fetchWebhookReport(query));
     } catch {
       setFailed(true);
@@ -183,6 +187,7 @@ export default function ReportsPage() {
     { key: 'conversations', label: 'المحادثات' },
     { key: 'team', label: 'الفريق' },
     { key: 'campaigns', label: 'الحملات' },
+    { key: 'closures', label: 'الإغلاقات' },
     { key: 'gateway', label: 'حالة القناة' },
     { key: 'webhooks', label: 'الويب هوك' },
   ];
@@ -265,6 +270,7 @@ export default function ReportsPage() {
           {tab === 'gateway' && (
             <GatewayTab report={gateway} sessions={liveSessions} loading={loading} />
           )}
+          {tab === 'closures' && <ClosuresTab report={closures} loading={loading} />}
           {tab === 'webhooks' && <WebhooksTab report={webhooks} loading={loading} />}
         </div>
       )}
@@ -748,6 +754,94 @@ const DIRECTION_LABEL: Record<string, string> = {
   INBOUND: 'وارد (من البوابة)',
   OUTBOUND: 'صادر (إلى نقاط النهاية)',
 };
+
+/**
+ * How conversations ended, and by what.
+ *
+ * The server's contract is that every breakdown reconciles to `total` — its own
+ * note says a report whose parts disagree with its whole is worse than no
+ * report, because it gets quoted. Two things here exist to keep that true:
+ *
+ * The uncategorised bucket is **rendered, never dropped**. Closures made
+ * without a category are real closures; filtering them would leave a tidier
+ * list that no longer adds up to the number printed above it.
+ *
+ * And the reconciliation is *shown* rather than assumed. If a breakdown ever
+ * stops summing to the total, the operator reading the report is the one who
+ * needs to know first — a silent discrepancy is how a wrong number gets quoted
+ * to a customer.
+ */
+function ClosuresTab({ report, loading }: { report: ClosureReport | null; loading: boolean }) {
+  const { t } = useT();
+  if (!report) return loading ? <Loading /> : <EmptyNote />;
+
+  const sourceLabel: Record<string, string> = {
+    MANUAL: 'يدوي',
+    AUTO_CLOSE: 'إغلاق تلقائي',
+    WORKFLOW: 'مسار عمل',
+    API: 'واجهة برمجية',
+    MERGE: 'دمج',
+  };
+
+  const categoryBuckets = report.byCategory.map((row) => ({
+    // The null key is the uncategorised bucket, labelled here rather than
+    // hidden. Resolved at this point instead of through a sentinel string in
+    // labelFor: a sentinel is a value a real category name could one day
+    // collide with, and null is the only thing that actually means it.
+    label: row.key ?? t('بدون تصنيف'),
+    count: row.count,
+  }));
+  const sourceBuckets = report.bySource.map((row) => ({ label: row.key, count: row.count }));
+
+  const sums = (rows: { count: number }[]) => rows.reduce((s, r) => s + r.count, 0);
+  const categorySum = sums(report.byCategory);
+  const sourceSum = sums(report.bySource);
+  const summarySum = report.summaries.withSummary + report.summaries.withoutSummary;
+  const reconciles =
+    categorySum === report.total && sourceSum === report.total && summarySum === report.total;
+
+  const summaryPct = report.total === 0
+    ? 0
+    : Math.round((report.summaries.withSummary / report.total) * 100);
+
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <MetricTile label={t('محادثات مغلقة')} value={report.total.toLocaleString()} />
+        <MetricTile
+          label={t('مع ملخص')}
+          value={report.summaries.withSummary.toLocaleString()}
+          hint={`${summaryPct}%`}
+        />
+        <MetricTile
+          label={t('بدون ملخص')}
+          value={report.summaries.withoutSummary.toLocaleString()}
+        />
+      </div>
+
+      {!reconciles && (
+        <p className="mt-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-caption text-warning">
+          {t('تفاصيل هذا التقرير لا تطابق الإجمالي. لا تعتمد عليه حتى تتم مراجعته.')}
+        </p>
+      )}
+
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <ReportCard title={t('حسب التصنيف')}>
+          <DistributionBars
+            buckets={categoryBuckets}
+            labelFor={(label) => label}
+          />
+        </ReportCard>
+        <ReportCard title={t('حسب طريقة الإغلاق')}>
+          <DistributionBars
+            buckets={sourceBuckets}
+            labelFor={(label) => t(sourceLabel[label] ?? label)}
+          />
+        </ReportCard>
+      </div>
+    </>
+  );
+}
 
 function WebhooksTab({ report, loading }: { report: WebhookReport | null; loading: boolean }) {
   const { t } = useT();
