@@ -25,6 +25,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RowOverflowMenu } from '@/components/ui/list-primitives';
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
+import { SettingsHeader } from './settings-primitives';
 
 /**
  * API tokens — the developer surface of the workspace.
@@ -187,17 +188,13 @@ export function ApiTokens() {
   if (failed) return <ErrorState title={t('Could not load API keys')} retryLabel={t('Try again')} onRetry={load} className="m-4" />;
 
   return <div className="flex min-h-0 flex-1 flex-col bg-background">
-    <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-      <div className="min-w-0 flex-1">
-        <h1 className="text-lg font-semibold">{t('API keys')}</h1>
-        <p className="mt-1 text-caption text-muted-foreground">
-          {t('Let your own software read and send on this workspace. Each key carries only the permissions you grant it.')}
-        </p>
-      </div>
-      {canManage
+    <SettingsHeader
+      title={t('API keys')}
+      description={t('Let your own software read and send on this workspace. Each key carries only the permissions you grant it.')}
+      action={canManage
         ? <Button onClick={openEditor}><Plus className="size-4" />{t('Create API key')}</Button>
         : <PermissionNotice action={t('Creating API keys')} className="self-center" />}
-    </header>
+    />
 
     {/* The base URL, where a developer looks first. Read from the same runtime
         configuration the app itself uses, so it is right on a LAN, a laptop and

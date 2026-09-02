@@ -21,6 +21,7 @@ import { ListToolbar, RowOverflowMenu } from '@/components/ui/list-primitives';
 import { EmptyState, ErrorState, LayoutSkeleton, NoResultsState } from '@/components/ui/operational-state';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { SettingsHeader } from './settings-primitives';
 
 type FormState = { title: string; body: string; shortCode: string; topicIds: string[]; isActive: boolean };
 const EMPTY_FORM: FormState = { title: '', body: '', shortCode: '', topicIds: [], isActive: true };
@@ -148,10 +149,11 @@ export function WorkspaceSnippets() {
   if (failed) return <ErrorState title={t('Could not load Snippets')} retryLabel={t('Try again')} onRetry={load} className="m-4" />;
 
   return <div className="flex min-h-0 flex-1 flex-col bg-background">
-    <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-      <div className="min-w-0 flex-1"><h1 className="text-lg font-semibold">{t('Snippets')}</h1><p className="mt-1 text-caption text-muted-foreground">{t('Shared replies for consistent customer conversations.')}</p></div>
-      <div className="flex items-center gap-3"><span className="text-caption text-muted-foreground"><bdi dir="ltr">{snippets.length} / 5000</bdi></span>{canManage ? <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Add Snippet')}</Button> : <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only workspace owners and managers can change Snippets.')}</span>}</div>
-    </header>
+    <SettingsHeader
+      title={t('Snippets')}
+      description={t('Shared replies for consistent customer conversations.')}
+      action={<><div className="flex items-center gap-3"><span className="text-caption text-muted-foreground"><bdi dir="ltr">{snippets.length} / 5000</bdi></span>{canManage ? <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Add Snippet')}</Button> : <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only workspace owners and managers can change Snippets.')}</span>}</div></>}
+    />
     <ListToolbar searchValue={query} onSearchChange={setQuery} searchLabel={t('Search name, message, shortcut, or ID')} clearSearchLabel={t('Clear search')} filters={<>
       <Select value={topicFilter} onValueChange={setTopicFilter}><SelectTrigger className="w-44" aria-label={t('Filter by topic')}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t('All topics')}</SelectItem><SelectItem value="__none__">{t('Without a topic')}</SelectItem>{topics.map((topic) => <SelectItem key={topic.id} value={topic.id}>{topic.name}</SelectItem>)}</SelectContent></Select>
       {canManage && <Button variant="outline" size="sm" onClick={() => setTopicDialogOpen(true)}><Tags className="size-4" />{t('Manage topics')}</Button>}

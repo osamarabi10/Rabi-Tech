@@ -37,6 +37,7 @@ import { RowOverflowMenu } from '@/components/ui/list-primitives';
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { SettingsHeader } from './settings-primitives';
 
 type StageKind = 'ACTIVE' | 'LOST';
 type StageForm = { name: string; description: string; color: string; emoji: string; kind: StageKind };
@@ -233,16 +234,14 @@ export function WorkspaceLifecycle() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold">{t('Lifecycle')}</h1>
-          <p className="mt-1 max-w-3xl text-caption text-muted-foreground">{t('Define the path from first contact to conversion and record why opportunities leave the funnel.')}</p>
-        </div>
-        <div className="flex items-center gap-3 text-caption text-muted-foreground">
+      <SettingsHeader
+      title={t('Lifecycle')}
+      description={t('Define the path from first contact to conversion and record why opportunities leave the funnel.')}
+      action={<><div className="flex items-center gap-3 text-caption text-muted-foreground">
           <span><bdi dir="ltr">{stages.length} / 20</bdi> {t('stages')}</span>
           {!capabilities.canManage && <span className="flex items-center gap-2"><ShieldCheck className="size-4" />{t('Only workspace owners can change lifecycle stages.')}</span>}
-        </div>
-      </header>
+        </div></>}
+    />
 
       <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
         <div className="grid gap-8 xl:grid-cols-2">

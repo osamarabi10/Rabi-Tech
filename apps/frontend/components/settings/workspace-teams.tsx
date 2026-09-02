@@ -45,6 +45,7 @@ import { Label } from '@/components/ui/label';
 import { ListToolbar, RowOverflowMenu } from '@/components/ui/list-primitives';
 import { EmptyState, ErrorState, LayoutSkeleton, NoResultsState } from '@/components/ui/operational-state';
 import { Textarea } from '@/components/ui/textarea';
+import { SettingsHeader } from './settings-primitives';
 
 const EMPTY_CAPABILITIES: WorkspaceUserCapabilities = {
   canInvite: false,
@@ -250,17 +251,15 @@ export function WorkspaceTeams() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold">{t('Teams')}</h1>
-          <p className="mt-1 text-caption text-muted-foreground">{t('Group users for shared inbox access, routing, reports, and reusable resources.')}</p>
-        </div>
-        {capabilities.canManage ? (
+      <SettingsHeader
+      title={t('Teams')}
+      description={t('Group users for shared inbox access, routing, reports, and reusable resources.')}
+      action={<>{capabilities.canManage ? (
           <Button type="button" onClick={() => setCreateOpen(true)}><Plus className="size-4" />{t('New team')}</Button>
         ) : (
           <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only workspace owners can change teams.')}</span>
-        )}
-      </header>
+        )}</>}
+    />
 
       <ListToolbar
         searchValue={query}

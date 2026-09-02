@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Drawer, DrawerBody, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer';
 import { ToggleCard, UpgradeBadge } from '@/components/ui/feedback-primitives';
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
+import { SettingsHeader } from './settings-primitives';
 
 const WORKER_ROLES = ['SUPERVISOR', 'AGENT', 'VIEWER', 'FINANCE'] as const;
 const EMPTY_CAPABILITIES: WorkspaceUserCapabilities = { canInvite: false, canManage: false, managerInviteRole: 'AGENT', maskPhoneAndEmail: false, callsAvailable: false };
@@ -158,10 +159,11 @@ export function WorkspaceUsers() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-        <div className="min-w-0 flex-1"><h1 className="text-lg font-semibold">{t('Workspace users')}</h1><p className="mt-1 text-caption text-muted-foreground">{t('Invite people, review presence, and control what each user can access.')}</p></div>
-        {capabilities.canInvite && <Button onClick={() => setInviteOpen(true)} disabled={!!seats?.atLimit} title={seats?.atLimit ? t('Upgrade the plan to add another user') : undefined}><UserPlus className="size-4" />{t('Invite user')}</Button>}
-      </header>
+      <SettingsHeader
+      title={t('Workspace users')}
+      description={t('Invite people, review presence, and control what each user can access.')}
+      action={<>{capabilities.canInvite && <Button onClick={() => setInviteOpen(true)} disabled={!!seats?.atLimit} title={seats?.atLimit ? t('Upgrade the plan to add another user') : undefined}><UserPlus className="size-4" />{t('Invite user')}</Button>}</>}
+    />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="space-y-3 border-b border-border px-4 py-3 sm:px-6">

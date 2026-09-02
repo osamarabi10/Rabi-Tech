@@ -15,6 +15,7 @@ import { EmptyState, ErrorState, LayoutSkeleton, NoResultsState } from '@/compon
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { SettingsHeader } from './settings-primitives';
 
 const TYPES = ['text', 'list', 'checkbox', 'email', 'number', 'url', 'date', 'time'] as const;
 type FieldForm = { name: string; slug: string; description: string; dataType: typeof TYPES[number]; allowedValues: string };
@@ -131,10 +132,11 @@ export function WorkspaceContactFields() {
   if (failed) return <ErrorState title={t('Could not load Contact fields')} retryLabel={t('Try again')} onRetry={load} className="m-4" />;
 
   return <div className="flex min-h-0 flex-1 flex-col bg-background">
-    <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-      <div className="min-w-0 flex-1"><h1 className="text-lg font-semibold">{t('Contact fields')}</h1><p className="mt-1 text-caption text-muted-foreground">{t('Define validated Contact data for personalization, filters, and Workflows.')}</p></div>
-      {canManage && <div className="flex gap-2"><Button variant="outline" onClick={() => { setViewRows(rows); setViewOpen(true); }}><Settings2 className="size-4" />{t('Customize view')}</Button><Button onClick={() => openEditor()}><Plus className="size-4" />{t('Add custom field')}</Button></div>}
-    </header>
+    <SettingsHeader
+      title={t('Contact fields')}
+      description={t('Define validated Contact data for personalization, filters, and Workflows.')}
+      action={<>{canManage && <div className="flex gap-2"><Button variant="outline" onClick={() => { setViewRows(rows); setViewOpen(true); }}><Settings2 className="size-4" />{t('Customize view')}</Button><Button onClick={() => openEditor()}><Plus className="size-4" />{t('Add custom field')}</Button></div>}</>}
+    />
     <ListToolbar searchValue={query} onSearchChange={setQuery} searchLabel={t('Search Contact fields')} clearSearchLabel={t('Clear search')} />
     <div className="min-h-0 flex-1 overflow-auto">
       {!rows.length ? <EmptyState icon={Braces} title={t('No Contact fields')} description={t('Standard Contact fields could not be loaded.')} /> : !shown.length ? <NoResultsState title={t('No Contact fields match this search')} clearLabel={t('Clear search')} onClear={() => setQuery('')} /> : <div className="divide-y divide-border border-b border-border">

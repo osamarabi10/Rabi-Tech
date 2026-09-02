@@ -81,6 +81,41 @@ export function SettingsPage({
 }
 
 /**
+ * The header every settings screen wears.
+ *
+ * Extracted rather than restructuring fifteen working screens. Each already had
+ * this markup inline and identical, which meant the visual language lived in
+ * fifteen copies free to drift — and it had already started to: some
+ * descriptions were capped at `max-w-3xl`, some at nothing.
+ *
+ * Swapping a self-contained `<header>` block is a contained change with obvious
+ * boundaries. Rewrapping each screen in a page component would mean surgery on
+ * closing tags in files whose lists, drawers and dialogs all work today, for the
+ * same visual result.
+ */
+export function SettingsHeader({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-5 sm:px-6">
+      <div className="min-w-0 flex-1">
+        <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
+        {description && (
+          <p className="mt-1 max-w-prose text-caption text-muted-foreground">{description}</p>
+        )}
+      </div>
+      {action}
+    </header>
+  );
+}
+
+/**
  * The same header language, on a screen that holds a list rather than a form.
  *
  * ## Why this exists instead of reusing SettingsPage
@@ -113,15 +148,7 @@ export function SettingsListPage({
 }) {
   return (
     <div className={cn('flex min-h-0 flex-1 flex-col bg-background', className)}>
-      <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-5 sm:px-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-          {description && (
-            <p className="mt-1 max-w-prose text-caption text-muted-foreground">{description}</p>
-          )}
-        </div>
-        {action}
-      </header>
+      <SettingsHeader title={title} description={description} action={action} />
       {toolbar}
       <div className="min-h-0 flex-1 overflow-auto">{children}</div>
     </div>

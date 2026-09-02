@@ -27,6 +27,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RowOverflowMenu } from '@/components/ui/list-primitives';
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
+import { SettingsHeader } from './settings-primitives';
 
 /**
  * Outbound webhooks.
@@ -198,17 +199,13 @@ export function Webhooks() {
   if (failed) return <ErrorState title={t('Could not load webhooks')} retryLabel={t('Try again')} onRetry={load} className="m-4" />;
 
   return <div className="flex min-h-0 flex-1 flex-col bg-background">
-    <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-      <div className="min-w-0 flex-1">
-        <h1 className="text-lg font-semibold">{t('Webhooks')}</h1>
-        <p className="mt-1 text-caption text-muted-foreground">
-          {t('Get told when something happens here, so your own software can react to it.')}
-        </p>
-      </div>
-      {canManage
+    <SettingsHeader
+      title={t('Webhooks')}
+      description={t('Get told when something happens here, so your own software can react to it.')}
+      action={canManage
         ? <Button onClick={() => { setForm(EMPTY); setEditorOpen(true); }}><Plus className="size-4" />{t('Add webhook')}</Button>
         : <PermissionNotice action={t('Managing webhooks')} className="self-center" />}
-    </header>
+    />
 
     <div className="min-h-0 flex-1 overflow-auto">
       {!rows.length

@@ -24,6 +24,7 @@ import { Label } from '@/components/ui/label';
 import { RowOverflowMenu } from '@/components/ui/list-primitives';
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
 import { Textarea } from '@/components/ui/textarea';
+import { SettingsHeader } from './settings-primitives';
 
 type DurationUnit = 'minutes' | 'hours' | 'days';
 
@@ -188,20 +189,15 @@ export function WorkspaceConversations() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold">{t('Conversations')}</h1>
-          <p className="mt-1 max-w-3xl text-caption text-muted-foreground">
-            {t('Control inactivity closing and the information agents record when work is completed.')}
-          </p>
-        </div>
-        {!canManage && (
+      <SettingsHeader
+      title={t('Conversations')}
+      action={<>{!canManage && (
           <span className="flex items-center gap-2 text-caption text-muted-foreground">
             <ShieldCheck className="size-4" aria-hidden />
             {t('Only workspace owners and managers can change conversation settings.')}
           </span>
-        )}
-      </header>
+        )}</>}
+    />
 
       <div className="min-h-0 flex-1 overflow-auto">
         <section className="border-b border-border px-4 py-5 sm:px-6" aria-labelledby="auto-close-title">

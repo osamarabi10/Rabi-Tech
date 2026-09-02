@@ -24,6 +24,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { SettingsHeader } from './settings-primitives';
 
 type FormState = {
   name: string;
@@ -125,13 +126,14 @@ export function WorkspaceMetaTemplates() {
   if (failed || !state) return <ErrorState title={t('Could not load Meta templates')} retryLabel={t('Try again')} onRetry={() => void load()} className="m-4" />;
 
   return <div className="flex min-h-0 flex-1 flex-col bg-background">
-    <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-      <div className="min-w-0 flex-1"><h1 className="text-lg font-semibold">{t('Meta templates')}</h1><p className="mt-1 text-caption text-muted-foreground">{t('Provider approval status for WhatsApp templates.')}</p></div>
-      <div className="flex flex-wrap items-center gap-2">
+    <SettingsHeader
+      title={t('Meta templates')}
+      description={t('Provider approval status for WhatsApp templates.')}
+      action={<><div className="flex flex-wrap items-center gap-2">
         {state.canSync && <Button variant="outline" onClick={() => void sync()} disabled={syncing || !state.wabaId} title={!state.wabaId ? t('Connect Meta before synchronizing templates.') : undefined}><RefreshCw className={cn('size-4', syncing && 'animate-spin')} />{t('Sync now')}</Button>}
         {state.canManage && <Button onClick={() => setEditorOpen(true)} disabled={!state.wabaId} title={!state.wabaId ? t('Connect Meta before creating templates.') : undefined}><Plus className="size-4" />{t('Create draft')}</Button>}
-      </div>
-    </header>
+      </div></>}
+    />
     {!state.wabaId && <div className="border-b border-warning/30 bg-warning/10 px-4 py-3 text-caption text-warning sm:px-6">{t('Connect an active Meta credential before managing templates.')}</div>}
     {state.wabaId && !state.canManage && <div className="flex items-center gap-2 border-b border-border px-4 py-3 text-caption text-muted-foreground sm:px-6"><ShieldCheck className="size-4" />{t('Only workspace owners and managers can change Meta templates.')}</div>}
     <div className="min-h-0 flex-1 overflow-auto">

@@ -49,6 +49,7 @@ import {
 import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
 import { MetaChannelCard } from '@/components/settings/meta-channel-card';
 import { ChannelCapabilitiesPanel } from '@/components/settings/channel-capabilities-panel';
+import { SettingsHeader } from './settings-primitives';
 
 const EMPTY_CAPABILITIES: WorkspaceUserCapabilities = {
   canInvite: false,
@@ -191,13 +192,11 @@ export function WorkspaceChannels() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-4 sm:px-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold">{t('Channels')}</h1>
-          <p className="mt-1 text-caption text-muted-foreground">{t('Monitor linked messaging accounts and manage their connection state.')}</p>
-        </div>
-        {!capabilities.canManage && <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only workspace owners can change channels.')}</span>}
-      </header>
+      <SettingsHeader
+      title={t('Channels')}
+      description={t('Monitor linked messaging accounts and manage their connection state.')}
+      action={<>{!capabilities.canManage && <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only workspace owners can change channels.')}</span>}</>}
+    />
 
       <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
         {channelProblem && (
