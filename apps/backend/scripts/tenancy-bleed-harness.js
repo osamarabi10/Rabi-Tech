@@ -516,7 +516,6 @@ async function waitForBackend(baseUrl, token, child) {
 
 async function httpSnapshot(baseUrl, token, fixture) {
   const routes = [
-    '/api/network',
     '/api/auth/me',
     '/api/notifications',
     '/api/contacts',

@@ -69,12 +69,22 @@
  * order. `/api/billing/webhook` and `/api/network` are both the second kind and
  * read as protected precisely because of their prefix.
  *
- * **Category 4 — authenticated, no tenant data** exists for `/api/network`:
- * genuinely authenticated, but touching no tenant-owned row, so there is no
- * scope to enter and categories 1 to 3 all misdescribe it. Its claim is checked
- * rather than accepted — the handler must name an auth primitive and must not
- * reach the database, so the moment it reads a table the annotation is a lie
- * and the gate says so.
+ * **Category 4 — authenticated, no tenant data — currently has no members, and
+ * that is the intended steady state.** It was created for `/api/network`, a
+ * development helper returning this machine's LAN addresses behind
+ * `verifyToken`. Nothing called it; its frontend caller had already been deleted
+ * as a dead flow. It was removed rather than guarded, because guarding
+ * preserves an endpoint with no consumer and leaves one more thing to reason
+ * about on every audit of this list.
+ *
+ * The category is kept because the *rule* is the point. A category-4 surface
+ * must not be **registered** in production at all — not registered and
+ * refusing, which still announces that it exists — so it must sit inside a
+ * `NODE_ENV` guard or carry a loud `@env-exempt` with a real reason. The guard
+ * is read from the code, never from the annotation: a comment claiming
+ * "development only" proves nothing. The handler must also name an auth
+ * primitive and must not reach the database, so the moment it touches a table
+ * the annotation is a lie and the gate says so.
  *
  * ## What this check cannot see
  *
@@ -364,7 +374,16 @@ check('8 · everything not exempted still goes through verifyToken into a tenant
   Rate-limiter mounts are excluded, and only those whose arguments are nothing
   but LIMITS entries. They register no handler and always call next().
 */
-const REGISTRATION = /^app\.(use|get|post|put|patch|delete|all)\(\s*'([^']+)'\s*(.*)$/;
+/*
+  Leading whitespace is allowed on purpose. Category 4 requires a route to sit
+  inside a `NODE_ENV` guard, which indents it — so an anchor of `^app\.` would
+  make the gate mandate a guard that then hides the route from the gate. The
+  rule and the parser have to agree about what a registration looks like.
+
+  A quoted path is required, which is what keeps `app.use(helmet())` and
+  `app.use(express.json(...))` out: they mount middleware, not routes.
+*/
+const REGISTRATION = /^\s*app\.(use|get|post|put|patch|delete|all)\(\s*'([^']+)'\s*(.*)$/;
 const ONLY_LIMITERS = /^(?:LIMITS\.\w+\s*,\s*)*LIMITS\.\w+\s*\)\s*;?\s*$/;
 
 const outsideSites = [];
@@ -491,13 +510,47 @@ for (const entry of outsideAnnotated) {
     // end of this route into the next one and reported its database access as
     // this route's — the check was reading the wrong handler.
     let bodyEnd = entry.index + 1;
-    while (bodyEnd < lines.length && !/^app\./.test(lines[bodyEnd]) && !/^\/\*\*/.test(lines[bodyEnd])) bodyEnd += 1;
+    while (bodyEnd < lines.length
+      && !/^\s*app\./.test(lines[bodyEnd])
+      && !/^\s*\/\*\*/.test(lines[bodyEnd])) bodyEnd += 1;
     const body = lines.slice(entry.index, bodyEnd).join('\n');
     if (!new RegExp('\\b' + entry.tags.auth + '\\b').test(body)) {
       outsideProblems.push(at + ' declares @auth ' + entry.tags.auth + ', which the handler does not use');
     }
     if (/\bprisma\./.test(body) || /runAsOrganization|runAsPlatform/.test(body)) {
       outsideProblems.push(at + ' is category 4 but touches tenant data — it needs a scope, and a different category');
+    }
+
+    /*
+      Category 4 must stay expensive to join.
+
+      It is the one category that describes a surface kept for its own sake:
+      authenticated, but outside the middleware and touching nothing the
+      middleware protects. That is a reasonable description of a development
+      helper and a terrible description of anything shipped, so the rule is that
+      a category-4 surface is **not registered in production at all** — not
+      registered and refusing, which still announces that it exists.
+
+      The guard is read from the code rather than taken from the annotation.
+      An annotation saying "development only" proves nothing; a route sitting
+      inside `NODE_ENV !== 'production'` does. The predicate is the literal
+      comparison the rest of this codebase already uses (logger.ts, index.ts) —
+      there is no isProduction helper here and inventing a second one would give
+      the next reader two things to keep in step.
+
+      The escape hatch is deliberately narrow and deliberately loud: @env-exempt
+      with a reason of real length, which shows up in review as a decision
+      somebody made rather than a default somebody accepted.
+    */
+    const guardWindow = lines.slice(Math.max(0, entry.index - 12), entry.index + 1).join('\n');
+    const guarded = /NODE_ENV\s*!==\s*'production'/.test(guardWindow)
+      || /NODE_ENV\s*===\s*'development'/.test(guardWindow);
+    const exemptReason = (entry.tags['env-exempt'] || '').trim();
+
+    if (!guarded && exemptReason.length < 40) {
+      outsideProblems.push(at + ' is category 4 and is neither guarded by NODE_ENV nor '
+        + '@env-exempt with a reason — an authenticated surface outside the middleware must not '
+        + 'be registered in production without one');
     }
   }
 }

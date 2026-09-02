@@ -38,7 +38,6 @@ import notificationRoutes from './modules/notifications/notifications.routes';
 import webhookRouter      from './webhooks/openwa.webhook';
 import { metaWebhookHandler, metaWebhookVerifyHandler } from './webhooks/meta.webhook';
 import { corsOriginCallback } from './utils/cors';
-import { getLanAddresses } from './utils/network';
 import { verifyPlatformToken, verifyToken } from './modules/auth/auth.middleware';
 import platformRoutes     from './modules/platform/platform.routes';
 import usageRoutes        from './modules/usage/usage.routes';
@@ -219,31 +218,26 @@ app.get('/health', async (_, res) => {
   });
 });
 
-/**
- * @auth-exempt /api/network
- * @category    4
- * @auth        verifyToken
- * @reason      LAN topology for the dashboard's own connection hints. It is
- *              authenticated — the addresses are not something to hand out —
- *              but it reads no tenant-owned row and therefore has no scope to
- *              enter. Category 4 exists for exactly this shape, and the gate
- *              asserts the claim by requiring that this handler touch no
- *              database at all: the moment it reads a table, "no tenant data"
- *              becomes false and it must be recategorised.
- */
-// LAN access info — requires auth
-app.get('/api/network', verifyToken, (req, res) => {
-  // This endpoint leaks LAN topology — require authentication
-  const frontendPort = process.env.FRONTEND_PORT || '8080';
-  const backendPort = String(process.env.PORT || 4000);
-  const ips = getLanAddresses();
-  res.json({
-    ips,
-    frontendPort,
-    backendPort,
-    urls: ips.map((ip) => `http://${ip}:${frontendPort}`),
-  });
-});
+/*
+  `GET /api/network` was removed here.
+
+  It returned this machine's LAN addresses and ports behind `verifyToken`, as a
+  development helper for reaching the dashboard from a phone on the same
+  network. Nothing called it. The frontend's pre-auth call was deleted long ago
+  — `PROJECT-SPEC.md` §5 records it as dead flow 1, "guaranteed 401, leaked LAN
+  IPs" — and dead flow 2 removed the login page's `allow-lan.cmd` instruction
+  that went with it. The callers went and the endpoint stayed.
+
+  Guarding it behind NODE_ENV would have preserved an endpoint with no consumer,
+  and a route that exists only in development is still a route somebody has to
+  reason about every time this list is audited. `utils/network.ts` went with it,
+  since `getLanAddresses` had exactly one caller.
+
+  Category 4 — *authenticated, no tenant data* — therefore has no members. The
+  category is kept, and `verify-auth-exemptions` now makes adding one expensive:
+  a category-4 surface must be environment-guarded or carry an explicit,
+  reasoned exemption. It exists to be hard to use, not to be used.
+*/
 
 
 async function verifyBearerTokenForRoute(req: express.Request, res: express.Response): Promise<boolean | null> {
@@ -459,10 +453,14 @@ app.use('/api', LIMITS.api);
     @auth-exempt  the path prefix, which must appear in the condition below it
     @category     1 = genuinely public · 2 = scoped elsewhere
                   3 = public, tenant-derived
+                  4 = authenticated, no tenant data (dev-only; see the gate)
     @scope        categories 2 and 3: the chain that establishes scope, checked
                   to exist and to end in runAsOrganization or runAsPlatform
     @ratelimit    category 3 only: the LIMITS key, checked to exist and to be
                   mounted on this path
+    @env-exempt   category 4 only: why this surface may be registered in
+                  production despite being outside the middleware. Without it, a
+                  category-4 route must sit inside a NODE_ENV guard
     @reason       why, in prose, and never empty
 
   **Category 3 exists because the widget redirect fits neither of the others.**
