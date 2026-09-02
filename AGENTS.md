@@ -76,6 +76,21 @@ Design rules do not catch the failures this repository actually has. These do.
   restored file is byte-identical. A green gate that has never gone red is an
   untested assertion.
 
+- **A test catch-all must fail loudly, not answer plausibly.** A route handler
+  that responds to every unmatched request with `{}` converts every fixture gap
+  into the same misleading symptom: consumers read fields off an object that is
+  truthy and empty, crash three components away, and the failure names whatever
+  you were looking at rather than what was missing. Four separate causes once
+  presented as "the rail is missing" for exactly this reason. Reject the
+  unmatched URL and say which one it was.
+
+- **One display utility per element per breakpoint.** Layering `flex` onto a
+  `hidden … lg:block` class leaves two utilities competing, and the winner is
+  decided by Tailwind's emission order rather than by anything written at the
+  call site. An element whose visibility depends on which class the framework
+  happens to emit last is unpredictable by construction — it will be visible,
+  clickable, or neither, for reasons no one reading the component can see.
+
 - **And prove the control: it must go green on the correctly-formed case.**
   Making a gate go red is half the proof. The other half is a case that *should*
   pass and does, because a check that is red for everything is as useless as one
