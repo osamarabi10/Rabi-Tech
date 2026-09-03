@@ -533,7 +533,7 @@ app.use('/api', (req, res, next) => {
    * @category    2
    * @scope       modules/snippets/snippets.routes.ts::verifySnippetAssetSignature
    *              -> modules/snippets/snippets.routes.ts::runAsOrganization
-   * @reason      OpenWA downloads workspace Snippet files server-to-server. The
+   * @reason      OpenWA downloads organization Snippet files server-to-server. The
    *              HMAC in the URL is the authorization; requiring a browser JWT
    *              would make every attachment fail at the gateway. The handler
    *              verifies the signature before it reads anything, then enters

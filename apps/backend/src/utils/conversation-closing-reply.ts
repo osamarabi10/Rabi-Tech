@@ -5,7 +5,7 @@ import { getTenantId } from '../lib/tenant-context';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
 import { resolveAutoReply } from './auto-reply';
 
-/** Send the workspace's optional closing message after the close is durable. */
+/** Send the organization's optional closing message after the close is durable. */
 export async function sendConversationClosingReply(conversationId: string): Promise<void> {
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },

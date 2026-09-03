@@ -21,8 +21,8 @@ import {
  * withdraw this screen. That pairing is not redundancy — a route guarded by
  * `requireAdmin` alone is invisible to the restriction table, which is how the
  * first draft of the per-user restrictions shipped a checkbox that gated
- * nothing. An admin restricted from workspace settings who can still mint a
- * workspace-wide credential has not been restricted from anything.
+ * nothing. An admin restricted from organization settings who can still mint a
+ * organization-wide credential has not been restricted from anything.
  *
  * ## Language
  *
@@ -144,7 +144,7 @@ router.post('/', async (req, res) => {
     });
 
     // The prefix identifies the token in the log; the secret never appears in
-    // one. This line is how a workspace owner later ties "who made this" to a
+    // one. This line is how an organization owner later ties "who made this" to a
     // token they find in the list.
     logger.info('API token issued', {
       prefix: issued.prefix,
@@ -175,7 +175,7 @@ router.delete('/:id', async (req, res) => {
   try {
     const id = String(req.params.id);
 
-    // The tenancy extension scopes this update, so an id from another workspace
+    // The tenancy extension scopes this update, so an id from another organization
     // matches nothing and reports as not-found rather than revoking it.
     const result = await prisma.apiToken.updateMany({
       where: { id, revokedAt: null },

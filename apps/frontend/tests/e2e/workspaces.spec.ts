@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * Certification for the branch switcher and contact isolation.
+ * Certification for the workspace switcher and contact isolation.
  *
  * 18 combinations of 375/768/1440 x ar/he/en x light/dark, the same bar every
  * shared primitive and the Inbox gaps met.
@@ -28,9 +28,9 @@ const DEFAULT_WS = { id: 'ws_org-test', name: 'Head office', isDefault: true };
 const SECOND_WS = { id: 'ws_second', name: 'Retail', isDefault: false };
 
 /*
-  The same number in both branches, which is the whole point of the schema
+  The same number in both workspacees, which is the whole point of the schema
   change: after commit 2a this is two contacts, not one, and they share nothing.
-  The names differ so the assertion can tell which branch it is looking at
+  The names differ so the assertion can tell which workspace it is looking at
   without depending on ids the UI does not render.
 */
 const SHARED_PHONE = '970599111222';
@@ -67,7 +67,7 @@ async function prepare(page: Page, options: DisplayOptions & { workspaces: typeo
   await page.route('**/api/auth/me**', (route) =>
     route.fulfill({ json: { ...auth.user, locale: options.locale, theme: options.theme, isAway: false } }));
 
-  // The active branch lives on the server in a claim, so the fixture keeps it
+  // The active workspace lives on the server in a claim, so the fixture keeps it
   // here rather than in a query parameter — mirroring the real thing, where the
   // client cannot name a workspace at all.
   let active = DEFAULT_WS.id;
@@ -120,11 +120,11 @@ async function expectNoPageOverflow(page: Page) {
 for (const width of WIDTHS) {
   for (const locale of LOCALES) {
     for (const theme of THEMES) {
-      test(`branch switcher isolates contacts — ${width}px ${locale} ${theme}`, async ({ page }) => {
+      test(`workspace switcher isolates contacts — ${width}px ${locale} ${theme}`, async ({ page }) => {
         await prepare(page, { width, locale, theme, workspaces: [DEFAULT_WS, SECOND_WS], canCreate: true });
         await page.goto('/contacts');
 
-        const switcher = page.getByTestId('branch-switcher');
+        const switcher = page.getByTestId('workspace-switcher');
         await expect(switcher).toBeVisible();
         await expect(switcher).toContainText(DEFAULT_WS.name);
 
@@ -134,9 +134,9 @@ for (const width of WIDTHS) {
         await expect(page.getByText('Retail Customer')).toHaveCount(0);
 
         await switcher.click();
-        await page.getByTestId(`branch-option-${SECOND_WS.id}`).click();
+        await page.getByTestId(`workspace-option-${SECOND_WS.id}`).click();
 
-        // Switching reloads, because every list on screen belongs to the branch
+        // Switching reloads, because every list on screen belongs to the workspace
         // being left.
         await page.waitForLoadState('networkidle');
         await expect(page.getByText('Retail Customer').first()).toBeVisible({ timeout: 10_000 });
@@ -146,11 +146,11 @@ for (const width of WIDTHS) {
         await expectNoPageOverflow(page);
       });
 
-      test(`one branch renders no switcher — ${width}px ${locale} ${theme}`, async ({ page }) => {
+      test(`one workspace renders no switcher — ${width}px ${locale} ${theme}`, async ({ page }) => {
         /*
           The absence, asserted directly.
 
-          A single branch with no room to create another has nothing to offer, so
+          A single workspace with no room to create another has nothing to offer, so
           the control is not rendered at all rather than rendered disabled. This
           also covers the shape of every organization today, which is why it is
           not an edge case.
@@ -159,7 +159,7 @@ for (const width of WIDTHS) {
         await page.goto('/contacts');
         await page.waitForLoadState('networkidle');
 
-        await expect(page.getByTestId('branch-switcher')).toHaveCount(0);
+        await expect(page.getByTestId('workspace-switcher')).toHaveCount(0);
         // And the page still works: the contact list is the one the shell was
         // hiding nothing from.
         await expect(page.getByText('Head Office Customer').first()).toBeVisible({ timeout: 10_000 });

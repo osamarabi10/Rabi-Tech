@@ -34,7 +34,7 @@ export function Integrations() {
       href: '/settings/api',
       icon: KeyRound,
       title: t('API keys'),
-      body: t('Scoped, expiring keys so your own software can read and send on this workspace.'),
+      body: t('Scoped, expiring keys so your own software can read and send on this organization.'),
       badge: t('Active'),
     },
     {
@@ -49,7 +49,7 @@ export function Integrations() {
   return (
     <SettingsPage
       title={t('Integrations')}
-      description={t('Connect this workspace to your own software.')}
+      description={t('Connect this organization to your own software.')}
     >
       <SettingsSection
         title={t('Developer API')}

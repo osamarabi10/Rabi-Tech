@@ -1,5 +1,5 @@
-import { WorkspaceTeams } from '@/components/settings/workspace-teams';
+import { OrganizationTeams } from '@/components/settings/organization-teams';
 
-export default function WorkspaceTeamsPage() {
-  return <WorkspaceTeams />;
+export default function OrganizationTeamsPage() {
+  return <OrganizationTeams />;
 }

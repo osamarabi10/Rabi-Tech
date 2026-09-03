@@ -157,7 +157,7 @@ router.post('/staff', requirePlatformOwner, async (req, res) => {
        *
        * Email is globally unique and is how someone signs in, so a second row
        * is impossible anyway — but refusing outright would leave the owner
-       * unable to make an advisor out of someone who already has a workspace
+       * unable to make an advisor out of someone who already has an organization
        * account, which is the normal case for a small team.
        */
       if (existing.platformRole === 'OWNER') {
@@ -961,7 +961,7 @@ router.post('/subscribers/:id/gateway/restart', requirePlatformPermission('gatew
  * How long every *new* signup gets.
  *
  * Separate from extending one subscriber's trial, which is a sales decision
- * about one workspace. This is the product's offer, and it was configurable
+ * about one organization. This is the product's offer, and it was configurable
  * in the database and nowhere else.
  */
 router.get('/trial/settings', requirePlatformOwner, async (_req, res) => {
@@ -1040,8 +1040,8 @@ const ISSUER_NAME = process.env.PLATFORM_ISSUER_NAME || 'RabiTech';
  * The subscriber a finance route is acting on, with an address to put on the
  * document.
  *
- * Organization has no owner email of its own, so the workspace's admin is
- * used. `findFirst` ordered by creation because a workspace can have several
+ * Organization has no owner email of its own, so the organization's admin is
+ * used. `findFirst` ordered by creation because an organization can have several
  * admins and the founding one is the one whose name is on the account.
  */
 async function subscriberOr404(id: string) {
@@ -1055,7 +1055,7 @@ async function subscriberOr404(id: string) {
     where: { organizationId: id, role: 'ADMIN' },
     orderBy: { createdAt: 'asc' },
     // The address lives on Identity, not User: a person signs in once and can
-    // hold a User row in several workspaces.
+    // hold a User row in several organizations.
     select: { identity: { select: { email: true } } },
   });
 
@@ -1417,7 +1417,7 @@ router.delete('/subscribers/:id', requirePlatformOwner, async (req, res) => {
 /**
  * The edition catalogue: the product's offer, not one subscriber's deal.
  *
- * Distinct from /subscribers/:id/commercials, which grants one workspace an
+ * Distinct from /subscribers/:id/commercials, which grants one organization an
  * exception. This changes the menu everyone is sold from, so it is owner-only
  * and it takes effect without a deploy - which was the entire point of moving
  * the catalogue out of a TypeScript constant.
@@ -1479,7 +1479,7 @@ router.get('/editions', requirePlatformOwner, async (_req, res) => {
  * timestamp — and there was simply no way to read it back. This is that way.
  *
  * Owner-only and shaped like /subscribers/:id/commercials/history, which
- * answers the same question one workspace at a time. The one difference is the
+ * answers the same question one organization at a time. The one difference is the
  * handle: commercials filter on targetOrgId, and an edition change sets that
  * null deliberately, so this filters on targetEditionCode instead.
  *
@@ -1785,7 +1785,7 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
     await refreshEditions();
 
     // Platform audit, not tenant audit: this changes the offer, not one
-    // workspace. targetOrg stays null for the same reason - no subscriber was
+    // organization. targetOrg stays null for the same reason - no subscriber was
     // acted on, and pretending otherwise would make the per-org trail lie.
     await prisma.platformAuditLog.create({
       data: {
@@ -2124,7 +2124,7 @@ const CREATABLE_PLAN_CODES: ReadonlySet<string> = new Set([
  * Create an edition.
  *
  * Owner-only, like the rest of the catalogue: this changes the menu everyone is
- * sold from rather than one workspace's deal.
+ * sold from rather than one organization's deal.
  */
 router.post('/editions', requirePlatformOwner, async (req, res) => {
   try {
@@ -2225,7 +2225,7 @@ router.post('/editions', requirePlatformOwner, async (req, res) => {
     await refreshEditions();
 
     // Platform audit, not tenant audit: this changes the offer, not one
-    // workspace. No beforeState, because there was no edition before this.
+    // organization. No beforeState, because there was no edition before this.
     await prisma.platformAuditLog.create({
       data: {
         reason: `edition ${code} created`,

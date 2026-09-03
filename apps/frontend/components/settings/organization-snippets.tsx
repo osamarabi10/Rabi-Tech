@@ -5,7 +5,7 @@ import { Check, File, FileText, Hash, Loader2, Paperclip, Pencil, Plus, ShieldCh
 import { toast } from 'sonner';
 import {
   createSnippetTopic, deleteSnippet, deleteSnippetAttachment, deleteSnippetTopic,
-  fetchSnippets, fetchSnippetTopics, fetchWorkspaceUsers, saveSnippet,
+  fetchSnippets, fetchSnippetTopics, fetchOrganizationUsers, saveSnippet,
   uploadSnippetAttachment, type SnippetAttachment, type SnippetTopic, type Template,
 } from '@/lib/data';
 import { useT } from '@/lib/i18n';
@@ -37,7 +37,7 @@ function toForm(snippet?: Template | null): FormState {
   return snippet ? { title: snippet.title, body: snippet.body, shortCode: snippet.shortCode || '', topicIds: snippet.topics?.map((topic) => topic.id) || [], isActive: snippet.isActive } : EMPTY_FORM;
 }
 
-export function WorkspaceSnippets() {
+export function OrganizationSnippets() {
   const { t } = useT();
   const [snippets, setSnippets] = useState<Template[]>([]);
   const [topics, setTopics] = useState<SnippetTopic[]>([]);
@@ -62,7 +62,7 @@ export function WorkspaceSnippets() {
     if (showLoader) setLoading(true);
     setFailed(false);
     try {
-      const [snippetRows, topicRows, roster] = await Promise.all([fetchSnippets(), fetchSnippetTopics(), fetchWorkspaceUsers()]);
+      const [snippetRows, topicRows, roster] = await Promise.all([fetchSnippets(), fetchSnippetTopics(), fetchOrganizationUsers()]);
       setSnippets(snippetRows); setTopics(topicRows); setCanManage(roster.capabilities.canInvite);
     } catch { setFailed(true); } finally { setLoading(false); }
   }, []);
@@ -152,14 +152,14 @@ export function WorkspaceSnippets() {
     <SettingsHeader
       title={t('Snippets')}
       description={t('Shared replies for consistent customer conversations.')}
-      action={<><div className="flex items-center gap-3"><span className="text-caption text-muted-foreground"><bdi dir="ltr">{snippets.length} / 5000</bdi></span>{canManage ? <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Add Snippet')}</Button> : <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only workspace owners and managers can change Snippets.')}</span>}</div></>}
+      action={<><div className="flex items-center gap-3"><span className="text-caption text-muted-foreground"><bdi dir="ltr">{snippets.length} / 5000</bdi></span>{canManage ? <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Add Snippet')}</Button> : <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only organization owners and managers can change Snippets.')}</span>}</div></>}
     />
     <ListToolbar searchValue={query} onSearchChange={setQuery} searchLabel={t('Search name, message, shortcut, or ID')} clearSearchLabel={t('Clear search')} filters={<>
       <Select value={topicFilter} onValueChange={setTopicFilter}><SelectTrigger className="w-44" aria-label={t('Filter by topic')}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t('All topics')}</SelectItem><SelectItem value="__none__">{t('Without a topic')}</SelectItem>{topics.map((topic) => <SelectItem key={topic.id} value={topic.id}>{topic.name}</SelectItem>)}</SelectContent></Select>
       {canManage && <Button variant="outline" size="sm" onClick={() => setTopicDialogOpen(true)}><Tags className="size-4" />{t('Manage topics')}</Button>}
     </>} />
     <div className="min-h-0 flex-1 overflow-auto">
-      {!snippets.length ? <EmptyState icon={FileText} title={t('No Snippets yet')} description={canManage ? t('Create the first shared reply for this workspace.') : t('Workspace owners and managers can create shared replies.')} action={canManage ? <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Add Snippet')}</Button> : undefined} /> : !shown.length ? <NoResultsState title={t('No Snippets match these filters')} clearLabel={t('Clear filters')} onClear={() => { setQuery(''); setTopicFilter('all'); }} /> : <div className="divide-y divide-border border-b border-border">
+      {!snippets.length ? <EmptyState icon={FileText} title={t('No Snippets yet')} description={canManage ? t('Create the first shared reply for this organization.') : t('Organization owners and managers can create shared replies.')} action={canManage ? <Button onClick={() => openEditor()}><Plus className="size-4" />{t('Add Snippet')}</Button> : undefined} /> : !shown.length ? <NoResultsState title={t('No Snippets match these filters')} clearLabel={t('Clear filters')} onClear={() => { setQuery(''); setTopicFilter('all'); }} /> : <div className="divide-y divide-border border-b border-border">
         {shown.map((snippet) => <article key={snippet.id} className={cn('grid min-h-24 gap-3 bg-card px-4 py-3 sm:grid-cols-[minmax(190px,0.9fr)_minmax(260px,1.7fr)_minmax(150px,0.8fr)_80px_40px] sm:items-center sm:px-6', !snippet.isActive && 'opacity-60')}>
           <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-small font-semibold">{snippet.title}</h2>{!snippet.isActive && <Badge variant="secondary">{t('Inactive')}</Badge>}</div><div className="mt-1 flex items-center gap-1 text-micro text-muted-foreground"><Hash className="size-3" /><bdi dir="ltr">/{snippet.shortCode || snippet.title}</bdi></div><div className="mt-1 truncate font-mono text-micro text-muted-foreground" dir="ltr">{snippet.id}</div></div>
           <p dir="auto" className="line-clamp-3 whitespace-pre-wrap text-caption text-muted-foreground">{snippet.body}</p>
@@ -170,7 +170,7 @@ export function WorkspaceSnippets() {
       </div>}
     </div>
 
-    <Drawer open={editorOpen} onOpenChange={setEditorOpen}><DrawerContent closeLabel={t('Close')} className="sm:max-w-xl"><DrawerHeader><DrawerTitle className="text-base font-semibold">{selected ? t('Edit Snippet') : t('Add Snippet')}</DrawerTitle><DrawerDescription>{t('Snippets are shared with every workspace user.')}</DrawerDescription></DrawerHeader><DrawerBody className="space-y-5">
+    <Drawer open={editorOpen} onOpenChange={setEditorOpen}><DrawerContent closeLabel={t('Close')} className="sm:max-w-xl"><DrawerHeader><DrawerTitle className="text-base font-semibold">{selected ? t('Edit Snippet') : t('Add Snippet')}</DrawerTitle><DrawerDescription>{t('Snippets are shared with every organization user.')}</DrawerDescription></DrawerHeader><DrawerBody className="space-y-5">
       <div className="space-y-1.5"><Label htmlFor="snippet-name">{t('Name')}</Label><Input id="snippet-name" value={form.title} maxLength={80} onChange={(event) => setForm((value) => ({ ...value, title: event.target.value }))} /></div>
       <div className="space-y-1.5"><Label htmlFor="snippet-shortcut">{t('Shortcut')}</Label><div className="relative"><span className="absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground">/</span><Input id="snippet-shortcut" dir="ltr" className="ps-7" value={form.shortCode} maxLength={80} onChange={(event) => setForm((value) => ({ ...value, shortCode: event.target.value.replace(/^\/+|\s/g, '') }))} /></div></div>
       <div className="space-y-1.5"><Label htmlFor="snippet-message">{t('Message')}</Label><Textarea ref={textareaRef} id="snippet-message" rows={8} maxLength={3000} dir="auto" value={form.body} onChange={(event) => setForm((value) => ({ ...value, body: event.target.value }))} /><div className="flex flex-wrap gap-1" aria-label={t('Dynamic variables')}>{VARIABLES.map((variable) => <Button key={variable} type="button" variant="outline" size="sm" className="h-7 font-mono text-micro" dir="ltr" onClick={() => insertVariable(variable)}>{variable}</Button>)}</div><p className="text-micro text-muted-foreground">{t('Custom fields use $contact.field_name.')}</p></div>
@@ -184,6 +184,6 @@ export function WorkspaceSnippets() {
     </DrawerBody><DrawerFooter><Button variant="outline" onClick={() => setEditorOpen(false)}>{t('Cancel')}</Button><Button disabled={saving || !form.title.trim() || !form.body.trim()} onClick={() => void persist()}>{saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}{t('Save')}</Button></DrawerFooter></DrawerContent></Drawer>
 
     <Dialog open={topicDialogOpen} onOpenChange={setTopicDialogOpen}><DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>{t('Manage Snippet topics')}</DialogTitle></DialogHeader><div className="space-y-4"><div className="flex gap-2"><Input value={newTopic} maxLength={50} placeholder={t('Topic name')} aria-label={t('Topic name')} onChange={(event) => setNewTopic(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void addTopic(); } }} /><Button onClick={() => void addTopic()} disabled={topicBusy || !newTopic.trim()}><Plus className="size-4" />{t('Add')}</Button></div><div className="max-h-72 divide-y divide-border overflow-y-auto border-y border-border">{topics.map((topic) => <div key={topic.id} className="flex items-center gap-3 py-2"><Tags className="size-4 text-muted-foreground" /><span className="min-w-0 flex-1 truncate text-small">{topic.name}</span><span className="text-caption text-muted-foreground">{topic.snippetCount || 0}</span><Button variant="ghost" size="icon" className="size-8" aria-label={`${t('Delete topic')} ${topic.name}`} disabled={topicBusy} onClick={() => void removeTopic(topic)}><Trash2 className="size-4" /></Button></div>)}{!topics.length && <p className="py-6 text-center text-caption text-muted-foreground">{t('No topics configured.')}</p>}</div></div><DialogFooter><Button variant="outline" onClick={() => setTopicDialogOpen(false)}>{t('Done')}</Button></DialogFooter></DialogContent></Dialog>
-    <ConfirmDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }} title={t('Delete Snippet')} description={t('This removes the shared reply and its files for every workspace user. This cannot be undone.')} cancelLabel={t('Cancel')} confirmLabel={t('Delete Snippet')} onConfirm={removeSnippet} busy={saving} />
+    <ConfirmDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }} title={t('Delete Snippet')} description={t('This removes the shared reply and its files for every organization user. This cannot be undone.')} cancelLabel={t('Cancel')} confirmLabel={t('Delete Snippet')} onConfirm={removeSnippet} busy={saving} />
   </div>;
 }

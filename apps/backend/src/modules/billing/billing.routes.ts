@@ -42,10 +42,10 @@ function handleRouteError(res: any, error: unknown) {
 }
 
 /**
- * Why this workspace is in trouble, if it is.
+ * Why this organization is in trouble, if it is.
  *
  * On the gate's allow-list beside the trial endpoint, and for the same
- * reason: a workspace that has just been refused everything else still has to
+ * reason: an organization that has just been refused everything else still has to
  * be able to render an explanation.
  *
  * Returns the deadline rather than a rendered sentence, because the banner is

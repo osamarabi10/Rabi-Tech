@@ -13,7 +13,7 @@
  * **The filter is user input stored as JSON.** It is validated here on write
  * and never trusted on read. A malformed filter that reaches the client breaks
  * the inbox for everyone who can see the view, and for a shared view that is
- * the entire workspace. Unknown keys are rejected rather than ignored: silently
+ * the entire organization. Unknown keys are rejected rather than ignored: silently
  * dropping a key someone typed means a view that does not filter the way its
  * author believes it does.
  */
@@ -38,7 +38,7 @@ export type InboxViewFilter = {
    *
    * Conversations carry a `sessionId`; `OrganizationChannel` is the gateway
    * deployment. Filtering by channel on a shared gateway would match every
-   * conversation in the workspace — the same conflation that left one
+   * conversation in the organization — the same conflation that left one
    * subscriber reading FAILED for weeks while its gateway answered 200.
    */
   sessionNames?: string[];
@@ -65,7 +65,7 @@ const KEYS = [
  * Caps on a blob a user controls.
  *
  * Without them a filter is an unbounded write: a megabyte of label strings
- * stored per view, sent to every member of the workspace on every inbox load.
+ * stored per view, sent to every member of the organization on every inbox load.
  */
 const MAX_ITEMS = 50;
 const MAX_ITEM_LENGTH = 200;

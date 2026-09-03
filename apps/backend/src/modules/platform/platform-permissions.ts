@@ -75,7 +75,7 @@ export const ALL_PLATFORM_PERMISSIONS = Object.keys(PLATFORM_PERMISSIONS) as Pla
 
 /**
  * A sensible advisor: everything needed to answer a customer, nothing that
- * moves money or turns a workspace off.
+ * moves money or turns an organization off.
  *
  * Offered as a starting point in the UI rather than applied automatically —
  * a default that is silently correct teaches nobody what they granted.

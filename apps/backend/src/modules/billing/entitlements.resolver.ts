@@ -53,11 +53,11 @@ export type EffectiveEntitlements = {
   limits: Record<UsageMetric, number | null>;
   seatLimit: number | null;
   /**
-   * Workspaces allowed, the default one included. Null is unlimited.
+   * Organizations allowed, the default one included. Null is unlimited.
    *
    * Read from the edition exactly like seatLimit, so a platform-owner plan
    * override moves it without anything else changing: overriding an
-   * organization to BUSINESS grants BUSINESS's workspaces for the same reason
+   * organization to BUSINESS grants BUSINESS's organizations for the same reason
    * it grants BUSINESS's seats.
    */
   maxWorkspaces: number | null;

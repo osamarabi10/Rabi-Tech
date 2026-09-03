@@ -4,7 +4,7 @@ import logger from '../../lib/logger';
 import { requireScope } from '../api-tokens/api-token.middleware';
 
 /**
- * Discovery — the vocabulary of one workspace.
+ * Discovery — the vocabulary of one organization.
  *
  * ## Why these are not optional extras
  *
@@ -12,9 +12,9 @@ import { requireScope } from '../api-tokens/api-token.middleware';
  * `lifecycleStage` means knowing which stages exist; sending `customFields`
  * means knowing the slugs; assigning a conversation means knowing user ids.
  *
- * Without these, an integrator discovers the workspace's vocabulary by guessing
+ * Without these, an integrator discovers the organization's vocabulary by guessing
  * and reading 400s — which is how integrations end up hardcoding a stage name
- * that one workspace happens to use, and silently failing on every other one.
+ * that one organization happens to use, and silently failing on every other one.
  * `PATCH /contacts` names the valid slugs when you get one wrong; that is a
  * safety net, not a way to find out.
  *
@@ -29,7 +29,7 @@ function fail(res: any, req: any, err: unknown, where: string) {
 }
 
 /**
- * `GET /tags` — the workspace's tag vocabulary.
+ * `GET /tags` — the organization's tag vocabulary.
  *
  * This endpoint is also the fix for a defect in this API's own first release:
  * `tags:read` was a scope a subscriber could grant and **nothing required it**.
@@ -66,7 +66,7 @@ router.get('/contact-fields', requireScope('workspace:read'), async (req, res) =
 });
 
 /**
- * `GET /lifecycle-stages` — the stages, in the order the workspace arranged them.
+ * `GET /lifecycle-stages` — the stages, in the order the organization arranged them.
  *
  * Ordered by `orderIndex`, not by name: a lifecycle is a sequence, and
  * alphabetical would put Customer before Lead. `kind` matters to a caller —
@@ -98,7 +98,7 @@ router.get('/users', requireScope('workspace:read'), async (req, res) => {
     const users = await prisma.user.findMany({
       where: { isActive: true },
       // Email lives on Identity, not User — one identity can hold a seat in
-      // several workspaces, and the login address belongs to the person rather
+      // several organizations, and the login address belongs to the person rather
       // than to any one membership.
       select: { id: true, name: true, role: true, identity: { select: { email: true } } },
       orderBy: { name: 'asc' },

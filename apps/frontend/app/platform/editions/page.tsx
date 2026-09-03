@@ -16,7 +16,7 @@ import { EmptyState, ErrorState } from '@/components/ui/operational-state';
  *
  * Until now this lived in a TypeScript constant, so changing a price meant a
  * deploy. The per-subscriber overrides on the subscribers page could grant one
- * workspace an exception; nothing could change the menu everyone is sold from.
+ * organization an exception; nothing could change the menu everyone is sold from.
  *
  * English-only, like the rest of this console. The tenant product is trilingual;
  * the platform console has one operator.

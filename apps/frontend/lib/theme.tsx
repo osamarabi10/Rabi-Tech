@@ -24,7 +24,7 @@ export const THEME_STORAGE_KEY = 'rabitech_theme';
  * What a first-time visitor gets.
  *
  * Light, not `system`. Following the OS sounds neutral and is not: a
- * WhatsApp workspace is a working tool used beside other working tools, and
+ * WhatsApp organization is a working tool used beside other working tools, and
  * the product should look the same to a team whose laptops are configured
  * differently — one agent describing a screen to another should be describing
  * the same screen.

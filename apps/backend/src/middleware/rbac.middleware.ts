@@ -37,7 +37,7 @@ const ROLE_PERMISSIONS: Record<string, Set<Role>> = {
   // Saved views follow the same reasoning one step further. Anyone who can
   // read conversations may keep their own private views — they are a personal
   // arrangement of an inbox that agent already sees. Putting a view in front
-  // of the whole workspace, or editing one that is already there, is a
+  // of the whole organization, or editing one that is already there, is a
   // different act: an agent must not rename or delete a view four colleagues
   // start their day in.
   'inbox-view:manage-shared': new Set(['ADMIN', 'SUPERVISOR']),
@@ -127,11 +127,11 @@ const USER_RESTRICTIONS = [
   { flag: 'restrictContactDeletion', operations: ['contact:delete'], code: 'USER_CONTACT_DELETE_RESTRICTED', message: 'Deleting contacts is restricted for this user' },
   /*
     Workspace settings is `system:config` plus the four user-management
-    operations, because "who is in this workspace" is a workspace setting in
+    operations, because "who is in this organization" is an organization setting in
     every product this resembles, and an admin restricted from settings who can
     still create admins has not been restricted from anything.
   */
-  { flag: 'restrictWorkspaceSettings', operations: ['system:config', 'user:create', 'user:update', 'user:delete', 'user:list'], code: 'USER_SETTINGS_RESTRICTED', message: 'Workspace settings are restricted for this user' },
+  { flag: 'restrictWorkspaceSettings', operations: ['system:config', 'user:create', 'user:update', 'user:delete', 'user:list'], code: 'USER_SETTINGS_RESTRICTED', message: 'Organization settings are restricted for this user' },
   /*
     Integrations, the seventh and last of theirs we lacked.
 

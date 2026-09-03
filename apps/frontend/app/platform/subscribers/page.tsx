@@ -90,7 +90,7 @@ function trialExpired(subscriber: Subscriber): boolean {
  * How long is left, in the console's own words.
  *
  * Coarse on purpose: an owner scanning a table wants to know who is about to
- * fall off, not that a workspace has 2h 41m. Minutes appear only inside the
+ * fall off, not that an organization has 2h 41m. Minutes appear only inside the
  * last hour, where the difference is the difference between calling someone
  * today and calling them tomorrow.
  */

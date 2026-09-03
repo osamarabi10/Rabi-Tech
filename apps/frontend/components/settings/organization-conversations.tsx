@@ -7,7 +7,7 @@ import {
   createConversationCategory,
   deleteConversationCategory,
   fetchConversationSettings,
-  fetchWorkspaceUsers,
+  fetchOrganizationUsers,
   updateConversationCategory,
   updateConversationSettings,
   type ClosingNoteMode,
@@ -65,7 +65,7 @@ function PolicySwitch({ checked, onCheckedChange, disabled, label }: {
   );
 }
 
-export function WorkspaceConversations() {
+export function OrganizationConversations() {
   const { t } = useT();
   const [settings, setSettings] = useState<ConversationSettings | null>(null);
   const [canManage, setCanManage] = useState(false);
@@ -87,7 +87,7 @@ export function WorkspaceConversations() {
     try {
       const [nextSettings, roster] = await Promise.all([
         fetchConversationSettings(),
-        fetchWorkspaceUsers(),
+        fetchOrganizationUsers(),
       ]);
       setSettings(nextSettings);
       setCanManage(roster.capabilities.canInvite);
@@ -194,7 +194,7 @@ export function WorkspaceConversations() {
       action={<>{!canManage && (
           <span className="flex items-center gap-2 text-caption text-muted-foreground">
             <ShieldCheck className="size-4" aria-hidden />
-            {t('Only workspace owners and managers can change conversation settings.')}
+            {t('Only organization owners and managers can change conversation settings.')}
           </span>
         )}</>}
     />

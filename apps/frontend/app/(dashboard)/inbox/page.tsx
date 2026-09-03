@@ -157,7 +157,7 @@ const MEDIA_LABELS: Record<string, string> = {
   audio: 'صوت', ptt: 'رسالة صوتية', document: 'ملف',
   // The TYPE is what gets stored; the sentence is rendered here. A stored
   // "[location]" could never be translated afterwards — the defect behind
-  // Respond.io's [Deleted Workflow] — so an Arabic workspace reads Arabic and a
+  // Respond.io's [Deleted Workflow] — so an Arabic organization reads Arabic and a
   // Hebrew one Hebrew, from the same row.
   location: 'موقع', contacts: 'بطاقة جهة اتصال', interactive: 'رد تفاعلي',
   button: 'ضغطة زر', order: 'طلب', reaction: 'تفاعل على رسالة',
@@ -411,7 +411,7 @@ export default function InboxPage() {
   const [newName, setNewName] = useState('');
   const [startingChat, setStartingChat] = useState(false);
   /**
-   * The workspace's configured numbers, each with the team it belongs to.
+   * The organization's configured numbers, each with the team it belongs to.
    *
    * This state existed and was never populated — declared, typed, and always
    * null. It is what the new-conversation dialog needs to say which number a
@@ -447,7 +447,7 @@ export default function InboxPage() {
    *
    * Starts empty rather than null. A scope of kind 'view' matches nothing
    * while the list is empty, so the moment before these arrive shows an empty
-   * view instead of every conversation in the workspace under someone's saved
+   * view instead of every conversation in the organization under someone's saved
    * heading.
    */
   const [inboxViews, setInboxViews] = useState<InboxView[]>([]);
@@ -574,7 +574,7 @@ export default function InboxPage() {
         prev.map((m) => (m.id === messageId ? { ...m, failureReason: reason } : m)),
       );
       // Through t() for the same reason the bubble is: the server writes
-      // these in Arabic and this workspace may not be reading Arabic.
+      // these in Arabic and this organization may not be reading Arabic.
       toast.error(t(reason));
     } finally {
       setRetryingId(null);
@@ -779,7 +779,7 @@ export default function InboxPage() {
      *
      * The payload carries the whole view, so this applies the change rather
      * than re-fetching: a refetch on every keystroke of a rename would be a
-     * request per character for every member of the workspace.
+     * request per character for every member of the organization.
      */
     const onViewChanged = (p: {
       action: 'created' | 'updated' | 'deleted';
@@ -1236,7 +1236,7 @@ export default function InboxPage() {
   /**
    * Sessions that exist but are not connected, by name.
    *
-   * Only worth marking rows at all on a workspace with more than one number:
+   * Only worth marking rows at all on an organization with more than one number:
    * if every channel is down the rail already says so across the whole list,
    * and repeating it on each row is noise. What this catches is the case the
    * rail cannot express — two numbers, one of them dead, and no way to tell
@@ -1253,7 +1253,7 @@ export default function InboxPage() {
     sel?.sessionPhone ?? null,
     liveSessions,
   );
-  // Naming the channel only earns its place on a multi-number workspace.
+  // Naming the channel only earns its place on a multi-number organization.
   const multiChannel = (liveSessions?.length ?? 0) > 1;
   const sendBlocked = isSendBlocked(readiness);
 

@@ -15,7 +15,7 @@ import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { cheapestUpgradeGranting, getEdition } from '../billing/editions.service';
 
 /**
- * Whether this workspace's edition may connect a channel kind.
+ * Whether this organization's edition may connect a channel kind.
  *
  * `allowedChannels` shipped identical on all five editions, unread by anything,
  * with the PATCH endpoint refusing to set it — a toggle that granted nothing.
@@ -27,7 +27,7 @@ import { cheapestUpgradeGranting, getEdition } from '../billing/editions.service
  * by ladder position, never hardcoded.
  *
  * The two catalogue reads below are deliberately different, and archiving is
- * what makes the difference matter. getEdition() resolves what this workspace
+ * what makes the difference matter. getEdition() resolves what this organization
  * already has and must see archived editions, or a subscriber on a withdrawn
  * plan loses a channel they are still paying for. getEditions() names what they
  * could buy and must not, so no archivedAt test belongs here - the published
@@ -60,7 +60,7 @@ async function channelRefusal(
  *
  * Admin-only throughout. Connecting a channel hands this platform a credential
  * that sends as the business to its own customers; that is not a supervisor's
- * decision, and reading the connection reveals which number the workspace
+ * decision, and reading the connection reveals which number the organization
  * operates from.
  */
 const router = Router();
@@ -194,7 +194,7 @@ router.get('/capabilities', async (_req, res) => {
   try {
     res.json({ capabilities: await channelCapabilities() });
   } catch (error) {
-    // A workspace mid-switch, or with two active channels, has no single answer.
+    // An organization mid-switch, or with two active channels, has no single answer.
     // Reported as a named state rather than a 500, so the UI can say so.
     if (isChannelSendError(error)) {
       return res.status(409).json({
@@ -208,7 +208,7 @@ router.get('/capabilities', async (_req, res) => {
 });
 
 /**
- * Choose which channel this workspace sends through.
+ * Choose which channel this organization sends through.
  *
  * A switch, not a toggle: exactly one channel is active afterwards, and the
  * transaction behind it is why a send in flight never sees zero.

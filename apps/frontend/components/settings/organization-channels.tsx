@@ -20,7 +20,7 @@ import {
   fetchSessionQR,
   fetchSessions,
   fetchTeams,
-  fetchWorkspaceUsers,
+  fetchOrganizationUsers,
   setActiveChannel,
   type ChannelCapabilities,
   type Session,
@@ -68,7 +68,7 @@ type ChannelState = {
   message: string | null;
 };
 
-export function WorkspaceChannels() {
+export function OrganizationChannels() {
   const { t } = useT();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -130,7 +130,7 @@ export function WorkspaceChannels() {
       const [sessionRows, teamRows, roster, activeChannel] = await Promise.all([
         fetchSessions(),
         fetchTeams(),
-        fetchWorkspaceUsers(),
+        fetchOrganizationUsers(),
         fetchChannelCapabilities().catch(() => ({
           capabilities: null,
           code: 'CHANNEL_CAPABILITIES_UNAVAILABLE',
@@ -216,7 +216,7 @@ export function WorkspaceChannels() {
       await setActiveChannel('OPENWA');
       setConfirmOpenWA(false);
       await channelChanged();
-      toast.success(t('This workspace now sends through OpenWA'));
+      toast.success(t('This organization now sends through OpenWA'));
     } catch (error: any) {
       toast.error(error?.response?.data?.error || t('Could not switch the sending channel'));
     } finally {
@@ -249,7 +249,7 @@ export function WorkspaceChannels() {
         selectedChannelId={railSelectedId}
         basePath="/settings/channels"
         onAddChannel={sessions.length ? undefined : () => setConfirmOpenWA(true)}
-        addDisabledReason={sessions.length ? t('قناة واحدة لكل مساحة عمل في هذه المرحلة') : undefined}
+        addDisabledReason={sessions.length ? t('قناة واحدة لكل مؤسسة في هذه المرحلة') : undefined}
       />
       {content}
     </div>
@@ -272,7 +272,7 @@ export function WorkspaceChannels() {
       <SettingsHeader
       title={t('Channels')}
       description={t('Monitor linked messaging accounts and manage their connection state.')}
-      action={<>{!capabilities.canManage && <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only workspace owners can change channels.')}</span>}</>}
+      action={<>{!capabilities.canManage && <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only organization owners can change channels.')}</span>}</>}
     />
 
       <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
@@ -301,7 +301,7 @@ export function WorkspaceChannels() {
                   inactiveLabel={repairAmbiguous ? t('Sending channel needs selection') : t('Inactive sending channel')}
                 />
               </div>
-              <p className="mt-1 text-caption text-muted-foreground">{t('QR-linked WhatsApp sessions for this workspace.')}</p>
+              <p className="mt-1 text-caption text-muted-foreground">{t('QR-linked WhatsApp sessions for this organization.')}</p>
             </div>
             {offerOpenWASwitch && (
               <div className="max-w-md text-end">
@@ -328,7 +328,7 @@ export function WorkspaceChannels() {
         )}
 
         {!sessions.length ? (
-          <EmptyState icon={MessageCircle} title={t('No channels configured')} description={t('A channel appears here after workspace provisioning completes.')} />
+          <EmptyState icon={MessageCircle} title={t('No channels configured')} description={t('A channel appears here after organization provisioning completes.')} />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {sessions.map((session) => (
@@ -441,13 +441,13 @@ function channelProblemCopy(code: string, t: (key: string) => string) {
   if (code === 'CHANNEL_NOT_ACTIVE') {
     return {
       title: t('No sending channel is active'),
-      description: t('Sending is paused. A workspace owner must choose a connected channel below.'),
+      description: t('Sending is paused. An organization owner must choose a connected channel below.'),
     };
   }
   if (code === 'CHANNEL_AMBIGUOUS') {
     return {
       title: t('More than one sending channel is active'),
-      description: t('Sending is paused to prevent messages leaving from the wrong number. A workspace owner must select one channel below.'),
+      description: t('Sending is paused to prevent messages leaving from the wrong number. An organization owner must select one channel below.'),
     };
   }
   return {

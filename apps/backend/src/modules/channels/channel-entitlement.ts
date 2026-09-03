@@ -4,17 +4,17 @@ import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { ChannelKind } from './channel.types';
 
 /**
- * May this workspace *obtain* a channel of this kind?
+ * May this organization *obtain* a channel of this kind?
  *
  * `allowedChannels` was enforced at exactly two call sites — `/channels/connect`
  * for Meta and `/channels/active` for the switch — while the two paths a
- * workspace actually takes to get a working OpenWA number, gateway provisioning
+ * organization actually takes to get a working OpenWA number, gateway provisioning
  * and the QR pairing endpoint, asked nothing about the edition. The switch was
  * guarded and the front door was not.
  *
  * The consequence was not theoretical. GROWTH, BUSINESS and ENTERPRISE carry
  * `autoProvisionGateway: true` with `allowedChannels: ['WHATSAPP_CLOUD']`, so a
- * workspace on any of them had an OpenWA gateway built for it automatically,
+ * organization on any of them had an OpenWA gateway built for it automatically,
  * reached AWAITING_QR, and — because nothing checked — could be paired and sent
  * through normally. That is why trials appeared to work at all while Meta was
  * unconfigured: they were running on a channel the edition forbade and nothing
@@ -23,13 +23,13 @@ import { ChannelKind } from './channel.types';
  * ## The grandfather rule, and why it is not an oversight
  *
  * A channel that is already ACTIVE is always permitted, whatever the edition
- * says. Enforcing this retroactively would disconnect live workspaces — ostudio
+ * says. Enforcing this retroactively would disconnect live organizations — ostudio
  * is on ENTERPRISE, which is Meta-only, and has a working OpenWA channel it has
  * been sending through. Cutting off a paying subscriber to correct a rule they
  * never broke is a worse outcome than the inconsistency, and it is not a
  * decision an entitlement check should make on its own.
  *
- * So this bounds the *future*: no new workspace can obtain a channel its edition
+ * So this bounds the *future*: no new organization can obtain a channel its edition
  * forbids, and every existing one keeps working. Closing the remaining gap means
  * migrating the affected subscribers deliberately, which is a commercial act
  * rather than a code change.
@@ -50,7 +50,7 @@ async function alreadyEstablished(organizationId: string, kind: ChannelKind): Pr
 }
 
 /**
- * Null when the workspace may have this channel, a refusal when it may not.
+ * Null when the organization may have this channel, a refusal when it may not.
  *
  * Deliberately mirrors `channelRefusal` in channels.routes.ts rather than
  * replacing it: that one answers for a *request* the admin just made and can

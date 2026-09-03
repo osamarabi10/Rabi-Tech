@@ -81,7 +81,7 @@ router.post('/', requireAdmin, async (req, res) => {
   try {
     const name = String(req.body?.name ?? '').trim();
     if (!name) {
-      return res.status(400).json({ error: 'invalid_request', message: 'لازم اسم للفرع' });
+      return res.status(400).json({ error: 'invalid_request', message: 'لازم اسم لمساحة العمل' });
     }
     if (name.length > 60) {
       return res.status(400).json({ error: 'invalid_request', message: 'الاسم أطول من اللازم' });
@@ -102,7 +102,7 @@ router.post('/', requireAdmin, async (req, res) => {
       */
       return res.status(402).json({
         error: 'plan_limit',
-        message: `باقتك (${entitlements.planName}) بتسمح بـ ${entitlements.maxWorkspaces} فرع.`,
+        message: `باقتك (${entitlements.planName}) بتسمح بـ ${entitlements.maxWorkspaces} مساحة عمل.`,
         limit: entitlements.maxWorkspaces,
         current: existing,
         planName: entitlements.planName,
@@ -111,7 +111,7 @@ router.post('/', requireAdmin, async (req, res) => {
 
     const duplicate = await prisma.workspace.findFirst({ where: { name }, select: { id: true } });
     if (duplicate) {
-      return res.status(409).json({ error: 'duplicate', message: 'في فرع بنفس الاسم' });
+      return res.status(409).json({ error: 'duplicate', message: 'في مساحة عمل بنفس الاسم' });
     }
 
     const created = await prisma.$transaction(async (tx) => {
@@ -167,7 +167,7 @@ router.post('/:id/activate', async (req, res) => {
       select: { id: true, name: true },
     });
     if (!workspace) {
-      return res.status(404).json({ error: 'not_found', message: 'ما في فرع بهذا المعرّف' });
+      return res.status(404).json({ error: 'not_found', message: 'ما في مساحة عمل بهذا المعرّف' });
     }
 
     const membership = await prisma.workspaceMember.findFirst({
@@ -175,7 +175,7 @@ router.post('/:id/activate', async (req, res) => {
       select: { id: true },
     });
     if (!membership) {
-      return res.status(403).json({ error: 'not_a_member', message: 'إنت مش عضو بهذا الفرع' });
+      return res.status(403).json({ error: 'not_a_member', message: 'إنت مش عضو بهذي المساحة' });
     }
 
     const header = String(req.headers.authorization || '');

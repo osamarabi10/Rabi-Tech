@@ -1,13 +1,13 @@
 import type { Session } from '@/lib/data';
 
 /**
- * What the WhatsApp gateway is doing, and what that costs the workspace.
+ * What the WhatsApp gateway is doing, and what that costs the organization.
  *
  * The inbox reported two states — "channel working" and "channel not
- * connected" — for at least five distinct situations. A workspace with three
+ * connected" — for at least five distinct situations. An organization with three
  * numbers where one had dropped was labelled "not connected", which is untrue
  * of the two that were fine and useless about the one that was not. A
- * workspace that had never scanned a QR got the same sentence as one whose
+ * organization that had never scanned a QR got the same sentence as one whose
  * gateway container had crashed, though only one of them has a phone to fix it
  * with.
  *

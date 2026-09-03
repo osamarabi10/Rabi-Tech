@@ -6,7 +6,7 @@ import { CheckCircle2, Clock } from 'lucide-react';
  *
  * The previous copy said an activation "request" was received and left the
  * customer with a reference and no idea what happens next. Until a payment
- * provider is wired, a person activates the workspace — so say that plainly,
+ * provider is wired, a person activates the organization — so say that plainly,
  * say roughly when, and make clear the account already exists.
  */
 export default function ContactUsToActivatePage({

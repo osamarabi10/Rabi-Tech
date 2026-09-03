@@ -19,7 +19,7 @@ import {
 } from './reporting.service';
 import { webhookReport } from './webhook-report.service';
 import { WEBHOOK_LOG_RETENTION_DAYS } from '../webhooks/webhook-log.service';
-import { workspaceOffsetMinutes } from '../../utils/workspace-offset';
+import { organizationOffsetMinutes } from '../../utils/organization-offset';
 
 const router = Router();
 router.use(verifyToken);
@@ -124,9 +124,9 @@ router.get('/conversations', requirePermission('analytics:read'), async (req, re
       resolutionStats(period, filters),
       hourOfDayHeatmap(
         period,
-        // The workspace's clock, resolved at the period's end so a report run
+        // The organization's clock, resolved at the period's end so a report run
         // during DST reads the offset that was in force for most of it.
-        await workspaceOffsetMinutes(period.to),
+        await organizationOffsetMinutes(period.to),
         filters,
         req.user!.organizationId,
       ),

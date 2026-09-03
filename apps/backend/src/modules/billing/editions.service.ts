@@ -125,7 +125,7 @@ const RESTRICTED_FLOOR: PlanEntitlements = {
   maxWorkspaces: 1,
   // capability by failing to resolve.
   // organization whose edition cannot be resolved must not acquire a paid
-  // The floor grants the default workspace and nothing past it: an
+  // The floor grants the default organization and nothing past it: an
   workflowsLimit: 0,
   monthlyAiTokensInLimit: BigInt(0),
   monthlyAiTokensOutLimit: BigInt(0),

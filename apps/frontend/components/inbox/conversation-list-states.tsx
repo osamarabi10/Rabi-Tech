@@ -9,7 +9,7 @@ import { useT } from '@/lib/i18n';
  * What the conversation list shows when it is not showing conversations.
  *
  * There was one message for every case: "no conversations". That is the same
- * sentence whether the workspace has never been connected to WhatsApp, whether
+ * sentence whether the organization has never been connected to WhatsApp, whether
  * it is connected and simply quiet, or whether the agent has a filter applied
  * that happens to match nothing. Three very different situations, three
  * different next actions, and the UI told them apart from none of it.
@@ -69,10 +69,10 @@ export type EmptyReason =
  *   created themselves. Server-side search *replaces* the loaded list, so a
  *   search matching nothing empties it entirely; ranking any other cause above
  *   the filter told an agent staring at their own search term that their
- *   workspace had no conversations, or no channel. Clearing the filter then
+ *   organization had no conversations, or no channel. Clearing the filter then
  *   reveals whatever the real state underneath is.
  * - A missing channel is only asked about once no filter is involved. A
- *   workspace with existing conversations plainly has a working number, and a
+ *   organization with existing conversations plainly has a working number, and a
  *   gateway that is down right now is already reported by the composer strip
  *   and the header chip — not by the conversation list.
  */

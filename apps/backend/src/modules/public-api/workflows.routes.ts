@@ -12,9 +12,9 @@ import { parseContactRef } from './identifier';
  *
  * Before this, an integration could read and write but could not *start*
  * anything. Whatever happened in the subscriber's own system — an order ships,
- * a payment clears, a delivery fails — could only reach the workspace as a
+ * a payment clears, a delivery fails — could only reach the organization as a
  * message somebody had to read and act on. This closes that: their software
- * fires the workflow the workspace already built.
+ * fires the workflow the organization already built.
  *
  * ## Addressed by id, authorised by a token
  *

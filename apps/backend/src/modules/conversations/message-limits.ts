@@ -17,7 +17,7 @@
  * Every file is a separate provider call. Twenty of them is twenty chances to
  * fail halfway, leaving the customer with eleven of the twenty and the agent
  * with no way to tell which. On Meta each failure also costs the number's
- * quality rating, which governs how many messages the workspace may send at
+ * quality rating, which governs how many messages the organization may send at
  * all — so an unbounded attachment list degrades the thing it is using.
  */
 export const MAX_FILES_PER_MESSAGE = 5;

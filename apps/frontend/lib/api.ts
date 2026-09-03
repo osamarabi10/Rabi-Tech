@@ -46,7 +46,7 @@ api.interceptors.request.use((config) => {
 });
 
 /**
- * Where a locked-out workspace is sent.
+ * Where a locked-out organization is sent.
  *
  * Keyed on the response *code*, never on the bare 403: a 403 also means "you
  * lack that permission", and sending an agent to the pricing page because
@@ -63,7 +63,7 @@ api.interceptors.response.use(
     const gateCode = err.response?.status === 403 ? err.response?.data?.code : undefined;
     const destination = gateCode ? GATE_DESTINATIONS[gateCode] : undefined;
     if (destination && typeof window !== 'undefined') {
-      // The session stays valid — they are a real user of a workspace that
+      // The session stays valid — they are a real user of an organization that
       // owes money, not someone who has been signed out. Clearing the token
       // here would make them log in again just to reach the checkout.
       const alreadyThere = window.location.pathname === '/pricing';

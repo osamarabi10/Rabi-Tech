@@ -40,7 +40,7 @@ const GRACE_DAYS_DEFAULT = 7;
 /**
  * Who hears about a billing problem.
  *
- * The workspace admins, not "the organization" — an organization has no
+ * The organization admins, not "the organization" — an organization has no
  * inbox. Falls back to nobody rather than to some default address: a warning
  * sent to the wrong person is worse than one the outbox records as unsent,
  * because the first looks handled.

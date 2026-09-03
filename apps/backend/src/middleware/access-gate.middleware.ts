@@ -5,7 +5,7 @@ import { runAsPlatform } from '../lib/tenant-context';
 import { trialStateOf, TRIAL_SUBSCRIPTION_STATUSES } from '../modules/billing/trial.service';
 
 /**
- * Whether this workspace may use the product at all right now.
+ * Whether this organization may use the product at all right now.
  *
  * Distinct from RBAC, which answers "may *this user* do *this thing*". This
  * answers a question that was previously asked nowhere: is the subscriber
@@ -115,7 +115,7 @@ export async function decideAccess(organizationId: string, now = new Date()): Pr
  * Fails **open** on an internal error. A database hiccup here would otherwise
  * lock every paying subscriber out of the product at once — the blast radius of
  * failing closed is the entire customer base, and the blast radius of failing
- * open is one unpaid workspace getting a few more minutes. The error is logged
+ * open is one unpaid organization getting a few more minutes. The error is logged
  * loudly rather than silently swallowed.
  */
 export function enforceAccess(req: Request, res: Response, next: NextFunction) {

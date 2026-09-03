@@ -537,9 +537,9 @@ for (const scenario of scenarios) {
     await page.goto('/settings/general');
     await expect(page).toHaveURL(/\/settings\/general$/);
     await expectSettingsFrame(page, scenario);
-    await expect(page.locator('#workspace-name')).toHaveValue('RabiTech Demo');
+    await expect(page.locator('#organization-name')).toHaveValue('RabiTech Demo');
     await expect(page.locator('#inactivity-value')).toHaveValue('20');
-    await expect(page.locator('#workspace-timezone')).toHaveValue('Asia/Jerusalem');
+    await expect(page.locator('#organization-timezone')).toHaveValue('Asia/Jerusalem');
     await expect(page.getByRole('checkbox')).toHaveCount(1);
     await page.screenshot({ path: testInfo.outputPath(`${scenario.name}-workspace-general.png`), fullPage: true });
     if (scenario.width === 375) {
@@ -977,12 +977,12 @@ test('workspace settings submit name, idle policy, timezone, recap state, and re
   );
   await page.goto('/settings/general');
 
-  await page.locator('#workspace-name').fill('RabiTech Operations');
+  await page.locator('#organization-name').fill('RabiTech Operations');
   await page.locator('#inactivity-value').fill('2');
   await page.getByRole('combobox', { name: 'Inactivity timeout unit' }).click();
   await page.getByRole('option', { name: 'Hours' }).click();
-  await page.locator('#workspace-timezone').fill('Asia/Hebron');
-  await page.getByRole('combobox', { name: 'Select a workspace member' }).click();
+  await page.locator('#organization-timezone').fill('Asia/Hebron');
+  await page.getByRole('combobox', { name: 'Select an organization member' }).click();
   await page.getByRole('option', { name: /Maya Saleh/ }).click();
   await page.getByRole('button', { name: 'Add recipient' }).click();
   await page.getByRole('button', { name: 'Save', exact: true }).click();

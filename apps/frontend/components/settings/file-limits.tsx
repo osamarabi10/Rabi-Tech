@@ -8,7 +8,7 @@ import { ErrorState, LayoutSkeleton } from '@/components/ui/operational-state';
 import { SettingsPage, SettingsSection } from './settings-primitives';
 
 /**
- * Files — the sizes this workspace actually enforces.
+ * Files — the sizes this organization actually enforces.
  *
  * ## Every number here comes from the server
  *
@@ -65,7 +65,7 @@ export function FileLimits() {
   return (
     <SettingsPage
       title={t('Files')}
-      description={t('The sizes this workspace accepts. Anything larger is refused before it is stored.')}
+      description={t('The sizes this organization accepts. Anything larger is refused before it is stored.')}
     >
       <SettingsSection
         title={t('Upload limits')}

@@ -66,7 +66,7 @@ import { Activity, CheckCircle2, Clock, Copy, ImageIcon, Loader2, LogOut, Palett
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import { PermissionNotice } from '@/components/permission-notice';
-import { WorkspaceGeneral } from '@/components/settings/workspace-general';
+import { OrganizationGeneral } from '@/components/settings/organization-general';
 
 const QR_POLL_MS = 5000;
 
@@ -137,7 +137,7 @@ export default function SettingsPage() {
     window.addEventListener('hashchange', syncHash);
     return () => window.removeEventListener('hashchange', syncHash);
   }, []);
-  return searchParams.has('tab') || hash ? <LegacySettingsPage /> : <WorkspaceGeneral />;
+  return searchParams.has('tab') || hash ? <LegacySettingsPage /> : <OrganizationGeneral />;
 }
 
 function LegacySettingsPage() {

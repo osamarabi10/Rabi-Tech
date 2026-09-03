@@ -95,7 +95,7 @@ export type Conv = {
  * The value is the Arabic source string, which is also its dictionary key —
  * that is how every UI string in this app works. What makes it different from
  * the rest is that it is produced in the data layer, where there is no `t()`,
- * so it reached the screen untranslated and a Hebrew workspace showed one
+ * so it reached the screen untranslated and a Hebrew organization showed one
  * Arabic phrase in the middle of its conversation list. Display sites compare
  * against this and translate; a real contact called something else passes
  * through untouched.
@@ -282,7 +282,7 @@ export type WorkspaceUserCapabilities = {
   callsAvailable: boolean;
 };
 
-export type WorkspaceUsersResponse = {
+export type OrganizationUsersResponse = {
   users: SystemUser[];
   capabilities: WorkspaceUserCapabilities;
 };
@@ -508,7 +508,7 @@ export async function startConversation(input: {
     sessionDate: fmtDate(data.createdAt),
     unread: data._count?.messages ?? 0,
     // ASCII '?', not the Arabic '؟'. It is a placeholder glyph, not a
-    // sentence — a Hebrew or English workspace should not get an Arabic
+    // sentence — a Hebrew or English organization should not get an Arabic
     // question mark in its avatar circle, and no locale needs a translated one.
     avatar: (data.contact?.name || data.contact?.phone || '?').charAt(0),
     assigneeId: data.assignee?.id ?? null,
@@ -1058,7 +1058,7 @@ export async function fetchSystemUsers(): Promise<SystemUser[]> {
   return Array.isArray(data) ? data : data.users;
 }
 
-export async function fetchWorkspaceUsers(): Promise<WorkspaceUsersResponse> {
+export async function fetchOrganizationUsers(): Promise<OrganizationUsersResponse> {
   const { data } = await api.get('/api/system/users', { params: { all: 'true' } });
   if (Array.isArray(data)) {
     return {
@@ -1581,7 +1581,7 @@ export type WorkspaceSettings = {
   eligibleRecipients: WorkspaceRecipient[];
   /**
    * Broadcasts hold outside these hours, in the *recipient's* local time — not
-   * the workspace's. Off by default: enabling it for an existing workspace
+   * the organization's. Off by default: enabling it for an existing organization
    * would silently delay sends that were already scheduled.
    */
   quietHoursEnabled: boolean;
@@ -1860,7 +1860,7 @@ export type InboxView = {
   name: string;
   filter: InboxViewFilter;
   sortOrder: number;
-  /** Shared with the workspace. Derived from ownership, never stored. */
+  /** Shared with the organization. Derived from ownership, never stored. */
   shared: boolean;
   ownerId: string | null;
   /**
@@ -2606,7 +2606,7 @@ export type MetaChannel = {
   lastValidatedAt: string | null;
   invalidReason: string | null;
   graphVersion: string;
-  /** Whether the workspace currently sends through this channel. */
+  /** Whether the organization currently sends through this channel. */
   isActiveChannel: boolean;
 };
 
@@ -2652,7 +2652,7 @@ export async function disconnectMetaChannel(): Promise<boolean> {
 // ---------- Channel capabilities ----------
 
 /**
- * What the workspace's active channel can do.
+ * What the organization's active channel can do.
  *
  * The point of this type is that no component should ever ask *which* channel
  * it is talking to. A composer asking "is this Meta?" has to be edited every
@@ -2675,7 +2675,7 @@ export type ChannelCapabilities = {
 };
 
 /**
- * Null when the workspace has no single answer — mid-switch, or two channels
+ * Null when the organization has no single answer — mid-switch, or two channels
  * active. The `code` says which, so the UI can describe the state instead of
  * rendering an empty card that looks like a missing feature.
  */
@@ -2699,7 +2699,7 @@ export async function fetchChannelCapabilities(): Promise<{
   }
 }
 
-/** Choose the channel this workspace sends through. Exactly one, always. */
+/** Choose the channel this organization sends through. Exactly one, always. */
 export async function setActiveChannel(kind: string): Promise<ChannelCapabilities | null> {
   const { data } = await api.post('/api/channels/active', { kind });
   return data.capabilities ?? null;
@@ -2949,7 +2949,7 @@ export async function removeCollaborator(conversationId: string, userId: string)
   await api.delete(`/api/conversations/${conversationId}/collaborators/${userId}`);
 }
 
-// ---------- workspaces (branches) ----------
+// ---------- organizations (branches) ----------
 
 export type Workspace = { id: string; name: string; isDefault: boolean };
 
@@ -2991,11 +2991,11 @@ export async function createWorkspace(name: string): Promise<Workspace> {
 }
 
 /**
- * Switch the active workspace.
+ * Switch the active organization.
  *
  * The server mints a new session token carrying the new claim and this replaces
  * the stored one. Nothing is sent as a header or a query parameter, so the
- * active workspace cannot be changed by editing a request — the same rule
+ * active organization cannot be changed by editing a request — the same rule
  * organizationId has always followed.
  */
 export async function activateWorkspace(id: string): Promise<{ token: string; workspace: Workspace }> {

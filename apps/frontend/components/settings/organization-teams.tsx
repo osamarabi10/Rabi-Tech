@@ -16,7 +16,7 @@ import {
   createTeam,
   deleteTeam,
   fetchTeams,
-  fetchWorkspaceUsers,
+  fetchOrganizationUsers,
   updateTeam,
   updateTeamMembers,
   type AssignmentStrategy,
@@ -84,7 +84,7 @@ function teamDependencies(team: Team): number {
   return (team._count?.members || 0) + (team._count?.conversations || 0) + (team._count?.sessions || 0);
 }
 
-export function WorkspaceTeams() {
+export function OrganizationTeams() {
   const { t } = useT();
   const [teams, setTeams] = useState<Team[]>([]);
   const [users, setUsers] = useState<SystemUser[]>([]);
@@ -106,7 +106,7 @@ export function WorkspaceTeams() {
     setLoading(true);
     setFailed(false);
     try {
-      const [teamRows, roster] = await Promise.all([fetchTeams(), fetchWorkspaceUsers()]);
+      const [teamRows, roster] = await Promise.all([fetchTeams(), fetchOrganizationUsers()]);
       setTeams(teamRows);
       setUsers(roster.users);
       setCapabilities(roster.capabilities);
@@ -257,7 +257,7 @@ export function WorkspaceTeams() {
       action={<>{capabilities.canManage ? (
           <Button type="button" onClick={() => setCreateOpen(true)}><Plus className="size-4" />{t('New team')}</Button>
         ) : (
-          <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only workspace owners can change teams.')}</span>
+          <span className="flex items-center gap-2 text-caption text-muted-foreground"><ShieldCheck className="size-4" />{t('Only organization owners can change teams.')}</span>
         )}</>}
     />
 

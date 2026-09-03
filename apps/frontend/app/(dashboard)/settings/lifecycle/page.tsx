@@ -1,5 +1,5 @@
-import { WorkspaceLifecycle } from '@/components/settings/workspace-lifecycle';
+import { OrganizationLifecycle } from '@/components/settings/organization-lifecycle';
 
 export default function LifecycleSettingsPage() {
-  return <WorkspaceLifecycle />;
+  return <OrganizationLifecycle />;
 }

@@ -98,7 +98,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
    * Clears the view-as selection along with the session. A platform user who
    * was viewing a subscriber and then signs out must not leave that subscriber
    * selected for whoever signs in next — the console would open scoped to
-   * someone else's workspace with no indication why.
+   * someone else's organization with no indication why.
    *
    * Lives here rather than on a page because the sidebar is on every console
    * screen, and a way out that exists on exactly one of them is not a way out.

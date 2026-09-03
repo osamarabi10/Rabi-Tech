@@ -71,7 +71,7 @@ function editableSnapshot(
   });
 }
 
-export function WorkspaceGeneral() {
+export function OrganizationGeneral() {
   const { t } = useT();
   const router = useRouter();
   const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
@@ -182,19 +182,19 @@ export function WorkspaceGeneral() {
           organization: { ...stored.organization, name: saved.name },
         }));
       }
-      toast.success(t('Workspace settings saved'));
+      toast.success(t('Organization settings saved'));
     } catch (error: any) {
-      toast.error(error?.response?.data?.error || t('Could not save workspace settings'));
+      toast.error(error?.response?.data?.error || t('Could not save organization settings'));
     } finally {
       setSaving(false);
     }
   };
 
   if (loading) {
-    return <div className="flex-1 overflow-y-auto p-5"><LayoutSkeleton label={t('Loading workspace settings')} rows={6} /></div>;
+    return <div className="flex-1 overflow-y-auto p-5"><LayoutSkeleton label={t('Loading organization settings')} rows={6} /></div>;
   }
   if (loadError || !settings) {
-    return <div className="flex-1 overflow-y-auto p-5"><ErrorState title={t('Could not load workspace settings')} retryLabel={t('Try again')} onRetry={load} /></div>;
+    return <div className="flex-1 overflow-y-auto p-5"><ErrorState title={t('Could not load organization settings')} retryLabel={t('Try again')} onRetry={load} /></div>;
   }
 
   const selectedRecipients = settings.weeklyRecapRecipientIds
@@ -204,30 +204,30 @@ export function WorkspaceGeneral() {
   return (
     <div className="flex-1 overflow-y-auto">
       <header className="border-b border-border px-5 py-4">
-        <h1 className="text-base font-bold">{t('Workspace information')}</h1>
+        <h1 className="text-base font-bold">{t('Organization information')}</h1>
       </header>
 
       <div className="mx-auto max-w-3xl px-5 py-5">
-        <section className="border-b border-border pb-6" aria-labelledby="workspace-details-title">
-          <h2 id="workspace-details-title" className="text-sm font-semibold">{t('General information')}</h2>
+        <section className="border-b border-border pb-6" aria-labelledby="organization-details-title">
+          <h2 id="organization-details-title" className="text-sm font-semibold">{t('General information')}</h2>
           <div className="mt-4 space-y-1.5">
-            <Label htmlFor="workspace-name">{t('Workspace name')}</Label>
+            <Label htmlFor="organization-name">{t('Organization name')}</Label>
             <Input
-              id="workspace-name"
+              id="organization-name"
               value={settings.name}
               maxLength={120}
               onChange={(event) => setSettings({ ...settings, name: event.target.value })}
               aria-invalid={settings.name.trim().length < 2}
             />
-            <p className="text-caption text-muted-foreground">{t('This name appears to every member of the workspace.')}</p>
+            <p className="text-caption text-muted-foreground">{t('This name appears to every member of the organization.')}</p>
           </div>
         </section>
 
-        <section className="border-b border-border py-6" aria-labelledby="workspace-session-title">
+        <section className="border-b border-border py-6" aria-labelledby="organization-session-title">
           <div className="flex gap-3">
             <Clock3 className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
             <div className="min-w-0 flex-1">
-              <h2 id="workspace-session-title" className="text-sm font-semibold">{t('Session and timezone')}</h2>
+              <h2 id="organization-session-title" className="text-sm font-semibold">{t('Session and timezone')}</h2>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="inactivity-value">{t('Sign out after inactivity')}</Label>
@@ -252,15 +252,15 @@ export function WorkspaceGeneral() {
                   <p className="text-caption text-muted-foreground">{t('Active sessions are checked by the server, not only by this browser.')}</p>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="workspace-timezone">{t('Workspace timezone')}</Label>
+                  <Label htmlFor="organization-timezone">{t('Organization timezone')}</Label>
                   <Input
-                    id="workspace-timezone"
-                    list="workspace-timezones"
+                    id="organization-timezone"
+                    list="organization-timezones"
                     value={settings.timezone}
                     onChange={(event) => setSettings({ ...settings, timezone: event.target.value })}
                     dir="ltr"
                   />
-                  <datalist id="workspace-timezones">
+                  <datalist id="organization-timezones">
                     {timezones.map((timezone) => <option key={timezone} value={timezone} />)}
                   </datalist>
                   <p className="text-caption text-muted-foreground" dir="ltr">
@@ -286,7 +286,7 @@ export function WorkspaceGeneral() {
                   broadcasts after 21:00" will assume their own clock, and the
                   whole feature is that it is not.
                 */
-                description={t('Hold broadcasts outside these hours, measured in each recipient’s own local time rather than the workspace’s. Nothing is dropped — held messages send when the window ends.')}
+                description={t('Hold broadcasts outside these hours, measured in each recipient’s own local time rather than the organization’s. Nothing is dropped — held messages send when the window ends.')}
                 checked={settings.quietHoursEnabled}
                 onCheckedChange={(checked) => setSettings({ ...settings, quietHoursEnabled: checked })}
               />
@@ -347,7 +347,7 @@ export function WorkspaceGeneral() {
               <ToggleCard
                 className="pt-0"
                 title={t('Weekly recap')}
-                description={t('Send a seven-day activity summary every Monday at 8:00 AM in the workspace timezone.')}
+                description={t('Send a seven-day activity summary every Monday at 8:00 AM in the organization timezone.')}
                 checked={settings.weeklyRecapEnabled}
                 onCheckedChange={(checked) => setSettings({ ...settings, weeklyRecapEnabled: checked })}
               />
@@ -385,7 +385,7 @@ export function WorkspaceGeneral() {
 
                 <div className="flex max-w-lg gap-2">
                   <Select value={recipientToAdd} onValueChange={setRecipientToAdd} disabled={!settings.weeklyRecapEnabled || !availableRecipients.length}>
-                    <SelectTrigger aria-label={t('Select a workspace member')}><SelectValue placeholder={t('Select a workspace member')} /></SelectTrigger>
+                    <SelectTrigger aria-label={t('Select an organization member')}><SelectValue placeholder={t('Select an organization member')} /></SelectTrigger>
                     <SelectContent>
                       {availableRecipients.map((user) => (
                         <SelectItem key={user.id} value={user.id}>{user.name} · {user.email}</SelectItem>

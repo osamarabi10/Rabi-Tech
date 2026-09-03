@@ -48,7 +48,7 @@ export function ServiceStateBanner() {
         .then((res) => {
           if (!cancelled) setState(res.data as ServiceState);
         })
-        // A workspace in good standing is the common case, and a failed lookup
+        // An organization in good standing is the common case, and a failed lookup
         // is not something to announce in a red bar.
         .catch(() => {});
 
@@ -94,7 +94,7 @@ export function ServiceStateBanner() {
         <span>
           <b>
             {suspended
-              ? t('مساحتك متوقفة مؤقتاً')
+              ? t('مؤسستك متوقفة مؤقتاً')
               : t('في فاتورة متأخرة')}
           </b>{' '}
           {suspended

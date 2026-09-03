@@ -19,7 +19,7 @@ import {
   createLifecycleStage,
   deleteLifecycleStage,
   fetchLifecycleStages,
-  fetchWorkspaceUsers,
+  fetchOrganizationUsers,
   reorderLifecycleStages,
   updateLifecycleStage,
   type LifecycleStage,
@@ -52,7 +52,7 @@ const EMPTY_CAPABILITIES: WorkspaceUserCapabilities = {
 const COLORS = ['#2563EB', '#059669', '#D97706', '#DC2626', '#0891B2', '#7C3AED'];
 const EMPTY_FORM: StageForm = { name: '', description: '', color: COLORS[0], emoji: '', kind: 'ACTIVE' };
 
-export function WorkspaceLifecycle() {
+export function OrganizationLifecycle() {
   const { t } = useT();
   const [stages, setStages] = useState<LifecycleStage[]>([]);
   const [capabilities, setCapabilities] = useState(EMPTY_CAPABILITIES);
@@ -72,7 +72,7 @@ export function WorkspaceLifecycle() {
     if (showLoader) setLoading(true);
     setFailed(false);
     try {
-      const [rows, roster] = await Promise.all([fetchLifecycleStages(), fetchWorkspaceUsers()]);
+      const [rows, roster] = await Promise.all([fetchLifecycleStages(), fetchOrganizationUsers()]);
       setStages(rows);
       setCapabilities(roster.capabilities);
     } catch {
@@ -131,7 +131,7 @@ export function WorkspaceLifecycle() {
       setFormOpen(false);
       await load(false);
     } catch (error: any) {
-      toast.error(error?.response?.data?.code === 'STAGE_LIMIT' ? t('A workspace can have at most 20 lifecycle stages.') : t('Could not save lifecycle stage'));
+      toast.error(error?.response?.data?.code === 'STAGE_LIMIT' ? t('An organization can have at most 20 lifecycle stages.') : t('Could not save lifecycle stage'));
     } finally {
       setBusy(false);
     }
@@ -239,7 +239,7 @@ export function WorkspaceLifecycle() {
       description={t('Define the path from first contact to conversion and record why opportunities leave the funnel.')}
       action={<><div className="flex items-center gap-3 text-caption text-muted-foreground">
           <span><bdi dir="ltr">{stages.length} / 20</bdi> {t('stages')}</span>
-          {!capabilities.canManage && <span className="flex items-center gap-2"><ShieldCheck className="size-4" />{t('Only workspace owners can change lifecycle stages.')}</span>}
+          {!capabilities.canManage && <span className="flex items-center gap-2"><ShieldCheck className="size-4" />{t('Only organization owners can change lifecycle stages.')}</span>}
         </div></>}
     />
 

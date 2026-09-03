@@ -22,10 +22,10 @@ const organizationLocks = new Map<string, Promise<unknown>>();
  * How long a gateway may sit at AWAITING_QR before we stop asking.
  *
  * Pairing needs a human to scan a code. Until this bound existed, one who
- * never did left the workspace polling forever: `on('completed')` re-queued a
+ * never did left the organization polling forever: `on('completed')` re-queued a
  * monitor job every 15 seconds for as long as the process lived, and
  * reconcileProvisioning queued another every 30 on top. Silent, unbounded, and
- * one loop per unpaired workspace.
+ * one loop per unpaired organization.
  *
  * Two hours rather than minutes or days. A QR screen left open over a lunch
  * break should still work, so minutes is too short; a week of 15-second polls

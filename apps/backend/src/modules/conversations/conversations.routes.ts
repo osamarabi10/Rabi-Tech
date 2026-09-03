@@ -84,8 +84,8 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
     const contact = await prisma.contact.upsert({
       where: {
         // The session is chosen from the agent's team above, and it carries
-        // the workspace. Deriving it here rather than from ambient scope keeps
-        // the contact in the same workspace as the channel it will be messaged
+        // the organization. Deriving it here rather than from ambient scope keeps
+        // the contact in the same organization as the channel it will be messaged
         // on — which the composite foreign key requires anyway, so disagreeing
         // would fail at the insert rather than quietly file it elsewhere.
         organizationId_workspaceId_phone: {
@@ -245,7 +245,7 @@ router.get('/', async (req, res) => {
 
           Deliberately NOT `lastHumanOutboundAt: null`, which looks like exactly
           this and is not. That column is only written when auto-close is
-          *enabled*, so on a workspace with the feature switched off every
+          *enabled*, so on an organization with the feature switched off every
           thread would report as unreplied. The column is a side effect of a
           feature; the messages are the fact.
 
@@ -878,7 +878,7 @@ router.post('/:id/collaborators', requirePermission('conversation:create'), asyn
     });
     if (!conversation) return res.status(404).json({ error: 'محادثة غير موجودة' });
 
-    // Composite FKs would refuse a user from another workspace anyway; a 400
+    // Composite FKs would refuse a user from another organization anyway; a 400
     // naming the problem beats a 500 carrying a constraint name to a log.
     const user = await prisma.user.findFirst({ where: { id: userId, isActive: true }, select: { id: true, name: true } });
     if (!user) return res.status(400).json({ error: 'المستخدم غير موجود أو غير مفعّل' });

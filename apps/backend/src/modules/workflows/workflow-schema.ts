@@ -43,7 +43,7 @@ export const TRIGGER_TYPES = [
    * This is the trigger P1 existed to make possible. Without it an integration
    * can read and write, but cannot start an automation — so anything that
    * happens in their system (an order ships, a payment clears) can only reach
-   * the workspace as a message somebody has to read.
+   * the organization as a message somebody has to read.
    *
    * Addressed by workflow id and authorised by an API token carrying
    * `workflows:trigger`. Deliberately not a secret URL: a per-workflow token in

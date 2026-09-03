@@ -25,7 +25,7 @@ import {
   fetchCurrentProfile,
   fetchLifecycleStages,
   fetchSessions,
-  fetchWorkspaceUsers,
+  fetchOrganizationUsers,
   updateCurrentProfile,
   type CurrentProfile,
 } from '@/lib/data';
@@ -71,7 +71,7 @@ export default function OnboardingPage() {
         fetchCurrentProfile(),
         fetchSessions(),
         fetchLifecycleStages(),
-        fetchWorkspaceUsers(),
+        fetchOrganizationUsers(),
       ]);
       setProfile(nextProfile);
       setChannelConnected(sessions.some((session) => session.connected));
@@ -135,8 +135,8 @@ export default function OnboardingPage() {
         <header className="border-b border-border pb-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="min-w-0">
-              <p className="text-caption font-semibold text-primary">{t('Workspace onboarding')}</p>
-              <h1 className="mt-1 text-xl font-bold sm:text-2xl">{t('Get your workspace ready')}</h1>
+              <p className="text-caption font-semibold text-primary">{t('Organization onboarding')}</p>
+              <h1 className="mt-1 text-xl font-bold sm:text-2xl">{t('Get your organization ready')}</h1>
               <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">{t('Complete the operational setup that gets a team from account creation to its first managed conversation.')}</p>
             </div>
             <bdi dir="ltr" className="numeric shrink-0 text-sm font-semibold">{completeCount} / {steps.length} {t('complete')}</bdi>
@@ -201,7 +201,7 @@ export default function OnboardingPage() {
 
           <aside id="resources" aria-labelledby="resources-heading" className="min-w-0 border-t border-border pt-6 lg:border-s lg:border-t-0 lg:ps-7 lg:pt-0">
             <h2 id="resources-heading" className="text-sm font-semibold">{t('Resources')}</h2>
-            <p className="mt-1 text-caption leading-5 text-muted-foreground">{t('Open the workspace tools behind each setup step.')}</p>
+            <p className="mt-1 text-caption leading-5 text-muted-foreground">{t('Open the organization tools behind each setup step.')}</p>
             <nav className="mt-3 divide-y divide-border border-y border-border" aria-label={t('Onboarding resources')}>
               {RESOURCES.map((resource) => {
                 const Icon = resource.icon;

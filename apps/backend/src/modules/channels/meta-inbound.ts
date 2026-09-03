@@ -22,7 +22,7 @@ const MEDIA_TYPES = ['image', 'video', 'audio', 'document', 'sticker', 'voice'] 
  * What gets stored is the **type**, never a sentence. A stored English string
  * like "[location]" cannot be translated afterwards, which is precisely the
  * defect flagged in the Respond.io review of `[Deleted Workflow]`. An Arabic
- * workspace must read Arabic, so the type is stored and the copy is rendered.
+ * organization must read Arabic, so the type is stored and the copy is rendered.
  */
 const PLACEHOLDER_TYPES = [
   'location', 'contacts', 'interactive', 'button', 'order',

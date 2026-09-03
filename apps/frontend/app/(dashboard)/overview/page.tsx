@@ -8,13 +8,13 @@ import {
   fetchDashboardSummary,
   fetchLifecycleStages,
   fetchOverviewReport,
-  fetchWorkspaceUsers,
+  fetchOrganizationUsers,
   type Campaign,
   type DashboardSummary,
   type LifecycleStage,
   type OverviewReport,
   type ReportRange,
-  type WorkspaceUsersResponse,
+  type OrganizationUsersResponse,
 } from '@/lib/data';
 import { useT } from '@/lib/i18n';
 import { resolveReportPreset } from '@/components/reports/filter-bar';
@@ -110,7 +110,7 @@ export default function OverviewPage() {
   }, []);
   const [summary, setSummary] = useState<Resource<DashboardSummary>>(LOADING);
   const [lifecycle, setLifecycle] = useState<Resource<LifecycleStage[]>>(LOADING);
-  const [users, setUsers] = useState<Resource<WorkspaceUsersResponse>>(LOADING);
+  const [users, setUsers] = useState<Resource<OrganizationUsersResponse>>(LOADING);
   const [overview, setOverview] = useState<Resource<OverviewReport>>(LOADING);
   const [campaigns, setCampaigns] = useState<Resource<Campaign[]>>(LOADING);
   const [groupBy, setGroupBy] = useState('');
@@ -130,7 +130,7 @@ export default function OverviewPage() {
 
     request(fetchDashboardSummary, setSummary);
     request(fetchLifecycleStages, setLifecycle);
-    request(fetchWorkspaceUsers, setUsers);
+    request(fetchOrganizationUsers, setUsers);
     request(() => fetchOverviewReport(range), setOverview);
     request(fetchCampaigns, setCampaigns);
   }, [range]);
@@ -152,7 +152,7 @@ export default function OverviewPage() {
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-h1 font-extrabold">{t('لوحة التحكم')}</h1>
-          <p className="mt-1 text-small text-muted-foreground">{t('ملخص مساحة العمل')}</p>
+          <p className="mt-1 text-small text-muted-foreground">{t('ملخص المؤسسة')}</p>
         </div>
         <span className="text-caption text-muted-foreground">{t('آخر ٧ أيام')}</span>
       </div>

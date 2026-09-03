@@ -2,7 +2,7 @@ import { prisma } from '../../prisma';
 import { runAsPlatform } from '../../lib/tenant-context';
 
 /**
- * Whether this workspace is in trouble, and how much warning it has had.
+ * Whether this organization is in trouble, and how much warning it has had.
  *
  * ## Why this is not the access gate
  *
@@ -47,7 +47,7 @@ export async function getServiceState(organizationId: string): Promise<ServiceSt
 
   if (!organization) return { kind: 'ok' };
 
-  // Order matters: a suspended workspace is suspended whatever else is true of
+  // Order matters: a suspended organization is suspended whatever else is true of
   // it, and saying "your trial ends in an hour" to somebody already locked out
   // is worse than saying nothing.
   if (organization.status === 'SUSPENDED') {

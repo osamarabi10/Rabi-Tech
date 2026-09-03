@@ -105,7 +105,7 @@ async function assertWithinRecipientCap(
  *
  * `assertSendable` in the channel service enforces that correctly and refuses
  * with `SERVICE_WINDOW_NEVER_OPENED`. With no template path, that refusal was
- * absolute: a Meta-only workspace could reply and could never initiate. No
+ * absolute: a Meta-only organization could reply and could never initiate. No
  * onboarding, no order notification, no re-engagement, no broadcast to a list
  * that had not written first.
  *

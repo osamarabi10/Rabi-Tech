@@ -47,7 +47,7 @@ import {
  * The navigation rail.
  *
  * A 48px icon-only rail, matching the respond.io information architecture the
- * product spec recorded: workspace switcher at the top, destinations in the
+ * product spec recorded: organization switcher at the top, destinations in the
  * middle, and a cluster of avatar / notifications / help at the bottom.
  *
  * It replaced a 220px labelled column. The width is the point — the inbox is a
@@ -227,12 +227,12 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
         )}
         aria-label={t('التنقل')}
       >
-        {/* ── Workspace switcher ─────────────────────────── */}
+        {/* ── Organization menu ──────────────────────────── */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               className={cn(railButton, 'mt-2 hover:bg-nav-accent/60')}
-              aria-label={t('مساحة العمل')}
+              aria-label={t('المؤسسة')}
             >
               <BrandLogo size="sm" showText={false} />
             </button>

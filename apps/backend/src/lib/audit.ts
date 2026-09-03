@@ -33,7 +33,7 @@ export interface PlatformAuditDetail {
    *
    * Separate from targetOrgId rather than reusing it: a catalogue change acts
    * on the offer, not on a subscriber, and borrowing the per-org column would
-   * make that trail claim a workspace was touched when none was.
+   * make that trail claim an organization was touched when none was.
    */
   targetEditionCode?: string;
   beforeState?: unknown;

@@ -350,7 +350,7 @@ async function handleOutboundFromOtherDevice(
 
   const contact = await prisma.contact.findUnique({
     // Same rule as the worker: the session that received it owns the
-    // workspace. This path already resolved sessionRecord above precisely
+    // organization. This path already resolved sessionRecord above precisely
     // because it needs the thread, so the answer is in hand.
     where: {
       organizationId_workspaceId_phone: {

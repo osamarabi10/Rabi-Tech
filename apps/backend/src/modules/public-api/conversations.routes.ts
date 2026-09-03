@@ -240,7 +240,7 @@ router.get('/:id/messages', requireScope('conversations:read'), requireScope('me
  * ## Closing goes through the lifecycle service, not a status column
  *
  * `closeConversation` writes an immutable `ConversationClosure` row, applies the
- * workspace's closing-notes policy, cancels the auto-close job and optionally
+ * organization's closing-notes policy, cancels the auto-close job and optionally
  * sends the closing reply. Setting `status = 'RESOLVED'` directly would do none
  * of that, and the thread would be closed in the list while every report that
  * reads closures believed it was still open.
@@ -275,7 +275,7 @@ router.patch('/:id', requireScope('conversations:write'), async (req, res) => {
     }
 
     // Assignee is validated rather than trusted. The composite foreign key would
-    // refuse a user from another workspace anyway, but a 400 naming the problem
+    // refuse a user from another organization anyway, but a 400 naming the problem
     // beats a 500 carrying a constraint name to somebody's log.
     if (req.body?.assigneeId !== undefined && req.body.assigneeId !== null) {
       const assignee = await prisma.user.findFirst({
@@ -294,7 +294,7 @@ router.patch('/:id', requireScope('conversations:write'), async (req, res) => {
           source: 'API',
           categoryId: req.body?.closingCategoryId ?? null,
           summary: req.body?.closingSummary ?? null,
-          // The workspace's closing-notes policy applies to an integration the
+          // The organization's closing-notes policy applies to an integration the
           // same as to an agent. A caller that skips a required category is
           // told so, rather than quietly producing a closure the reports
           // cannot categorise.
@@ -341,7 +341,7 @@ router.patch('/:id', requireScope('conversations:write'), async (req, res) => {
  * note is addressed to colleagues and a token has no name to sign it with — a
  * note from "nobody" is worse than no note. That objection is about
  * attribution, not about the capability, so this endpoint answers it directly:
- * **`authorId` is required.** The integration names which workspace user the
+ * **`authorId` is required.** The integration names which organization user the
  * comment is from, and it is validated as a real, active member.
  *
  * The result is a comment that reads in the inbox exactly like one a person

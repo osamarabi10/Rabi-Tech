@@ -1,5 +1,5 @@
-import { WorkspaceChannels } from '@/components/settings/workspace-channels';
+import { OrganizationChannels } from '@/components/settings/organization-channels';
 
-export default function WorkspaceChannelsPage() {
-  return <WorkspaceChannels />;
+export default function OrganizationChannelsPage() {
+  return <OrganizationChannels />;
 }

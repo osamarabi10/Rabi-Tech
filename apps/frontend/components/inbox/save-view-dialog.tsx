@@ -151,7 +151,7 @@ export function SaveViewDialog({
                   {t('شاركه مع الفريق')}
                 </span>
                 <span className="mt-0.5 block text-caption text-muted-foreground">
-                  {t('رح يشوفوه كل أعضاء المساحة بصندوق الوارد عندهم.')}
+                  {t('رح يشوفوه كل أعضاء المؤسسة بصندوق الوارد عندهم.')}
                 </span>
               </span>
             </label>

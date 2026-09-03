@@ -28,7 +28,7 @@ import { resolveApiToken, tokenHasScope, type ApiScope, type ResolvedToken } fro
  * revoked from wrong-secret. The caller is told `invalid_token` for all five.
  * Telling an attacker that a prefix is real but the secret is wrong halves
  * their problem; telling a legitimate integrator the same thing saves them a
- * support ticket. The reason goes to the log, where the workspace owner's
+ * support ticket. The reason goes to the log, where the organization owner's
  * support request can be answered from it.
  */
 
@@ -97,7 +97,11 @@ export async function apiTokenAuth(req: Request, res: Response, next: NextFuncti
     res.setHeader('Retry-After', '30');
     return res.status(449).json({
       error: 'workspace_provisioning',
-      message: 'This workspace is still being set up. Retry shortly.',
+      // The error CODE stays workspace_provisioning: it is published in
+      // docs/PUBLIC-API.md and integrations already branch on it. Renaming a
+      // wire identifier to fix a vocabulary problem breaks callers who did
+      // nothing wrong, so only the sentence a human reads changes.
+      message: 'This organization is still being set up. Retry shortly.',
       retryAfter: 30,
     });
   }

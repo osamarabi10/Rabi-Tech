@@ -38,7 +38,7 @@ router.use('/contacts', contactRoutes);
 // /contacts/:identifier/messages and /conversations/:id/messages — and one
 // router owning both keeps the send rules in a single file.
 router.use(messagingRoutes);
-// Discovery endpoints hang off the root: they describe the workspace, not one
+// Discovery endpoints hang off the root: they describe the organization, not one
 // resource inside it.
 router.use(workspaceRoutes);
 router.use('/workflows', workflowRoutes);

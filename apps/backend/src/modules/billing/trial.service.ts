@@ -44,7 +44,7 @@ export type TrialState =
   | { kind: 'expired'; endsAt: Date };
 
 /**
- * How long a new workspace gets, in hours.
+ * How long a new organization gets, in hours.
  *
  * A setting rather than a constant: the length of a trial is a commercial
  * decision, and one that gets tuned. Changing it must not require a deploy, and
@@ -124,7 +124,7 @@ export async function setTrialPlanCode(input: string, updatedBy: string | null):
   return code;
 }
 
-/** The deadline for a workspace created now. */
+/** The deadline for an organization created now. */
 export async function trialDeadlineFrom(start: Date): Promise<Date> {
   const hours = await getTrialHours();
   return new Date(start.getTime() + hours * 3600_000);
@@ -168,7 +168,7 @@ export function trialStateOf(
 }
 
 /**
- * Subscription statuses that mean the workspace may be used.
+ * Subscription statuses that mean the organization may be used.
  *
  * TRIALING belongs here beside ACTIVE: a trial is the whole product for its
  * window, so anything that gates on "is this subscription live" has to accept

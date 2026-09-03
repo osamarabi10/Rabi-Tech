@@ -58,7 +58,7 @@ export function ComposerReadinessStrip({
   readiness: Readiness;
   /**
    * Only worth naming the channel when the tenant has more than one — on a
-   * single-number workspace it is noise above every composer, all day.
+   * single-number organization it is noise above every composer, all day.
    */
   showChannel: boolean;
 }) {

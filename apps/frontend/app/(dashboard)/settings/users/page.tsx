@@ -1,5 +1,5 @@
-import { WorkspaceUsers } from '@/components/settings/workspace-users';
+import { OrganizationUsers } from '@/components/settings/organization-users';
 
-export default function WorkspaceUsersPage() {
-  return <WorkspaceUsers />;
+export default function OrganizationUsersPage() {
+  return <OrganizationUsers />;
 }

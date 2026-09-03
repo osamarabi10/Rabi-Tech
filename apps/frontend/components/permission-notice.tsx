@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
  * The pattern across settings was to render the button only for admins, so an
  * agent opening the same page saw a card with nothing in it. There is no way to
  * tell that apart from a card that is genuinely empty, or from a feature the
- * workspace has not been given — three unrelated situations, one blank space.
+ * organization has not been given — three unrelated situations, one blank space.
  *
  * Showing the restriction instead answers the question the blank space raises:
  * the capability exists, it is not yours, and here is whose it is. Nothing here

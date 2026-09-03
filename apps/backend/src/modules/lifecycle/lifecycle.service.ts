@@ -34,7 +34,7 @@ export const DEFAULT_LIFECYCLE_STAGES: {
  * Seed the default pipeline for a new organization.
  *
  * Takes a transaction client so it composes into the signup transaction: a
- * workspace that exists without its stage list would show an empty selector on
+ * organization that exists without its stage list would show an empty selector on
  * the first contact anyone opened.
  */
 export async function seedLifecycleStages(

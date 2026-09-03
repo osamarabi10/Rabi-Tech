@@ -72,7 +72,7 @@ function statusLabel(status: string, t: (key: string) => string): string {
   return t(STATUS_KEYS[status] || 'Unknown provider status');
 }
 
-export function WorkspaceMetaTemplates() {
+export function OrganizationMetaTemplates() {
   const { t } = useT();
   const [state, setState] = useState<MetaTemplateListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -135,7 +135,7 @@ export function WorkspaceMetaTemplates() {
       </div></>}
     />
     {!state.wabaId && <div className="border-b border-warning/30 bg-warning/10 px-4 py-3 text-caption text-warning sm:px-6">{t('Connect an active Meta credential before managing templates.')}</div>}
-    {state.wabaId && !state.canManage && <div className="flex items-center gap-2 border-b border-border px-4 py-3 text-caption text-muted-foreground sm:px-6"><ShieldCheck className="size-4" />{t('Only workspace owners and managers can change Meta templates.')}</div>}
+    {state.wabaId && !state.canManage && <div className="flex items-center gap-2 border-b border-border px-4 py-3 text-caption text-muted-foreground sm:px-6"><ShieldCheck className="size-4" />{t('Only organization owners and managers can change Meta templates.')}</div>}
     <div className="min-h-0 flex-1 overflow-auto">
       {!templates.length ? <EmptyState icon={FileText} title={t('No Meta templates yet')} description={state.wabaId ? t('Create a draft or synchronize templates from Meta.') : t('Meta templates appear after a Meta credential is connected.')} action={state.canManage && state.wabaId ? <Button onClick={() => setEditorOpen(true)}><Plus className="size-4" />{t('Create draft')}</Button> : undefined} /> : <div className="divide-y divide-border border-b border-border">
         {templates.map((template) => <article key={template.id} className={cn('grid min-h-28 gap-3 bg-card px-4 py-4 sm:grid-cols-[minmax(180px,0.9fr)_minmax(240px,1.6fr)_120px_120px_90px] sm:items-center sm:px-6', template.archivedAt && 'opacity-60')}>

@@ -15,12 +15,12 @@ import {
  * Saved views — a named conversation filter pinned to the inbox.
  *
  * Ownership *is* the sharing model: `ownerId` set means private to that user,
- * null means shared with the workspace. There is no `shared` boolean to fall
+ * null means shared with the organization. There is no `shared` boolean to fall
  * out of step with it.
  *
  * Permission therefore depends on the body and the row, not on the route.
  * Anyone who can read conversations may keep their own views; putting one in
- * front of the whole workspace needs `inbox-view:manage-shared`.
+ * front of the whole organization needs `inbox-view:manage-shared`.
  */
 
 const router = Router();
@@ -39,7 +39,7 @@ const VIEW_SELECT = {
 const MAX_NAME_LENGTH = 60;
 
 /**
- * A cap on how many views one workspace can accumulate.
+ * A cap on how many views one organization can accumulate.
  *
  * Column 1 of the inbox is a fixed-height list beside the conversations. This
  * is not a storage concern — it is the point past which the thing a view is
@@ -128,7 +128,7 @@ function announce(
       getIO().to(socketRoom.organization(organizationId)).emit(SocketEvents.INBOX_VIEW_CHANGED, payload);
     } else {
       // Never the organization room: that would put a private view's name and
-      // filter in front of the whole workspace.
+      // filter in front of the whole organization.
       getIO().to(socketRoom.user(organizationId, view.ownerId!)).emit(SocketEvents.INBOX_VIEW_CHANGED, payload);
     }
   } catch (err) {
@@ -146,7 +146,7 @@ function announce(
  * The row this request is allowed to act on, or the reason it is not.
  *
  * 404 for an id in another organization: the tenancy extension scopes the read,
- * so a row in another workspace is indistinguishable from one that never
+ * so a row in another organization is indistinguishable from one that never
  * existed — which is the correct answer to give, since existence is itself
  * information.
  */

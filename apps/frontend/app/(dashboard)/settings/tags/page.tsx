@@ -1,5 +1,5 @@
-import { WorkspaceTags } from '@/components/settings/workspace-tags';
+import { OrganizationTags } from '@/components/settings/organization-tags';
 
 export default function TagSettingsPage() {
-  return <WorkspaceTags />;
+  return <OrganizationTags />;
 }

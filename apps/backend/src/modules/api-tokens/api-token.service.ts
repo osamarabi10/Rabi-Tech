@@ -166,7 +166,7 @@ export type ResolvedToken = {
  *
  * `runAsPlatform` is the right answer rather than adding `ApiToken` to
  * `PLATFORM_MODELS`: that list removes tenant scoping from a model *everywhere*,
- * which would also unscope the management routes where one workspace must never
+ * which would also unscope the management routes where one organization must never
  * see another's tokens. The narrow, audited exemption is here, at the one call
  * that legitimately has no tenant yet — the same shape the Meta webhook uses to
  * resolve a `phone_number_id` before it knows whose it is.

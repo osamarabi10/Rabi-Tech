@@ -81,7 +81,7 @@ export default function PricingPage() {
   const [failed, setFailed] = useState(false);
 
   /*
-   * Why they landed here. Set by the API client when a workspace is refused, so
+   * Why they landed here. Set by the API client when an organization is refused, so
    * somebody who was working a second ago is told what happened rather than
    * being dropped on a price list with no explanation.
    */

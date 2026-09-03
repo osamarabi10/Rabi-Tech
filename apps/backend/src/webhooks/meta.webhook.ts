@@ -206,7 +206,7 @@ async function ingestChange(context: MetaChangeContext): Promise<void> {
 
     // A type this product cannot render carries its TYPE, never a sentence.
     // A stored English or Arabic string cannot be translated afterwards, which
-    // is the defect behind Respond.io's [Deleted Workflow]; an Arabic workspace
+    // is the defect behind Respond.io's [Deleted Workflow]; an Arabic organization
     // must read Arabic and a Hebrew one Hebrew, so the copy is rendered from
     // this value rather than baked into the row.
     if (message.placeholder) mediaType = message.metaType;
@@ -386,7 +386,7 @@ export async function dispatchMetaWebhookPayload(
 
       // A retained credential keeps late delivery receipts routable after a
       // switch, but an inactive number must never create an inbox message. If
-      // it did, every reply and automation would resolve the workspace's new
+      // it did, every reply and automation would resolve the organization's new
       // ACTIVE adapter and leave from a different number than the customer
       // wrote to. Keep only statuses in that state; Meta receives 200 for the
       // skipped customer message and therefore does not retry it.

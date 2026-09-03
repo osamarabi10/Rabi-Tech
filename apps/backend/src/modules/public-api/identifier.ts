@@ -28,7 +28,7 @@ import { normalizePhone } from '../contacts/phone';
 
 /**
  * Refuse a phone: or email: identifier once an organization has more than one
- * workspace.
+ * organization.
  *
  * ## The temporary state this encodes, and the condition that ends it
  *
@@ -38,20 +38,20 @@ import { normalizePhone } from '../contacts/phone';
  * a change to the token model, its issuing UI and its documentation — too much
  * to carry into a commit whose subject is scope enforcement.
  *
- * So while every organization has exactly one workspace, resolving against the
+ * So while every organization has exactly one organization, resolving against the
  * default is not merely convenient, it is EXACTLY correct: there is one answer
- * and this finds it. The moment a second workspace exists that stops being
+ * and this finds it. The moment a second organization exists that stops being
  * true, and the honest response is not to pick one. Returning a contact from
- * whichever workspace sorted first would be a silent wrong answer on a PUT —
+ * whichever organization sorted first would be a silent wrong answer on a PUT —
  * overwriting a record belonging to a different part of the business.
  *
  * Therefore: correct today, loud tomorrow. This is a deliberate temporary
  * state, and the condition that ends it is the first organization to create a
- * second workspace. When token scoping lands, this function is deleted, not
+ * second organization. When token scoping lands, this function is deleted, not
  * relaxed.
  *
  * id: identifiers are unaffected — a contact id is unique on its own and needs
- * no workspace to disambiguate it.
+ * no organization to disambiguate it.
  */
 export async function assertRefUnambiguous(
   client: { workspace: { count: (args?: any) => Promise<number> } },

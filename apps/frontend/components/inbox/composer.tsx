@@ -409,7 +409,7 @@ export function Composer({
             onChange={(e) => {
               const next = e.target.value;
               onChange(next);
-              // `/code` is the workspace-wide Snippet command. The old
+              // `/code` is the organization-wide Snippet command. The old
               // `:code` form remains accepted so agents do not lose muscle
               // memory during the migration.
               if ((next.startsWith('/') || next.startsWith(':')) && next.length >= 2 && !next.includes(' ')) {

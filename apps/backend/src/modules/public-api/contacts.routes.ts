@@ -80,7 +80,7 @@ function contactPayload(body: any) {
 }
 
 /**
- * Resolve `customFields` through the workspace's definitions.
+ * Resolve `customFields` through the organization's definitions.
  *
  * Never written as a bare object onto the contact. That exact shape — spreading
  * caller-supplied keys straight onto a row — was caught in the workflow engine
@@ -104,7 +104,7 @@ async function resolveCustomFields(input: unknown): Promise<{ definitionId: stri
   const unknown = slugs.filter((slug) => !bySlug.has(slug));
   if (unknown.length) {
     // Naming the valid slugs turns a guessing game into one more request. The
-    // list is the workspace's own vocabulary, which the caller is entitled to.
+    // list is the organization's own vocabulary, which the caller is entitled to.
     throw new ApiError(400, 'Unknown custom field(s).', {
       unknown,
       known: definitions.length ? definitions.map((d) => d.slug) : await knownSlugs(),
@@ -145,11 +145,11 @@ async function writeCustomFields(contactId: string, fields: { definitionId: stri
 /**
  * The country code to assume for a local number, from the request.
  *
- * Not a workspace setting, because there is no such column and inventing one
+ * Not an organization setting, because there is no such column and inventing one
  * here would be a guess stored permanently. The console's import route takes it
  * the same way — per request, from whoever knows which country the numbers came
  * from. Absent it, a local number is rejected rather than assigned to whichever
- * country the workspace happens to sit in, which is how contacts end up
+ * country the organization happens to sit in, which is how contacts end up
  * unreachable at a plausible-looking number in the wrong country.
  */
 function countryCodeFrom(req: any): string | undefined {
@@ -510,7 +510,7 @@ router.put('/:identifier/custom-fields/:slug', requireScope('contacts:write'), a
 /* ── tags ─────────────────────────────────────────────────────────────────── */
 
 /**
- * Tag a contact. Creates the tag if the workspace does not have it yet.
+ * Tag a contact. Creates the tag if the organization does not have it yet.
  *
  * Deliberate: a sync job that must create the tag first, in a second call, with
  * different error handling, is a sync job that half-applies its tags. The
@@ -614,7 +614,7 @@ router.delete('/:identifier/tags/:tag', requireScope('tags:write'), async (req, 
  *    looked at. The console's tag deletion uses this same pattern.
  *
  * There is no soft delete here on purpose. `isArchived` already means "hidden
- * but retained"; a second, softer delete would leave a workspace unable to
+ * but retained"; a second, softer delete would leave an organization unable to
  * answer "is this person's data gone" with a yes.
  */
 router.delete('/:identifier', requireScope('contacts:delete'), async (req, res) => {
@@ -659,7 +659,7 @@ router.delete('/:identifier', requireScope('contacts:delete'), async (req, res) 
     ]);
 
     // The one record that outlives the contact, deliberately: the fact that an
-    // erasure happened, when, and by which credential. A workspace asked "did
+    // erasure happened, when, and by which credential. An organization asked "did
     // we honour that request" has nothing else to read.
     logger.warn('public-api contact deleted', {
       contactId: contact.id,

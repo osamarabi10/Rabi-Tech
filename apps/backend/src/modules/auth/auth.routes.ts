@@ -153,8 +153,8 @@ async function completeIdentityLogin(identity: Identity) {
       name: user.name,
       role: user.role,
       organizationId: membership.organizationId,
-      // The default workspace at login. Switching mints a new token through
-      // POST /api/workspaces/:id/activate, which is the only other place this
+      // The default organization at login. Switching mints a new token through
+      // POST /api/organizations/:id/activate, which is the only other place this
       // claim is ever set.
       workspaceId: defaultWorkspaceIdFor(membership.organizationId),
       tokenVersion: user.tokenVersion,
@@ -316,7 +316,7 @@ router.post('/change-password', verifyToken, async (req, res) => {
         'The password for your RabiTech account was just changed, and every',
         'device that was signed in has been signed out.',
         '',
-        'If this was not you, contact your workspace administrator immediately.',
+        'If this was not you, contact your organization administrator immediately.',
       ].join(String.fromCharCode(10)),
     });
 
@@ -405,7 +405,7 @@ router.post('/me/2fa/enable', verifyToken, async (req, res) => {
       to: user.identity.email,
       kind: 'security.two-factor-enabled',
       subject: 'Two-factor authentication enabled for RabiTech',
-      body: 'Two-factor authentication was enabled for your RabiTech account. If this was not you, contact your workspace administrator immediately.',
+      body: 'Two-factor authentication was enabled for your RabiTech account. If this was not you, contact your organization administrator immediately.',
     });
     return res.json({
       enabled: true,

@@ -18,7 +18,7 @@ type RecapStats = {
  *
  * ## Why suppression matters more than the numbers in it
  *
- * A dormant workspace otherwise receives a Monday email of five zeros, every
+ * A dormant organization otherwise receives a Monday email of five zeros, every
  * week, forever. The cost is not the send — it is that the recipient learns the
  * channel carries nothing, and then does not read the one that reports a real
  * week. A recap nobody opens is worse than no recap, because it also spends the
@@ -28,7 +28,7 @@ type RecapStats = {
  *
  * All five of our metrics at zero: no contact arrived, no conversation opened,
  * none was resolved, and no message moved in either direction. Those cover
- * every way a workspace can be used, so all five at zero means genuinely
+ * every way an organization can be used, so all five at zero means genuinely
  * nothing happened — not "nothing we chose to measure".
  *
  * Deliberately **not** "the interesting ones are zero". Suppressing on a subset
@@ -128,7 +128,7 @@ function recapCopy(locale: string, workspace: string, stats: RecapStats) {
   };
 }
 
-/** Queue Monday recaps at 08:00 in each workspace's own timezone. */
+/** Queue Monday recaps at 08:00 in each organization's own timezone. */
 export async function queueDueWeeklyRecaps(now = new Date()): Promise<{ workspaces: number; emails: number }> {
   const workspaces = await runAsPlatform('weekly-recap:eligible-workspaces', () =>
     prisma.organization.findMany({

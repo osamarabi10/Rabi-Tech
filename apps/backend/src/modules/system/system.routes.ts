@@ -929,7 +929,7 @@ router.patch('/users/:id', requireAdmin, requirePermission('user:update'), async
 router.delete('/users/:id', requireAdmin, requirePermission('user:delete'), async (req, res) => {
   try {
     // Same rule as the update route, for the more final version of the act.
-    // An admin deactivating themselves locks themselves out of the workspace
+    // An admin deactivating themselves locks themselves out of the organization
     // they administer, and there is no self-service way back in.
     if (req.params.id === req.user!.id) {
       return res.status(403).json({

@@ -85,9 +85,9 @@ export type PlanEntitlements = {
   customFieldsLimit: number | null;
   usersLimit: number | null;
   /**
-   * Workspaces allowed, the default one included.
+   * Organizations allowed, the default one included.
    *
-   * 1 is not "the feature is off" — every organization has a workspace and
+   * 1 is not "the feature is off" — every organization has an organization and
    * always did. It is the ceiling that makes a second one a paid capability,
    * which is why the create endpoint compares a count against this rather than
    * asking whether the plan has a flag.

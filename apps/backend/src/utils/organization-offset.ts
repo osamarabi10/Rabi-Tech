@@ -2,7 +2,7 @@ import { getTenantId } from '../lib/tenant-context';
 import { prisma } from '../prisma';
 
 /**
- * The workspace's own clock, as minutes east of UTC.
+ * The organization's own clock, as minutes east of UTC.
  *
  * ## Why reports must not use the viewer's offset
  *
@@ -74,7 +74,7 @@ export function offsetMinutesFor(timeZone: string, at: Date = new Date()): numbe
  * Falls back to the schema default rather than to the caller's clock — the
  * whole point is that no report depends on who is asking.
  */
-export async function workspaceOffsetMinutes(at: Date = new Date()): Promise<number> {
+export async function organizationOffsetMinutes(at: Date = new Date()): Promise<number> {
   const config = await prisma.organizationConfig.findUnique({
     where: { organizationId: getTenantId() },
     select: { timezone: true },

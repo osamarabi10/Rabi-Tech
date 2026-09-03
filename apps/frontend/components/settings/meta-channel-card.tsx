@@ -28,7 +28,7 @@ import { PermissionNotice } from '@/components/permission-notice';
 /**
  * Connecting a Meta WhatsApp Cloud API number.
  *
- * Kept in its own file rather than inlined into WorkspaceChannels because the
+ * Kept in its own file rather than inlined into OrganizationChannels because the
  * two channels share a page and nothing else: OpenWA is paired by scanning a
  * QR, Meta by pasting its identifiers and token, and the states they can be in do not
  * overlap at all.
@@ -149,7 +149,7 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
       setConfirmActivate(false);
       await onChannelChanged();
       setChannel(await fetchMetaChannel());
-      toast.success(t('This workspace now sends through Meta'));
+      toast.success(t('This organization now sends through Meta'));
     } catch (error: any) {
       toast.error(error?.response?.data?.error || t('Could not switch the sending channel'));
     } finally {
@@ -217,7 +217,7 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
           {(!channel.isActiveChannel || resolutionCode === 'CHANNEL_AMBIGUOUS') && (
             <div className="mt-4 space-y-2">
               <p className="text-micro text-muted-foreground">
-                {t('Connected, but this workspace still sends through its other channel.')}
+                {t('Connected, but this organization still sends through its other channel.')}
               </p>
               <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setConfirmActivate(true)}>
                 {busy ? <Loader2 className="size-4 animate-spin" /> : <Radio className="size-4" />}

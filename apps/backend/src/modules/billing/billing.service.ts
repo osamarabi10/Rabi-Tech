@@ -412,7 +412,7 @@ export async function createSignup(input: {
 
       const whatsappSession = await tx.whatsappSession.create({
         data: {
-          // The explicit id, not currentWorkspaceId(): that resolver reads
+          // The explicit id, not currentOrganizationId(): that resolver reads
           // through the ambient client, which cannot see a row created inside
           // this still-open transaction.
           workspaceId: workspace.id,
@@ -996,7 +996,7 @@ export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<stri
  * It used to activate. A `paid` status called activateManualSubscription and a
  * `failed` status called markPaymentFailed, which suspends the organization.
  * That made an unauthenticated endpoint, keyed on a value that travels in a URL,
- * able both to grant a subscription and to suspend a workspace. It was inert
+ * able both to grant a subscription and to suspend an organization. It was inert
  * only by accident: the manual provider derives checkout status *from* the
  * subscription's own status, so it could never report anything the database did
  * not already say. Integrating any real provider removes that accident.

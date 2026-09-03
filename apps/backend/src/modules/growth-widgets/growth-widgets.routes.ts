@@ -62,7 +62,7 @@ router.post('/', requirePermission('system:config'), async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Name is required' });
     if (!sessionId) return res.status(400).json({ error: 'A channel is required' });
 
-    // Scoped by the tenant context, so this cannot find another workspace's
+    // Scoped by the tenant context, so this cannot find another organization's
     // session even if its id were guessed.
     const session = await prisma.whatsappSession.findUnique({ where: { id: sessionId } });
     if (!session) return res.status(404).json({ error: 'Channel not found' });

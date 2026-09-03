@@ -1,5 +1,5 @@
-import { WorkspaceSnippets } from '@/components/settings/workspace-snippets';
+import { OrganizationSnippets } from '@/components/settings/organization-snippets';
 
 export default function SnippetSettingsPage() {
-  return <WorkspaceSnippets />;
+  return <OrganizationSnippets />;
 }

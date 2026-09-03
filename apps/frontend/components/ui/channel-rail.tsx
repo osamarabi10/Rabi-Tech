@@ -13,7 +13,7 @@ import { RailGroup } from '@/components/ui/rail-group';
  *
  * `SettingsRail` is P2 and certified, and its data model is a compile-time list
  * of destinations. This one's model is *channels*: a runtime list that varies
- * per workspace, carries connection state, and differs in what it may offer
+ * per organization, carries connection state, and differs in what it may offer
  * depending on which provider is behind each entry. Bending the certified
  * component into that shape would have meant P2 absorbing P3 and neither being
  * what it says it is. They share P4 `RailGroup`, which is the part that is
@@ -29,7 +29,7 @@ import { RailGroup } from '@/components/ui/rail-group';
  * would be indistinguishable from a broken one, which is the same reasoning the
  * settings rail already records for screens we do not have.
  *
- * The one exception is a destination the workspace could have but this channel
+ * The one exception is a destination the organization could have but this channel
  * has not finished setting up. That is disabled *with a stated reason*, because
  * it is a real destination in a temporary state rather than one that does not
  * apply.

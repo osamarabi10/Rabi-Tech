@@ -129,7 +129,7 @@ export type MetaChannelStatus = {
   invalidReason: string | null;
   graphVersion: string;
   /**
-   * Is this the channel the workspace currently sends through?
+   * Is this the channel the organization currently sends through?
    *
    * Returned as its own fact so the UI never has to compare channel kinds to
    * find out. A component asking `capabilities.kind === 'WHATSAPP_CLOUD'`
@@ -453,7 +453,7 @@ export async function getMetaChannel(): Promise<MetaChannelStatus | null> {
       messagingTier: true,
       lastValidatedAt: true,
       invalidReason: true,
-      // Whether this channel is the one the workspace sends through. Read from
+      // Whether this channel is the one the organization sends through. Read from
       // the parent row so the UI is told the fact directly instead of deducing
       // it by comparing channel kinds.
       channel: { select: { status: true } },

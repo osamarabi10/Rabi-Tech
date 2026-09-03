@@ -67,7 +67,7 @@ function RelayRule({ label }: { label: string }) {
 }
 
 /**
- * The workspace mock in the hero.
+ * The organization mock in the hero.
  *
  * The names are deliberately Arabic, Hebrew and Latin together: the product's
  * whole claim is that one queue holds all three, and a screenshot of four
@@ -82,7 +82,7 @@ function ProductSurface({ t }: { t: (key: string) => string }) {
   ];
 
   return (
-    <div className="lp-product-surface" aria-label={t('معاينة مساحة العمل')}>
+    <div className="lp-product-surface" aria-label={t('معاينة المؤسسة')}>
       <header>
         <span className="lp-surface-brand">
           <b>RabiTech</b>
@@ -94,7 +94,7 @@ function ProductSurface({ t }: { t: (key: string) => string }) {
       </header>
       <div className="lp-surface-content">
         <aside className="lp-surface-selector">
-          <small>{t('مساحة العمل')}</small>
+          <small>{t('المؤسسة')}</small>
           <strong>{t('المحادثات')}</strong>
           <span className="lp-surface-selected">
             <MessageSquareText size={14} /> {t('كل المحادثات')} <b>18</b>
@@ -192,10 +192,10 @@ export default function LandingPage() {
   const faqs: Array<[string, string]> = [
     [
       t('هل RabiTech بديل عن واتساب؟'),
-      t('لأ. RabiTech بيعطي فريقك مساحة شغل حوالين قناة واتساب، عشان كل محادثة يكون إلها صاحب ومسؤول وسياق وتاريخ واضح.'),
+      t('لأ. RabiTech بيعطي فريقك مؤسسة حوالين قناة واتساب، عشان كل محادثة يكون إلها صاحب ومسؤول وسياق وتاريخ واضح.'),
     ],
     [
-      t('فيه المبيعات والدعم يشتغلوا بنفس المساحة؟'),
+      t('فيه المبيعات والدعم يشتغلوا بنفس المؤسسة؟'),
       t('أيوه. طوابير مشتركة، مراحل للعميل، إسناد، وسياق جهة الاتصال — مع بقاء المسؤولية عن الخطوة الجاية واضحة.'),
     ],
     [
@@ -270,7 +270,7 @@ export default function LandingPage() {
             {t('كل رسالة من عميلك،')} <em>{t('وإلها صاحب مسؤول.')}</em>
           </h1>
           <p>
-            {t('RabiTech بيعطي فريقك مساحة واتساب مشتركة: بيوزّع المحادثات، بيحمي موافقة العميل، وبيخلّي كل تسليمة بين الموظفين مكشوفة وواضحة.')}
+            {t('RabiTech بيعطي فريقك مؤسسة واتساب مشتركة: بيوزّع المحادثات، بيحمي موافقة العميل، وبيخلّي كل تسليمة بين الموظفين مكشوفة وواضحة.')}
           </p>
           <div className="lp-hero-actions">
             <Link href="/signup" className="lp-primary-cta">
@@ -317,7 +317,7 @@ export default function LandingPage() {
         <p>{t('واتساب بيكبر لما الشغل حواليه يكون واضح.')}</p>
         <div>
           <span>
-            <b>{t('مساحة وحدة مشتركة')}</b>
+            <b>{t('مؤسسة وحدة مشتركة')}</b>
             <small>{t('للفريق كله، مش تلفون بيتناقل')}</small>
           </span>
           <span>
@@ -486,7 +486,7 @@ export default function LandingPage() {
         </div>
         <div>
           <RelayRule label={t('مفصول من الأساس')} />
-          <h2>{t('كل مساحة شغل بتضل مساحتها.')}</h2>
+          <h2>{t('كل مؤسسة بتضل لحالها.')}</h2>
           <p>
             {t('RabiTech معمول لفرق بدها فصل نظيف بين المؤسسات والأدوار وسجلات العملاء والصلاحيات — بدون ما يبطّئ الشغل بصندوق الوارد.')}
           </p>
@@ -500,7 +500,7 @@ export default function LandingPage() {
           <span>
             <ShieldCheck size={19} />
             <b>{t('أدوار إلها معنى')}</b>
-            <small>{t('صلاحيات المساحة منفصلة عن صلاحيات المنصة، والعمليات الحسّاسة محميّة بالدور.')}</small>
+            <small>{t('صلاحيات المؤسسة منفصلة عن صلاحيات المنصة، والعمليات الحسّاسة محميّة بالدور.')}</small>
           </span>
         </div>
         <div className="lp-security-ledger">
@@ -508,7 +508,7 @@ export default function LandingPage() {
             <i /> {t('حدود المؤسسة')} <b>{t('مفصولة')}</b>
           </span>
           <span>
-            <i /> {t('الوصول للمساحة')} <b>{t('محمي بالدور')}</b>
+            <i /> {t('الوصول للمؤسسة')} <b>{t('محمي بالدور')}</b>
           </span>
           <span>
             <i /> {t('حالة القناة')} <b>{t('ظاهرة')}</b>
@@ -544,7 +544,7 @@ export default function LandingPage() {
           </h2>
         </div>
         <div>
-          <p>{t('جيب محادثات واتساب لمساحة شغل وحدة، وكل واحد بيعرف مسؤوليته.')}</p>
+          <p>{t('جيب محادثات واتساب لمؤسسة شغل وحدة، وكل واحد بيعرف مسؤوليته.')}</p>
           <Link href="/signup" className="lp-primary-cta">
             {t('ابدأ التجربة المجانية')} <ArrowRight size={17} />
           </Link>

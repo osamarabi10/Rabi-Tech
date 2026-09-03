@@ -21,7 +21,7 @@ import { ChannelKind } from './channel.types';
  * path while META_APP_SECRET was unset, so the webhook rejected every delivery,
  * no inbound message row was ever written, the 24-hour service window could
  * never open, and every outbound send was refused. The customer paid, activated
- * automatically, and landed in a workspace whose only permitted channel could
+ * automatically, and landed in an organization whose only permitted channel could
  * neither send nor receive.
  *
  * **Derived, never a flag.** The block exists because Meta is unconfigured and
@@ -104,7 +104,7 @@ export function channelOperability(kind: ChannelKind): ChannelOperability {
  *
  * An edition permitting **no** channels is unofferable and says so. That is not
  * a hypothetical — it is what the owner console produces by unticking every
- * channel, and selling a workspace that can never carry a message is the same
+ * channel, and selling an organization that can never carry a message is the same
  * defect this module exists to prevent, arrived at by a different route.
  */
 export function editionOfferability(allowedChannels: readonly string[]): {

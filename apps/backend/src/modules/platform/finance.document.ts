@@ -38,7 +38,7 @@ export type DocumentData = {
 
 /**
  * Escape before interpolation. Every value below is subscriber-controlled —
- * workspace names and payment notes are typed by people — and a document that
+ * organization names and payment notes are typed by people — and a document that
  * renders as HTML is a document that executes whatever is in them.
  */
 function escapeHtml(value: string): string {
@@ -168,11 +168,11 @@ export function renderFinanceDocument(data: DocumentData): string {
  *
  * Excel is where a platform owner's accounting actually happens, so the export
  * has to open there without a conversion step. Values are quoted and embedded
- * quotes doubled — a workspace called `Ali "Abu" Trading` would otherwise split
+ * quotes doubled — an organization called `Ali "Abu" Trading` would otherwise split
  * into three columns.
  *
  * Cells also go through `csvCell`, which neutralises formula leaders. A
- * workspace name is chosen by the subscriber at signup, so `=cmd|'/c calc'!A1`
+ * organization name is chosen by the subscriber at signup, so `=cmd|'/c calc'!A1`
  * is a value somebody can put in this file and have execute on the platform
  * owner's machine — the one person whose machine has the most access.
  */

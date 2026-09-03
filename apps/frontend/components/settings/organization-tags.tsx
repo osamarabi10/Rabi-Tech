@@ -26,7 +26,7 @@ function storedRole(): string {
   catch { return ''; }
 }
 
-export function WorkspaceTags() {
+export function OrganizationTags() {
   const { t } = useT();
   const [rows, setRows] = useState<CrmTag[]>([]);
   const [loading, setLoading] = useState(true);

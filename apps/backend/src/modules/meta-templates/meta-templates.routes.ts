@@ -144,7 +144,7 @@ router.post('/:id/archive', requirePermission('campaign:create'), async (req: an
  * POST /api/meta-templates/:id/send — start a conversation.
  *
  * The one send that does not require the customer to have written first, and
- * therefore the only way a Meta-only workspace can initiate anything at all.
+ * therefore the only way a Meta-only organization can initiate anything at all.
  *
  * Guarded by `conversation:create` rather than a template permission: what this
  * does is message a customer, and that is the permission that governs messaging

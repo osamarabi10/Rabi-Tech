@@ -6,7 +6,7 @@ import { newDeliveryId, newEventId } from './webhook-policy';
 import type { WebhookEvent, WebhookEnvelope } from './webhook-events';
 
 /**
- * Emitting an event to a workspace's configured endpoints.
+ * Emitting an event to an organization's configured endpoints.
  *
  * ## Never throws, never blocks
  *

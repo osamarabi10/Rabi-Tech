@@ -7,7 +7,7 @@ import { PlatformShell } from '@/components/platform/platform-shell';
  *
  * `app/layout.tsx` sets `dir={branding.direction}` on `<html>`, which is
  * correct — the tenant console is Arabic and Hebrew as well as English. The
- * platform console had no override, so an owner whose own workspace is Arabic
+ * platform console had no override, so an owner whose own organization is Arabic
  * got `dir="rtl"` around English text.
  *
  * `truncate` is `text-overflow: ellipsis`, and the ellipsis follows the

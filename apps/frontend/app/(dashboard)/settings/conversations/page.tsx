@@ -1,5 +1,5 @@
-import { WorkspaceConversations } from '@/components/settings/workspace-conversations';
+import { OrganizationConversations } from '@/components/settings/organization-conversations';
 
 export default function ConversationSettingsPage() {
-  return <WorkspaceConversations />;
+  return <OrganizationConversations />;
 }

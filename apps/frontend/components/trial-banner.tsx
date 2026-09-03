@@ -60,7 +60,7 @@ export function TrialBanner() {
         setSkewMs(skew);
         setMinutes(minutesLeft(deadline, skew));
       })
-      // A workspace that is not on a trial is the common case, and a failed
+      // An organization that is not on a trial is the common case, and a failed
       // lookup is not something to shout about in a banner.
       .catch(() => {});
     return () => {

@@ -28,7 +28,7 @@ import { EmptyState, ErrorState, LayoutSkeleton } from '@/components/ui/operatio
 import { SettingsHeader } from './settings-primitives';
 
 /**
- * API tokens — the developer surface of the workspace.
+ * API tokens — the developer surface of the organization.
  *
  * ## The one-time reveal is the whole design problem
  *
@@ -190,7 +190,7 @@ export function ApiTokens() {
   return <div className="flex min-h-0 flex-1 flex-col bg-background">
     <SettingsHeader
       title={t('API keys')}
-      description={t('Let your own software read and send on this workspace. Each key carries only the permissions you grant it.')}
+      description={t('Let your own software read and send on this organization. Each key carries only the permissions you grant it.')}
       action={canManage
         ? <Button onClick={openEditor}><Plus className="size-4" />{t('Create API key')}</Button>
         : <PermissionNotice action={t('Creating API keys')} className="self-center" />}
@@ -214,7 +214,7 @@ export function ApiTokens() {
             icon={KeyRound}
             title={t('No API keys yet')}
             description={canManage
-              ? t('Create a key to connect your own software to this workspace.')
+              ? t('Create a key to connect your own software to this organization.')
               : t('An organisation admin can create keys for developers here.')}
             action={canManage ? <Button onClick={openEditor}><Plus className="size-4" />{t('Create API key')}</Button> : undefined}
           />

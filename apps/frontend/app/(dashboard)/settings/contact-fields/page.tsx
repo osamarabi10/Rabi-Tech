@@ -1,5 +1,5 @@
-import { WorkspaceContactFields } from '@/components/settings/workspace-contact-fields';
+import { OrganizationContactFields } from '@/components/settings/organization-contact-fields';
 
 export default function ContactFieldSettingsPage() {
-  return <WorkspaceContactFields />;
+  return <OrganizationContactFields />;
 }

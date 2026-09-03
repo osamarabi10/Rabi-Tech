@@ -366,7 +366,7 @@ export type MetaTemplateSendComponent = {
  * Meta permits free-form messages only inside the 24-hour window that opens
  * when the customer writes. Outside it — which includes *every contact who has
  * never written* — an approved template is the sole permitted message. Without
- * this call a Meta-only workspace can reply and can never initiate: no
+ * this call a Meta-only organization can reply and can never initiate: no
  * onboarding, no notification, no re-engagement, no broadcast to a cold list.
  *
  * That is not a missing convenience. GROWTH, BUSINESS and ENTERPRISE are

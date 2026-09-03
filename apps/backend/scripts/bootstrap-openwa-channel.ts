@@ -19,7 +19,7 @@ async function main() {
       data: { apiKeyEnc: encryptCredential(apiKey), baseUrl, status: 'ACTIVE' },
     }),
   );
-  process.stdout.write(`Initialized ${updated.count} OpenWA organization channel(s).\n`);
+  process.stdout.write(`Initialized ${updated.count} OpenWAn organization channel(s).\n`);
 }
 
 main()

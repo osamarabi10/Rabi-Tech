@@ -1,24 +1,22 @@
 'use client';
 
 /**
- * The branch switcher.
+/**
+ * The workspace switcher.
  *
- * ## Why "branch" and not "workspace"
+ * ## It says workspace, and means it
  *
- * The code calls this a Workspace, and the product cannot. `مساحة العمل`
- * already means the ORGANIZATION throughout this UI — the sidebar's brand menu
- * is labelled with it, the overview page summarises it, the signup page
- * promises one. Shipping a second control called the same thing, one level
- * down, would leave nobody able to say which one they meant.
+ * 2b called this a workspace, because `مساحة العمل` then meant the ORGANIZATION
+ * everywhere in this UI - the sidebar brand menu was labelled with it, the
+ * overview page summarised it - and a second control by the same name would
+ * have left nobody able to say which one they meant. That collision is gone:
+ * organization means organization now, so the sub-unit takes the name the
+ * schema has always given it.
  *
- * So the schema keeps Workspace and the interface says فرع / סניף / Branch. The
- * label is taken from BRANCH_LABEL below and nowhere else, so if the product
- * name for this changes it changes in one place.
- *
- * ## It does not render for a single branch
+ * ## It does not render for a single workspace
  *
  * A control with one option is noise: it occupies a place in the shell, invites
- * a click, and does nothing. Below two branches this returns null — unless the
+ * a click, and does nothing. Below two workspaces this returns null - unless the
  * organization could create one, in which case the create action is the whole
  * reason to show anything.
  */
@@ -47,12 +45,12 @@ import {
  * The concept's name in the interface, for anything that needs to refer to it
  * outside a t() call.
  *
- * The strings below are written as literals rather than as t(BRANCH_LABEL),
+ * The strings below are written as literals rather than as t(WORKSPACE_LABEL),
  * because the extractor only sees literals and a dynamic key would need an
- * exemption. The dictionary entry for الفرع is still the single place the
+ * exemption. The dictionary entry for مساحة العمل is still the single place the
  * translations live.
  */
-export const BRANCH_LABEL = 'الفرع';
+export const WORKSPACE_LABEL = 'مساحة العمل';
 
 export function WorkspaceSwitcher({ className }: { className?: string }) {
   const { t } = useT();
@@ -101,12 +99,12 @@ export function WorkspaceSwitcher({ className }: { className?: string }) {
     try {
       await activateWorkspace(id);
       // A full reload rather than refetching in place. Every cached list on the
-      // screen belongs to the branch being left — contacts, threads, counts —
+      // screen belongs to the workspace being left — contacts, threads, counts —
       // and reconciling them one by one is a long list of chances to miss one.
       window.location.reload();
     } catch {
       setBusy(false);
-      setError(t('ما زبطت تبديل الفرع'));
+      setError(t('ما زبط تبديل مساحة العمل'));
     }
   }
 
@@ -123,10 +121,10 @@ export function WorkspaceSwitcher({ className }: { className?: string }) {
       setBusy(false);
       const status = err?.response?.status;
       setError(status === 402
-        ? err?.response?.data?.message || t('باقتك ما بتسمح بفرع زيادة')
+        ? err?.response?.data?.message || t('باقتك ما بتسمح بمساحة عمل زيادة')
         : status === 409
-          ? t('في فرع بنفس الاسم')
-          : t('ما زبط إنشاء الفرع'));
+          ? t('في مساحة عمل بنفس الاسم')
+          : t('ما زبط إنشاء مساحة العمل'));
     }
   }
 
@@ -136,7 +134,7 @@ export function WorkspaceSwitcher({ className }: { className?: string }) {
 
       Placing a bar in the layout and putting the switcher inside it would leave
       an empty bordered strip on every screen of every organization with one
-      branch - which is all of them today. Returning null from here removes the
+      workspace - which is all of them today. Returning null from here removes the
       strip with it, so there is nothing to hide and no display utility fighting
       a breakpoint to do it.
     */
@@ -145,8 +143,8 @@ export function WorkspaceSwitcher({ className }: { className?: string }) {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          data-testid="branch-switcher"
-          aria-label={t('الفرع')}
+          data-testid="workspace-switcher"
+          aria-label={t('مساحة العمل')}
           className={cn(
             'flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-caption font-semibold',
             'text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
@@ -155,18 +153,18 @@ export function WorkspaceSwitcher({ className }: { className?: string }) {
           )}
         >
           <Building2 className="size-3.5 shrink-0" aria-hidden />
-          <span className="truncate">{active?.name ?? t('الفرع')}</span>
+          <span className="truncate">{active?.name ?? t('مساحة العمل')}</span>
           <ChevronsUpDown className="size-3 shrink-0 opacity-60" aria-hidden />
         </button>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuLabel>{t('الفرع')}</DropdownMenuLabel>
+        <DropdownMenuLabel>{t('مساحة العمل')}</DropdownMenuLabel>
 
         {state.workspaces.map((workspace) => (
           <DropdownMenuItem
             key={workspace.id}
-            data-testid={`branch-option-${workspace.id}`}
+            data-testid={`workspace-option-${workspace.id}`}
             onSelect={() => choose(workspace.id)}
             className="flex items-center justify-between gap-2"
           >
@@ -194,16 +192,16 @@ export function WorkspaceSwitcher({ className }: { className?: string }) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-                placeholder={t('اسم الفرع')}
-                aria-label={t('اسم الفرع')}
-                data-testid="branch-name-input"
+                placeholder={t('اسم مساحة العمل')}
+                aria-label={t('اسم مساحة العمل')}
+                data-testid="workspace-name-input"
                 className="w-full rounded-md border border-border bg-transparent px-2 py-1 text-caption focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
               <button
                 type="button"
                 onClick={submit}
                 disabled={busy || !name.trim()}
-                data-testid="branch-create-submit"
+                data-testid="workspace-create-submit"
                 className="rounded-md bg-primary px-2 py-1 text-caption font-semibold text-primary-foreground disabled:opacity-50"
               >
                 {t('إنشاء')}
@@ -211,22 +209,22 @@ export function WorkspaceSwitcher({ className }: { className?: string }) {
             </div>
           ) : (
             <DropdownMenuItem
-              data-testid="branch-create"
+              data-testid="workspace-create"
               onSelect={(e) => { e.preventDefault(); setCreating(true); }}
               className="flex items-center gap-2"
             >
               <Plus className="size-3.5" aria-hidden />
-              {t('فرع جديد')}
+              {t('مساحة عمل جديدة')}
             </DropdownMenuItem>
           )
         ) : (
           <div
-            data-testid="branch-create-locked"
+            data-testid="workspace-create-locked"
             className="flex items-center justify-between gap-2 px-2 py-1.5 text-caption text-muted-foreground"
           >
             <span className="flex items-center gap-2">
               <Plus className="size-3.5 opacity-50" aria-hidden />
-              {t('فرع جديد')}
+              {t('مساحة عمل جديدة')}
             </span>
             <UpgradeBadge label={t('ترقية')} />
           </div>

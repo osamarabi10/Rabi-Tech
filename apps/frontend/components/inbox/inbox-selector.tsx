@@ -397,7 +397,7 @@ export function InboxSelector({
   }, []);
 
   /**
-   * Whether this user may put a view in front of the whole workspace.
+   * Whether this user may put a view in front of the whole organization.
    *
    * Read from the server rather than inferred from a role string here. It
    * gates only what the dialog offers; the server enforces the same rule
