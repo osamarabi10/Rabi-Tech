@@ -147,9 +147,55 @@ docker compose up -d
 docker compose exec backend npx prisma migrate deploy
 ```
 
----
+### What a migration will and will not do to a live database
 
-## 6. Check it, rather than assume it
+**`CREATE INDEX CONCURRENTLY` is unavailable here, and index creation therefore
+takes a brief write lock.** Prisma Migrate wraps each migration in a
+transaction, and PostgreSQL refuses concurrent index builds inside one. So an
+index added by a migration blocks writes to that table for as long as the build
+takes — seconds on the tables in this product today, longer as they grow.
+
+If a future index is large enough for that to matter, it has to be created
+outside the migration: apply the migration without it, then run
+`CREATE INDEX CONCURRENTLY` by hand against the live database and record it as
+applied. Nothing automates that today, and nothing should pretend to.
+
+**Adding a column is cheap; making it `NOT NULL` need not be expensive.** A
+nullable `ADD COLUMN` with no default is metadata-only and instant regardless of
+table size. `ALTER COLUMN ... SET NOT NULL` normally scans the whole table under
+`ACCESS EXCLUSIVE`, which blocks readers as well as writers — but PostgreSQL
+will skip that scan if an equivalent `CHECK (col IS NOT NULL)` has already been
+validated, and validating a `NOT VALID` check takes only `SHARE UPDATE
+EXCLUSIVE`, which concurrent reads and writes do not block on.
+
+Measured on this server (15.19) against a two-million-row table:
+
+| Statement | Time | Lock |
+|---|---|---|
+| `SET NOT NULL`, bare | 122.5 ms | `ACCESS EXCLUSIVE` — full scan |
+| `ADD CONSTRAINT … CHECK … NOT VALID` | 15.1 ms | brief |
+| `VALIDATE CONSTRAINT` | 219.6 ms | `SHARE UPDATE EXCLUSIVE` |
+| `SET NOT NULL`, with the validated check | 4.2 ms | `ACCESS EXCLUSIVE` |
+
+More total work, roughly thirty times less of it under the lock that blocks the
+application. `20261014090000_workspaces_scope_enforcement` is written that way
+and is the worked example.
+
+### How much a guarded `down.sql` actually promises
+
+Every migration in this repository that ships a `down.sql` ships a **guarded**
+one, and each has been proved to parse and to **refuse** when live data depends
+on it. That is the claim that can be made about all of them.
+
+**It is weaker than it sounds.** Only the Workspaces migrations have been proved
+to *reverse*: run for real against a populated database, then re-applied, with
+row counts checked identical on both sides. For every other `down.sql` here,
+what is known is that the guards fire — not that the reversal leaves a working
+database.
+
+Do not read "we have guarded down migrations" as "we can roll back". Before
+relying on one that has not been exercised, take the backup first
+(`pg_dump -Fc`, confirmed with `pg_restore -l`), and expect to need it.
 
 ```bash
 # TLS is real, not self-signed

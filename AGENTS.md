@@ -152,9 +152,62 @@ Design rules do not catch the failures this repository actually has. These do.
   aimed at the wrong artifact, and not a mutation that missed its target, but a
   revert that silently deleted the subject before the check ran.
 
+- **The thing that establishes ambient scope can never be a consumer of it.**
+  Anything running before or during the establishment of an ambient value must
+  name that value explicitly, because the mechanism that would supply it is the
+  thing being set up. The workspace resolver asked the Prisma client for "the
+  default workspace" from inside the tenancy extension, where the client handed
+  to you is the unextended one — so it read platform-wide and resolved to
+  another tenant's workspace. Eight existing checks caught it. See D-38.
+
+- **A per-line guard cannot see what a paragraph is about.** A filter operating
+  one line at a time cannot make a decision that depends on wider context. A
+  comment rename skipped any line naming the new concept and still corrupted
+  seven files, because "the workspace this contact belongs to" carries no token
+  saying which concept it means — the paragraph does. Widen the unit, or treat
+  the pass as a draft and read the diff.
+
+- **Suspect your input before you suspect the tool.** A migration failed on a
+  `DO $$` block and the first conclusion was that Prisma could not parse it. It
+  parses it fine; a shell expansion had eaten one dollar of each pair and the
+  file said `DO $`. "The tool cannot do this" is far more expensive than "my
+  input was broken": it sends the next person to a workaround for a limitation
+  that does not exist, and it gets written into a comment that outlives the
+  mistake. Read the file that was actually written.
+
+- **Group failures by cause, not by symptom.** Nineteen failures were two
+  causes. Grouping by error message produced three, because one of eighteen
+  identical failures carried a different error — a load flake that fired before
+  the real assertion was reached, inventing a Hebrew-desktop layout bug that
+  does not exist. A symptom seen once among many identical failures is more
+  likely noise inside the failure than a separate fault; re-run it alone before
+  believing it.
+
+- **A test that fails intermittently is reporting something intermittently, not
+  reporting nothing.** A one-cell-in-thirty-six flake was a real user-facing
+  defect: a failed undo visible for a single frame. It had been explained away
+  in a comment and worked around with a widened timeout, and the timeout could
+  never have helped — the toast was gone, not late. Name what the wait is for
+  before widening anything. See D-40.
+
+- **A checker that manufactures work gets distrusted, and a distrusted checker
+  gets switched off.** When a new gate would demand hundreds of immediate
+  entries, stage it: a ratchet that records today's count and refuses to let it
+  grow buys the same guarantee without asking anybody to write ninety-eight
+  justifications first. `check:i18n` shipped this way — 85 backlog, 0 exempt,
+  and the number may fall but never rise.
+
 - **Every migration ships a guarded `down.sql`** that refuses when live data
   depends on it, and a verified backup taken beforehand (`pg_dump -Fc`,
   confirmed with `pg_restore -l`) before it is applied.
+
+  **Proved to refuse is not proved to reverse, and the difference matters.**
+  Every `down.sql` here has been shown to parse and to refuse. Only the
+  Workspaces ones have been run for real against a populated database and
+  re-applied with row counts identical on both sides. For the rest, what is
+  known is that the guards fire — not that the reversal leaves a working
+  database. Exercise a reversal before claiming one, and never read "we have
+  guarded down migrations" as "we can roll back".
 
 ---
 

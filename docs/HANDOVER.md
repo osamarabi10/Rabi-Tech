@@ -212,7 +212,7 @@ issuing five separate requests is a different act, bounded by the rate limiter.
 
 ```bash
 cd apps/backend
-npm run test:tenancy          # 130  — isolation; a red gate is a release blocker
+npm run test:tenancy          # 143  — isolation, now on two axes; a red gate is a release blocker
 npm run test:public-api       # 141  — over HTTP against a booted server
 npm run test:api-tokens       #  90
 npm run test:workflow-p2      #  75
@@ -228,8 +228,23 @@ npm run test:growth-widgets   #  17  — attribution, end to end; boots a server
 cd apps/frontend
 npm run check:i18n            # every t() key translated in he + en
 npm run check:mojibake        # Arabic/Hebrew decoded as Latin-1
+npm run test:e2e              # 193 passed, 2 skipped — the whole Playwright suite
 npx tsc --noEmit && npx next build
 ```
+
+**The default set is eleven**, and `test:e2e` is the newest of them. It needs
+`RABITECH_E2E_SESSION` and a production build, and it is the slowest by an
+order of magnitude. The two skips are pre-existing `test.skip`s in the suite,
+not anything switched off to make a number look better.
+
+It was added because nothing ran it. `settings-responsive` reached **19 failed
+/ 37 passed** and stayed there across three commits, and the count travelled
+forward in report prose each time — a person remembering rather than a gate
+checking. Both causes turned out to be small: an assertion counting anonymous
+checkboxes, which broke the day a second toggle shipped, and an expected payload
+missing four restriction flags added later. Either was a one-line fix on the day
+it appeared. The cost of finding out late was not the fix; it was that nobody
+could tell a new failure from the nineteen already there.
 
 `test:public-api` boots a real server. If it prints `[ENV]` there is **no
 summary line** — deliberately. A run that could not start has tested nothing
@@ -281,6 +296,105 @@ If a genuinely slow machine still overruns it, raise
 happened — a backend that **exited** is a code problem, one that is **still
 running** is a slow start and wants a bigger number, not debugging. See D-33;
 the timeout wording is proven, the crash wording is not.
+
+---
+
+## 5.1 · Workspaces — the second key column
+
+**This section exists because everything above it predates Workspaces.** A
+session that read this document before 2026-09-03 would be wrong about the
+schema: it described a single tenant key when there are now two.
+
+### The model
+
+`Workspace` is a division **inside** an organization — its own channel, its own
+contacts, its own threads. `Organization` is still the tenancy boundary and
+nothing about that changed. `WorkspaceMember` says who may work in one, and
+carries a `role` copied from `User.role` rather than defaulted, because a
+default would silently re-permission everybody on the day the table appeared.
+
+Every organization has exactly one default workspace, created with the id
+`ws_` || organization.id. That derivation is deliberate: it made the backfill
+idempotent and it lets `down.sql` recognise its own rows. A partial unique index
+enforces one default per organization.
+
+### workspaceId is a THIRD key column, on four models only
+
+`WhatsappSession`, `Contact`, `Conversation`, `Message`. Those four hold a
+division's own work. The **other 54 tenant-scoped models are organization-scoped
+only** — one billing account, one set of teams, one keyword list, one seat
+count — and that is a product decision, not an omission. Adding a model to
+`WORKSPACE_SCOPED` in `prisma/extensions.ts` is a decision about what a
+workspace owns, and it is additive whenever it is taken.
+
+`User` is deliberately absent from that set, and the absence is load-bearing:
+seats are counted as `User` rows, so somebody working in five workspaces is one
+row and one seat. The tenancy harness asserts both halves — the count, and the
+list — because either alone leaves the other reachable.
+
+Every composite foreign key between the four carries **both** keys, so a
+conversation whose contact belongs to another workspace is unrepresentable in
+the database rather than merely unwritten by careful code. App-level checks are
+not the boundary; these are.
+
+### The four constraint decisions, each for a different reason
+
+| Constraint | Decision | Why |
+|---|---|---|
+| `Contact (organizationId, phone)` and `(organizationId, email)` | **Widened** | The same number in two workspaces is two contacts sharing nothing. This is the semantic change the whole model rests on |
+| `Conversation (organizationId, displayId)` | **Not widened** | `displayId` is `1000 + OrgSequence`, an organization-level counter, and it is the number a customer quotes back at an agent. Per-workspace numbering needs a per-workspace counter — behaviour dressed as a constraint — and would let two workspaces both hold a "conversation 47" inside one company |
+| `Message (organizationId, waMessageId)` | **Not widened** | The id comes from the provider and is globally unique there, so organization scope already disambiguates it. Three delivery-status callbacks look it up knowing only the organization; widening breaks status handling to buy disambiguation the identifier does not need |
+| `WhatsappSession (organizationId, sessionName)` and `(organizationId, phoneNumber)` | **Not widened** | One physical number, one gateway. Widening would let the data model represent two workspaces owning the same number — a state the gateway cannot be in. A constraint that permits an impossible reality is worse than a restrictive one |
+
+### The active workspace is a claim, never a parameter
+
+There is no header and no query string that selects a workspace, for the same
+reason `organizationId` has never had one: anything the client sends, the client
+can change.
+
+It is minted in **two places and only two** — at login, stamping the default
+workspace, and at `POST /api/workspaces/:id/activate`, which re-signs the
+existing payload after checking membership. Re-signing rather than rebuilding is
+deliberate: a claim added to the login path later cannot then be silently
+dropped by switching.
+
+`verifyToken` **re-validates on every request**, because a token outlives the
+moment it was signed and a membership revoked an hour later would otherwise keep
+working until expiry. The two refusals are deliberately different:
+
+- **A workspace id from another organization** resolves to nothing inside the
+  organization scope and is refused as **not found**. Confirming that another
+  tenant's workspace exists is itself a disclosure.
+- **A workspace in this organization the user is not a member of** is refused as
+  **forbidden**, because they can be told that much.
+
+An absent claim is not a refusal: it resolves to the organization's default
+workspace, which is where a pre-workspaces session's data already is.
+
+### The public API `phone:` identifier — a temporary state, with its end condition
+
+`phone:` and `email:` resolve against the organization's **default workspace**,
+and return **400 `ambiguous_identifier`** the moment an organization has more
+than one.
+
+Correct today rather than merely convenient: with one workspace there is exactly
+one answer and this finds it. `ApiToken` is not workspace-scoped, and giving it
+a workspace is a change to the token model, its issuing UI and its published
+documentation — which is why it is not done yet.
+
+**The condition that ends this is the first organization to create a second
+workspace.** At that point the identifier stops being unique and the endpoint
+says so instead of returning a contact from whichever workspace sorted first —
+which on a `PUT` would overwrite a record belonging to a different part of the
+business. When token scoping lands, `assertRefUnambiguous` is **deleted, not
+relaxed**.
+
+### Deferred, as decisions rather than omissions
+
+`WorkspaceMember` management UI · per-workspace settings · moving data between
+workspaces · the downgrade behaviour, which **is decided and not built**: a
+BUSINESS subscriber dropping to GROWTH keeps their workspaces, the non-default
+ones become read-only, and the billing screen names exactly which and why.
 
 ---
 

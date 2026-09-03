@@ -1641,3 +1641,118 @@ output is not evidence of work. Before diagnosing a hang, establish that the
 process is *doing* something — otherwise the fix will land on whatever was
 plausible rather than on whatever was true. This is instance 5 of §4 in a
 different costume: a conclusion drawn without confirming the probe.
+
+---
+
+## D-38 · The code that decides tenancy read the client that has no tenancy — FIXED, CAUGHT BY THE HARNESS
+
+**Mine, in the commit that introduced workspace scope, and the worst-shaped
+defect in this document: a cross-tenant leak inside the thing whose job is to
+prevent cross-tenant leaks.**
+
+**What happened.** The Prisma extension resolves the active workspace lazily,
+once per scope, by asking for the organization's default workspace. It asked
+like this:
+
+    const workspace = await client.workspace.findFirst({
+      where: { isDefault: true },
+    });
+
+`client` there is the argument `Prisma.defineExtension((client) => ...)` hands
+you, and it is the **unextended** client — the extension is being built, so it
+cannot already be applied. That query therefore carried **no organization
+predicate at all**. It resolved to the first default workspace of *any*
+organization on the platform, and every subsequent query in that scope was then
+filed against a stranger's workspace.
+
+**How it was caught.** Eight existing tenancy checks went red at once, including
+"org A matches its single fixture contact". None of them was about workspaces;
+they failed because organization A had silently acquired organization B's
+workspace. The harness that existed before this feature found a bug in the
+feature.
+
+**The fix** is one clause — `where: { isDefault: true, organizationId }` — with
+`organizationId` passed in explicitly rather than injected.
+
+**The rule, which is general and now in AGENTS.md and §4:** *the thing that
+ESTABLISHES ambient scope can never be a consumer of it.* Anything running
+before or during scope resolution must name its tenant, because the mechanism
+that would name it for them is the very thing being set up.
+
+**Mutation-proved:** restoring the unscoped `findFirst` takes five existing
+tenancy checks red immediately.
+
+---
+
+## D-39 · Every user created after the backfill would have been locked out — FIXED
+
+**Mine, in the same commit, and it would have shipped as a total lockout for
+anyone hired after the migration ran.**
+
+**What happened.** Login mints a workspace claim, and `verifyToken` refuses a
+claim the user has no `WorkspaceMember` row for. Rows were written by exactly
+three things: the commit-1 backfill, and the two organization-provisioning
+paths. **Neither user-creation path wrote one** — not the admin creating a user
+in Settings, and not a user accepting an invitation.
+
+So a user created after the migration would log in successfully and then be
+refused **every authenticated request** with a 403 naming a workspace they had
+never heard of. Not a degraded feature: no product at all, for that person.
+
+**How it was caught.** The TOTP gate went from 200 to 403 on a fixture user. The
+failing check had nothing to do with workspaces — it was about two-factor
+challenges — and it was the only thing in the suite that happened to create a
+user and then use them.
+
+**The fix** creates the membership in both paths, through the same shared helper
+the provisioning paths use so the derivation cannot drift. The harness fixture
+was brought into line with what the system does, rather than the reverse.
+
+**Worth naming:** the near-miss here was coverage, not care. Had no gate created
+a user and then acted as them, this ships.
+
+---
+
+## D-40 · A failed undo was visible for one frame — FIXED
+
+**Pre-existing, user-facing, and it presented for weeks as nothing worse than a
+flaky test in one cell of a certification matrix.**
+
+**What happened.** `notifyWithUndo` replaces its toast **in place, by id** —
+first with progress, then with success or with a failure that carries
+`duration: Infinity` because, in that function's own words, a failed undo that
+fades out leaves the user believing it worked.
+
+Sonner removes a toast when its action button is pressed, unless the handler
+prevents the default. Its own sequence:
+
+    action.onClick(event);
+    if (event.defaultPrevented) return;
+    deleteToast();
+
+So pressing **undo** queued the toast's removal. The replacement rendered, and
+the removal unmounted it about 150 milliseconds later. Measured:
+
+    t=0     ["Undo failed — the notification is still archivedRetry"]
+    t=150   []
+
+**A failed undo therefore appeared for roughly one frame and vanished** — the
+exact outcome the component exists to prevent, on the one path where being wrong
+matters most.
+
+**How it presented.** As flakiness. The assertion passed when it happened to
+land inside that first frame, which it did when the spec ran alone and often did
+not when the machine was busy. The suite reported one, two or three red cells
+depending on load, and it had been read as noise across four runs.
+
+**The fix** calls `event.preventDefault()` in both the undo and retry actions.
+
+**Mutation-proved in both directions:** with the fix, 54 of 54 across three
+repeats of every cell; with it removed, 4 failed of 54 — the same one-to-three
+cells per run that had been dismissed as flake.
+
+**The lesson, and it is the expensive one:** *a test that fails intermittently is
+reporting something intermittently, not reporting nothing.* This one had been
+described in the spec's own comments as a sonner stacking hazard and worked
+around with a widened timeout. Both were wrong, and a widened timeout could
+never have helped — the toast was **gone**, not late.

@@ -416,6 +416,12 @@ Ours already exports **SVG, PNG and CSV** (M9.3) — matching theirs exactly.
 
 ## 10 · Workspace and organisation settings
 
+**A note on the word, added 2026-09-03.** This section was written when this
+product used "workspace" to mean the organization. It no longer does: the
+interface says *organization* for the tenant and *workspace* for the division
+inside it, matching the schema. The headings below keep their original wording
+and mean the ORGANIZATION; the new sub-unit is §10.1.
+
 Their workspace settings index lists **18** articles. Ours has 10 screens.
 
 | Setting | Theirs | Ours |
@@ -430,6 +436,7 @@ Their workspace settings index lists **18** articles. Ours has 10 screens.
 | Lifecycle | 20 max, default, reorder | `✓` |
 | Conversations | Auto-close, closing notes, categories, mention toggle | `✓` |
 | Snippets | Caps | `✓` (no caps) |
+| **Workspaces** (sub-unit) | Multiple workspaces per account, member management, per-workspace settings | `≈` **shipped 2026-09-03** — see §10.1 |
 | Tags | | `✓` |
 | AI Assist / AI Prompts | Knowledge, persona, 4 custom prompts | `✗` |
 | Calls | Recording mode | `—` |
@@ -471,6 +478,32 @@ org-from-workspace, we separate platform-owner-from-tenant.
 writes produce a durable audit row.**
 
 ---
+
+### 10.1 · Workspaces — what shipped and what is deferred
+
+Was `✗` until 2026-09-03. It is `≈` now rather than `✓`: the model and the
+isolation are real and enforced at the database, and four things a subscriber
+would expect are deliberately not built yet.
+
+**Shipped.**
+
+| | |
+|---|---|
+| Model | `Workspace` and `WorkspaceMember`, one default per organization, enforced by a partial unique index |
+| Isolation | `workspaceId` is a third key column on `WhatsappSession`, `Contact`, `Conversation`, `Message`; composite foreign keys carry both keys, so cross-workspace reference is unrepresentable rather than merely unwritten |
+| Contact identity | The same phone number in two workspaces is two contacts, sharing no tags, consent or history |
+| Switcher | In the shell, driven by a validated claim in the session token — never a header or a query parameter. Absent entirely when there is one workspace and no room for another |
+| Plan gating | `maxWorkspaces` on `Plan`, resolved through `resolveEntitlements`, so a platform-owner override moves it for free. **BUSINESS 5, ENTERPRISE unlimited**, everything below 1. The refusal is **402**, not 403 — the caller is permitted, the plan refuses |
+| Certification | 36 of 36: 375/768/1440 × ar/he/en × light/dark, asserting both that switching changes what you see and that the control is absent when there is nothing to switch to |
+
+**Deferred, as decisions rather than omissions.**
+
+| | |
+|---|---|
+| Member management UI | Who is in which workspace, and adding or removing them. Memberships exist and are enforced; nothing surfaces them |
+| Per-workspace settings | Every setting is organization-wide today |
+| Moving data between workspaces | The hardest of the four: a contact carries consent and history that do not obviously travel with it |
+| Downgrade behaviour | **Decided, not built.** A BUSINESS subscriber dropping to GROWTH keeps their workspaces; the non-default ones become read-only; the billing screen names exactly which and why. Blocking the downgrade traps a customer in a tier they want to leave, deleting data is unthinkable, and silent read-only is the worst of the three |
 
 ## 11 · Roles and permissions
 
@@ -555,13 +588,21 @@ revocation or scoping; no webhook event log; no API versioning policy.
 |---|---|---|
 | `★` **We are ahead** | **21** | consent, empty-segment refusal, auto-close gating, thread-preserving reopen, reply metrics, quiet hours, audit logs, editions-as-data, 5 roles, richer filter DSL, digits-only phone storage, tag provenance, opt-out surviving import, template fail-closed, lifecycle inboxes, category rename, free send rates, explicit schedule timezone, notifications screen, Meta templates screen, composite tenant FKs |
 | `✓` Match | ~45 | |
-| `≈` Partial | ~39 | |
-| `✗` Absent | ~36 | |
+| `≈` Partial | ~40 | |
+| `✗` Absent | ~35 | |
 | `—` Deliberate | 7 | calls, tasks, channel switcher, Chats/Calls tabs, one-team-per-user, AI Objective, **multichannel growth widgets** |
 
 **The absent set concentrates in four places:** the developer platform (13),
 workflows (17 triggers and steps), AI (all of 06), and reporting tabs (4).
 Everything else is small and cumulative.
+
+**One movement on 2026-09-03.** Workspaces went `✗ → ≈`, so `✗` drops by one
+and `≈` gains one. `≈` rather than `✓` on purpose: the model, the isolation,
+the switcher and the plan gate are shipped and certified, and member management,
+per-workspace settings, moving data between workspaces and the downgrade
+behaviour are not. The last of those is decided and written down — see §10.1 —
+which makes it a deferral rather than a gap, but it is still not built and the
+matrix should not imply otherwise.
 
 **Two corrections on 2026-09-02, and the arithmetic follows them.** §03's
 opening-sources row moved `≈ → ✗` — it claimed three of eight when there is no
