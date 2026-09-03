@@ -17,7 +17,49 @@ check the sourcing of a single claim below. That is what the sources file fixes.
 
 **Legend**
 `✓` we have it · `≈` partial, gap named · `✗` absent · `★` **we are ahead** ·
-`—` deliberately not building
+`—` deliberately not building · `?` **unverified — see the audit note**
+
+---
+
+## Last audited against code: 2026-09-03
+
+**Read this before trusting a row.** This document is a claim about code, and a
+claim about code decays silently: nothing fails when a row goes stale, and a
+stale row reads exactly like a checked one.
+
+It decayed here. Three rows were known wrong before this audit and a fourth
+was found by it costing real work — `Collaborators` was marked
+`✗` **"the largest inbox gap"** while shipping complete and gated at 14/14, and
+that row caused a prompt to commission a feature that already existed. A `✗`
+that ships is the expensive direction: a `≈` that is really `✓` understates
+the product, but a `✗` that is really `✓` gets it built twice.
+
+**Twelve rows were corrected on 2026-09-03.** Eight had shipped and still read
+`✗`; one `≈` was complete; three were reworded because the gap named in them
+had moved. Each corrected row now names the file or the gate that proves it, so
+the next reader can check a claim without re-deriving it.
+
+### How much of this document was actually checked
+
+| Section | Status |
+|---|---|
+| 02 Inbox | **Audited row by row** against `src/modules/conversations`, `components/inbox`, and the `inbox-gaps` and `collaborators` gates |
+| 04 Contacts | **Audited** for the `✗` rows: unmerge, default segments, blocked-excluded-from-merge, conversation-status-as-field, import auto-tag, data export |
+| 10 Settings | **Audited** for Growth Widgets and Files |
+| 11 Roles | **Audited** for `restrict_space_integration` and collaborator visibility override |
+| 12 Plans | **Audited** for the MAC exclusion row only |
+| 01, 03, 05, 06, 07, 08, 09, 13 | **NOT audited this pass.** Their rows are as previously written and their accuracy is unknown |
+
+The unaudited sections are not asserted to be wrong. They are asserted to be
+**unchecked**, which is the state the whole document was in before anybody
+looked — and the distinction is the only thing that stops this happening again.
+Sections 05 (workflows) and 13 (developer platform) carry the largest absent
+counts and are therefore the ones where a stale `✗` would cost the most; they
+are the obvious next pass.
+
+**The cheapest way to keep this honest** is to correct the row in the same
+commit as the feature. Every row corrected here was stale because that did not
+happen — the work shipped, its gate went green, and nobody came back.
 
 ---
 
@@ -55,7 +97,7 @@ the dashboard, duration sorting.
 | Standard Inbox | All, Mine, Unassigned, **Collaborations** | `≈` All, Mine, Unassigned — no Collaborations |
 | Team Inbox | One per team | `✓` |
 | Custom Inbox | User-created, All / By me / By others | `✓` `InboxView` |
-| **Blocked Contacts Inbox** | A first-class inbox | `✗` **we block with nowhere to see it** |
+| **Blocked Contacts Inbox** | Contacts you blocked; unblock from the row | `✓` `components/inbox/blocked-contacts-list.tsx`, `GET /api/contacts/blocked`; certified by `inbox-gaps` 36/36 |
 | Lifecycle as inbox | *"Lifecycle does not create a separate inbox"* | `★` **ours does** — lifecycle queues in the selector |
 
 **Custom inbox visibility:** theirs is Private (default) / Public / Shared with
@@ -67,13 +109,14 @@ sharing.**
 | | Theirs | Ours |
 |---|---|---|
 | Status filters | All, Open, Closed, Snoozed | `✓` plus PENDING and AWAITING_CLIENT |
-| **Unreplied toggle** | Conversations lacking a team response | `✗` |
-| Sorts | Newest, Oldest, Longest, Shortest (per state) | `≈` newest-first only |
-| Row indicators | Status, channel icon, unread count, direction arrow (blue out / orange in) | `≈` no directional colour coding |
+| **Unreplied toggle** | Conversations lacking a team response | `✓` `conversations.routes.ts`; server-side, defined as no OUTBOUND non-internal non-auto message |
+| Sorts | Newest, Oldest, Longest, Shortest (per state) | `≈` all four ship (`conversationOrder` in `conversations.routes.ts`); Longest/Shortest rank by `openedAt`, so for a resolved thread this is age rather than handling time |
+| Row indicators | Status, channel icon, unread count, direction arrow (blue out / orange in) | `✓` arrow **and** colour, flipped under rtl, with an accessible name — `inbox/page.tsx` |
 | Unread expiry | Cached; expires after **90 days** inactivity | `✗` n/a |
-| Quick actions | Close · Close with notes · Snooze · Shortcuts · Assign · Collaborators · Lifecycle | `≈` missing Shortcuts and Collaborators |
+| Quick actions | Close · Close with notes · Snooze · Shortcuts · Assign · Collaborators · Lifecycle | `≈` **missing Shortcuts only** — Collaborators ship (`inbox/page.tsx`, `handleAddCollaborator`) |
 
-**Gap:** Unreplied toggle, the four sort modes, Shortcuts, Collaborators.
+**Gap:** Shortcuts. The unreplied toggle, the four sort modes, directional
+indicators and Collaborators all shipped between 2026-09-02 and 2026-09-03.
 **Size:** ~3 days without Shortcuts (which needs P2).
 
 ### Conversation window
@@ -93,7 +136,7 @@ sharing.**
 |---|---|---|
 | Tabs | Contact details · Call activities · Activities · HubSpot · Salesforce · Attachments | `≈` details, conversations, files, activity |
 | Fields shown | Phone, email, country, language | `✓` plus custom fields, tags, consent + provenance, block |
-| Merge suggestion card | Inline in the pane | `✗` |
+| Merge suggestion card | Inline in the pane | `✓` `components/contacts/merge-suggestions.tsx` + `GET /api/contacts/merge-suggestions` |
 | Channel status | Active / Inactive / Unavailable | `≈` |
 
 ### Snippets
@@ -114,7 +157,7 @@ guard. **Size:** hours.
 |---|---|---|
 | Internal comments | Never visible to contacts; 50 files each | `✓` `Message.isInternal` |
 | @mentions | Yes, with notification | `✓` (H5) |
-| **Collaborators** | Up to **9**; can do everything the assignee can; own inbox; added by button, quick action, or @mention when a workspace setting allows | `✗` **the largest inbox gap** |
+| **Collaborators** | Up to **9**; can do everything the assignee can; own inbox; added by button, quick action, or @mention when a workspace setting allows | `✓` **all of it**, gated at 14/14 by `test:collaborators`. `ConversationCollaborator`, cap in `collaborator-limits.ts`, Collaborations scope in `inbox-selector.tsx`, and the @mention path behind `OrganizationConfig.mentionAddsCollaborator` (default off) |
 | Conversation events | Assignments, closures, snoozes, workflow automation, inline and in Activities | `✓` |
 | AI Summarize | Drafts an internal comment | `✗` (P7) |
 
@@ -431,7 +474,7 @@ Their workspace settings index lists **18** articles. Ours has 10 screens.
 | Teams | **Max 200; one team per user** | `≈` ours allows many teams per user |
 | Channels | *"Only Owners can connect Channels"* | `✓` `/settings/channels` |
 | Integrations | Developer API, Dialogflow, Zapier, Make, Sheets | `✗` **none** |
-| Growth Widgets | Embeddable, campaign attribution, branding toggle | `✗` — except the **multichannel** widget type, which is `—`; see below |
+| Growth Widgets | Embeddable, campaign attribution, branding toggle | `≈` the **chat-link** type ships with first-touch attribution, gated at 17/17 by `test:growth-widgets`; embeddable widgets and the branding toggle are absent, and the **multichannel** type stays `—`; see below |
 | Contact Fields | 8 types, visibility, Owner-only delete | `✓` |
 | Lifecycle | 20 max, default, reorder | `✓` |
 | Conversations | Auto-close, closing notes, categories, mention toggle | `✓` |
@@ -440,7 +483,7 @@ Their workspace settings index lists **18** articles. Ours has 10 screens.
 | Tags | | `✓` |
 | AI Assist / AI Prompts | Knowledge, persona, 4 custom prompts | `✗` |
 | Calls | Recording mode | `—` |
-| **Files** | 20 MB platform cap; per-channel caps published | `✗` **not surfaced** |
+| **Files** | 20 MB platform cap; per-channel caps published | `✓` `components/settings/file-limits.tsx` surfaces the accepted sizes |
 | Contacts import | | `✓` |
 | **Data Export** | Separate module, 4 types, 365-day range | `✗` |
 | Notifications | | `★` ours has a dedicated screen |
@@ -449,8 +492,14 @@ Their workspace settings index lists **18** articles. Ours has 10 screens.
 **Growth Widgets, and the one sub-type that is not a gap.** Respond.io names
 four classes — single-channel, multichannel, QR code, chat link — and their own
 documentation never enumerates the full catalogue, so there is no published list
-to be measured against. The row above stays `✗`: we have no widget model, no
-`sourceUrl`, no referrer and no attribution field on `Contact`.
+to be measured against.
+
+**Corrected 2026-09-03.** The paragraph above said the row stays `✗` because we
+had no widget model, no `sourceUrl`, no referrer and no attribution field on
+`Contact`. All four now exist: `GrowthWidget`, `WidgetClick` carrying landing
+page and referrer, and four `acquisition*` columns on `Contact`, gated at 17/17
+by `test:growth-widgets`. The row is `≈` — the chat-link type ships, embeddable
+widgets and the branding toggle do not.
 
 **Multichannel is `—`, the seventh deliberate non-build.** It is not deferred,
 it is inapplicable. Our channel set is WhatsApp on two transports — `OPENWA` and
@@ -517,10 +566,10 @@ would expect are deliberately not built yet.
 | `restrict_space_setting` | ✓ | `✓` |
 | `show_team_contacts` / `show_only_mine` | ✓ | `✓` `contactVisibilityScope` |
 | `restrict_shortcuts` | ✓ | `✓` `restrictWorkflows` |
-| `restrict_space_integration` | ✓ | `✗` **withheld — no route here can enforce it** |
+| `restrict_space_integration` | ✓ | `✓` `restrictIntegrations` in `rbac.middleware.ts`, gated by `test:restrictions` |
 | Mask phone/email | Advanced+ only | `★` ours is not plan-gated |
 | **Cannot edit own access** | Stated rule | `✓` added 1 Sep after reading their docs |
-| Collaborator overrides visibility | Explicit | `✗` (needs collaborators) |
+| Collaborator overrides visibility | Explicit | `✓` `lib/user-access.ts` — being a collaborator grants visibility whatever the restriction says, and it is a code path rather than a comment |
 
 ---
 
@@ -587,14 +636,32 @@ revocation or scoping; no webhook event log; no API versioning policy.
 | Verdict | Count | |
 |---|---|---|
 | `★` **We are ahead** | **21** | consent, empty-segment refusal, auto-close gating, thread-preserving reopen, reply metrics, quiet hours, audit logs, editions-as-data, 5 roles, richer filter DSL, digits-only phone storage, tag provenance, opt-out surviving import, template fail-closed, lifecycle inboxes, category rename, free send rates, explicit schedule timezone, notifications screen, Meta templates screen, composite tenant FKs |
-| `✓` Match | ~45 | |
+| `✓` Match | ~53 | |
 | `≈` Partial | ~40 | |
-| `✗` Absent | ~35 | |
+| `✗` Absent | ~27 | |
 | `—` Deliberate | 7 | calls, tasks, channel switcher, Chats/Calls tabs, one-team-per-user, AI Objective, **multichannel growth widgets** |
 
 **The absent set concentrates in four places:** the developer platform (13),
 workflows (17 triggers and steps), AI (all of 06), and reporting tabs (4).
 Everything else is small and cumulative.
+
+**Counts after the 2026-09-03 audit**, taken over table rows only — prose in
+this document quotes the markers too, so a naive count of the whole file is
+about fifteen higher and means nothing:
+
+    grep -E "^\|" docs/RESPONDIO-PARITY-MATRIX.md | grep -oE '`[✗≈✓★—]`' | sort | uniq -c
+
+which gives 74 `✓`, 53 `≈`, 36 `✗`, 27 `★`, 9 `—`. Those differ from the
+approximate figures in the table above because that table counts capability
+rows while the body also marks sub-rows; both are kept because the table is the
+comparable series and the command is the checkable one.
+
+The direction is what matters: eight rows moved out of `✗` because the work had
+shipped, not because anything was rescored.
+
+Three of the four concentrations — workflows, AI, the developer platform — sit
+in sections this audit did NOT check. Those numbers should be read as the last
+figure somebody wrote down rather than as a current measurement.
 
 **One movement on 2026-09-03.** Workspaces went `✗ → ≈`, so `✗` drops by one
 and `≈` gains one. `≈` rather than `✓` on purpose: the model, the isolation,
@@ -609,5 +676,8 @@ opening-sources row moved `≈ → ✗` — it claimed three of eight when there
 `openingSource` column at all, so `≈` drops by one and `✗` gains one. And
 multichannel growth widgets became the seventh `—`: inapplicable rather than
 missing, for the same reason the channel switcher already was. The Growth
-Widgets row in §10 stays `✗`, because the module as a whole is genuinely absent
-— only that one sub-type is a decision.
+Widgets row in §10 said `✗` because the module as a whole was absent — **that
+sentence was already wrong when it was written on 2026-09-02**, since the
+chat-link slice had shipped, and it survived a documentation commit the
+following day that noticed the staleness and deliberately left it. The row is
+`≈` as of the 2026-09-03 audit.
