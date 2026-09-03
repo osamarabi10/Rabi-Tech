@@ -2948,3 +2948,60 @@ export async function addCollaborator(conversationId: string, userId: string): P
 export async function removeCollaborator(conversationId: string, userId: string): Promise<void> {
   await api.delete(`/api/conversations/${conversationId}/collaborators/${userId}`);
 }
+
+// ---------- workspaces (branches) ----------
+
+export type Workspace = { id: string; name: string; isDefault: boolean };
+
+export type WorkspaceList = {
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+  maxWorkspaces: number | null;
+  workspaceCount: number;
+  canCreate: boolean;
+  planName: string;
+};
+
+/**
+ * Deliberately a raw fetch rather than the shared axios client.
+ *
+ * The switcher is chrome: it renders on every dashboard page and its data is
+ * optional. The shared client carries interceptors that NAVIGATE - 401 clears
+ * the session and goes to /login, a billing gate goes to /pricing - which is
+ * correct for a request the user asked for and wrong for one a background
+ * component made on its own. A chrome component must not be able to sign
+ * somebody out of a page they were reading.
+ *
+ * Not hypothetical: mounting this in the shell took contacts-responsive from
+ * 24/24 to 21/24, with the page arriving somewhere it had not asked to go, and
+ * which cells failed varied between runs because it was a race.
+ */
+export async function fetchWorkspaces(): Promise<WorkspaceList> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('rabitech_token') : null;
+  const res = await fetch('/api/workspaces', {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`workspaces: ${res.status}`);
+  return res.json();
+}
+
+export async function createWorkspace(name: string): Promise<Workspace> {
+  const { data } = await api.post('/api/workspaces', { name });
+  return data;
+}
+
+/**
+ * Switch the active workspace.
+ *
+ * The server mints a new session token carrying the new claim and this replaces
+ * the stored one. Nothing is sent as a header or a query parameter, so the
+ * active workspace cannot be changed by editing a request — the same rule
+ * organizationId has always followed.
+ */
+export async function activateWorkspace(id: string): Promise<{ token: string; workspace: Workspace }> {
+  const { data } = await api.post(`/api/workspaces/${id}/activate`, {});
+  if (typeof window !== 'undefined' && data?.token) {
+    localStorage.setItem('rabitech_token', data.token);
+  }
+  return data;
+}

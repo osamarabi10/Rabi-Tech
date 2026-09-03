@@ -680,6 +680,8 @@ function connectSocket(baseUrl, token) {
  */
 const WORKSPACE_FIXTURE_MODELS = new Set(['contact', 'conversation', 'message', 'whatsappSession']);
 
+// user is handled separately: it needs a second ROW, not a filled column.
+
 function withWorkspaceDefaults(client) {
   const fill = (row) => (row && row.organizationId && row.workspaceId === undefined
     ? { ...row, workspaceId: `ws_${row.organizationId}` }
@@ -687,6 +689,39 @@ function withWorkspaceDefaults(client) {
 
   return new Proxy(client, {
     get(target, prop) {
+      /*
+        Creating a fixture user also creates its default-workspace membership.
+
+        Not cosmetic: login mints a workspace claim and verifyToken refuses one
+        the user has no membership for, so a fixture user without this row gets
+        403 on every authenticated request. That is exactly how the harness
+        found the same hole in the two production user-creation paths, which
+        this commit fixes - the fixture is only being brought back into line
+        with what the system now does.
+      */
+      if (prop === 'user') {
+        const delegate = target.user;
+        return new Proxy(delegate, {
+          get(d, op) {
+            if (op !== 'create') return d[op];
+            return async (args) => {
+              const user = await d.create(args);
+              const organizationId = args?.data?.organizationId;
+              if (organizationId && user?.id) {
+                await client.workspaceMember.create({
+                  data: {
+                    organizationId,
+                    workspaceId: `ws_${organizationId}`,
+                    userId: user.id,
+                    role: args?.data?.role || 'AGENT',
+                  },
+                }).catch(() => {});
+              }
+              return user;
+            };
+          },
+        });
+      }
       if (typeof prop !== 'string' || !WORKSPACE_FIXTURE_MODELS.has(prop)) return target[prop];
       const delegate = target[prop];
       return new Proxy(delegate, {
@@ -723,7 +758,7 @@ async function seedOrganization(raw, key, volume) {
   await raw.identity.create({
     data: { id: identityId, email: `bleed-${key}@rabitech.test`, passwordHash: 'not-used' },
   });
-  await raw.user.create({
+  await fixtureWriter.user.create({
     data: {
       id: userId,
       organizationId,
@@ -1102,8 +1137,8 @@ async function databaseAudits() {
         raw.identity.create({ data: { email: 'metadata-agent@rabitech.test', passwordHash: 'not-used' } }),
       ]);
       const [manager, agent] = await Promise.all([
-        raw.user.create({ data: { organizationId: orgA.organizationId, identityId: managerIdentity.id, name: 'Metadata Manager', role: 'SUPERVISOR' } }),
-        raw.user.create({ data: { organizationId: orgA.organizationId, identityId: agentIdentity.id, name: 'Metadata Agent', role: 'AGENT' } }),
+        fixtureWriter.user.create({ data: { organizationId: orgA.organizationId, identityId: managerIdentity.id, name: 'Metadata Manager', role: 'SUPERVISOR' } }),
+        fixtureWriter.user.create({ data: { organizationId: orgA.organizationId, identityId: agentIdentity.id, name: 'Metadata Agent', role: 'AGENT' } }),
       ]);
       const managerToken = makeRoleToken(manager, managerIdentity, 'SUPERVISOR');
       const agentToken = makeRoleToken(agent, agentIdentity, 'AGENT');
@@ -1288,7 +1323,7 @@ async function databaseAudits() {
       const agentIdentity = await raw.identity.create({
         data: { email: 'merge-agent@rabitech.test', passwordHash: 'not-used' },
       });
-      const agent = await raw.user.create({
+      const agent = await fixtureWriter.user.create({
         data: { organizationId: orgA.organizationId, identityId: agentIdentity.id, name: 'Merge Agent', role: 'AGENT' },
       });
       const agentToken = jwt.sign({
@@ -1422,7 +1457,7 @@ async function databaseAudits() {
       const policyAgentIdentity = await raw.identity.create({
         data: { email: 'policy-agent@rabitech.test', passwordHash: 'not-used' },
       });
-      const policyAgent = await raw.user.create({
+      const policyAgent = await fixtureWriter.user.create({
         data: {
           organizationId: orgA.organizationId,
           identityId: policyAgentIdentity.id,
@@ -1450,7 +1485,7 @@ async function databaseAudits() {
           passwordHash: await bcrypt.hash('Manager-Password-123!', 10),
         },
       });
-      const supervisor = await raw.user.create({
+      const supervisor = await fixtureWriter.user.create({
         data: {
           organizationId: orgA.organizationId,
           identityId: supervisorIdentity.id,
@@ -1620,7 +1655,7 @@ async function databaseAudits() {
       const memberIdentity = await raw.identity.create({
         data: { email: 'team-member-a@rabitech.test', passwordHash: 'not-used' },
       });
-      const member = await raw.user.create({
+      const member = await fixtureWriter.user.create({
         data: {
           organizationId: orgA.organizationId,
           identityId: memberIdentity.id,
@@ -1875,7 +1910,7 @@ async function databaseAudits() {
       await raw.identity.create({
         data: { id: identityId, email, passwordHash: await bcrypt.hash(password, 10) },
       });
-      await raw.user.create({
+      await fixtureWriter.user.create({
         data: {
           id: userId,
           identityId,
@@ -2004,7 +2039,7 @@ async function databaseAudits() {
       const identity = await raw.identity.create({
         data: { email: 'live-room-agent@rabitech.test', passwordHash: 'not-used' },
       });
-      const user = await raw.user.create({
+      const user = await fixtureWriter.user.create({
         data: {
           organizationId: orgA.organizationId,
           identityId: identity.id,
@@ -2115,7 +2150,7 @@ async function databaseAudits() {
       const workerIdentity = await raw.identity.create({
         data: { email: 'branding-worker@rabitech.test', passwordHash: 'not-used' },
       });
-      const worker = await raw.user.create({
+      const worker = await fixtureWriter.user.create({
         data: {
           organizationId: orgA.organizationId,
           identityId: workerIdentity.id,
@@ -3917,7 +3952,7 @@ async function databaseAudits() {
         await raw.identity.create({
           data: { id: `bleed_ident_${suffix}`, email: `bleed-${suffix}@rabitech.test`, passwordHash: 'not-used' },
         });
-        const user = await raw.user.create({
+        const user = await fixtureWriter.user.create({
           data: {
             id: `bleed_actor_${suffix}`,
             organizationId: orgA.organizationId,
@@ -6364,6 +6399,53 @@ async function databaseAudits() {
         'the workspace-scoped phone unique must exist');
       assert.ok(names.includes('Contact_organizationId_workspaceId_email_key'),
         'the workspace-scoped email unique must exist');
+    });
+
+    await check('workspace: the create ceiling comes from the resolved entitlement', async () => {
+      /*
+        The gate must read resolveEntitlements, not the plan code.
+
+        Comparing plan codes would work and would silently ignore a
+        platform-owner override — an organization overridden to BUSINESS would
+        be refused a second branch by a check that never heard of overrides, and
+        the person who granted the override would have no way to see why it did
+        not take. Kept as a literal grep for the same reason the capability rule
+        is: the alternative is a principle in a comment.
+      */
+      const route = fs.readFileSync(
+        path.join(ROOT, 'src', 'modules', 'workspaces', 'workspaces.routes.ts'), 'utf8');
+
+      assert.ok(route.includes('entitlements.maxWorkspaces'),
+        'the create endpoint must compare against the resolved entitlement');
+      assert.ok(/resolveEntitlements\(/.test(route),
+        'the create endpoint must resolve entitlements rather than read a tier');
+      assert.ok(!/plan\s*===\s*['"`](?:BUSINESS|ENTERPRISE)['"`]/.test(route),
+        'the create endpoint must not branch on a plan code');
+
+      // 402 and not 403: the caller is permitted, the plan refuses, and the UI
+      // needs to tell those apart to offer an upgrade instead of reporting a
+      // permissions fault.
+      assert.ok(route.includes('402'), 'a plan refusal must be 402, not 403');
+    });
+
+    await check('workspace: every shipped edition carries a workspace ceiling', async () => {
+      /*
+        A null ceiling means unlimited, so an edition that simply forgot the
+        column would grant unlimited branches on a starter plan — the failure
+        would look like generosity rather than like a bug, and nobody reports it.
+
+        ENTERPRISE is the one edition where null is the intent, so it is asserted
+        as null rather than skipped: "unset" and "deliberately unlimited" must
+        not be the same reading.
+      */
+      const plans = await admin.plan.findMany({ select: { code: true, maxWorkspaces: true } });
+      const byCode = new Map(plans.map((row) => [row.code, row.maxWorkspaces]));
+
+      for (const code of ['FREE', 'STANDARD', 'GROWTH']) {
+        assert.equal(byCode.get(code), 1, code + ' must allow exactly its default workspace');
+      }
+      assert.equal(byCode.get('BUSINESS'), 5, 'BUSINESS must allow five');
+      assert.equal(byCode.get('ENTERPRISE'), null, 'ENTERPRISE is deliberately unlimited');
     });
 
     await check('workspace: every organization has exactly one default workspace', async () => {

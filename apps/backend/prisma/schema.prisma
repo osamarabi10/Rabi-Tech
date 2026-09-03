@@ -175,6 +175,16 @@ model Plan {
   monthlyCampaignSendsLimit    Int?
   customFieldsLimit            Int?
   usersLimit                   Int?
+  /// How many workspaces the edition allows, counting the default one.
+  ///
+  /// Named maxWorkspaces rather than workspacesLimit, breaking the sibling
+  /// convention on purpose: this is one name from the plan catalogue through
+  /// resolveEntitlements to the endpoint that enforces it, and two spellings of
+  /// one quota is how the two drift.
+  ///
+  /// 1 means the organization has its default workspace and no more, which is
+  /// every edition below BUSINESS. Null means unlimited.
+  maxWorkspaces                Int?
   workflowsLimit               Int?
 
   /// AI allowances. Null means unlimited, as with every limit above.
@@ -2445,7 +2455,11 @@ model WidgetClick {
 /// that ships, the derivation must be dropped and the ids regenerated, and this
 /// paragraph is the reason a future reader will know that is required.
 model Workspace {
-  id             String @id
+  /// Generated for a workspace somebody creates; supplied explicitly for the
+  /// default one, whose id is derived from the organization id so the backfill
+  /// stays idempotent and down.sql can recognise its own rows. Both paths
+  /// coexist: a default() only applies when no id is given.
+  id             String @id @default(cuid())
   organizationId String
   name           String
 

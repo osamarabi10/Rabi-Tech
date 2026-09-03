@@ -85,6 +85,15 @@ export type PlanEntitlements = {
   customFieldsLimit: number | null;
   usersLimit: number | null;
   /**
+   * Workspaces allowed, the default one included.
+   *
+   * 1 is not "the feature is off" — every organization has a workspace and
+   * always did. It is the ceiling that makes a second one a paid capability,
+   * which is why the create endpoint compares a count against this rather than
+   * asking whether the plan has a flag.
+   */
+  maxWorkspaces: number | null;
+  /**
    * Active *and* inactive workflows both count.
    *
    * Counting only active ones would make the limit trivially avoidable — build
@@ -130,6 +139,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: 0,
     customFieldsLimit: 5,
     usersLimit: 1,
+    maxWorkspaces: 1,
     // Free gets one, so automation is demonstrable rather than merely
     // advertised: a tier that cannot build a single workflow teaches nobody
     // what the feature is worth.
@@ -175,6 +185,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: 0,
     customFieldsLimit: 5,
     usersLimit: 2,
+    maxWorkspaces: 1,
     workflowsLimit: 1,
     monthlyAiTokensInLimit: null,
     monthlyAiTokensOutLimit: null,
@@ -204,6 +215,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: 5000,
     customFieldsLimit: 20,
     usersLimit: 5,
+    maxWorkspaces: 1,
     workflowsLimit: 10,
     monthlyAiTokensInLimit: null,
     monthlyAiTokensOutLimit: null,
@@ -226,6 +238,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: 25000,
     customFieldsLimit: 50,
     usersLimit: 25,
+    maxWorkspaces: 5,
     workflowsLimit: 50,
     monthlyAiTokensInLimit: null,
     monthlyAiTokensOutLimit: null,
@@ -248,6 +261,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     monthlyCampaignSendsLimit: null,
     customFieldsLimit: null,
     usersLimit: null,
+    maxWorkspaces: null,
     workflowsLimit: null,
     monthlyAiTokensInLimit: null,
     monthlyAiTokensOutLimit: null,

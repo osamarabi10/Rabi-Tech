@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import { Menu } from 'lucide-react';
 import { AppSidebar } from '@/components/app-sidebar';
+import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { BrandLogo } from '@/components/brand-logo';
 import { EntitlementsProvider } from '@/lib/entitlements';
 import { DashboardFooter } from '@/components/dashboard-footer';
@@ -87,6 +88,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           overdue invoice has a harder deadline than one with hours left, and
           the two never apply at once anyway.
         */}
+        <WorkspaceSwitcher />
         <ServiceStateBanner />
         <TrialBanner />
         {children}

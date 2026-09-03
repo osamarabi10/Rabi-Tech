@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../../prisma';
-import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
+import { setScopeWorkspaceId, runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 
 export interface JwtPayload {
   scope?: 'ORGANIZATION';
@@ -12,6 +12,16 @@ export interface JwtPayload {
   name: string;
   role?: 'ADMIN' | 'SUPERVISOR' | 'AGENT' | 'VIEWER' | 'FINANCE';
   organizationId: string;
+  /**
+   * The active workspace, and the only thing that selects one.
+   *
+   * Optional because a token minted before workspaces existed does not carry
+   * it, and those sessions must keep working — an unclaimed token falls back to
+   * the organization's default workspace, which is where all of its data
+   * already is. That fallback is not a hole: it resolves within the token's own
+   * organization and cannot name somebody else's workspace.
+   */
+  workspaceId?: string;
   tokenVersion?: number;
   sessionId?: string;
   restrictContactVisibility?: boolean;
@@ -145,6 +155,48 @@ export async function verifyToken(req: Request, res: Response, next: NextFunctio
     }
 
     return runAsOrganization(decoded.organizationId, async () => {
+      /*
+        Re-validate the workspace claim on EVERY request.
+
+        Checking it once at mint time would be checking it at the wrong moment:
+        a token lives for days, and a membership revoked an hour after it was
+        signed would keep working until the token expired. So the claim is
+        treated as an assertion to be verified, not as a fact already
+        established — the same standard organizationId is held to.
+
+        Two refusals, and they are different failures:
+
+        - A workspace id from ANOTHER organization resolves to nothing, because
+          this lookup runs inside the organization scope opened above. It is
+          refused as not found rather than as forbidden: confirming that another
+          tenant's workspace exists is itself a disclosure.
+        - A workspace in this organization that the user is not a member of is
+          refused as forbidden, because they can be told that much.
+
+        An absent claim is not a refusal. It resolves to the default workspace
+        further down the stack, which is where a pre-workspaces session's data
+        already lives.
+      */
+      let activeWorkspaceId: string | undefined;
+      if (decoded.workspaceId) {
+        const workspace = await prisma.workspace.findFirst({
+          where: { id: decoded.workspaceId },
+          select: { id: true },
+        });
+        if (!workspace) {
+          return res.status(401).json({ error: 'Invalid token: unknown workspace' });
+        }
+        const membership = await prisma.workspaceMember.findFirst({
+          where: { workspaceId: decoded.workspaceId, userId: decoded.id },
+          select: { id: true },
+        });
+        if (!membership) {
+          return res.status(403).json({ error: 'You are no longer a member of that workspace' });
+        }
+        activeWorkspaceId = workspace.id;
+        setScopeWorkspaceId(workspace.id);
+        (req as any).activeWorkspaceId = workspace.id;
+      }
       const session = decoded.sessionId
         ? await prisma.authSession.findUnique({
             where: { id: decoded.sessionId },

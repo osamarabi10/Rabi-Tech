@@ -52,6 +52,15 @@ export type EffectiveEntitlements = {
   source: EntitlementSource;
   limits: Record<UsageMetric, number | null>;
   seatLimit: number | null;
+  /**
+   * Workspaces allowed, the default one included. Null is unlimited.
+   *
+   * Read from the edition exactly like seatLimit, so a platform-owner plan
+   * override moves it without anything else changing: overriding an
+   * organization to BUSINESS grants BUSINESS's workspaces for the same reason
+   * it grants BUSINESS's seats.
+   */
+  maxWorkspaces: number | null;
   /** True when any override is live right now (expired ones do not count). */
   isOverridden: boolean;
   override: {
@@ -280,6 +289,7 @@ export async function resolveEntitlements(
     source,
     limits,
     seatLimit: edition(plan).usersLimit,
+    maxWorkspaces: edition(plan).maxWorkspaces,
     isOverridden: overrideLive,
     override: {
       plan: safePlanCode(organization.planOverride, 'planOverride'),

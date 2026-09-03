@@ -892,6 +892,16 @@ const D: Dict = {
   'شاركه مع الفريق': { he: 'שיתוף עם הצוות', en: 'Share with the team' },
   'رح يشوفوه كل أعضاء المساحة بصندوق الوارد عندهم.': { he: 'כל חברי המרחב יראו אותה בתיבה שלהם.', en: 'Everyone in the workspace will see it in their own inbox.' },
   'فريق': { he: 'צוות', en: 'Team' },
+  // Workspaces, commit 2b. "فرع" rather than "مساحة العمل" because the latter
+  // already means the organization everywhere in this UI.
+  'الفرع': { he: 'סניף', en: 'Branch' },
+  'فرع جديد': { he: 'סניף חדש', en: 'New branch' },
+  'اسم الفرع': { he: 'שם הסניף', en: 'Branch name' },
+  'ترقية': { he: 'שדרוג', en: 'Upgrade' },
+  'ما زبطت تبديل الفرع': { he: 'החלפת הסניף נכשלה', en: 'Could not switch branch' },
+  'ما زبط إنشاء الفرع': { he: 'יצירת הסניף נכשלה', en: 'Could not create the branch' },
+  'في فرع بنفس الاسم': { he: 'כבר קיים סניף בשם הזה', en: 'A branch with that name already exists' },
+  'باقتك ما بتسمح بفرع زيادة': { he: 'החבילה שלך לא מאפשרת סניף נוסף', en: 'Your plan does not allow another branch' },
   'تصنيف': { he: 'תווית', en: 'Label' },
   // ---- Pricing page — honest rewrite ----
   'اختار الباقة اللي بتناسب شغلك': { he: 'בחרו את החבילה שמתאימה לעבודה שלכם', en: 'Pick the plan that fits how you work' },

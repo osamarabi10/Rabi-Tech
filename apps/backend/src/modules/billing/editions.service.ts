@@ -122,6 +122,10 @@ const RESTRICTED_FLOOR: PlanEntitlements = {
   monthlyCampaignSendsLimit: 0,
   customFieldsLimit: 0,
   usersLimit: 0,
+  maxWorkspaces: 1,
+  // capability by failing to resolve.
+  // organization whose edition cannot be resolved must not acquire a paid
+  // The floor grants the default workspace and nothing past it: an
   workflowsLimit: 0,
   monthlyAiTokensInLimit: BigInt(0),
   monthlyAiTokensOutLimit: BigInt(0),
@@ -183,6 +187,7 @@ export function rowToEdition(row: {
   monthlyCampaignSendsLimit: number | null;
   customFieldsLimit: number | null;
   usersLimit: number | null;
+  maxWorkspaces: number | null;
   workflowsLimit: number | null;
   monthlyAiTokensInLimit: bigint | null;
   monthlyAiTokensOutLimit: bigint | null;
@@ -209,6 +214,7 @@ export function rowToEdition(row: {
     monthlyCampaignSendsLimit: row.monthlyCampaignSendsLimit,
     customFieldsLimit: row.customFieldsLimit,
     usersLimit: row.usersLimit,
+    maxWorkspaces: row.maxWorkspaces,
     workflowsLimit: row.workflowsLimit,
     monthlyAiTokensInLimit: row.monthlyAiTokensInLimit,
     monthlyAiTokensOutLimit: row.monthlyAiTokensOutLimit,
@@ -245,6 +251,7 @@ const SCHEDULABLE_COLUMNS = new Set([
   'name', 'monthlyPriceCents', 'pricingModel', 'billingInterval', 'currency',
   'monthlyActiveContactsLimit', 'monthlyOutboundMessagesLimit', 'monthlyCampaignSendsLimit',
   'customFieldsLimit', 'usersLimit', 'workflowsLimit',
+  'maxWorkspaces',
   'monthlyAiTokensInLimit', 'monthlyAiTokensOutLimit',
   'campaignRateMax', 'campaignRateDurationMs',
   'autoProvisionGateway', 'customDomain', 'whiteLabel', 'maskContactDetails',

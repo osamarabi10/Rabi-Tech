@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Identity } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { defaultWorkspaceIdFor } from '../../lib/workspace-provisioning';
 import { randomUUID } from 'crypto';
 import { prisma } from '../../prisma';
 import { verifyToken } from './auth.middleware';
@@ -152,6 +153,10 @@ async function completeIdentityLogin(identity: Identity) {
       name: user.name,
       role: user.role,
       organizationId: membership.organizationId,
+      // The default workspace at login. Switching mints a new token through
+      // POST /api/workspaces/:id/activate, which is the only other place this
+      // claim is ever set.
+      workspaceId: defaultWorkspaceIdFor(membership.organizationId),
       tokenVersion: user.tokenVersion,
       sessionId,
     },

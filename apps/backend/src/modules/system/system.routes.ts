@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { workspaceMemberData } from '../../lib/workspace-provisioning';
 import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
@@ -716,6 +717,22 @@ router.post('/users', requireAdmin, requirePermission('user:create'), async (req
           createdAt: true,
           identity: { select: { email: true } },
         },
+      });
+
+      /*
+        Every new user joins the default workspace immediately.
+      
+        Login mints a workspace claim and verifyToken refuses a claim the user has
+        no membership for, so a user created without this row is not partially
+        configured — they are locked out of every request by a 403 naming a
+        workspace they have never heard of. The tenancy harness found exactly
+        that, on a fixture user created after the backfill.
+      
+        The default workspace only. Membership of any other is a deliberate act
+        and belongs with the management UI, which is not in this commit.
+      */
+      await tx.workspaceMember.create({
+        data: workspaceMemberData(req.user!.organizationId, created.id, created.role),
       });
 
       const memberships = Array.from(
