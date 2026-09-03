@@ -125,6 +125,19 @@ Design rules do not catch the failures this repository actually has. These do.
   green.** If that is the question, check the committed files out and run
   against them.
 
+- **A revert that reaches for HEAD is not a revert when the baseline is
+  uncommitted — snapshot the contents instead.** `git checkout -- <file>`
+  restores from the index, so using it to undo a control mutation discards
+  everything uncommitted in that file, including the code the mutation was
+  testing. This removed a new gate mid-proof and the next run reported
+  `130/130` — the count from before that gate existed. A green that is missing
+  its checks looks exactly like a green that ran them, and the number was
+  *lower* than the passing run, which is the only visible tell.
+
+  A third route to declared-but-unreachable, and the least expected: not a check
+  aimed at the wrong artifact, and not a mutation that missed its target, but a
+  revert that silently deleted the subject before the check ran.
+
 - **Every migration ships a guarded `down.sql`** that refuses when live data
   depends on it, and a verified backup taken beforehand (`pg_dump -Fc`,
   confirmed with `pg_restore -l`) before it is applied.

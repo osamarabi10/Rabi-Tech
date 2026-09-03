@@ -369,6 +369,74 @@ function staticAudits() {
     staleExcuses.join(', '),
   );
 
+  /*
+    Every tenant-scoped table must be reached by the application, or be listed
+    here with a reason.
+
+    This is the analytics check one level down. That one caught an endpoint with
+    no screen; this one catches a TABLE with no code — the same defect at the
+    layer where it is most expensive, because a table that nothing reads still
+    takes writes from migrations, still appears in a schema diagram, still looks
+    like a supported part of the product to whoever arrives next, and still has
+    to be reasoned about by every future migration.
+
+    This repository's signature failure is the declared-but-unreachable thing:
+    ten instances so far. Two new tables that nothing reads is that shape
+    exactly. The difference between a defect and a plan is whether somebody
+    wrote down which one it is, so silence fails and a named entry passes.
+
+    Reachability is delegate access — prisma.<model> or tx.<model> — and not the
+    bare model name. A word like "message" or "contact" occurs everywhere in
+    this codebase, so matching it would report every table as reached and the
+    check would pass by being blind. It was worth confirming rather than
+    assuming: 58 of the 60 tenant-scoped models match on delegate access, and
+    the two that do not are the two added by the workspaces migration.
+  */
+  const tenantScopedModels = [...schema.matchAll(/\nmodel\s+(\w+)\s*\{([\s\S]*?)\n\}/g)]
+    .filter((m) => /\n\s*organizationId\s+String/.test(m[2]))
+    .map((m) => m[1]);
+
+  /** Tenant-scoped tables nothing under src/ touches yet, and why. Each is a decision. */
+  const TENANT_TABLES_WITHOUT_READER = {
+    Workspace:
+      'workspaces commit 1 of 2 is schema only: the table is created, backfilled and constrained by '
+      + 'migration 20261013090000_workspaces_schema, and nothing reads it until commit 2 brings the '
+      + 'queries, the NOT NULL and the widened uniques together',
+    WorkspaceMember:
+      'same migration; the role column is copied from User.role rather than defaulted so that commit 2 '
+      + 'starts from what the system already said, and so down.sql has a baseline to measure role '
+      + 'divergence against before it agrees to drop the table',
+  };
+
+  const backendSource = sourceFiles.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+  const delegateOf = (model) => model[0].toLowerCase() + model.slice(1);
+  const isRead = (model) =>
+    new RegExp('\\b(?:prisma|tx)\\.' + delegateOf(model) + '\\b').test(backendSource);
+
+  const unreadTenantTables = tenantScopedModels.filter((model) => {
+    if (Object.prototype.hasOwnProperty.call(TENANT_TABLES_WITHOUT_READER, model)) return false;
+    return !isRead(model);
+  });
+
+  record(
+    'audit: every tenant-scoped table is reached by the application, or listed as deliberately not',
+    unreadTenantTables.length === 0,
+    unreadTenantTables.join(', '),
+  );
+
+  // And the allowlist has to stay honest, which for this one is the whole
+  // point: the entry is what commit 2 must delete. An entry naming a table that
+  // is now read is a stale excuse, and it is exactly the moment the excuse
+  // should stop being accepted rather than quietly outlive the reason for it.
+  const staleTableExcuses = Object.keys(TENANT_TABLES_WITHOUT_READER).filter(
+    (model) => !tenantScopedModels.includes(model) || isRead(model),
+  );
+  record(
+    'audit: no stale entry in the tenant-table no-reader allowlist',
+    staleTableExcuses.length === 0,
+    staleTableExcuses.join(', '),
+  );
+
   const openwaWebhookSource = fs.readFileSync(
     path.join(ROOT, 'src', 'webhooks', 'openwa.webhook.ts'), 'utf8');
   const metaWebhookSource = fs.readFileSync(
