@@ -157,16 +157,18 @@ async function behaviourChecks() {
     });
 
     const session = await prisma.whatsappSession.create({
-      data: { organizationId: org.id, sessionName: 'collab-gate-' + Date.now(), label: 'gate', isActive: false },
+      // Explicit workspace: platform scope injects nothing.
+      data: { organizationId: org.id, workspaceId: 'ws_' + org.id, sessionName: 'collab-gate-' + Date.now(), label: 'gate', isActive: false },
       select: { id: true },
     });
     const contact = await prisma.contact.create({
-      data: { organizationId: org.id, phone: '99903' + String(Date.now()).slice(-9) },
+      data: { organizationId: org.id, workspaceId: 'ws_' + org.id, phone: '99903' + String(Date.now()).slice(-9) },
       select: { id: true },
     });
     const conversation = await prisma.conversation.create({
       data: {
         organizationId: org.id,
+        workspaceId: 'ws_' + org.id,
         displayId: 950000 + (Date.now() % 1000),
         contactId: contact.id,
         sessionId: session.id,

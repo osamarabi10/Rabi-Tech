@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import { Router } from 'express';
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
@@ -389,6 +390,7 @@ router.post('/:id/comments', requireScope('conversations:write'), async (req, re
     */
     const comment = await prisma.message.create({
       data: {
+        workspaceId: await currentWorkspaceId(),
         organizationId: getTenantId(),
         conversationId: conversation.id,
         direction: 'OUTBOUND',

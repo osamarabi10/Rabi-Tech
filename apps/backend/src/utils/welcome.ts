@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../lib/current-workspace';
 import { prisma } from '../prisma';
 import { ChannelService } from '../modules/channels/channel.service';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
@@ -28,6 +29,7 @@ export async function sendStartWelcome(opts: {
   const result = await ChannelService.sendText(opts.sessionName, opts.phone, body);
   await prisma.message.create({
     data: {
+      workspaceId: await currentWorkspaceId(),
       organizationId: getTenantId(),
       conversationId: opts.conversationId,
       direction: 'OUTBOUND',

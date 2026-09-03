@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../lib/current-workspace';
 import { Queue, Worker } from 'bullmq';
 import { ChannelService } from '../modules/channels/channel.service';
 import { prisma } from '../prisma';
@@ -114,6 +115,19 @@ async function processInboundMessage(data: {
   const sessionRecord = await prisma.whatsappSession.findUnique({
     where: { organizationId_sessionName: { organizationId, sessionName: session } },
   });
+  /*
+    Step 5: the workspace comes from the channel the message arrived on.
+
+    A WhatsappSession belongs to exactly one workspace, so the session that
+    received a message is the only thing that can say which workspace the
+    conversation belongs in. Nothing else in this path knows — an inbound
+    message carries a phone number and a session name, not an operator's
+    current view.
+
+    Set on the scope rather than threaded through the twenty calls below, so
+    every workspace-scoped query in the rest of this worker is filed against the
+    same workspace by construction rather than by each call site remembering.
+  */
   if (!sessionRecord) {
     throw new Error(`Session ${session} not found`);
   }
@@ -150,8 +164,15 @@ async function processInboundMessage(data: {
 
   // Find or create contact
   const contact = await prisma.contact.upsert({
-    where: { organizationId_phone: { organizationId, phone: normalizedPhone } },
+    where: {
+      organizationId_workspaceId_phone: {
+        organizationId,
+        workspaceId: sessionRecord.workspaceId,
+        phone: normalizedPhone,
+      },
+    },
     create: {
+      workspaceId: await currentWorkspaceId(),
       organizationId,
       phone: normalizedPhone,
       ...(contactName ? { name: contactName } : {}),
@@ -259,6 +280,7 @@ async function processInboundMessage(data: {
   // Create message
   const inboundMessage = await prisma.message.create({
     data: {
+      workspaceId: await currentWorkspaceId(),
       organizationId,
       conversationId: conversation.id,
       waMessageId,
@@ -310,6 +332,7 @@ async function processInboundMessage(data: {
       const result = await ChannelService.sendText(session, phone, welcomeBody).catch(() => null);
       await prisma.message.create({
         data: {
+          workspaceId: await currentWorkspaceId(),
           organizationId,
           conversationId: conversation.id,
           direction: 'OUTBOUND',
@@ -345,6 +368,7 @@ async function processInboundMessage(data: {
         const result = await ChannelService.sendText(session, phone, confirmBody).catch(() => null);
         await prisma.message.create({
           data: {
+            workspaceId: await currentWorkspaceId(),
             organizationId,
             conversationId: conversation.id,
             direction: 'OUTBOUND',

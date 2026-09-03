@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import { Prisma } from '@prisma/client';
 import { ChannelService } from '../channels/channel.service';
 import { prisma } from '../../prisma';
@@ -519,6 +520,7 @@ async function runAction(
       */
       const comment = await prisma.message.create({
         data: {
+          workspaceId: await currentWorkspaceId(),
           organizationId: getTenantId(),
           conversationId: context.conversationId,
           direction: 'OUTBOUND',

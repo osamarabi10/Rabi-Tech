@@ -1245,7 +1245,7 @@ model UserInvitation {
 model WhatsappSession {
   id             String   @id @default(cuid())
   organizationId String
-  workspaceId    String?
+  workspaceId    String
   sessionName    String
   phoneNumber    String?
   teamId         String?
@@ -1254,7 +1254,7 @@ model WhatsappSession {
   createdAt      DateTime @default(now())
 
   organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  workspace     Workspace?     @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  workspace     Workspace      @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
   team          Team?          @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
   conversations Conversation[]
   campaigns     Campaign[]
@@ -1262,23 +1262,31 @@ model WhatsappSession {
 
   // Composite unique constraints: session name and phone per org
   @@unique([id, organizationId])
+  @@unique([id, organizationId, workspaceId])
   @@unique([organizationId, sessionName])
   @@unique([organizationId, phoneNumber])
   @@index([organizationId])
   @@index([organizationId, teamId])
+  /// The channels list. GET /api/system/sessions lists a workspace's channels;
+  /// the inbound worker also resolves a session's workspace on every message.
+  @@index([organizationId, workspaceId])
 }
 
 model Contact {
   id               String           @id @default(cuid())
   organizationId   String
-  /// Nullable in this commit, and that is the whole design.
+  /// The workspace this contact belongs to. Required as of commit 2a.
   ///
-  /// Commit 1 adds the column, backfills it and constrains it. It does not
-  /// make it NOT NULL, because the moment it is mandatory every insert in the
-  /// application has to supply it — and that is commit 2's change, arriving
-  /// with the widened uniques and the code that reads it. Splitting them would
-  /// mean shipping a schema the running application cannot write to.
-  workspaceId      String?
+  /// Commit 1 added it nullable and backfilled it; this commit makes it
+  /// mandatory, widens the uniques below and teaches the scope extension to
+  /// inject it — one change, because separating them would ship a schema the
+  /// running application cannot write to.
+  ///
+  /// The consequence is semantic and deliberate: the same phone number in two
+  /// workspaces is now two contacts. They share nothing — not tags, not
+  /// consent, not history — because they are two relationships that happen to
+  /// reach the same handset.
+  workspaceId      String
   phone            String
   name             String?
   firstName        String?
@@ -1346,7 +1354,7 @@ model Contact {
   /// going too. NO ACTION defers to the end of the statement, by which time
   /// they have. Restrict here would make deleting an organization fail on an
   /// ordering the database does not promise to keep stable.
-  workspace          Workspace?           @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  workspace          Workspace            @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
   blockedBy          User?                @relation("ContactBlockedBy", fields: [blockedById, organizationId], references: [id, organizationId], onDelete: Restrict)
   conversations      Conversation[]
   campaignRecipients CampaignRecipient[]
@@ -1362,9 +1370,14 @@ model Contact {
 
   // Composite unique: phone per org
   @@unique([id, organizationId])
-  @@unique([organizationId, phone])
-  @@unique([organizationId, email])
+  @@unique([id, organizationId, workspaceId])
+  @@unique([organizationId, workspaceId, phone])
+  @@unique([organizationId, workspaceId, email])
   @@index([organizationId, name])
+  /// The contacts list. GET /api/contacts orders by name inside one workspace,
+  /// and after this commit every Contact read carries workspaceId, so the
+  /// leading pair of the old index is no longer the leading pair of the query.
+  @@index([organizationId, workspaceId, name])
   @@index([organizationId, assigneeId])
   @@index([organizationId, marketingConsent])
   @@index([organizationId, lifecycleStage])
@@ -1502,7 +1515,7 @@ model CustomFieldValue {
 model Conversation {
   id                  String                     @id @default(cuid())
   organizationId      String
-  workspaceId         String?
+  workspaceId         String
   displayId           Int
   contactId           String
   sessionId           String
@@ -1547,9 +1560,9 @@ model Conversation {
   updatedAt           DateTime                   @updatedAt
 
   organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  workspace          Workspace?            @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
-  contact            Contact               @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  session            WhatsappSession       @relation(fields: [sessionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  workspace          Workspace             @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  contact            Contact               @relation(fields: [contactId, organizationId, workspaceId], references: [id, organizationId, workspaceId], onDelete: Cascade)
+  session            WhatsappSession       @relation(fields: [sessionId, organizationId, workspaceId], references: [id, organizationId, workspaceId], onDelete: Cascade)
   team               Team?                 @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
   assignee           User?                 @relation(fields: [assignedToId, organizationId], references: [id, organizationId], onDelete: Restrict)
   messages           Message[]
@@ -1559,8 +1572,12 @@ model Conversation {
   closures           ConversationClosure[]
 
   @@unique([id, organizationId])
+  @@unique([id, organizationId, workspaceId])
   @@unique([organizationId, displayId])
   @@index([organizationId, isArchived, status, lastMessageAt])
+  /// The inbox list. GET /api/conversations filters archived + status and
+  /// orders by lastMessageAt, now within a workspace.
+  @@index([organizationId, workspaceId, isArchived, status, lastMessageAt])
   @@index([organizationId, contactId, sessionId])
   @@index([organizationId, teamId])
   @@index([organizationId, resolvedAt])
@@ -1646,7 +1663,7 @@ model ConversationClosure {
 model Message {
   id             String           @id @default(cuid())
   organizationId String
-  workspaceId    String?
+  workspaceId    String
   conversationId String
   waMessageId    String?
   direction      MessageDirection
@@ -1665,8 +1682,8 @@ model Message {
   sentById       String?
   timestamp      DateTime         @default(now())
 
-  conversation Conversation @relation(fields: [conversationId, organizationId], references: [id, organizationId], onDelete: Cascade)
-  workspace    Workspace?   @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  conversation Conversation @relation(fields: [conversationId, organizationId, workspaceId], references: [id, organizationId, workspaceId], onDelete: Cascade)
+  workspace    Workspace    @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
   sentBy       User?        @relation(fields: [sentById, organizationId], references: [id, organizationId], onDelete: Restrict)
 
   // Composite unique: waMessageId per org

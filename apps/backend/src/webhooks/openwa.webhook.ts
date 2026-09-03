@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../lib/current-workspace';
 import { Router, Request, Response } from 'express';
 import { prisma } from '../prisma';
 import { OpenWAService, sessionNameById } from '../modules/whatsapp/openwa.service';
@@ -348,7 +349,16 @@ async function handleOutboundFromOtherDevice(
   if (!sessionRecord) return;
 
   const contact = await prisma.contact.findUnique({
-    where: { organizationId_phone: { organizationId, phone } },
+    // Same rule as the worker: the session that received it owns the
+    // workspace. This path already resolved sessionRecord above precisely
+    // because it needs the thread, so the answer is in hand.
+    where: {
+      organizationId_workspaceId_phone: {
+        organizationId,
+        workspaceId: sessionRecord.workspaceId,
+        phone,
+      },
+    },
   });
   if (!contact) return;
 
@@ -370,6 +380,7 @@ async function handleOutboundFromOtherDevice(
 
   const savedMessage = await prisma.message.create({
     data: {
+      workspaceId: await currentWorkspaceId(),
       organizationId,
       conversationId: conversation.id,
       waMessageId,

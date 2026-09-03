@@ -10,7 +10,7 @@ import {
 } from '../usage/entitlements';
 import { OutboundSendError, sendOutboundMessage } from '../conversations/outbound-message.service';
 import { requireScope } from '../api-tokens/api-token.middleware';
-import { parseContactRef } from './identifier';
+import { parseContactRef, assertRefUnambiguous, AmbiguousIdentifierError } from './identifier';
 
 /**
  * Sending, from the public API.
@@ -201,6 +201,18 @@ router.post('/contacts/:identifier/messages', requireScope('messages:send'), asy
     const countryCode = String(req.body?.defaultCountryCode ?? '').replace(/\D/g, '') || undefined;
     const ref = parseContactRef(req.params.identifier, countryCode);
     if (!ref.ok) return res.status(400).json({ error: 'invalid_request', message: ref.message });
+
+    // Refuse a phone:/email: identifier once it stops being unambiguous. This
+    // route reports errors as responses rather than by throwing, so the guard
+    // is caught here rather than routed through an ApiError.
+    try {
+      await assertRefUnambiguous(prisma as any, ref);
+    } catch (err) {
+      if (err instanceof AmbiguousIdentifierError) {
+        return res.status(400).json({ error: 'ambiguous_identifier', message: err.message });
+      }
+      throw err;
+    }
 
     const contact = await prisma.contact.findFirst({
       where: ref.where,

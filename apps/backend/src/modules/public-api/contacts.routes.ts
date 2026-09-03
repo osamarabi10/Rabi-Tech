@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import { Router } from 'express';
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
@@ -13,7 +14,7 @@ import { normalizePhone } from '../contacts/phone';
 import { validateCustomFieldValue } from '../contacts/custom-field-validation';
 import { setContactConsent } from '../../utils/consent';
 import { requireScope } from '../api-tokens/api-token.middleware';
-import { parseContactRef } from './identifier';
+import { parseContactRef, assertRefUnambiguous, AmbiguousIdentifierError } from './identifier';
 import { CONTACT_INCLUDE, serializeContact } from './serialize';
 import { emitWebhook } from '../webhooks/webhook-dispatch.service';
 import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
@@ -159,6 +160,10 @@ function countryCodeFrom(req: any): string | undefined {
 async function findByRef(raw: unknown, req: any) {
   const ref = parseContactRef(raw, countryCodeFrom(req));
   if (!ref.ok) throw new ApiError(400, ref.message);
+  await assertRefUnambiguous(prisma as any, ref).catch((err) => {
+    if (err instanceof AmbiguousIdentifierError) throw new ApiError(400, err.message);
+    throw err;
+  });
   const contact = await prisma.contact.findFirst({ where: ref.where, include: CONTACT_INCLUDE });
   return { ref, contact };
 }
@@ -270,6 +275,7 @@ router.post('/', requireScope('contacts:write'), async (req, res) => {
 
     const created = await prisma.contact.create({
       data: {
+        workspaceId: await currentWorkspaceId(),
         organizationId: getTenantId(),
         phone: phone.phone,
         ...contactPayload(req.body),
@@ -295,6 +301,10 @@ router.put('/:identifier', requireScope('contacts:write'), async (req, res) => {
   try {
     const cc = countryCodeFrom(req);
     const ref = parseContactRef(req.params.identifier, cc);
+    await assertRefUnambiguous(prisma as any, ref).catch((err) => {
+      if (err instanceof AmbiguousIdentifierError) throw new ApiError(400, err.message);
+      throw err;
+    });
     if (!ref.ok) throw new ApiError(400, ref.message);
 
     const fields = await resolveCustomFields(req.body?.customFields);
@@ -322,6 +332,7 @@ router.put('/:identifier', requireScope('contacts:write'), async (req, res) => {
       }
       const created = await prisma.contact.create({
         data: {
+          workspaceId: await currentWorkspaceId(),
           organizationId: getTenantId(), phone, ...contactPayload(req.body),
           acquisitionSource: 'API', acquisitionAt: new Date(),
         },

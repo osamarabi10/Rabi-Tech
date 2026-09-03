@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../lib/current-workspace';
 import { prisma } from '../prisma';
 import { ChannelService } from '../modules/channels/channel.service';
 import { OpenWAService } from '../modules/whatsapp/openwa.service';
@@ -65,6 +66,7 @@ export async function maybeSendOutOfHoursReply(
   const result = await ChannelService.sendText(session, phone, body).catch(() => null);
   await prisma.message.create({
     data: {
+      workspaceId: await currentWorkspaceId(),
       organizationId: getTenantId(),
       conversationId,
       direction: 'OUTBOUND',

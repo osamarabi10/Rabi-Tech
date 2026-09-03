@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { decryptCredential, encryptCredential } from '../../lib/credential-crypto';
@@ -391,6 +392,7 @@ async function persist(input: {
         },
       },
       create: {
+        workspaceId: await currentWorkspaceId(),
         organizationId: input.organizationId,
         sessionName: metaSessionName(input.phoneNumberId),
         phoneNumber: input.displayPhoneNumber,

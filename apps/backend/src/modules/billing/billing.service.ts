@@ -1,3 +1,5 @@
+import { defaultWorkspaceData, workspaceMemberData } from '../../lib/workspace-provisioning';
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { OrganizationConfig, Prisma } from '@prisma/client';
@@ -357,6 +359,20 @@ export async function createSignup(input: {
         },
       });
       const identity = await tx.identity.create({ data: { email, passwordHash, platformRole: 'NONE' } });
+      /*
+        The organization's default workspace, created here because the migration
+        that gave one to every existing organization cannot reach forward to
+        organizations created later. An organization without a default workspace
+        cannot resolve a scope, so its very first inbound message would throw.
+
+        The id comes from the shared helper rather than being spelled out, so
+        this and migration 20261013090000_workspaces_schema cannot drift into two
+        conventions — down.sql's guard 1 recognises its own rows by exactly this
+        shape.
+      */
+      const workspace = await tx.workspace.create({
+        data: defaultWorkspaceData(organization.id, organization.name),
+      });
       const generalTeam = await tx.team.create({
         data: {
           organizationId: organization.id,
@@ -387,8 +403,19 @@ export async function createSignup(input: {
           teamId: generalTeam.id,
         },
       });
+      // Membership mirrors the organization role, the same copy the backfill
+      // made. A default here would re-permission the first admin of every new
+      // organization and leave down.sql guard 2 with nothing to measure.
+      await tx.workspaceMember.create({
+        data: workspaceMemberData(organization.id, admin.id, admin.role),
+      });
+
       const whatsappSession = await tx.whatsappSession.create({
         data: {
+          // The explicit id, not currentWorkspaceId(): that resolver reads
+          // through the ambient client, which cannot see a row created inside
+          // this still-open transaction.
+          workspaceId: workspace.id,
           organizationId: organization.id,
           sessionName: `${slug}-primary`,
           phoneNumber: null,

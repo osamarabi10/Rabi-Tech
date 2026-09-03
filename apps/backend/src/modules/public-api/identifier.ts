@@ -26,6 +26,53 @@ import { normalizePhone } from '../contacts/phone';
  * API and WhatsApp agree on identity.
  */
 
+/**
+ * Refuse a phone: or email: identifier once an organization has more than one
+ * workspace.
+ *
+ * ## The temporary state this encodes, and the condition that ends it
+ *
+ * A phone number identifies one contact per WORKSPACE now, not one per
+ * organization. An API token, however, is scoped to an organization: ApiToken
+ * is not one of the four workspace-scoped models, and giving it a workspace is
+ * a change to the token model, its issuing UI and its documentation — too much
+ * to carry into a commit whose subject is scope enforcement.
+ *
+ * So while every organization has exactly one workspace, resolving against the
+ * default is not merely convenient, it is EXACTLY correct: there is one answer
+ * and this finds it. The moment a second workspace exists that stops being
+ * true, and the honest response is not to pick one. Returning a contact from
+ * whichever workspace sorted first would be a silent wrong answer on a PUT —
+ * overwriting a record belonging to a different part of the business.
+ *
+ * Therefore: correct today, loud tomorrow. This is a deliberate temporary
+ * state, and the condition that ends it is the first organization to create a
+ * second workspace. When token scoping lands, this function is deleted, not
+ * relaxed.
+ *
+ * id: identifiers are unaffected — a contact id is unique on its own and needs
+ * no workspace to disambiguate it.
+ */
+export async function assertRefUnambiguous(
+  client: { workspace: { count: (args?: any) => Promise<number> } },
+  ref: ContactRef,
+): Promise<void> {
+  if (!ref.ok || ref.kind === 'id') return;
+
+  const workspaces = await client.workspace.count();
+  if (workspaces <= 1) return;
+
+  throw new AmbiguousIdentifierError(
+    `This organization has ${workspaces} workspaces, so "${ref.kind}:" no longer identifies one `
+    + 'contact: the same address can belong to a different person in each workspace. '
+    + 'Address the contact by "id:<id>", which is unambiguous, until API tokens can be '
+    + 'scoped to a workspace.',
+  );
+}
+
+/** Thrown by assertRefUnambiguous; the routes map it to a 400. */
+export class AmbiguousIdentifierError extends Error {}
+
 export type ContactRef =
   | { ok: true; kind: 'id' | 'phone' | 'email'; where: Prisma.ContactWhereInput; value: string }
   | { ok: false; message: string };

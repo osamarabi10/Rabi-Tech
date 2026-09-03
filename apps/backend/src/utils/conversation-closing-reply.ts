@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../lib/current-workspace';
 import { prisma } from '../prisma';
 import { ChannelService } from '../modules/channels/channel.service';
 import { getTenantId } from '../lib/tenant-context';
@@ -30,6 +31,7 @@ export async function sendConversationClosingReply(conversationId: string): Prom
 
   await prisma.message.create({
     data: {
+      workspaceId: await currentWorkspaceId(),
       organizationId: getTenantId(),
       conversationId: conversation.id,
       direction: 'OUTBOUND',

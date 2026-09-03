@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import { Router } from 'express';
 import { ChannelService } from '../channels/channel.service';
 import { prisma } from '../../prisma';
@@ -82,12 +83,19 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
     const organizationId = req.user!.organizationId;
     const contact = await prisma.contact.upsert({
       where: {
-        organizationId_phone: {
+        // The session is chosen from the agent's team above, and it carries
+        // the workspace. Deriving it here rather than from ambient scope keeps
+        // the contact in the same workspace as the channel it will be messaged
+        // on — which the composite foreign key requires anyway, so disagreeing
+        // would fail at the insert rather than quietly file it elsewhere.
+        organizationId_workspaceId_phone: {
           organizationId,
+          workspaceId: session.workspaceId,
           phone,
         },
       },
       create: {
+        workspaceId: await currentWorkspaceId(),
         organizationId,
         phone,
         ...(name?.trim() ? { name: name.trim() } : {}),
@@ -106,6 +114,7 @@ router.post('/start', requirePermission('conversation:create'), validateBody(cre
       // Persist first, then send — a provider error must never discard the record.
       const created = await prisma.message.create({
         data: {
+          workspaceId: await currentWorkspaceId(),
           organizationId,
           conversationId: conversation.id,
           direction: 'OUTBOUND',

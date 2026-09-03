@@ -1,6 +1,7 @@
 import { UsageMetric } from '@prisma/client';
 import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import { getOrganizationConfig } from '../../utils/whatsapp-sessions';
 import { getTenantId, runAsPlatform } from '../../lib/tenant-context';
 import {
@@ -263,7 +264,24 @@ export async function contactIdForAddress(address: string): Promise<string | nul
   if (!phone) return null;
   const contact = await prisma.contact.findUnique({
     where: {
-      organizationId_phone: { organizationId: getTenantId(), phone },
+      /*
+        Metering resolves the contact in the CURRENT workspace, not across the
+        organization.
+
+        There is no session here - this is asked before a send, from whatever
+        scope the caller is in - so ambient workspace scope is the only honest
+        answer, and it is also the correct one. The send being metered happens
+        in some workspace, and the contact it bills against must be that
+        workspace’s contact. Once a number exists in two workspaces, resolving
+        it organization-wide would meter one workspace’s message against the
+        other’s contact, and monthly-active-contact billing would be wrong in a
+        way nobody would think to look for.
+      */
+      organizationId_workspaceId_phone: {
+        organizationId: getTenantId(),
+        workspaceId: await currentWorkspaceId(),
+        phone,
+      },
     },
     select: { id: true },
   });

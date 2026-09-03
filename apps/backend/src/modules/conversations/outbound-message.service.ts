@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import { ChannelService } from '../channels/channel.service';
 import { prisma } from '../../prisma';
 import { getTenantId } from '../../lib/tenant-context';
@@ -131,6 +132,7 @@ export async function sendOutboundMessage(input: OutboundInput): Promise<Outboun
 
   const message = await prisma.message.create({
     data: {
+      workspaceId: await currentWorkspaceId(),
       organizationId,
       conversationId: input.conversation.id,
       direction: 'OUTBOUND',

@@ -397,16 +397,11 @@ function staticAudits() {
     .map((m) => m[1]);
 
   /** Tenant-scoped tables nothing under src/ touches yet, and why. Each is a decision. */
-  const TENANT_TABLES_WITHOUT_READER = {
-    Workspace:
-      'workspaces commit 1 of 2 is schema only: the table is created, backfilled and constrained by '
-      + 'migration 20261013090000_workspaces_schema, and nothing reads it until commit 2 brings the '
-      + 'queries, the NOT NULL and the widened uniques together',
-    WorkspaceMember:
-      'same migration; the role column is copied from User.role rather than defaulted so that commit 2 '
-      + 'starts from what the system already said, and so down.sql has a baseline to measure role '
-      + 'divergence against before it agrees to drop the table',
-  };
+  // Empty, and that is the point: commit 2a gave both tables readers, so both
+  // entries came out. The stale check below is what forced it — an entry naming
+  // a table that is now read fails, so the excuse could not outlive its reason
+  // even if nobody remembered to look.
+  const TENANT_TABLES_WITHOUT_READER = {};
 
   const backendSource = sourceFiles.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
   const delegateOf = (model) => model[0].toLowerCase() + model.slice(1);
@@ -669,11 +664,58 @@ function connectSocket(baseUrl, token) {
   });
 }
 
+/**
+ * A fixture-writing view of the raw client that fills in workspaceId.
+ *
+ * Every fixture organization has exactly one workspace and its id is derived
+ * the same way the migration derives it, so the value is always recoverable
+ * from the organizationId the fixture already passes. This fills it in rather
+ * than making twenty-eight seed sites repeat it.
+ *
+ * Deliberately NOT applied to `raw` itself. `raw` is the unextended client and
+ * its whole purpose is to write and read rows without the tenancy extension in
+ * the way, so that the assertions prove isolation rather than proving the
+ * extension agrees with itself. This wrapper touches writes only, adds no
+ * predicate to any read, and is used only where a fixture is being built.
+ */
+const WORKSPACE_FIXTURE_MODELS = new Set(['contact', 'conversation', 'message', 'whatsappSession']);
+
+function withWorkspaceDefaults(client) {
+  const fill = (row) => (row && row.organizationId && row.workspaceId === undefined
+    ? { ...row, workspaceId: `ws_${row.organizationId}` }
+    : row);
+
+  return new Proxy(client, {
+    get(target, prop) {
+      if (typeof prop !== 'string' || !WORKSPACE_FIXTURE_MODELS.has(prop)) return target[prop];
+      const delegate = target[prop];
+      return new Proxy(delegate, {
+        get(d, op) {
+          if (op !== 'create' && op !== 'createMany' && op !== 'upsert') return d[op];
+          return (args) => {
+            const next = { ...args };
+            if (op === 'upsert') {
+              if (next.create) next.create = fill(next.create);
+            } else if (Array.isArray(next.data)) {
+              next.data = next.data.map(fill);
+            } else if (next.data) {
+              next.data = fill(next.data);
+            }
+            return d[op](next);
+          };
+        },
+      });
+    },
+  });
+}
+
 async function seedOrganization(raw, key, volume) {
+  const fixtureWriter = withWorkspaceDefaults(raw);
   const organizationId = `bleed_org_${key}`;
   const identityId = `bleed_identity_${key}`;
   const userId = `bleed_user_${key}`;
   const sessionId = `bleed_session_${key}`;
+  const workspaceId = `ws_${organizationId}`;
 
   await raw.organization.create({
     data: { id: organizationId, name: `Bleed Org ${key}`, slug: `bleed-${key}`, status: 'ACTIVE' },
@@ -690,10 +732,20 @@ async function seedOrganization(raw, key, volume) {
       role: 'ADMIN',
     },
   });
-  await raw.whatsappSession.create({
+  // Every organization has a default workspace, the same shape the migration
+  // gives one. Seeded through the raw client, so it is explicit here rather
+  // than injected.
+  await raw.workspace.create({
+    data: { id: workspaceId, organizationId, name: `Bleed Org ${key}`, isDefault: true },
+  });
+  await raw.workspaceMember.create({
+    data: { id: `bleed_wsm_${key}`, organizationId, workspaceId, userId, role: 'ADMIN' },
+  });
+  await fixtureWriter.whatsappSession.create({
     data: {
       id: sessionId,
       organizationId,
+      workspaceId,
       sessionName: 'it-support',
       label: 'WhatsApp',
     },
@@ -705,28 +757,31 @@ async function seedOrganization(raw, key, volume) {
   const records = [];
   for (let index = 0; index < volume; index += 1) {
     const suffix = `${key}_${index}`;
-    const contact = await raw.contact.create({
+    const contact = await fixtureWriter.contact.create({
       data: {
         id: `bleed_contact_${suffix}`,
         organizationId,
+        workspaceId,
         phone: index === 0 ? '+972500000001' : `+9725${key.charCodeAt(0)}${String(index).padStart(6, '0')}`,
         name: `Contact ${suffix}`,
       },
     });
-    const conversation = await raw.conversation.create({
+    const conversation = await fixtureWriter.conversation.create({
       data: {
         id: `bleed_conversation_${suffix}`,
         organizationId,
+        workspaceId,
         displayId: 1001 + index,
         contactId: contact.id,
         sessionId,
         status: 'OPEN',
       },
     });
-    await raw.message.create({
+    await fixtureWriter.message.create({
       data: {
         id: `bleed_message_${suffix}`,
         organizationId,
+        workspaceId,
         conversationId: conversation.id,
         waMessageId: `provider-${suffix}`,
         direction: 'INBOUND',
@@ -755,18 +810,25 @@ async function seedOrganization(raw, key, volume) {
     },
   });
 
-  return { organizationId, identityId, userId, sessionId, records };
+  return { organizationId, identityId, userId, sessionId, workspaceId, records };
 }
 
 async function seedProvisioningOrganization(raw, key) {
+  const fixtureWriter = withWorkspaceDefaults(raw);
   const organizationId = `gateway_org_${key}`;
   const slug = `gateway-${key}`;
   await raw.organization.create({
     data: { id: organizationId, name: `Gateway Org ${key}`, slug, status: 'PROVISIONING' },
   });
-  await raw.whatsappSession.create({
+  // Provisioning seeds a whole organization, so it seeds a default workspace
+  // too - the same thing signup does now.
+  await raw.workspace.create({
+    data: { id: `ws_${organizationId}`, organizationId, name: slug, isDefault: true },
+  });
+  await fixtureWriter.whatsappSession.create({
     data: {
       organizationId,
+      workspaceId: `ws_${organizationId}`,
       sessionName: `${slug}-primary`,
       label: 'WhatsApp',
     },
@@ -879,6 +941,7 @@ async function databaseAudits() {
   process.env.DATABASE_URL = testUrl;
   const raw = new PrismaClient({ datasources: { db: { url: testUrl } } });
   const admin = new PrismaClient({ datasources: { db: { url: baseUrl } } });
+  const fixtureWriter = withWorkspaceDefaults(raw);
   let backendChild;
   const sockets = [];
 
@@ -1203,16 +1266,16 @@ async function databaseAudits() {
     });
 
     await check('contacts: merge suggestions, confirmation boundary, export permissions, and audit stay tenant-scoped', async () => {
-      const primary = await raw.contact.create({
+      const primary = await fixtureWriter.contact.create({
         data: { id: 'bleed_merge_primary_a', organizationId: orgA.organizationId, phone: '972500000201', name: 'Merge Candidate' },
       });
-      const secondary = await raw.contact.create({
+      const secondary = await fixtureWriter.contact.create({
         data: { id: 'bleed_merge_secondary_a', organizationId: orgA.organizationId, phone: '972500000202', name: ' merge   candidate ' },
       });
-      const foreign = await raw.contact.create({
+      const foreign = await fixtureWriter.contact.create({
         data: { id: 'bleed_merge_foreign_b', organizationId: orgB.organizationId, phone: '972500000203', name: 'Merge Candidate' },
       });
-      const secondaryConversation = await raw.conversation.create({
+      const secondaryConversation = await fixtureWriter.conversation.create({
         data: {
           id: 'bleed_merge_conversation_a',
           organizationId: orgA.organizationId,
@@ -1465,7 +1528,7 @@ async function databaseAudits() {
         where: { id: orgA.records[0].contact.id },
         data: { assigneeId: restrictedAgentId, email: 'visible@rabitech.test' },
       });
-      const hiddenContact = await raw.contact.create({
+      const hiddenContact = await fixtureWriter.contact.create({
         data: {
           id: 'bleed_hidden_contact_a',
           organizationId: orgA.organizationId,
@@ -2636,14 +2699,14 @@ async function databaseAudits() {
         phone: `97259${String(index + 1).padStart(7, '0')}`,
         name: `MAC fixture ${index + 1}`,
       }));
-      await raw.contact.createMany({ data: extraContacts });
+      await fixtureWriter.contact.createMany({ data: extraContacts });
 
       const conversations = [
         { id: 'bleed_mac_conversation_1', contactId: extraContacts[0].id, displayId: 2001 },
         { id: 'bleed_mac_conversation_2', contactId: extraContacts[0].id, displayId: 2002 },
         { id: 'bleed_mac_conversation_3', contactId: extraContacts[1].id, displayId: 2003 },
       ];
-      await raw.conversation.createMany({
+      await fixtureWriter.conversation.createMany({
         data: conversations.map((conversation) => ({
           ...conversation,
           organizationId: orgA.organizationId,
@@ -2668,7 +2731,7 @@ async function databaseAudits() {
         status: 'DELIVERED',
         body: `MAC message ${index + 1}`,
       }));
-      await raw.message.createMany({ data: additionalMessages });
+      await fixtureWriter.message.createMany({ data: additionalMessages });
 
       const messageIds = ['bleed_message_a_0', ...additionalMessages.map((message) => message.id)];
       await runAsOrganization(orgA.organizationId, () => recordUsageEvents(
@@ -2831,9 +2894,9 @@ async function databaseAudits() {
           timestamp: new Date(syntheticStart.getTime() + Math.floor((index / 500) * syntheticSpanMs)),
         };
       });
-      await raw.contact.createMany({ data: contacts });
-      await raw.conversation.createMany({ data: conversations });
-      await raw.message.createMany({ data: messages });
+      await fixtureWriter.contact.createMany({ data: contacts });
+      await fixtureWriter.conversation.createMany({ data: conversations });
+      await fixtureWriter.message.createMany({ data: messages });
 
       await runAsOrganization(orgC.organizationId, () => recordUsageEvents(
         messages.flatMap((message, index) => [
@@ -3464,7 +3527,7 @@ async function databaseAudits() {
       ]);
       assert.equal(contactCountAfter, contactCountBefore);
       assert.ok(organization.downgradeGraceEndsAt);
-      await raw.contact.create({
+      await fixtureWriter.contact.create({
         data: {
           id: 'bleed_downgrade_new_contact',
           organizationId: orgA.organizationId,
@@ -3828,7 +3891,7 @@ async function databaseAudits() {
     // earlier check already mutated.
     const newConversation = async (org, suffix, data = {}) => {
       convOpsSeq += 1;
-      return raw.conversation.create({
+      return fixtureWriter.conversation.create({
         data: {
           id: `bleed_convops_${suffix}`,
           organizationId: org.organizationId,
@@ -5454,11 +5517,11 @@ async function databaseAudits() {
       const convB = await raw.conversation.findFirst({
         where: { organizationId: orgB.organizationId }, select: { id: true },
       });
-      await raw.message.create({ data: {
+      await fixtureWriter.message.create({ data: {
         id: 'bleed_meta_ack_a', organizationId: orgA.organizationId, conversationId: convA.id,
         direction: 'OUTBOUND', body: 'a', waMessageId: 'wamid.shared', status: 'SENT',
       } });
-      await raw.message.create({ data: {
+      await fixtureWriter.message.create({ data: {
         id: 'bleed_meta_ack_b', organizationId: orgB.organizationId, conversationId: convB.id,
         direction: 'OUTBOUND', body: 'b', waMessageId: 'wamid.shared', status: 'SENT',
       } });
@@ -5541,13 +5604,13 @@ async function databaseAudits() {
       const conv = await raw.conversation.findFirst({
         where: { organizationId: orgA.organizationId }, select: { id: true },
       });
-      await raw.message.create({ data: {
+      await fixtureWriter.message.create({ data: {
         id: 'bleed_dedupe_1', organizationId: orgA.organizationId, conversationId: conv.id,
         direction: 'INBOUND', body: 'first', waMessageId: 'wamid.retry',
       } });
       try {
         await assert.rejects(
-          () => raw.message.create({ data: {
+          () => fixtureWriter.message.create({ data: {
             id: 'bleed_dedupe_2', organizationId: orgA.organizationId, conversationId: conv.id,
             direction: 'INBOUND', body: 'retry', waMessageId: 'wamid.retry',
           } }),
@@ -5558,7 +5621,7 @@ async function databaseAudits() {
         const convB = await raw.conversation.findFirst({
           where: { organizationId: orgB.organizationId }, select: { id: true },
         });
-        await raw.message.create({ data: {
+        await fixtureWriter.message.create({ data: {
           id: 'bleed_dedupe_3', organizationId: orgB.organizationId, conversationId: convB.id,
           direction: 'INBOUND', body: 'other tenant', waMessageId: 'wamid.retry',
         } });
@@ -5667,7 +5730,7 @@ async function databaseAudits() {
         where: { organizationId: orgA.organizationId },
         select: { id: true },
       });
-      await raw.message.create({ data: {
+      await fixtureWriter.message.create({ data: {
         id: 'bleed_ack_message', organizationId: orgA.organizationId,
         conversationId: conversation.id, direction: 'OUTBOUND', body: 'ack ordering',
         waMessageId: 'wamid.bleed_ack', status: 'SENT',
@@ -5761,11 +5824,11 @@ async function databaseAudits() {
       // than by anything under test.
       const contactId = 'bleed_window_contact';
       const conversationId = 'bleed_window_conversation';
-      await raw.contact.create({ data: {
+      await fixtureWriter.contact.create({ data: {
         id: contactId, organizationId: orgA.organizationId,
         phone: '+972599000111', name: 'Service Window',
       } });
-      await raw.conversation.create({ data: {
+      await fixtureWriter.conversation.create({ data: {
         id: conversationId, organizationId: orgA.organizationId, displayId: 98765,
         contactId, sessionId: orgA.sessionId,
       } });
@@ -5778,7 +5841,7 @@ async function databaseAudits() {
         assert.equal(never.open, false);
         assert.equal(never.lastInboundAt, null, 'a contact who never wrote has no last inbound');
 
-        await raw.message.create({ data: {
+        await fixtureWriter.message.create({ data: {
           id: 'bleed_window_inbound', organizationId: orgA.organizationId,
           conversationId, direction: 'INBOUND', body: 'hello',
           timestamp: new Date(Date.now() - 60_000),
@@ -5795,7 +5858,7 @@ async function databaseAudits() {
           where: { id: 'bleed_window_inbound' },
           data: { timestamp: new Date(Date.now() - SERVICE_WINDOW_MS - 60_000) },
         });
-        await raw.message.create({ data: {
+        await fixtureWriter.message.create({ data: {
           id: 'bleed_window_outbound', organizationId: orgA.organizationId,
           conversationId, direction: 'OUTBOUND', body: 'agent reply',
           timestamp: new Date(),
@@ -6127,6 +6190,198 @@ async function databaseAudits() {
         ),
       );
     });
+
+    /* ────────────────────────────────────────────────────────────────────
+       Workspace bleed: the organization suite, mirrored at the second axis.
+
+       Everything above asks whether org A can reach org B. These ask whether
+       workspace 1 can reach workspace 2 INSIDE one organization — which is a
+       different question with the same shape, and until commit 2a there was
+       nothing to ask it of.
+
+       The fixture is one organization with two workspaces, because that is the
+       configuration every assumption in this codebase was written before.
+       ──────────────────────────────────────────────────────────────────── */
+
+    const wsSecond = 'ws_second_' + orgA.organizationId;
+    await fixtureWriter.workspace.create({
+      data: { id: wsSecond, organizationId: orgA.organizationId, name: 'Second', isDefault: false },
+    });
+    await fixtureWriter.whatsappSession.create({
+      data: {
+        id: 'bleed_session_a_second',
+        organizationId: orgA.organizationId,
+        workspaceId: wsSecond,
+        sessionName: 'second-workspace',
+        label: 'WhatsApp Second',
+      },
+    });
+
+    await check('workspace: the same number is two contacts in two workspaces', async () => {
+      // The semantic change, asserted directly. Under the old unique the second
+      // of these was a constraint violation; it is now a different person.
+      const shared = '+972500000001';
+      const inSecond = await fixtureWriter.contact.create({
+        data: {
+          id: 'bleed_contact_a_second',
+          organizationId: orgA.organizationId,
+          workspaceId: wsSecond,
+          phone: shared,
+          name: 'Same number, other workspace',
+        },
+      });
+      assert.equal(inSecond.phone, orgA.records[0].contact.phone,
+        'the fixture must reuse the default workspace contact number for this to mean anything');
+      assert.notEqual(inSecond.id, orgA.records[0].contact.id);
+    });
+
+    await check('workspace: a read in one workspace cannot see the other\'s contacts', async () => {
+      const fromDefault = await runAsOrganization(orgA.organizationId, () =>
+        scoped.contact.findMany({ select: { id: true } }));
+      const ids = fromDefault.map((row) => row.id);
+      assert.ok(ids.includes(orgA.records[0].contact.id), 'default workspace must see its own contact');
+      assert.ok(!ids.includes('bleed_contact_a_second'),
+        'default workspace must NOT see the second workspace\'s contact');
+    });
+
+    await check('workspace: an explicit workspace scope narrows to that workspace', async () => {
+      const fromSecond = await runAsOrganization(
+        orgA.organizationId,
+        () => scoped.contact.findMany({ select: { id: true } }),
+        { workspaceId: wsSecond },
+      );
+      const ids = fromSecond.map((row) => row.id);
+      assert.ok(ids.includes('bleed_contact_a_second'), 'second workspace must see its own contact');
+      assert.ok(!ids.includes(orgA.records[0].contact.id),
+        'second workspace must NOT see the default workspace\'s contact');
+    });
+
+    await check('workspace: a conversation cannot borrow another workspace\'s contact', async () => {
+      // The composite foreign key, not an application check. This is the
+      // property that makes workspace isolation structural: the row is
+      // unrepresentable rather than merely unwritten by careful code.
+      await assert.rejects(() =>
+        fixtureWriter.conversation.create({
+          data: {
+            id: 'bleed_conv_cross_workspace',
+            organizationId: orgA.organizationId,
+            workspaceId: wsSecond,
+            displayId: 9998,
+            contactId: orgA.records[0].contact.id,
+            sessionId: 'bleed_session_a_second',
+          },
+        }),
+      );
+    });
+
+    await check('workspace: a message cannot borrow another workspace\'s conversation', async () => {
+      await assert.rejects(() =>
+        fixtureWriter.message.create({
+          data: {
+            id: 'bleed_msg_cross_workspace',
+            organizationId: orgA.organizationId,
+            workspaceId: wsSecond,
+            conversationId: orgA.records[0].conversation.id,
+            direction: 'INBOUND',
+            body: 'must be rejected by the composite FK',
+          },
+        }),
+      );
+    });
+
+    await check('workspace: a seat is a user, not a membership', async () => {
+      /*
+        Half one of two. A person who works in five workspaces is one seat, and
+        seats are counted as User rows — so this asserts the count does not move
+        when a membership is added.
+
+        On its own this would pass while somebody quietly added User to
+        WORKSPACE_SCOPED, because the count would then be per-workspace and this
+        fixture has one user in the default workspace either way. The second
+        half below closes that.
+      */
+      const before = await runAsOrganization(orgA.organizationId, () =>
+        scoped.user.count({ where: { isActive: true } }));
+
+      await fixtureWriter.workspaceMember.create({
+        data: {
+          id: 'bleed_wsm_a_second',
+          organizationId: orgA.organizationId,
+          workspaceId: wsSecond,
+          userId: orgA.userId,
+          role: 'ADMIN',
+        },
+      });
+
+      const after = await runAsOrganization(orgA.organizationId, () =>
+        scoped.user.count({ where: { isActive: true } }));
+
+      assert.equal(after, before,
+        'adding a second workspace membership must not consume a second seat');
+    });
+
+    await check('workspace: User is not workspace-scoped', async () => {
+      /*
+        Half two. The upstream cause of the meter going wrong, asserted at the
+        list rather than at the number.
+
+        Either half alone leaves the other reachable: a correct list with a
+        meter someone "fixed" to count memberships, or a correct meter with User
+        quietly added to the scoped set. They are one property in two places.
+      */
+      const { WORKSPACE_SCOPED } = require('../src/prisma/extensions');
+      assert.ok(!WORKSPACE_SCOPED.has('User'),
+        'User must not be workspace-scoped: seats are counted as User rows');
+      assert.deepEqual(
+        [...WORKSPACE_SCOPED].sort(),
+        ['Contact', 'Conversation', 'Message', 'WhatsappSession'],
+        'exactly four models are workspace-scoped; adding one is a product decision',
+      );
+    });
+
+    await check('workspace: contact identity is unique per workspace, not per organization', async () => {
+      /*
+        The migration's own outcome, asserted against the catalogue.
+
+        The DROP in that migration is written with IF EXISTS, so a mistyped name
+        would drop nothing and report success — leaving the old organization-wide
+        unique in place and the semantic change silently not made. This is the
+        check that would notice.
+
+        schemaname = 'public' matters: this database carries leftover shadow
+        schemas from earlier harness runs that still hold the old index, and a
+        query without the filter reports on those instead of on the live schema.
+      */
+      const rows = await raw.$queryRawUnsafe(
+        `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'Contact'`,
+      );
+      const names = rows.map((row) => row.indexname);
+      assert.ok(!names.includes('Contact_organizationId_phone_key'),
+        'the organization-wide phone unique must be gone');
+      assert.ok(!names.includes('Contact_organizationId_email_key'),
+        'the organization-wide email unique must be gone');
+      assert.ok(names.includes('Contact_organizationId_workspaceId_phone_key'),
+        'the workspace-scoped phone unique must exist');
+      assert.ok(names.includes('Contact_organizationId_workspaceId_email_key'),
+        'the workspace-scoped email unique must exist');
+    });
+
+    await check('workspace: every organization has exactly one default workspace', async () => {
+      // The partial unique index from commit 1, asserted as behaviour. The
+      // second workspace above was created with isDefault false; a second true
+      // must be refused.
+      await assert.rejects(() =>
+        fixtureWriter.workspace.create({
+          data: {
+            id: 'bleed_ws_second_default',
+            organizationId: orgA.organizationId,
+            name: 'Second default',
+            isDefault: true,
+          },
+        }),
+      );
+    });
+
   } catch (error) {
     record(
       'database: clean migration chain supports the current Prisma schema and fixtures',

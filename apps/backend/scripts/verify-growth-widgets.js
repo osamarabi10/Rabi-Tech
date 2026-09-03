@@ -297,7 +297,10 @@ async function main() {
       if (!org) throw new Error('no organization exists to test against');
       const session = await prisma.whatsappSession.create({
         data: {
+          // Named explicitly: this runs under platform scope, where the
+          // extension injects nothing on purpose.
           organizationId: org.id,
+          workspaceId: 'ws_' + org.id,
           sessionName: 'widget-gate-' + stamp,
           label: 'gate',
           isActive: false,

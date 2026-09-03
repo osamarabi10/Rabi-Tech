@@ -11,6 +11,7 @@
  */
 
 import { Prisma } from '@prisma/client';
+import { resolveWorkspaceIdWith } from '../lib/workspace-scope';
 import { tenantStore, getTenantId } from '../lib/tenant-context';
 
 // Models that are NOT tenant-scoped (they're org/global)
@@ -27,6 +28,29 @@ const PLATFORM_MODELS = new Set([
   'Plan',
   'PaymentEvent',
   'SignupThrottleEvent',
+]);
+
+/**
+ * The models scoped by workspace as well as by organization.
+ *
+ * Exactly four, and the number is the point. Organization scope applies to all
+ * 60 tenant tables; workspace scope applies to the four that hold a division's
+ * own work — its channel, its people, its threads, its messages. The other 54
+ * are organization-wide by design: one billing account, one set of teams, one
+ * keyword list, one seat count. Adding a model here is a product decision about
+ * what a workspace owns, not a consistency exercise.
+ *
+ * User is deliberately absent, and that absence is load-bearing. Seats are
+ * counted as User rows, so a person who works in five workspaces is one row and
+ * one seat. Putting User here would make them five. The workspace harness
+ * asserts both halves of that — the count and this list — because either alone
+ * leaves the other reachable.
+ */
+export const WORKSPACE_SCOPED = new Set([
+  'Contact',
+  'Conversation',
+  'Message',
+  'WhatsappSession',
 ]);
 
 export const tenancyExtension = Prisma.defineExtension((client) => {
@@ -129,6 +153,47 @@ export const tenancyExtension = Prisma.defineExtension((client) => {
           // augmenting an existing one.
           if (['findMany', 'findFirst', 'findFirstOrThrow', 'count', 'aggregate', 'groupBy'].includes(operation)) {
             anyArgs.where = { ...(anyArgs.where || {}), organizationId };
+          }
+
+          /*
+            Workspace scope: the second axis, for four models only.
+
+            Placed after the organization pass and reusing the same anyArgs, so
+            a workspace-scoped query carries BOTH predicates. That ordering is
+            not cosmetic — workspace scope narrows within an organization and is
+            never a substitute for it. A row is reachable only when both match,
+            which is exactly what the composite foreign keys added in the
+            accompanying migration enforce at the database.
+          */
+          if (WORKSPACE_SCOPED.has(model)) {
+            const workspaceId = await resolveWorkspaceIdWith(client as any, organizationId);
+
+            if (operation === 'create' && anyArgs?.data) {
+              anyArgs.data = { workspaceId, ...anyArgs.data };
+            }
+
+            if (operation === 'createMany' && anyArgs?.data) {
+              anyArgs.data = Array.isArray(anyArgs.data)
+                ? anyArgs.data.map((d: any) => ({ workspaceId, ...d }))
+                : { workspaceId, ...anyArgs.data };
+            }
+
+            if (operation === 'upsert') {
+              if (anyArgs?.create) anyArgs.create = { workspaceId, ...anyArgs.create };
+              if (anyArgs?.where) anyArgs.where = { ...anyArgs.where, workspaceId };
+            }
+
+            if (['findUnique', 'findUniqueOrThrow', 'update', 'delete'].includes(operation)) {
+              if (anyArgs?.where) anyArgs.where = { ...anyArgs.where, workspaceId };
+            }
+
+            if (['updateMany', 'deleteMany'].includes(operation)) {
+              anyArgs.where = { ...(anyArgs.where || {}), workspaceId };
+            }
+
+            if (['findMany', 'findFirst', 'findFirstOrThrow', 'count', 'aggregate', 'groupBy'].includes(operation)) {
+              anyArgs.where = { ...(anyArgs.where || {}), workspaceId };
+            }
           }
 
           return query(anyArgs);

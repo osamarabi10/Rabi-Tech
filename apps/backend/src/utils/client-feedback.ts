@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../lib/current-workspace';
 import { prisma } from '../prisma';
 import { ChannelService } from '../modules/channels/channel.service';
 import { resolveAutoReply, renderAutoReply } from './auto-reply';
@@ -27,6 +28,7 @@ export async function sendCsatPrompt(conversationId: string): Promise<void> {
   
   await prisma.message.create({
     data: {
+      workspaceId: await currentWorkspaceId(),
       organizationId,
       conversationId,
       direction: 'OUTBOUND',
@@ -168,6 +170,7 @@ export async function handleClientFeedback(opts: {
     const orgIdForMsg = getTenantId();
     await prisma.message.create({
       data: {
+        workspaceId: await currentWorkspaceId(),
         organizationId: orgIdForMsg,
         conversationId: opts.conversationId,
         direction: 'OUTBOUND',

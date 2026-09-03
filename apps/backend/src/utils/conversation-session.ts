@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../lib/current-workspace';
 import { Conversation } from '@prisma/client';
 import { ChannelService } from '../modules/channels/channel.service';
 import { prisma } from '../prisma';
@@ -179,6 +180,7 @@ export async function getOrCreateActiveConversation(
     const sequence = await nextOrgSequence(tx, organizationId, 'conversationDisplayId');
     const conversation = await tx.conversation.create({
       data: {
+        workspaceId: await currentWorkspaceId(),
         organizationId,
         displayId: 1000 + Number(sequence),
         contactId,
@@ -242,6 +244,7 @@ export async function maybeSendKeywordAutoReply(opts: {
   const result = await ChannelService.sendText(session, phone, reply).catch(() => null);
   await prisma.message.create({
     data: {
+      workspaceId: await currentWorkspaceId(),
       organizationId: getTenantId(),
       conversationId,
       direction: 'OUTBOUND',

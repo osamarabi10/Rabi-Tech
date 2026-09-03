@@ -1,3 +1,4 @@
+import { currentWorkspaceId } from '../../lib/current-workspace';
 import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { normalizePhone } from './phone';
@@ -228,6 +229,7 @@ export async function importContacts(
           } else {
             const created = await tx.contact.create({
               data: {
+                workspaceId: await currentWorkspaceId(),
                 organizationId,
                 phone: entry.phone,
                 name: entry.name,

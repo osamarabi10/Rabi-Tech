@@ -365,7 +365,10 @@ async function main() {
     const session = await runAsPlatform('verify-public-api:setup', () =>
       prisma.whatsappSession.create({
         data: {
+          // Named explicitly: this runs under platform scope, where the
+          // extension injects nothing on purpose.
           organizationId: orgA.id,
+          workspaceId: 'ws_' + orgA.id,
           sessionName: 'gate-session-' + stamp,
           label: 'gate',
           isActive: false,
@@ -379,6 +382,7 @@ async function main() {
       prisma.conversation.create({
         data: {
           organizationId: orgA.id,
+          workspaceId: 'ws_' + orgA.id,
           displayId: 900000 + Number(stamp.slice(-4)),
           contactId: contactId,
           sessionId: session.id,
@@ -393,8 +397,8 @@ async function main() {
     await runAsPlatform('verify-public-api:setup', () =>
       prisma.message.createMany({
         data: [
-          { organizationId: orgA.id, conversationId: thread.id, direction: 'INBOUND', body: 'customer said this', status: 'DELIVERED' },
-          { organizationId: orgA.id, conversationId: thread.id, direction: 'OUTBOUND', body: 'agent note, not sent', status: 'SENT', isInternal: true },
+          { organizationId: orgA.id, workspaceId: 'ws_' + orgA.id, conversationId: thread.id, direction: 'INBOUND', body: 'customer said this', status: 'DELIVERED' },
+          { organizationId: orgA.id, workspaceId: 'ws_' + orgA.id, conversationId: thread.id, direction: 'OUTBOUND', body: 'agent note, not sent', status: 'SENT', isInternal: true },
         ],
       }),
     );
