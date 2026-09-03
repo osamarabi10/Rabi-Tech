@@ -540,8 +540,43 @@ for (const scenario of scenarios) {
     await expect(page.locator('#organization-name')).toHaveValue('RabiTech Demo');
     await expect(page.locator('#inactivity-value')).toHaveValue('20');
     await expect(page.locator('#organization-timezone')).toHaveValue('Asia/Jerusalem');
-    await expect(page.getByRole('checkbox')).toHaveCount(1);
-    await page.screenshot({ path: testInfo.outputPath(`${scenario.name}-workspace-general.png`), fullPage: true });
+    /*
+      Name the toggles rather than counting them.
+
+      This asserted toHaveCount(1) on a bare checkbox role, written when the
+      page had one toggle. Quiet hours arrived beside the weekly recap and the
+      count became 2, so all eighteen combinations went red — and stayed red
+      across three commits, because a count of anonymous controls says nothing
+      about what is on the page and fails for the one reason that is not a
+      defect: the page legitimately grew.
+
+      Naming them keeps the case alive in the direction that matters. Removing
+      either toggle still fails here; adding a third does not.
+    */
+    const quietHours = page.getByRole('checkbox', { name: scenario.locale === 'en' ? 'Quiet hours' : scenario.locale === 'he' ? 'שעות שקט' : 'ساعات الهدوء' });
+    const weeklyRecap = page.getByRole('checkbox', { name: scenario.locale === 'en' ? 'Weekly recap' : scenario.locale === 'he' ? 'סיכום שבועי' : 'الملخّص الأسبوعي' });
+    await expect(quietHours).toHaveCount(1);
+    await expect(weeklyRecap).toHaveCount(1);
+
+    /*
+      And every toggle here carries an accessible name.
+
+      This is what makes the two assertions above possible, and it is the thing
+      that would break first if somebody added a toggle without one — which is
+      also the state that forces the next person back to counting.
+    */
+    const unnamedToggles = await page.getByRole('checkbox').evaluateAll((nodes) => nodes.filter((node) => {
+      const labelled = node.getAttribute('aria-label')
+        || (node.getAttribute('aria-labelledby') || '')
+          .split(/\s+/).filter(Boolean)
+          .map((id) => document.getElementById(id)?.textContent?.trim() || '')
+          .join(' ').trim()
+        || node.closest('label')?.textContent?.trim();
+      return !labelled;
+    }).length);
+    expect(unnamedToggles, 'every toggle on organization settings needs an accessible name').toBe(0);
+
+    await page.screenshot({ path: testInfo.outputPath(`${scenario.name}-organization-general.png`), fullPage: true });
     if (scenario.width === 375) {
       const workspaceSave = page.getByRole('button', { name: scenario.locale === 'en' ? 'Save' : scenario.locale === 'he' ? 'שמירה' : 'حفظ', exact: true });
       await workspaceSave.scrollIntoViewIfNeeded();
@@ -1028,10 +1063,26 @@ test('workspace users send invitations and persist server-enforced restrictions'
   await drawer.getByRole('checkbox', { name: 'Restrict contact visibility' }).check();
   await drawer.getByRole('checkbox', { name: 'Hide Workflows button' }).check();
   await drawer.getByRole('button', { name: 'Save' }).click();
+  /*
+    Every restriction the form owns, listed.
+
+    Four arrived after this expectation was written - contact deletion, data
+    export, integrations and organization settings - and the object was never
+    updated, so this has failed on four extra keys ever since. Listing all of
+    them is deliberate rather than switching to a partial match: a restriction
+    the form stops submitting is a permission silently not applied, and an
+    assertion that ignores unknown keys would not notice a new one going
+    unsent either. This failing when a flag is added is the correct signal.
+
+    restrictWorkspaceSettings keeps its name because it is a database column;
+    the vocabulary commit renamed its message and left the column alone.
+  */
   await expect.poll(() => saved).toEqual({
     role: 'AGENT', primaryTeamId: 'team-sales', teamIds: ['team-sales'], isActive: true,
     restrictContactVisibility: true, contactVisibilityScope: 'TEAM', restrictCalls: false,
     restrictWorkflows: true, maskPhoneAndEmail: false,
+    restrictContactDeletion: false, restrictDataExport: false,
+    restrictIntegrations: false, restrictWorkspaceSettings: false,
   });
 });
 

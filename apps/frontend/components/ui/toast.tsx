@@ -153,7 +153,31 @@ export function notifyWithUndo(message: string, options: ToastOptions) {
     duration: windowMs,
     action: {
       label: labels.undo,
-      onClick: () => { void performUndo(); },
+      /*
+        preventDefault, and it is load-bearing rather than tidy.
+
+        Sonner removes a toast once its action handler returns, unless the
+        handler prevents the default — see the library's own sequence:
+        `action.onClick(event); if (event.defaultPrevented) return; deleteToast()`.
+
+        This toast must survive being pressed. performUndo replaces it IN PLACE,
+        by id, first with progress and then either with success or with a
+        failure that carries duration: Infinity because a failed undo which
+        fades out leaves somebody believing it worked. Without this line the
+        replacement renders and sonner's queued removal unmounts it about
+        150ms later, so the failure message existed for roughly one frame.
+
+        That is not a hypothetical: it is what made the P19 certification flaky.
+        The assertion passed when it happened to land inside that frame — which
+        it did when the spec ran alone and often did not when the machine was
+        busy — so the suite reported one, two or three red cells depending on
+        load. The bug was in this component the whole time, and the timing was
+        only what decided whether a test caught it.
+      */
+      onClick: (event) => {
+        event.preventDefault();
+        void performUndo();
+      },
     },
     onAutoClose: () => { settle(); },
     onDismiss: () => { settle(); },
@@ -232,8 +256,13 @@ export function notifyWithUndo(message: string, options: ToastOptions) {
         id,
         duration: Infinity,
         action: {
+          // Same reason as the undo action above: pressing retry must not be
+          // what removes the message explaining why the last attempt failed.
           label: labels.retry,
-          onClick: () => { void performUndo(); },
+          onClick: (event) => {
+            event.preventDefault();
+            void performUndo();
+          },
         },
       });
     }

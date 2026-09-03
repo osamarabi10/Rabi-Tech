@@ -58,8 +58,22 @@ Design rules do not catch the failures this repository actually has. These do.
                      test:secrets           test:growth-widgets
                      test:meta-templates    test:collaborators
   cd apps/frontend   npm run check:i18n     check:mojibake
+                     npm run test:e2e         # the whole Playwright suite
   both               npx tsc --noEmit
   ```
+
+  `test:e2e` needs `RABITECH_E2E_SESSION` and a production build, and it is the
+  slowest of these by an order of magnitude. It is in the list anyway.
+
+  It was added after `settings-responsive` sat at 19 failed / 37 passed across
+  three commits. Nothing in this list ran it, so nothing said so — the number
+  was carried forward in report prose each time, which is a person remembering
+  rather than a gate checking. Both causes turned out to be small: an assertion
+  counting anonymous checkboxes, which broke the day a second toggle shipped,
+  and an expected payload missing four restriction flags added later. Either
+  would have been a one-line fix on the day it appeared. The cost of finding out
+  late is not the fix, it is that nobody can tell a new failure from the
+  nineteen already there.
 
   A prompt may exclude one, and the exclusion must be **stated and reasoned** in
   the report — never silent, and never by omission.
