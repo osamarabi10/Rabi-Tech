@@ -6448,6 +6448,147 @@ async function databaseAudits() {
       assert.equal(byCode.get('ENTERPRISE'), null, 'ENTERPRISE is deliberately unlimited');
     });
 
+    await check('workspace: the workspace role is actually read, not merely stored', async () => {
+      /*
+        WorkspaceMember.role governs member management and nothing else yet, and
+        that is only true if something reads it.
+
+        Before this commit it was written by four paths and read by none —
+        auth.middleware selects { id: true }, existence only. An editable role
+        that governs nothing is not a harmless placeholder: it is a control that
+        lies, showing somebody as VIEWER in a workspace where they still hold
+        every power. This asserts the one place that consults it.
+      */
+      const members = fs.readFileSync(
+        path.join(ROOT, 'src', 'modules', 'workspaces', 'members.routes.ts'), 'utf8');
+
+      assert.ok(/select:\s*\{\s*role:\s*true\s*\}/.test(members),
+        'membership access must SELECT the role, not just check existence');
+      assert.ok(/membership\.role\s*!==\s*'ADMIN'/.test(members),
+        'the workspace role must decide whether the caller may manage members');
+    });
+
+    await check('workspace: the organization-admin override is audited as an override', async () => {
+      /*
+        The override lets an organization ADMIN manage membership of a workspace
+        they do not belong to. Without it an admin can set themselves VIEWER in a
+        workspace they created and lock everyone out of administering it, which
+        is recoverable only by editing the database.
+
+        It is bounded by two things, and this checks the second. The first is
+        that it grants membership management and never data — no contact, no
+        conversation, no message — because those come from the claim and this
+        surface does not touch it. The second is that every override action is
+        distinguishable in the audit log from the same action by a member. An
+        escape hatch nobody can see is indistinguishable from a hole.
+      */
+      const members = fs.readFileSync(
+        path.join(ROOT, 'src', 'modules', 'workspaces', 'members.routes.ts'), 'utf8');
+
+      for (const action of ['member-added', 'member-role-changed', 'member-removed']) {
+        assert.ok(members.includes(`workspace.${action}.org-admin-override`),
+          `${action} must write a distinct audit action when taken as an override`);
+      }
+
+      // And the override must never be the thing that grants data. If this file
+      // ever starts setting the scope's workspace, the boundary is gone.
+      assert.ok(!/setScopeWorkspaceId/.test(members),
+        'the membership surface must not set workspace scope: it manages who belongs, never what they see');
+    });
+
+    await check('workspace: releasing a removed member\'s work targets THEIR workspace', async () => {
+      /*
+        The scope extension injects workspaceId into updateMany LAST, so it
+        overwrites an explicit one in the same where clause. A bare
+
+          conversation.updateMany({ where: { workspaceId: target, assignedToId } })
+
+        therefore becomes the CALLER's workspace. For the organization-admin
+        override — whose entire purpose is acting on a workspace you are not in
+        — that releases threads in the wrong workspace while the audit line
+        names the right one. Found by asking what the override could touch, not
+        by a failing test.
+
+        The removal path must open a scope on the target workspace instead of
+        naming it somewhere the extension will overwrite.
+      */
+      const members = fs.readFileSync(
+        path.join(ROOT, 'src', 'modules', 'workspaces', 'members.routes.ts'), 'utf8');
+
+      assert.ok(/runAsOrganization\([\s\S]{0,600}?workspaceId: workspace\.id/.test(members),
+        'the unassign must run in a scope opened on the target workspace');
+      assert.ok(!/where: \{ workspaceId: workspace\.id, assignedToId/.test(members),
+        'naming workspaceId in that where clause is silently overwritten by the extension');
+    });
+
+    await check('workspace: a second membership does not consume a second seat', async () => {
+      /*
+        The seat guarantee, asserted through the surface that can now create
+        memberships freely rather than only through the extension's model list.
+
+        Someone working in five workspaces is one User row and one seat. The
+        meter reads prisma.user.count, and this asserts the new endpoints did
+        not quietly introduce a membership count anywhere near billing.
+      */
+      const before = await runAsOrganization(orgA.organizationId, () =>
+        scoped.user.count({ where: { isActive: true } }));
+
+      // A new PERSON costs a seat. Asserted first, so the second half below
+      // is a contrast rather than a check that could pass by measuring
+      // nothing - if the count never moved for either, this would be green
+      // while the meter was broken.
+      await raw.identity.create({ data: { id: 'bleed_identity_seat', email: 'seat@rabitech.test', passwordHash: 'not-used' } });
+      await fixtureWriter.user.create({
+        data: { id: 'bleed_user_seat', organizationId: orgA.organizationId, identityId: 'bleed_identity_seat', name: 'Seat Probe', role: 'AGENT' },
+      });
+      const afterUser = await runAsOrganization(orgA.organizationId, () =>
+        scoped.user.count({ where: { isActive: true } }));
+      assert.equal(afterUser, before + 1, 'a new active user must consume a seat');
+
+      // The SAME person in a second workspace costs nothing more.
+      await fixtureWriter.workspaceMember.create({
+        data: {
+          id: 'bleed_wsm_seatcheck',
+          organizationId: orgA.organizationId,
+          workspaceId: wsSecond,
+          userId: 'bleed_user_seat',
+          role: 'VIEWER',
+        },
+      });
+
+      const after = await runAsOrganization(orgA.organizationId, () =>
+        scoped.user.count({ where: { isActive: true } }));
+      assert.equal(after, afterUser, 'a second workspace membership must not change the seat count');
+
+      const entitlements = fs.readFileSync(
+        path.join(ROOT, 'src', 'modules', 'usage', 'entitlements.ts'), 'utf8');
+      assert.ok(!/workspaceMember\.count/.test(entitlements),
+        'nothing in the meter may count memberships');
+    });
+
+    await check('workspace: membership cannot exist without a user in the organization', async () => {
+      /*
+        D-39 in the other direction.
+
+        That defect was a User with no membership, which locked them out. This
+        surface can create memberships directly, so the inverse becomes possible:
+        a membership naming somebody who is not in this organization. The
+        composite foreign key refuses it at the database — the same mechanism
+        that makes the workspace axis structural rather than conventional.
+      */
+      await assert.rejects(() =>
+        fixtureWriter.workspaceMember.create({
+          data: {
+            id: 'bleed_wsm_ghost',
+            organizationId: orgA.organizationId,
+            workspaceId: wsSecond,
+            userId: orgB.userId,
+            role: 'AGENT',
+          },
+        }),
+      );
+    });
+
     await check('workspace: every organization has exactly one default workspace', async () => {
       // The partial unique index from commit 1, asserted as behaviour. The
       // second workspace above was created with isDefault false; a second true

@@ -892,6 +892,26 @@ const D: Dict = {
   'شاركه مع الفريق': { he: 'שיתוף עם הצוות', en: 'Share with the team' },
   'رح يشوفوه كل أعضاء المؤسسة بصندوق الوارد عندهم.': { he: 'כל חברי הארגון יראו אותה בתיבה שלהם.', en: 'Everyone in the organization will see it in their own inbox.' },
   'فريق': { he: 'צוות', en: 'Team' },
+  // Workspace membership.
+  'أعضاء مساحة العمل': { he: 'חברי סביבת העבודה', en: 'Workspace members' },
+  'إدارة أعضاء مساحة العمل': { he: 'ניהול חברי סביבת העבודה', en: 'managing workspace members' },
+  'أدمن مساحة العمل': { he: 'מנהל סביבת העבודה', en: 'a workspace administrator' },
+  'Workspace members': { ar: 'أعضاء مساحة العمل', he: 'חברי סביבת העבודה', en: 'Workspace members' },
+  'Who can work in': { ar: 'مين بشتغل في', he: 'מי עובד ב', en: 'Who can work in' },
+  'Add a member': { ar: 'إضافة عضو', he: 'הוספת חבר', en: 'Add a member' },
+  'Choose someone': { ar: 'اختار حدا', he: 'בחירת אדם', en: 'Choose someone' },
+  'Workspace role': { ar: 'الدور بمساحة العمل', he: 'תפקיד בסביבת העבודה', en: 'Workspace role' },
+  'you': { ar: 'إنت', he: 'אתה', en: 'you' },
+  'Remove': { ar: 'إزالة', he: 'הסרה', en: 'Remove' },
+  'Leave': { ar: 'مغادرة', he: 'עזיבה', en: 'Leave' },
+  'Could not add the member': { ar: 'ما زبطت إضافة العضو', he: 'הוספת החבר נכשלה', en: 'Could not add the member' },
+  'Could not change the role': { ar: 'ما زبط تغيير الدور', he: 'שינוי התפקיד נכשל', en: 'Could not change the role' },
+  'Could not remove the member': { ar: 'ما زبطت إزالة العضو', he: 'הסרת החבר נכשלה', en: 'Could not remove the member' },
+  'Removed. Conversations released:': { ar: 'تمت الإزالة. المحادثات اللي تحررت:', he: 'הוסר. שיחות ששוחררו:', en: 'Removed. Conversations released:' },
+  'This organization has one workspace, so everyone in it is already a member. Team members are managed in organization settings.': { ar: 'المؤسسة عندها مساحة عمل وحدة، فكل اللي فيها أعضاء أصلاً. أعضاء الفريق بتتحكم فيهم من إعدادات المؤسسة.', he: 'לארגון יש סביבת עבודה אחת, כך שכל מי שבו כבר חבר. חברי הצוות מנוהלים בהגדרות הארגון.', en: 'This organization has one workspace, so everyone in it is already a member. Team members are managed in organization settings.' },
+  'You are acting as organization administrator. You are not a member of this workspace, and this does not give you access to its contacts or conversations — only to who belongs to it.': { ar: 'إنت عم تتصرف كمدير للمؤسسة. إنت مش عضو بهذي المساحة، وهاد ما بيعطيك وصول لجهات الاتصال أو المحادثات تبعها — بس لمين ينتمي إلها.', he: 'אתה פועל כמנהל הארגון. אינך חבר בסביבת עבודה זו, וזה אינו מקנה גישה לאנשי הקשר או לשיחות שלה — רק למי משתייך אליה.', en: 'You are acting as organization administrator. You are not a member of this workspace, and this does not give you access to its contacts or conversations — only to who belongs to it.' },
+  'A workspace role decides who manages this workspace’s members. Everything else still follows the organization role.': { ar: 'الدور بمساحة العمل بيحدد مين بيدير أعضاءها. كل إشي تاني بضل حسب الدور بالمؤسسة.', he: 'תפקיד בסביבת העבודה קובע מי מנהל את חבריה. כל השאר עדיין נקבע לפי התפקיד בארגון.', en: 'A workspace role decides who manages this workspace’s members. Everything else still follows the organization role.' },
+  'Someone who is not in the organization yet has to be invited first, in organization settings. They join the default workspace, and can then be added here.': { ar: 'اللي مش بالمؤسسة لازم تبعتله دعوة أول من إعدادات المؤسسة. بينضم للمساحة الأساسية، وبعدين بتقدر تضيفه هون.', he: 'מי שעדיין לא בארגון צריך לקבל הזמנה תחילה, בהגדרות הארגון. הוא מצטרף לסביבת העבודה המשמשת כברירת מחדל, ואז אפשר להוסיף אותו כאן.', en: 'Someone who is not in the organization yet has to be invited first, in organization settings. They join the default workspace, and can then be added here.' },
   // The workspace: a division inside an organization. Called a branch in 2b
   // only because مساحة العمل then meant the organization; this commit freed
   // that phrase, so the interface says what the schema says.

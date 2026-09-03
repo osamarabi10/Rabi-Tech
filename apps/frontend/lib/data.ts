@@ -3005,3 +3005,56 @@ export async function activateWorkspace(id: string): Promise<{ token: string; wo
   }
   return data;
 }
+
+// ---------- workspace members ----------
+
+export type WorkspaceMember = {
+  userId: string;
+  name: string;
+  isActive: boolean;
+  organizationRole: string;
+  workspaceRole: string;
+  joinedAt: string;
+};
+
+export type WorkspaceMembersResponse = {
+  workspace: { id: string; name: string; isDefault: boolean };
+  members: WorkspaceMember[];
+  candidates: Array<{ id: string; name: string; role: string }>;
+  canManage: boolean;
+  /** True when the caller is an organization admin who is NOT a member here. */
+  actingAsOverride: boolean;
+  selfUserId: string;
+  isDefaultWorkspace: boolean;
+};
+
+export async function fetchWorkspaceMembers(workspaceId: string): Promise<WorkspaceMembersResponse> {
+  const { data } = await api.get(`/api/workspaces/${workspaceId}/members`);
+  return data;
+}
+
+export async function addWorkspaceMember(workspaceId: string, userId: string, role: string): Promise<void> {
+  await api.post(`/api/workspaces/${workspaceId}/members`, { userId, role });
+}
+
+export async function setWorkspaceMemberRole(workspaceId: string, userId: string, role: string): Promise<void> {
+  await api.patch(`/api/workspaces/${workspaceId}/members/${userId}`, { role });
+}
+
+/**
+ * Remove a member.
+ *
+ * A self-removal returns a re-minted token: leaving the workspace you are in
+ * invalidates your own claim, and without replacing it the next request would
+ * 403 you out of the product rather than out of the workspace.
+ */
+export async function removeWorkspaceMember(
+  workspaceId: string,
+  userId: string,
+): Promise<{ unassignedConversations: number }> {
+  const { data } = await api.delete(`/api/workspaces/${workspaceId}/members/${userId}`);
+  if (typeof window !== 'undefined' && data?.token) {
+    localStorage.setItem('rabitech_token', data.token);
+  }
+  return data;
+}

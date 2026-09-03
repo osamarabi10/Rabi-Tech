@@ -42,6 +42,9 @@ const GROUPS: { id: SettingsRailGroupId; items: SettingsRailItem[] }[] = [
     id: 'users',
     items: [
       { href: '/settings/users', label: 'أعضاء الفريق', icon: Users },
+      // Distinct from the organization user list above: that one is who is in
+      // the company, this one is who works in this workspace.
+      { href: '/settings/workspace-members', label: 'أعضاء مساحة العمل', icon: Users },
       { href: '/settings/teams', label: 'الفرق', icon: ContactRound },
     ],
   },

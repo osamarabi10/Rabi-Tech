@@ -23,9 +23,14 @@ import { verifyToken } from '../auth/auth.middleware';
 import { requireAdmin } from '../../middleware/rbac.middleware';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import logger from '../../lib/logger';
+import memberRoutes from './members.routes';
 
 const router = Router();
 router.use(verifyToken);
+
+// Membership lives in its own file, mounted here so it inherits verifyToken
+// and the /api/workspaces prefix rather than declaring either again.
+router.use('/', memberRoutes);
 
 /**
  * The workspaces this user may work in.
