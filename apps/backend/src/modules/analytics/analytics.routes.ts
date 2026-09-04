@@ -556,4 +556,193 @@ router.get('/summary', requirePermission('analytics:read'), async (req, res) => 
   }
 });
 
+/*
+ * ── Dashboard widgets ────────────────────────────────────────────────────────
+ *
+ * Three endpoints rather than one, and that is deliberate. The dashboard renders
+ * six cards that fail independently, each with its own retry. One combined
+ * response would collapse that: a single slow or failing query would blank four
+ * cards at once and the operator would lose the ability to tell which datum is
+ * missing. Independent resources are what make independent failure possible.
+ *
+ * ## Blocked contacts are excluded, and this is the whole point
+ *
+ * Respond.io's dashboard counts assigned contacts differently from its inbox:
+ * the dashboard includes blocked contacts and the inbox does not, so the two
+ * screens disagree about the same number and neither says why.
+ *
+ * Both endpoints below filter `contact: { blockedAt: null }`. A blocked number
+ * is one an operator has decided not to deal with; counting it as somebody's
+ * workload overstates every queue on the screen and makes "assigned to me"
+ * unactionable.
+ *
+ * Worth recording honestly: our own conversation list does NOT filter on
+ * blockedAt today, and blocking a contact does not archive their threads. So
+ * this endpoint is stricter than GET /api/conversations, and until that list is
+ * brought into line the two can differ for an organization that has blocked
+ * someone with an open thread. That is a smaller and more visible gap than the
+ * one being avoided, and it is written here rather than discovered later.
+ */
+
+/** Start of the organization's local day, N days back. */
+function localDayStart(offsetMinutes: number, daysBack = 0): Date {
+  const now = new Date();
+  const shifted = new Date(now.getTime() + offsetMinutes * 60_000);
+  shifted.setUTCHours(0, 0, 0, 0);
+  shifted.setUTCDate(shifted.getUTCDate() - daysBack);
+  return new Date(shifted.getTime() - offsetMinutes * 60_000);
+}
+
+/**
+ * GET /api/analytics/dashboard/conversation-buckets
+ *
+ * Opened and closed for today, yesterday, the last 14 days and the last 30.
+ * Buckets are computed against the organization's own day boundary, not UTC —
+ * "today" on a screen in Jerusalem must mean today there.
+ */
+router.get('/dashboard/conversation-buckets', requirePermission('analytics:read'), async (req, res) => {
+  try {
+    const offset = await organizationOffsetMinutes();
+    const todayStart = localDayStart(offset, 0);
+    const yesterdayStart = localDayStart(offset, 1);
+    const fourteenStart = localDayStart(offset, 13);
+    const thirtyStart = localDayStart(offset, 29);
+
+    const opened = (gte: Date, lt?: Date) =>
+      prisma.conversation.count({ where: { createdAt: lt ? { gte, lt } : { gte } } });
+    const closed = (gte: Date, lt?: Date) =>
+      prisma.conversation.count({ where: { resolvedAt: lt ? { gte, lt } : { gte } } });
+
+    const [
+      openedToday, closedToday,
+      openedYesterday, closedYesterday,
+      opened14, closed14,
+      opened30, closed30,
+    ] = await Promise.all([
+      opened(todayStart), closed(todayStart),
+      opened(yesterdayStart, todayStart), closed(yesterdayStart, todayStart),
+      opened(fourteenStart), closed(fourteenStart),
+      opened(thirtyStart), closed(thirtyStart),
+    ]);
+
+    res.json({
+      today: { opened: openedToday, closed: closedToday },
+      yesterday: { opened: openedYesterday, closed: closedYesterday },
+      last14Days: { opened: opened14, closed: closed14 },
+      last30Days: { opened: opened30, closed: closed30 },
+    });
+  } catch (err) {
+    logger.error('dashboard conversation buckets failed', { error: String(err), requestId: (req as any).id });
+    res.status(500).json({ error: 'فشل جلب عدادات المحادثات', requestId: (req as any).id });
+  }
+});
+
+/**
+ * GET /api/analytics/dashboard/waiting-contacts
+ *
+ * Contacts with an open conversation, longest-waiting first — the order that
+ * makes the widget actionable, because the top row is the person who has been
+ * waiting the longest rather than whoever wrote most recently.
+ *
+ * `waitingSinceMinutes` measures from the last inbound message, falling back to
+ * conversation creation for a thread that has none.
+ */
+router.get('/dashboard/waiting-contacts', requirePermission('analytics:read'), async (req, res) => {
+  try {
+    const rows = await prisma.conversation.findMany({
+      where: {
+        status: { not: 'RESOLVED' },
+        isArchived: false,
+        contact: { blockedAt: null },
+      },
+      select: {
+        id: true,
+        lastMessageAt: true,
+        createdAt: true,
+        contact: { select: { id: true, name: true, phone: true, profilePic: true } },
+        assignee: { select: { id: true, name: true } },
+        messages: {
+          where: { direction: 'INBOUND' },
+          orderBy: { timestamp: 'desc' },
+          take: 1,
+          select: { body: true, timestamp: true },
+        },
+      },
+      take: 200,
+    });
+
+    const now = Date.now();
+    const list = rows.map((row) => {
+      const last = row.messages[0];
+      const since = last?.timestamp ?? row.lastMessageAt ?? row.createdAt;
+      return {
+        conversationId: row.id,
+        contactId: row.contact.id,
+        name: row.contact.name || row.contact.phone,
+        profilePic: row.contact.profilePic,
+        lastMessage: last?.body ?? null,
+        waitingSinceMinutes: Math.max(0, Math.round((now - new Date(since).getTime()) / 60_000)),
+        assigneeName: row.assignee?.name ?? null,
+      };
+    });
+
+    list.sort((a, b) => b.waitingSinceMinutes - a.waitingSinceMinutes);
+    res.json({ contacts: list.slice(0, 8), total: list.length });
+  } catch (err) {
+    logger.error('dashboard waiting contacts failed', { error: String(err), requestId: (req as any).id });
+    res.status(500).json({ error: 'فشل جلب المحادثات المنتظرة', requestId: (req as any).id });
+  }
+});
+
+/**
+ * GET /api/analytics/dashboard/team
+ *
+ * Every user with their team, presence and the number of live conversations
+ * assigned to them. The count excludes blocked contacts for the reason given at
+ * the top of this block, and excludes resolved and archived threads so it reads
+ * as current workload rather than lifetime volume.
+ */
+router.get('/dashboard/team', requirePermission('analytics:read'), async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        isAway: true,
+        primaryTeam: { select: { id: true, name: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    const counts = await prisma.conversation.groupBy({
+      by: ['assignedToId'],
+      where: {
+        status: { not: 'RESOLVED' },
+        isArchived: false,
+        assignedToId: { not: null },
+        contact: { blockedAt: null },
+      },
+      _count: { _all: true },
+    });
+    const byUser = new Map(counts.map((c) => [c.assignedToId as string, c._count._all]));
+
+    res.json({
+      members: users.map((u) => ({
+        id: u.id,
+        name: u.name,
+        role: u.role,
+        teamId: u.primaryTeam?.id ?? null,
+        teamName: u.primaryTeam?.name ?? null,
+        status: u.isAway ? 'away' : 'available',
+        assignedCount: byUser.get(u.id) ?? 0,
+      })),
+    });
+  } catch (err) {
+    logger.error('dashboard team failed', { error: String(err), requestId: (req as any).id });
+    res.status(500).json({ error: 'فشل جلب بيانات الفريق', requestId: (req as any).id });
+  }
+});
+
 export default router;

@@ -37,27 +37,36 @@ to.
 Worth stating before anything else, because it is the mistake that wastes a
 day and leaves no trace.
 
-`http://localhost:18080` is the compose `frontend` service. It serves a
-**Docker image built at some point in the past**. It does not read the working
-tree, it does not rebuild when you edit a file, and it will happily keep
-serving months-old source while your editor, your gates and your test suite
-all agree the code has changed. There is no warning, because from the
+**Both app containers** -- `rabitech-frontend-1` and `rabitech-backend-1` --
+serve **Docker images built at some point in the past**. Neither reads the
+working tree, neither rebuilds when you edit a file, and each will happily
+keep serving months-old source while your editor, your gates and your test
+suite all agree the code has changed. There is no warning, because from the
 browser's point of view nothing is wrong -- the app loads and looks correct.
 
-It happened here: the image predated the UI vocabulary rename, so the settings
-rail still said "Workspace information" long after the rename shipped and a
-full Playwright suite had gone green on it.
+Both happened here. The frontend image predated the UI vocabulary rename, so
+the settings rail still said "Workspace information" long after the rename
+shipped and a full Playwright suite had gone green on it. The backend image
+then returned `{"error":"Not found"}` for three dashboard endpoints that were
+written, typechecked and sitting on disk.
 
-**For local development, use the dev server:**
+**For local development, use the dev servers:**
 
 ```bash
 docker compose stop frontend        # release the port; leave the rest running
 cd apps/frontend && npm run dev     # http://localhost:8080
+
+docker compose stop backend
+cd apps/backend && npm run dev      # http://localhost:4000
 ```
 
-Keep `postgres`, `redis`, `backend` and `openwa` up. The dev server proxies
-`/api/*`, `/health` and `/socket.io` to the backend on `:4000` via the
-rewrites in `next.config.js`, so nothing else needs changing.
+Keep `postgres`, `redis` and `openwa` up. The frontend dev server proxies
+`/api/*`, `/health` and `/socket.io` to whatever is answering on `:4000` via
+the rewrites in `next.config.js`, so nothing else needs changing.
+
+The backend is the easier one to be fooled by, because it has no second port:
+`:4000` is served from source or from an image depending only on which is
+running. The URL cannot tell you which; `docker compose ps` can.
 
 `localhost:3000` serves nothing in this repository -- it is the Next default,
 and this project does not use it.
@@ -67,6 +76,8 @@ and this project does not use it.
 | `localhost:8080` | `next dev`, compiled per request | **yes** |
 | `localhost:18080` | compose `frontend`, a built image | no, until rebuilt |
 | `localhost:8081` | `next start` during `test:e2e` | only after `npm run build` |
+| `localhost:4000`, container stopped | `npm run dev` in `apps/backend` | **yes** |
+| `localhost:4000`, container running | compose `backend`, a built image | no, until rebuilt |
 
 ---
 

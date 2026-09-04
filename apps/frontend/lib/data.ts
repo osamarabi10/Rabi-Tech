@@ -145,6 +145,8 @@ export type Campaign = {
   createdAt: string;
   date: string;
   scheduledAt: string | null;
+  /** Present because the list endpoint uses `include: { session: true }`. */
+  session?: { id: string; label: string | null; phoneNumber: string | null } | null;
 };
 
 export type Contact = {
@@ -1042,6 +1044,62 @@ export type DashboardSummary = {
   activeSessions: number;
   timestamp: string;
 };
+
+/** Opened and closed counts for one window. */
+export type ConversationBucket = { opened: number; closed: number };
+
+export type ConversationBuckets = {
+  today: ConversationBucket;
+  yesterday: ConversationBucket;
+  last14Days: ConversationBucket;
+  last30Days: ConversationBucket;
+};
+
+export type WaitingContact = {
+  conversationId: string;
+  contactId: string;
+  name: string;
+  profilePic: string | null;
+  lastMessage: string | null;
+  waitingSinceMinutes: number;
+  assigneeName: string | null;
+};
+
+export type WaitingContacts = { contacts: WaitingContact[]; total: number };
+
+export type DashboardTeamMember = {
+  id: string;
+  name: string;
+  role: string;
+  teamId: string | null;
+  teamName: string | null;
+  status: 'away' | 'available';
+  assignedCount: number;
+};
+
+export type DashboardTeam = { members: DashboardTeamMember[] };
+
+/*
+  Three requests, not one.
+
+  The dashboard's six cards each fail on their own and each carry their own
+  retry. Fetching them together would undo that: one failure would blank several
+  cards at once, and the operator would be told less than they are told now.
+*/
+export async function fetchConversationBuckets(): Promise<ConversationBuckets> {
+  const { data } = await api.get('/api/analytics/dashboard/conversation-buckets');
+  return data;
+}
+
+export async function fetchWaitingContacts(): Promise<WaitingContacts> {
+  const { data } = await api.get('/api/analytics/dashboard/waiting-contacts');
+  return data;
+}
+
+export async function fetchDashboardTeam(): Promise<DashboardTeam> {
+  const { data } = await api.get('/api/analytics/dashboard/team');
+  return data;
+}
 
 export async function fetchDashboardSummary(): Promise<DashboardSummary> {
   const { data } = await api.get('/api/analytics/summary');

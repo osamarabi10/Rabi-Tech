@@ -281,28 +281,98 @@ Design rules do not catch the failures this repository actually has. These do.
   the thing it is measured against, that is a decision, not an accident.
   Consent above all.
 
-- **`:18080` is a built image and never reflects the working tree.** The
-  compose `frontend` service serves a Docker image baked at build time. It
-  does not read `apps/frontend`, it does not rebuild when you edit, and it
-  keeps serving whatever source it was built from until the image is rebuilt.
-  Nothing warns you: the app loads, it looks like the product, and it is
-  simply old.
+- **Never hand-mint a session token to reach real data.** A JWT signed
+  directly with `JWT_SECRET` can be made to authenticate, and it is the wrong
+  way to see the product for two reasons.
 
-  This cost a day of believing no change was taking effect. The image
-  predated the vocabulary rename, so its settings rail still read "Workspace
-  information" while the working tree, every gate and a green e2e suite all
-  said "Organization information". Every one of those was right. The browser
-  was pointed at a different build.
+  It is a shape no login produces. `auth.middleware.ts` tolerates a token with
+  no `sessionId`, so a hand-made one passes — down a branch kept for legacy
+  tokens. Anything verified through it was verified on a path no user takes,
+  which makes the verification worth less than it looks.
 
-  **Local development uses the dev server**, which compiles from the working
-  tree on every request:
+  And `JWT_SECRET` sits in `.env` beside credentials that are in public git
+  history and still unrotated. Reaching for it normalises handling the one
+  file that must never be treated casually.
 
-      docker compose stop frontend        # free the port, keep the rest up
-      cd apps/frontend && npm run dev     # http://localhost:8080
+  When real data is needed, seed a user through the real signup path and log
+  in as that user.
 
-  Leave `postgres`, `redis`, `backend` and `openwa` running — the dev server
-  reaches the backend on `:4000` through the rewrites in `next.config.js`.
-  `localhost:3000` is nothing in this repo; the dev server is on 8080.
+- **A new title that contains an existing title breaks locators elsewhere.**
+  Playwright matches accessible names by substring, so adding a heading called
+  "Contacts with open conversations" to a screen that already had "Contacts"
+  made `getByRole('heading', { name: 'Contacts' })` resolve to two elements.
+  The pre-existing test then failed on strict mode rather than on absence,
+  which reads as "the card is gone" and is not.
+
+  Two halves to this. Pin the locator with `exact: true` where a name is a
+  prefix of another. And check for the collision when choosing the title,
+  because the failure lands in a test nobody was editing, on a screen the new
+  work did not touch, and the error names ambiguity rather than the cause.
+
+- **Order in a list is not a meaning.** The dashboard funnel headline took the
+  last element of the lifecycle stage array as the funnel's end and reported
+  "0% reached Unqualified" against real data. The stages run Contacted,
+  Qualified, Lead, Customer, Unqualified — the terminal stage is not the final
+  element, and nothing about the array says which one it is. The model already
+  carried an `isWon` flag, and the frontend type already exposed it.
+
+  A positional assumption about domain data is invisible to `tsc`, survives
+  every gate, and renders a confident wrong number. Where the domain has a
+  flag, read the flag; where it does not, the assertion has to name the member
+  it depends on, so reordering the list fails loudly instead of quietly
+  changing the answer.
+
+- **Before adding a widget, ask whether a card already answers its question.**
+  A Team Members widget was built onto a dashboard that already had a Team
+  Members card. Both rendered, correctly, with the same title, on one screen.
+  Neither `tsc` nor any gate has an opinion about a screen saying the same
+  thing twice — only opening the page does.
+
+  The old card counted active users; the new one answers that and four more
+  questions, so the old one was deleted rather than kept beside it. Deleting it
+  also orphaned its request, which is the second half of the same check: a
+  panel that is gone should not still be fetching.
+
+- **Both compose app containers are built images and neither reflects the
+  working tree.** `rabitech-frontend-1` and `rabitech-backend-1` each serve a
+  Docker image baked at build time. Neither reads `apps/`, neither rebuilds
+  when you edit, and each keeps serving whatever source it was built from
+  until its image is rebuilt. Nothing warns you: the app loads, it looks like
+  the product, and it is simply old.
+
+  | Port | Serves | From |
+  |---|---|---|
+  | `:8080` | `next dev` | **the working tree**, compiled per request |
+  | `:18080` | compose `frontend` | a built image, stale until rebuilt |
+  | `:4000` (container stopped) | `npm run dev` in `apps/backend` | **the working tree** |
+  | `:4000` (container running) | compose `backend` | a built image, stale until rebuilt |
+
+  Note that the backend has no second port: `:4000` serves from source or from
+  an image depending only on which one is running, so the URL cannot tell you
+  which you are talking to. `docker compose ps` can.
+
+  This cost a day on the frontend, and then repeated on the backend inside the
+  same session, which is the reason this rule now names both. The frontend
+  image predated the vocabulary rename, so its settings rail still read
+  "Workspace information" while the working tree, every gate and a green e2e
+  suite all said "Organization information". Every one of those was right.
+  The browser was pointed at a different build. The backend image then did
+  the same thing to three freshly written dashboard endpoints, which returned
+  `{"error":"Not found"}` while `tsc` was clean and the routes were on disk.
+
+  **Local development uses the dev servers**, which compile from the working
+  tree:
+
+      docker compose stop frontend        # then, from apps/frontend:
+      npm run dev                         # http://localhost:8080
+
+      docker compose stop backend         # then, from apps/backend:
+      npm run dev                         # http://localhost:4000
+
+  Leave `postgres`, `redis` and `openwa` running. The frontend dev server
+  reaches the backend on `:4000` through the rewrites in `next.config.js`,
+  whichever backend is answering there. `localhost:3000` is nothing in this
+  repo; the frontend dev server is on 8080.
 
   The same confusion in a different costume is `test:e2e`, which serves a
   production build through `next start`. That one is now enforced by
