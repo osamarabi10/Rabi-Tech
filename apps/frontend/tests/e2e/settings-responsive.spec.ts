@@ -1212,6 +1212,23 @@ test('two-factor login accepts the challenge step and exposes recovery-code fall
     }
     await route.fulfill({ json: {} });
   });
+  // The login screen probes the backend, and the probe is not under /api.
+  //
+  // Every other request this test makes is mocked by the catch-all api rule
+  // above. This one escapes it: the login page calls api.get("/health"), the
+  // browser baseURL is same-origin, so the path is "/health" with no /api
+  // segment, and next.config.js rewrites it straight to the backend on :4000.
+  //
+  // When nothing answers there the probe rejects, serverOk becomes false, and
+  // the page renders Sign in permanently disabled - so this test, which asserts
+  // a fully mocked two-factor flow, could only pass on a machine that happened
+  // to be running the backend, which in turn needs Redis, which needs Docker.
+  // It failed for that reason and nothing else, while reporting a click timeout.
+  //
+  // Mocking it here makes the suite hermetic. A green run with Docker stopped
+  // is the proof. Written with line comments deliberately: the glob patterns
+  // this paragraph needs to quote contain the block-comment terminator.
+  await page.route('**/health', (route) => route.fulfill({ json: { status: 'ok' } }));
 
   await page.setViewportSize({ width: 375, height: 812 });
   await page.addInitScript(() => {
