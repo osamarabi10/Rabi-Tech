@@ -7,6 +7,11 @@ const backendApiUrl =
 
 const nextConfig = {
   reactStrictMode: true,
+  // Next writes its own AGENTS.md and CLAUDE.md into apps/frontend on dev
+  // start. Disabled rather than gitignored: an ignored file still sits on disk
+  // where an agent reads it, and a near-duplicate rules file next to the real
+  // one at the repository root is the wrong-artifact hazard in its purest form.
+  agentRules: false,
   headers: async () => [
     {
       source: '/:path*',

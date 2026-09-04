@@ -1141,6 +1141,10 @@ const D: Dict = {
   // ---- Contact context tabs (U2) ----
   'التفاصيل': { he: 'פרטים', en: 'Details' },
   'الملفات': { he: 'קבצים', en: 'Files' },
+  'التكاملات': { he: 'אינטגרציות', en: 'Integrations' },
+  'مفاتيح API': { he: 'מפתחות API', en: 'API keys' },
+  'ويب هوكس': { he: 'Webhooks', en: 'Webhooks' },
+  'مصادر العملاء': { he: 'מקורות לידים', en: 'Lead sources' },
   'لا توجد ملفات في هذه المحادثة': { he: 'אין קבצים בשיחה זו', en: 'No files in this conversation' },
   'لا يوجد نشاط مسجّل': { he: 'לא נרשמה פעילות', en: 'No activity recorded' },
   'تعذّر جلب النشاط': { he: 'טעינת הפעילות נכשלה', en: 'Could not load the activity' },

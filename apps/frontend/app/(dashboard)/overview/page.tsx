@@ -210,14 +210,29 @@ export default function OverviewPage() {
       </div>
 
       {overview.status === 'loading' && (
-        <section className="mt-3 rounded-lg border border-border bg-card p-4" role="status" aria-busy="true" aria-label={t('جارٍ التحميل')}>
-          <SkeletonBlock className="h-5 w-1/4" />
-          <SkeletonBlock className="mt-4 h-52 w-full" />
+        <section className="mt-3 rounded-lg border border-border bg-card" role="status" aria-busy="true" aria-label={t('جارٍ التحميل')}>
+          {/* The header sits outside the status switch, as DashboardPanel does
+              it: a card that loses its title when it fails leaves the reader
+              unable to tell which of the six panels is the broken one. */}
+          <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+            <MessagesSquare className="size-4 text-muted-foreground" aria-hidden />
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('المحادثات عبر الزمن')}</h2>
+          </header>
+          <div className="p-4">
+            <SkeletonBlock className="h-5 w-1/4" />
+            <SkeletonBlock className="mt-4 h-52 w-full" />
+          </div>
         </section>
       )}
       {overview.status === 'error' && (
         <section className="mt-3 rounded-lg border border-border bg-card">
-          <ErrorState title={t('تعذر تحميل لوحة التحكم')} description={t('تحقق من الاتصال وحاول مرة أخرى')} retryLabel={t('حاول مرة أخرى')} onRetry={load} />
+          <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+            <MessagesSquare className="size-4 text-muted-foreground" aria-hidden />
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('المحادثات عبر الزمن')}</h2>
+          </header>
+          <div className="p-4">
+            <ErrorState title={t('تعذر تحميل لوحة التحكم')} description={t('تحقق من الاتصال وحاول مرة أخرى')} retryLabel={t('حاول مرة أخرى')} onRetry={load} />
+          </div>
         </section>
       )}
       {overview.status === 'ready' && (
