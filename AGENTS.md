@@ -153,6 +153,25 @@ Design rules do not catch the failures this repository actually has. These do.
   aimed at the wrong artifact, and not a mutation that missed its target, but a
   revert that silently deleted the subject before the check ran.
 
+- **A mutation proof on frontend code must rebuild after restoring, not only
+  restore.** `test:e2e` serves a production build through `next start`, so the
+  compiled artifact is what the certification actually tests. Restoring the
+  source leaves `.next` still asserting the mutation: byte-identical source is
+  not a current build.
+
+  The near-miss is the evidence. In 950048c0 the switcher A/B probe ended with
+  a copy of the backup over `app/(dashboard)/layout.tsx` and an "restored"
+  echo — after the e2e run, and with no rebuild. For roughly ninety seconds
+  the source had the switcher mounted and `.next` did not. The certification
+  passed only because the very next command happened to rebuild for an
+  unrelated reason. Had it not, 36/36 would have been measured against a build
+  with the feature removed — and it would still have been green, because the
+  tests that would have caught it are the ones that did not exist yet.
+
+  `check-build-freshness.js` now runs in front of Playwright inside `test:e2e`
+  and refuses a build older than its source, so this is no longer something
+  anyone has to remember.
+
 - **The thing that establishes ambient scope can never be a consumer of it.**
   Anything running before or during the establishment of an ambient value must
   name that value explicitly, because the mechanism that would supply it is the
@@ -175,6 +194,39 @@ Design rules do not catch the failures this repository actually has. These do.
   input was broken": it sends the next person to a workaround for a limitation
   that does not exist, and it gets written into a comment that outlives the
   mistake. Read the file that was actually written.
+
+- **An analysis script is an instrument, and it fails more often than the thing
+  it measures.** Two scans of the session transcripts were wrong before they
+  were right, in the two ways this repository keeps producing.
+
+  The first was written into a heredoc and lost a backslash: a character class
+  written to match either path separator arrived a backslash short, and node
+  died on an invalid regular expression. Same shell mangling as the dollar-quote
+  migration above, and the same fix — avoid the character rather than escape it
+  harder. `String.fromCharCode(92)` and a normalising split cannot be eaten, and
+  writing the script through a file tool instead of a heredoc avoids the shell
+  altogether.
+
+  Then the same character bit a third time, in a place with no shell involved.
+  The rewritten script fed the corrected text to `String.prototype.replace` as a
+  replacement **string**, and a replacement string treats a dollar followed by a
+  backtick as "everything before the match". The text being inserted was itself
+  about dollar-quote mangling, so it contained exactly that sequence, and the
+  file inlined a copy of itself — 238 lines became 477, with zero deletions, so
+  nothing looked destroyed. Pass a replacement **function** and the substitution
+  rules do not apply.
+
+  The second was quieter and would have produced a confident wrong answer. The
+  pattern matched `npm run build` anywhere in a command, so `cat`, `cp`,
+  `sed -i` and `git stash push` all came back tagged BUILD because a build
+  appeared later in the same chain. Each would have counted as evidence that a
+  build ran. Anchoring on where the match sits inside the command is what
+  separated a real build from a mention of one.
+
+  Both were caught because the output looked implausible, not because anything
+  checked them. That is the rule above applied to the tool rather than the
+  code: when a measurement disagrees with what you expect, the measurement is
+  the first suspect.
 
 - **Group failures by cause, not by symptom.** Nineteen failures were two
   causes. Grouping by error message produced three, because one of eighteen

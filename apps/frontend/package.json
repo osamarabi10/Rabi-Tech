@@ -8,7 +8,7 @@
     "check:i18n": "node scripts/check-i18n.js",
     "check:mojibake": "node scripts/check-mojibake.js",
     "check:legacy-settings-links": "node scripts/check-legacy-settings-links.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "node scripts/check-build-freshness.js && playwright test"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.12",
