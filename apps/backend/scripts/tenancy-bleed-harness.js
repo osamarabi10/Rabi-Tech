@@ -3340,8 +3340,12 @@ async function databaseAudits() {
       const extend = await as('POST', `/api/platform/subscribers/${orgA.organizationId}/billing/extend-trial`, { hours: 3 });
       assert.notEqual(extend.status, 403, 'a granted permission must not 403');
 
+      // POST .../billing/activate is deliberately absent from this list. It was
+      // the staff manual-activation route and it no longer exists, so it would
+      // now answer 404 rather than the 403 this check is about. A permission
+      // assertion against a deleted route proves nothing and would read as
+      // coverage of a surface that is gone.
       for (const [method, path, body] of [
-        ['POST', `/api/platform/subscribers/${orgA.organizationId}/billing/activate`, { planCode: 'BUSINESS' }],
         ['PATCH', `/api/platform/subscribers/${orgA.organizationId}/commercials`, { discountPercent: 90 }],
         ['PATCH', `/api/platform/subscribers/${orgA.organizationId}/status`, { status: 'SUSPENDED' }],
         ['POST', `/api/platform/subscribers/${orgA.organizationId}/gateway/suspend`, {}],

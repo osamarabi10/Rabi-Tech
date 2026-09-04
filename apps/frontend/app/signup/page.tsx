@@ -129,21 +129,10 @@ function SignupFlow() {
               payment provider configured there is no checkout, and a button
               that leads nowhere is worse than no button.
             */}
-            {result.checkoutUrl ? (
+            {result.checkoutUrl && (
               <Button asChild className="w-full">
                 <a href={result.checkoutUrl}>{t('أكمل الدفع')}</a>
               </Button>
-            ) : (
-              planCode !== 'FREE' && (
-                <div className="rounded-md border border-border bg-muted/40 p-3">
-                  <p className="text-caption leading-6 text-muted-foreground">
-                    {t('الدفع الإلكتروني لسا مش مفعّل. فريقنا رح يتواصل معك لتفعيل الباقة يدوياً.')}
-                  </p>
-                  <Button asChild variant="outline" className="mt-2 w-full">
-                    <Link href="/contact-us-to-activate">{t('تفاصيل التفعيل')}</Link>
-                  </Button>
-                </div>
-              )
             )}
           </div>
         </div>

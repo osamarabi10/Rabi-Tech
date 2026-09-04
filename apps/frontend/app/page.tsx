@@ -559,7 +559,6 @@ export default function LandingPage() {
         <div>
           <Link href="/login">{t('تسجيل الدخول')}</Link>
           <Link href="/pricing">{t('الأسعار')}</Link>
-          <Link href="/contact-us-to-activate">{t('تواصل معنا')}</Link>
         </div>
       </footer>
     </main>

@@ -112,9 +112,19 @@ async function completeIdentityLogin(identity: Identity) {
   }
 
   const membership = memberships[0];
-  if (membership.organization.status !== 'ACTIVE') {
-    return { status: 403, body: { error: 'Organization is not active' } };
-  }
+  /*
+    Organization.status is no longer a login gate.
+
+    It used to answer 403 "Organization is not active" -- a dead end with no
+    cause, no next step and no way to pay, which is exactly what a suspended
+    subscriber needed. enforceAccess runs on every authenticated tenant request
+    and answers the same question properly: with a reason code, a message, and
+    an allow-list that keeps /billing reachable so the customer can settle up.
+
+    Letting a suspended organization authenticate and then be gated there is
+    deliberate. A paywall that blocks the route to the payment page has locked
+    the customer out of giving you money.
+  */
   const user = await runAsOrganization(membership.organizationId, async () =>
     prisma.user.findUnique({
       where: { id: membership.id },

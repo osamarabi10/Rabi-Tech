@@ -120,7 +120,6 @@ export async function inspectUserInvitation(token: string) {
 export async function acceptUserInvitation(token: string, password: string, suppliedName?: string) {
   const invitation = await inspectUserInvitation(token);
   if (!invitation) throw new Error('Invitation is invalid or expired');
-  if (invitation.organization.status !== 'ACTIVE') throw new Error('Workspace is not active');
 
   return runAsOrganization(invitation.organizationId, async () => {
     const live = await prisma.userInvitation.findUnique({ where: { id: invitation.id } });

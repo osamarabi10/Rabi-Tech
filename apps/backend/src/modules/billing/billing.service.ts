@@ -8,8 +8,11 @@ import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { queueGatewayAction } from '../../workers/gateway-provisioning.queue';
 import logger from '../../lib/logger';
 import { getCurrentUsage, getMetricUsage } from '../usage/usage.service';
+// ACCESS_GRANTING_SUBSCRIPTION_STATUSES is deliberately no longer imported
+// here. Its only use was the ternary in verifyEmail that let a subscription
+// status decide whether an organization could be logged into. That coupling is
+// gone; the constant remains in trial.service for the trial logic it names.
 import {
-  ACCESS_GRANTING_SUBSCRIPTION_STATUSES,
   getTrialPlanCode,
   trialDeadlineFrom,
 } from './trial.service';
@@ -347,7 +350,12 @@ export async function createSignup(input: {
         data: {
           name: input.organizationName.trim(),
           slug,
-          status: 'PENDING',
+          // ACTIVE at creation. Activation used to require a staff member to
+          // press a button, and PENDING was how that queue was represented --
+          // an organization nobody could log into until somebody acted. Signup
+          // is self-serve now, so the status a new organization is born with is
+          // the status it keeps.
+          status: 'ACTIVE',
           // The plan actually in force, which for a trial is the plan the
           // trial is *of*. Hardcoding FREE here while the subscription said
           // otherwise would leave tier and subscription disagreeing, and
@@ -519,15 +527,22 @@ export async function verifyEmail(token: string) {
       where: { id: row.organizationId },
       data: {
         emailVerifiedAt: new Date(),
-        // TRIALING counts as much as ACTIVE here. A trial *is* access — it is
-        // the whole product for its window — so leaving the organization
-        // PENDING after verification would strand every new signup outside the
-        // thing they just signed up for. The tenancy gate caught this.
-        status: ACCESS_GRANTING_SUBSCRIPTION_STATUSES.includes(
-          row.organization.subscriptions[0]?.status ?? '',
-        )
-          ? 'ACTIVE'
-          : row.organization.status,
+        /*
+          Verification records that the address is real. It does not decide
+          access, and this line used to.
+
+          It read the *subscription* status and left the organization PENDING
+          unless the subscription was ACTIVE or TRIALING -- so MANUAL_REVIEW,
+          which is a billing state, silently became the gate on logging in. The
+          component named for that decision, access-gate.middleware.ts, checked
+          neither value. A decision made inside an email-verification side
+          effect is a decision nobody can audit.
+
+          Organizations are ACTIVE from creation now, so there is nothing here
+          to flip. Any future restriction on an unverified payment belongs in
+          access-gate.middleware.ts as an allow-listed check with a reason code
+          -- see docs/DECISIONS.md.
+        */
       },
     });
     await maybeProvisionGateway(row.organizationId, 'email-verified');
@@ -689,7 +704,10 @@ export async function activateManualSubscription(
     await prisma.organization.update({
       where: { id: organizationId },
       data: {
-        status: 'ACTIVE',
+        // No status write. Organizations are ACTIVE from creation, so there is
+        // nothing for a payment to activate. A suspension is dunning's to place
+        // and dunning's to lift -- see the un-suspend branch in dunning.service,
+        // which restores only what dunning itself suspended.
         paymentProvider: providerName,
         paymentCustomerRef: customerRef,
         downgradeGraceEndsAt: graceEnd,
@@ -988,10 +1006,16 @@ export async function handlePaymentWebhook(rawBody: Buffer, headers: Record<stri
  *
  * This is served by `GET /api/billing/checkout-status/:externalRef`, which is in
  * the authentication bypass in index.ts and has to be: its only caller is the
- * return-from-checkout landing page, reached by someone who has just signed up,
- * has not verified their email, and whose organization is therefore still
- * PENDING — so they cannot hold a session, and requiring one would break the
- * only legitimate use.
+ * return-from-checkout landing page, reached by someone who has just come back
+ * from the payment provider and has not logged in yet. They hold no token, so
+ * requiring one would break the only legitimate use.
+ *
+ * This reason used to be "their organization is still PENDING, so they cannot
+ * hold a session". That stopped being true when manual activation was removed
+ * and organizations became ACTIVE at signup. The exemption is unchanged and
+ * still correct; only its justification was stale, which on an auth bypass is
+ * the kind of drift that gets a real exemption removed by someone who reads the
+ * comment and finds it false.
  *
  * It used to activate. A `paid` status called activateManualSubscription and a
  * `failed` status called markPaymentFailed, which suspends the organization.

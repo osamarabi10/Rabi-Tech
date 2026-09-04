@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, MessageCircle, MoreHorizontal, Pause, Play,
-  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, CreditCard, Eye, Wallet, AlarmClock, Clock, Plug, ArrowLeft,
+  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, Eye, Wallet, AlarmClock, Clock, Plug, ArrowLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -119,7 +119,6 @@ export default function SubscribersPage() {
     also meant STANDARD, a real sellable tier, could never be activated from
     this console at all.
   */
-  const [activatable, setActivatable] = useState<Array<{ code: string; name: string }>>([]);
   const [usage, setUsage] = useState<Record<string, RollupUsage>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -150,19 +149,6 @@ export default function SubscribersPage() {
       const { data } = await api.get<Subscriber[]>('/api/platform/subscribers');
       setSubscribers(data);
 
-      /*
-        An offer read: activating a subscriber is selling them something, so the
-        menu lists what is on sale. The platform endpoint returns every edition
-        including retired and archived ones - deliberately, so the owner can see
-        them - and those are filtered out here. Ladder order is preserved,
-        cheapest first, which is the order the endpoint already returns.
-      */
-      const editions = await api.get('/api/platform/editions');
-      setActivatable(
-        (editions.data.editions ?? [])
-          .filter((edition: any) => edition.isActive && !edition.archivedAt)
-          .map((edition: any) => ({ code: edition.code, name: edition.name })),
-      );
       const usageRows = await Promise.all(data.map(async (subscriber) => {
         const response = await api.get(`/api/platform/subscribers/${subscriber.id}/usage`);
         return [subscriber.id, response.data] as const;
@@ -204,7 +190,7 @@ export default function SubscribersPage() {
     setSaving(true);
     try {
       await api.post('/api/platform/subscribers', form);
-      toast.success('Subscriber created. Activate after email verification.');
+      toast.success('Subscriber created.');
       setForm(EMPTY_FORM);
       setOpen(false);
       await load();
@@ -289,19 +275,6 @@ export default function SubscribersPage() {
       await load();
     } catch (error: any) {
       toast.error(error?.response?.data?.error || 'Could not update the channel');
-    } finally {
-      setActionId(null);
-    }
-  };
-
-  const activatePlan = async (subscriber: Subscriber, planCode: string) => {
-    setActionId(subscriber.id);
-    try {
-      await api.post(`/api/platform/subscribers/${subscriber.id}/billing/activate`, { planCode });
-      toast.success(`${planCode} activation queued`);
-      await load();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error || 'Failed to activate plan');
     } finally {
       setActionId(null);
     }
@@ -541,14 +514,6 @@ export default function SubscribersPage() {
                         </DropdownMenuItem>
                       </>
                     )}
-                    {activatable.map((edition) => (
-                      <DropdownMenuItem
-                        key={edition.code}
-                        onSelect={() => activatePlan(subscriber, edition.code)}
-                      >
-                        <CreditCard /> Activate {edition.name}
-                      </DropdownMenuItem>
-                    ))}
                     <DropdownMenuItem onSelect={() => markPaymentFailed(subscriber)}>
                       <Pause /> Mark payment failed
                     </DropdownMenuItem>

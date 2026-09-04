@@ -12,7 +12,6 @@ import { queueGatewayAction } from '../../workers/gateway-provisioning.queue';
 import { getPlatformMonthlyRollupUsage } from '../usage/usage-rollup.service';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
 import {
-  activateManualSubscription,
   cancelCurrentSubscription,
   markPaymentFailed,
 } from '../billing/billing.service';
@@ -420,7 +419,11 @@ router.post('/subscribers', requirePlatformOwner, async (req, res) => {
     const passwordHash = await bcrypt.hash(adminPassword, 10);
     const subscriber = await prisma.$transaction(async (tx) => {
       const organization = await tx.organization.create({
-        data: { name: name.trim(), slug: normalizedSlug, status: 'PENDING', tier: 'FREE', paymentProvider: 'manual' },
+        // ACTIVE, for the same reason self-serve signup is: the two-step dance
+        // where an owner creates a subscriber and then separately activates it
+        // is the ceremony being removed. Its admin could not log in either --
+        // the login gate never cared who created the row.
+        data: { name: name.trim(), slug: normalizedSlug, status: 'ACTIVE', tier: 'FREE', paymentProvider: 'manual' },
       });
       const identity = await tx.identity.create({
         data: { email: normalizedEmail, passwordHash, platformRole: 'NONE' },
@@ -675,24 +678,6 @@ router.get('/subscribers/:id/commercials/history', requirePlatformOwner, async (
   } catch (err) {
     logger.error('Commercial history read failed', { error: String(err) });
     res.status(500).json({ error: 'Server error' });
-  }
-});
-
-router.post('/subscribers/:id/billing/activate', requirePlatformPermission('billing:activate'), async (req, res) => {
-  try {
-    // No default. An owner activating a subscription is choosing what the
-    // subscriber will be billed for, and silently choosing Growth on their
-    // behalf is a commercial decision made by an omission. The console's three
-    // activation buttons all send a plan code, so this refuses only a caller
-    // that genuinely did not say.
-    if (!req.body?.planCode) {
-      return res.status(400).json({ error: 'planCode is required to activate a subscription' });
-    }
-    const planCode = normalizePlanCode(req.body.planCode);
-    const subscription = await activateManualSubscription(req.params.id, planCode);
-    res.status(202).json({ organizationId: req.params.id, subscription });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message || 'Failed to activate subscription' });
   }
 });
 

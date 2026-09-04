@@ -281,6 +281,27 @@ Design rules do not catch the failures this repository actually has. These do.
   the thing it is measured against, that is a decision, not an accident.
   Consent above all.
 
+- **When the component named for a decision does not make it, the decision is
+  being made somewhere that cannot be audited.** Look for the code that owns a
+  rule before assuming the rule lives there; if it does not, the real decision
+  is somewhere nobody will think to check.
+
+  `access-gate.middleware.ts` exists to answer "is this subscriber entitled to
+  be here". It checked neither `PENDING` nor `MANUAL_REVIEW`. The actual login
+  decision was a ternary inside an email-verification side effect, reading a
+  *subscription* status to decide an *organization* status — so a billing state
+  gated authentication, from a function whose name says it verifies an email.
+
+  This is the same shape as the dunning lockout that wrote `SUSPENDED` while
+  nothing enforced it, which is the defect `access-gate.middleware.ts` was
+  written to fix. That one was a status with no reader; this one is a reader
+  with no status. Both leave the named component looking authoritative and
+  inert, and both are invisible to every gate, because the code is correct — it
+  is merely somewhere nobody would audit.
+
+  The test is cheap: name the file you would change to alter the behaviour, then
+  check whether that file mentions it at all.
+
 - **Never hand-mint a session token to reach real data.** A JWT signed
   directly with `JWT_SECRET` can be made to authenticate, and it is the wrong
   way to see the product for two reasons.
