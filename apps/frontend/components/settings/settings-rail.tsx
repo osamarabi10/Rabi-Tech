@@ -67,7 +67,7 @@ const GROUPS: { id: SettingsRailGroupId; items: SettingsRailItem[] }[] = [
       { href: '/settings/snippets', label: 'الردود الجاهزة', icon: MessageSquareText },
       { href: '/settings/tags', label: 'Tags', icon: Tags },
       { href: '/settings/growth-widgets', label: 'أدوات النمو', icon: Link2 },
-      { href: '/settings/general#auto-replies', label: 'الأتمتة', icon: Workflow },
+      { href: '/automations', label: 'الأتمتة', icon: Workflow },
     ],
   },
   {

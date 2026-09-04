@@ -91,7 +91,7 @@ export function ComposerReadinessStrip({
         <span className="text-destructive">{t('لن تصل الردود حتى تعود')}</span>
         {/* A recovery path, not just a warning. The QR scan lives in settings. */}
         <Link
-          href="/settings/general#channels"
+          href="/settings/channels"
           className="ms-auto shrink-0 font-medium underline underline-offset-2 hover:no-underline"
         >
           {t('إعادة الربط')}

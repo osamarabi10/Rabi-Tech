@@ -58,6 +58,7 @@ Design rules do not catch the failures this repository actually has. These do.
                      test:secrets           test:growth-widgets
                      test:meta-templates    test:collaborators
   cd apps/frontend   npm run check:i18n     check:mojibake
+                     npm run check:legacy-settings-links
                      npm run test:e2e         # the whole Playwright suite
   both               npx tsc --noEmit
   ```

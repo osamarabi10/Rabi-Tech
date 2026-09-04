@@ -184,7 +184,7 @@ export function SettingsSection({
     <section
       id={id}
       // scroll-mt keeps an anchored section clear of the sticky header when
-      // linked to directly, e.g. /settings/general#auto-replies from the rail.
+      // a section is linked to directly by id.
       className={cn('scroll-mt-20 rounded-lg border border-border bg-card', className)}
     >
       <div className="flex flex-wrap items-start gap-3 border-b border-border px-5 py-4">
