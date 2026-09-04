@@ -281,6 +281,34 @@ Design rules do not catch the failures this repository actually has. These do.
   the thing it is measured against, that is a decision, not an accident.
   Consent above all.
 
+- **`:18080` is a built image and never reflects the working tree.** The
+  compose `frontend` service serves a Docker image baked at build time. It
+  does not read `apps/frontend`, it does not rebuild when you edit, and it
+  keeps serving whatever source it was built from until the image is rebuilt.
+  Nothing warns you: the app loads, it looks like the product, and it is
+  simply old.
+
+  This cost a day of believing no change was taking effect. The image
+  predated the vocabulary rename, so its settings rail still read "Workspace
+  information" while the working tree, every gate and a green e2e suite all
+  said "Organization information". Every one of those was right. The browser
+  was pointed at a different build.
+
+  **Local development uses the dev server**, which compiles from the working
+  tree on every request:
+
+      docker compose stop frontend        # free the port, keep the rest up
+      cd apps/frontend && npm run dev     # http://localhost:8080
+
+  Leave `postgres`, `redis`, `backend` and `openwa` running — the dev server
+  reaches the backend on `:4000` through the rewrites in `next.config.js`.
+  `localhost:3000` is nothing in this repo; the dev server is on 8080.
+
+  The same confusion in a different costume is `test:e2e`, which serves a
+  production build through `next start`. That one is now enforced by
+  `check-build-freshness.js`. This one is not enforceable — a container has
+  every right to serve an old image — so it is written down instead.
+
 ---
 
 ## Precedence

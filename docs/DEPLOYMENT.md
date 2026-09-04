@@ -32,6 +32,44 @@ to.
 
 ---
 
+## The port you develop on is not the port compose serves
+
+Worth stating before anything else, because it is the mistake that wastes a
+day and leaves no trace.
+
+`http://localhost:18080` is the compose `frontend` service. It serves a
+**Docker image built at some point in the past**. It does not read the working
+tree, it does not rebuild when you edit a file, and it will happily keep
+serving months-old source while your editor, your gates and your test suite
+all agree the code has changed. There is no warning, because from the
+browser's point of view nothing is wrong -- the app loads and looks correct.
+
+It happened here: the image predated the UI vocabulary rename, so the settings
+rail still said "Workspace information" long after the rename shipped and a
+full Playwright suite had gone green on it.
+
+**For local development, use the dev server:**
+
+```bash
+docker compose stop frontend        # release the port; leave the rest running
+cd apps/frontend && npm run dev     # http://localhost:8080
+```
+
+Keep `postgres`, `redis`, `backend` and `openwa` up. The dev server proxies
+`/api/*`, `/health` and `/socket.io` to the backend on `:4000` via the
+rewrites in `next.config.js`, so nothing else needs changing.
+
+`localhost:3000` serves nothing in this repository -- it is the Next default,
+and this project does not use it.
+
+| Where | What it serves | Reflects your edits |
+|---|---|---|
+| `localhost:8080` | `next dev`, compiled per request | **yes** |
+| `localhost:18080` | compose `frontend`, a built image | no, until rebuilt |
+| `localhost:8081` | `next start` during `test:e2e` | only after `npm run build` |
+
+---
+
 ## Before you point a domain at anything
 
 **Rotate the secrets first.** This repository is public and shipped known
