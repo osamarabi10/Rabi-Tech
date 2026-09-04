@@ -44,11 +44,15 @@ the next reader can check a claim without re-deriving it.
 | Section | Status |
 |---|---|
 | 02 Inbox | **Audited row by row** against `src/modules/conversations`, `components/inbox`, and the `inbox-gaps` and `collaborators` gates |
-| 04 Contacts | **Audited** for the `✗` rows: unmerge, default segments, blocked-excluded-from-merge, conversation-status-as-field, import auto-tag, data export |
+| 04 Contacts | **Audited** for the absent rows: unmerge, default segments, blocked-excluded-from-merge, conversation-status-as-field, import auto-tag, data export |
 | 10 Settings | **Audited** for Growth Widgets and Files |
 | 11 Roles | **Audited** for `restrict_space_integration` and collaborator visibility override |
 | 12 Plans | **Audited** for the MAC exclusion row only |
-| 01, 03, 05, 06, 07, 08, 09, 13 | **NOT audited this pass.** Their rows are as previously written and their accuracy is unknown |
+| 01 Dashboard | **Audited 2026-09-03 (second pass).** One row corrected |
+| 05 Workflows | **Audited (second pass)** against `workflow-schema.ts`: 9 triggers and 17 declared / 15 usable steps confirmed exactly, and every entry on both "still missing" lists confirmed genuinely absent. No change |
+| 09 Reports | **Audited (second pass).** Already correct — the lifecycle-funnel and closures rows carry commit hashes |
+| 13 Developer platform | **Audited (second pass).** Already correct; SDK, MCP and custom channel remain the only absent rows |
+| 03, 06, 07, 08 | **NOT audited.** Their rows are as previously written and their accuracy is unknown |
 
 The unaudited sections are not asserted to be wrong. They are asserted to be
 **unchecked**, which is the state the whole document was in before anybody
@@ -74,14 +78,18 @@ Reports.
 | Team Members | All users, status, team, assigned count; filter by team and status | `✗` |
 | Conversations opened / closed | Today, Yesterday, 14d, 30d | `✓` opened and resolved, last-7-days default |
 | Merge Suggestions | Inline merge or dismiss | `≈` we have merge suggestions in Contacts, not on the dashboard |
-| Upcoming Broadcasts | Name, channel, scheduled time | `✗` |
+| Upcoming Broadcasts | Name, channel, scheduled time | `≈` `overview/page.tsx` renders an **Upcoming broadcasts** panel — name, scheduled time and recipient count, the next five, linking to /campaigns. Channel is not shown |
 
 **Their documented trap, worth copying the awareness of:** the Dashboard counts
 assigned contacts differently from the Inbox — *it includes blocked contacts
 while the Inbox does not*. Ours must not repeat that now that M9.1 exists.
 
-**Gap:** Team Members widget, Upcoming Broadcasts widget, merge suggestions on
-the dashboard, duration sorting.
+**Gap:** Team Members widget, merge suggestions on the dashboard, duration
+sorting, and channel on the broadcasts panel.
+
+**Corrected 2026-09-03.** The Upcoming Broadcasts row said `✗`; the panel
+exists and is titled. Team Members was re-checked and is genuinely absent from
+`/overview`.
 **Size:** ~2 days. **Phase:** P5-adjacent.
 
 ---
@@ -560,7 +568,7 @@ would expect are deliberately not built yet.
 |---|---|---|
 | Workspace roles | Owner · Manager · Agent (3) | `★` ADMIN · SUPERVISOR · AGENT · VIEWER · FINANCE (5) |
 | Org roles | Admin · Billing Admin · User Admin · Member | `≈` platform OWNER + staff scopes |
-| Restrictions | 7 (API enum) | **6 of 7** as of M8.1 |
+| Restrictions | 7 (API enum) | **6 of 7**, and the seventh is moot — `restrict_calls`, against a Calls module we deliberately do not build. All six that apply are enforced in `rbac.middleware.ts` and gated by `test:restrictions` |
 | `restrict_data_export` | ✓ | `✓` |
 | `restrict_contact_deletion` | ✓ | `✓` |
 | `restrict_space_setting` | ✓ | `✓` |
@@ -635,29 +643,37 @@ revocation or scoping; no webhook event log; no API versioning policy.
 
 | Verdict | Count | |
 |---|---|---|
-| `★` **We are ahead** | **21** | consent, empty-segment refusal, auto-close gating, thread-preserving reopen, reply metrics, quiet hours, audit logs, editions-as-data, 5 roles, richer filter DSL, digits-only phone storage, tag provenance, opt-out surviving import, template fail-closed, lifecycle inboxes, category rename, free send rates, explicit schedule timezone, notifications screen, Meta templates screen, composite tenant FKs |
-| `✓` Match | ~53 | |
-| `≈` Partial | ~40 | |
-| `✗` Absent | ~27 | |
+| `★` **We are ahead** | **26** | consent, empty-segment refusal, auto-close gating, thread-preserving reopen, reply metrics, quiet hours, audit logs, editions-as-data, 5 roles, richer filter DSL, digits-only phone storage, tag provenance, opt-out surviving import, template fail-closed, lifecycle inboxes, category rename, free send rates, explicit schedule timezone, notifications screen, Meta templates screen, composite tenant FKs |
+| `✓` Match | **73** | re-derived 2026-09-03 |
+| `≈` Partial | **53** | re-derived 2026-09-03 |
+| `✗` Absent | **34** | re-derived 2026-09-03 |
 | `—` Deliberate | 7 | calls, tasks, channel switcher, Chats/Calls tabs, one-team-per-user, AI Objective, **multichannel growth widgets** |
 
 **The absent set concentrates in four places:** the developer platform (13),
 workflows (17 triggers and steps), AI (all of 06), and reporting tabs (4).
 Everything else is small and cumulative.
 
-**Counts after the 2026-09-03 audit**, taken over table rows only — prose in
-this document quotes the markers too, so a naive count of the whole file is
-about fifteen higher and means nothing:
+**Counts after the 2026-09-03 audit.** A row's verdict is its **first** marker;
+some rows quote a second one in their explanation, and prose outside tables
+quotes them constantly, so both a whole-file count and a naive per-row count
+overstate. This is the command that matches how the document is actually read:
 
-    grep -E "^\|" docs/RESPONDIO-PARITY-MATRIX.md | grep -oE '`[✗≈✓★—]`' | sort | uniq -c
+    awk -F'`' '/^\|/{for(i=2;i<NF;i+=2){if($i=="✓"||$i=="≈"||$i=="✗"||$i=="★"||$i=="—"){c[$i]++;break}}}
+      END{printf "✓%d ≈%d ✗%d ★%d —%d\n",c["✓"],c["≈"],c["✗"],c["★"],c["—"]}' docs/RESPONDIO-PARITY-MATRIX.md
 
-which gives 74 `✓`, 53 `≈`, 36 `✗`, 27 `★`, 9 `—`. Those differ from the
-approximate figures in the table above because that table counts capability
-rows while the body also marks sub-rows; both are kept because the table is the
-comparable series and the command is the checkable one.
+**✓73 ≈53 ✗34 ★26 —7**, against **✓65 ≈52 ✗43 ★26 —7** before the audit began.
 
-The direction is what matters: eight rows moved out of `✗` because the work had
-shipped, not because anything was rescored.
+**Nine rows left `✗` across both passes** — eight in the first, one in the
+second — every one of them because the work had already shipped. Nothing was
+rescored, no standard was relaxed, and no row moved on an argument rather than
+on a file.
+
+Getting this number right took three attempts, which is itself worth recording:
+the first count included prose outside tables, the second included second
+markers inside table cells, and the third was skewed by a marker in a status
+row this very audit had added. A count whose method is unstated is the same
+defect as a row whose evidence is unstated — and a method stated loosely fails
+the same way.
 
 Three of the four concentrations — workflows, AI, the developer platform — sit
 in sections this audit did NOT check. Those numbers should be read as the last
