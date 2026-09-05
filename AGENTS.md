@@ -302,6 +302,60 @@ Design rules do not catch the failures this repository actually has. These do.
   The test is cheap: name the file you would change to alter the behaviour, then
   check whether that file mentions it at all.
 
+- **A fabricated success state is usually fabricated at every boundary.** When
+  one layer is found inventing a reassuring answer, check the layers above and
+  below it for the same invention before believing the fix is done.
+
+  The pairing endpoint swallowed six gateway failures and returned
+  `{pending: true}` for all of them. One layer up, the screen's poll had
+  `catch { setQr({ connected: false, pending: true }) }` -- so a failed request
+  became "pending" a second time, independently, in different code. Fixing only
+  the endpoint would have changed nothing the customer sees: the screen would
+  have carried on spinning whenever the request itself failed.
+
+  This happens because each boundary faces the same question -- "what do I show
+  when I do not know?" -- and the comfortable answer is the same at every one.
+  The honest default is the opposite: not knowing is a state worth reporting,
+  and it is never the same state as working on it.
+
+  So the check is not "did I fix the bug" but "how many places implement this
+  lie". Read the caller and the callee, not just the file the defect was
+  reported in.
+
+- **Never pipe a gate.** `npm run test:e2e | tail -10` reports **tail's** exit
+  status, not the gate's. Redirect to a file and read the file:
+
+      npm run test:e2e > run.log 2>&1; echo "EXIT=$?"; tail -6 run.log
+
+  This swallowed a real Playwright failure -- the suite never started, because
+  an orphaned `next start` still held port 8081 -- and the pipeline reported
+  `exited with code 0`. The rule against *appending* to a gate was already
+  written and did not cover it, because nothing was appended: the pipe alone
+  was enough. A general rule that does not name its mechanism is a rule you
+  will walk past, so the mechanism is named here.
+
+- **When a change does not appear, suspect the server before the code.**
+  Establish which artifact is being served and prove it carries your edit
+  before concluding anything about the edit. `docker compose ps` for a
+  container, the process start time against the file mtime for a dev server,
+  the build manifest for a production build.
+
+  Three instances in one day, and the third is the one that matters because it
+  is not a container:
+
+  - `:18080` served a frontend image built before the vocabulary rename, for a
+    day, while every gate agreed the code had changed.
+  - `rabitech-backend-1` answered `{"error":"Not found"}` for three endpoints
+    that were written, typechecked and on disk.
+  - a `ts-node-dev` process **older than the file it was serving** kept
+    answering with pre-edit code after logging `Restarting`. The edit was
+    right, `tsc` was clean, and the response was from a different build.
+
+  So the rule names dev servers as well as containers. The check is two
+  commands: the process start time, and the mtime of the file you changed. If
+  the process is older, nothing you conclude from its output is about your
+  code. It caught a nine-hour-old dev server on the very next run.
+
 - **Never hand-mint a session token to reach real data.** A JWT signed
   directly with `JWT_SECRET` can be made to authenticate, and it is the wrong
   way to see the product for two reasons.

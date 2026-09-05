@@ -429,6 +429,20 @@ export type SessionQR = {
   connected: boolean;
   qrCode?: string;
   pending?: boolean;
+  /**
+   * The gateway could not be asked, or refused. Distinct from `pending`, which
+   * now means only that the gateway answered and is working on it.
+   *
+   * When this is set the screen must render an error carrying `reason` and
+   * `nextStep` -- never a spinner. The endpoint used to swallow six failures
+   * and report `pending` for all of them, so a customer with no gateway at all
+   * watched "preparing link code" forever.
+   */
+  unavailable?: boolean;
+  /** CHANNEL_NOT_PROVISIONED | GATEWAY_REFUSED | GATEWAY_UNREACHABLE */
+  code?: string;
+  reason?: string;
+  nextStep?: string;
   /** Raw gateway state, for accurate UI messaging. */
   state?: string;
   /**

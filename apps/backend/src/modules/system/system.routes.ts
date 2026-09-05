@@ -1297,6 +1297,84 @@ router.post('/sessions/:name/disconnect', requireAdmin, async (req, res) => {
  * linked, `{ qrCode }` while scannable, or `{ pending }` while the engine is
  * warming up. Entitlement-gated: see the block inside.
  */
+/*
+ * Why a pairing attempt could not produce a code.
+ *
+ * The pairing path used to swallow six failures -- getStatus, createSession,
+ * stopSession, the re-check getStatus, startSession and getQR -- and answer
+ * 200 {pending: true, state: "unknown"} regardless. A dead gateway, an
+ * unprovisioned one, and a gateway genuinely still starting all produced the
+ * same response, so the screen spun on "preparing link code" forever. It is the
+ * first thing a customer does with the product, and it was the least honest.
+ *
+ * `pending` now means exactly one thing: the gateway answered and is working on
+ * it. Everything else is a fault carrying its own reason and a next step.
+ */
+type PairingFault = { code: string; reason: string; nextStep: string };
+
+/**
+ * The wire shape for a pairing attempt that cannot produce a code.
+ *
+ * Answered 200 rather than 5xx on purpose: this is a report about the gateway,
+ * not a failure of the request, and the screen has to render the reason. A 5xx
+ * would be turned into a generic error by the client and the reason would be
+ * lost -- which is the same disappearance this change exists to stop.
+ */
+function unavailable(fault: PairingFault) {
+  return {
+    connected: false,
+    pending: false,
+    unavailable: true,
+    code: fault.code,
+    reason: fault.reason,
+    nextStep: fault.nextStep,
+  };
+}
+
+/** A 404 is the gateway saying "no such session yet", which is an answer. */
+function isSessionMissing(error: unknown): boolean {
+  return (error as { response?: { status?: number } })?.response?.status === 404;
+}
+
+/**
+ * Classify a failed gateway call, or return null when it is not a fault.
+ *
+ * The distinction that matters is whether anything answered. An axios error
+ * with a `response` means the gateway is alive and said no; without one it
+ * never connected, and `code` carries ECONNREFUSED or ETIMEDOUT.
+ */
+function classifyGatewayFault(error: unknown, during: string): PairingFault | null {
+  if (isSessionMissing(error)) return null;
+
+  const err = error as { code?: string; message?: string; response?: { status?: number } };
+
+  // Thrown by provider() before any network call: this organization has no
+  // usable OpenWA channel row. Distinct from a gateway being down, because
+  // nothing was ever provisioned and waiting will not help.
+  if (typeof err?.message === "string" && err.message.includes("not configured for organization")) {
+    return {
+      code: "CHANNEL_NOT_PROVISIONED",
+      reason: "No WhatsApp gateway has been set up for this organization yet.",
+      nextStep: "Contact support so a gateway can be provisioned for you.",
+    };
+  }
+
+  const httpStatus = err?.response?.status;
+  if (httpStatus !== undefined) {
+    return {
+      code: "GATEWAY_REFUSED",
+      reason: "The WhatsApp gateway answered with an error (" + httpStatus + ") while " + during + ".",
+      nextStep: "Try again in a minute. If it keeps happening, contact support.",
+    };
+  }
+
+  return {
+    code: "GATEWAY_UNREACHABLE",
+    reason: "The WhatsApp gateway did not respond while " + during + " (" + (err?.code || "no response") + ").",
+    nextStep: "The gateway is being restarted. Try again in a minute; contact support if it persists.",
+  };
+}
+
 router.get('/sessions/:name/qr', requireAdmin, async (req, res) => {
   const { name } = req.params;
   try {
@@ -1340,59 +1418,104 @@ router.get('/sessions/:name/qr', requireAdmin, async (req, res) => {
       });
     }
 
+    /*
+      Every gateway call reports. A call either contributes a state or records
+      why it could not, and a recorded fault outranks pending -- because
+      pending is a promise that something is happening, and a fault means
+      nothing is.
+    */
+    const faults: PairingFault[] = [];
+    const note = (error: unknown, during: string) => {
+      const fault = classifyGatewayFault(error, during);
+      if (fault) faults.push(fault);
+    };
+
     let status = '';
+    let gatewayAnswered = false;
     try {
       const r = await OpenWAPairingProvider.getStatus(name);
       status = (r.data?.status || r.data?.state || '').toLowerCase();
-    } catch {
-      // Session doesn't exist in OpenWA yet — create it
-      await OpenWAPairingProvider.createSession(name).catch(() => {});
+      gatewayAnswered = true;
+    } catch (error) {
+      if (isSessionMissing(error)) {
+        // The gateway answered "no such session". It is alive; create one.
+        gatewayAnswered = true;
+        try {
+          await OpenWAPairingProvider.createSession(name);
+        } catch (createError) {
+          note(createError, 'creating the session');
+        }
+      } else {
+        note(error, 'reading the session status');
+      }
     }
 
     if (['connected', 'authenticated', 'working', 'ready'].includes(status)) {
       return res.json({ connected: true });
     }
 
-    // If stuck in authenticating and QR not available, stop → it will auto-reconnect via saved creds
+    // Stuck authenticating with no QR: stop it, and let saved credentials
+    // reconnect the same number.
     if (status === 'authenticating') {
       try {
         const qr = await OpenWAPairingProvider.getQR(name);
         if (qr.data?.qrCode) return res.json({ connected: false, qrCode: qr.data.qrCode });
-      } catch {
-        // QR not ready — stop the session so it can reconnect via saved credentials
-        await OpenWAPairingProvider.stopSession(name).catch(() => {});
+      } catch (qrError) {
+        note(qrError, 'reading the pairing code');
+        try {
+          await OpenWAPairingProvider.stopSession(name);
+        } catch (stopError) {
+          note(stopError, 'restarting the session');
+        }
         await new Promise((r) => setTimeout(r, 2000));
-        // Re-check — saved credentials often reconnect immediately
         try {
           const r2 = await OpenWAPairingProvider.getStatus(name);
           const s2 = (r2.data?.status || r2.data?.state || '').toLowerCase();
+          gatewayAnswered = true;
           if (['connected', 'authenticated', 'working', 'ready'].includes(s2)) {
             return res.json({ connected: true });
           }
-        } catch {}
+        } catch (recheckError) {
+          note(recheckError, 're-reading the session status');
+        }
       }
-      return res.json({ connected: false, pending: true });
+      if (faults.length > 0) return res.json(unavailable(faults[0]));
+      return res.json({ connected: false, pending: true, state: status, reconnecting: false });
     }
 
     if (!status || ['created', 'stopped', 'disconnected', 'failed'].includes(status)) {
-      await OpenWAPairingProvider.startSession(name).catch(() => {});
+      try {
+        await OpenWAPairingProvider.startSession(name);
+        gatewayAnswered = true;
+      } catch (startError) {
+        note(startError, 'starting the session');
+      }
     }
 
     try {
       const qr = await OpenWAPairingProvider.getQR(name);
+      gatewayAnswered = true;
       if (qr.data?.qrCode) return res.json({ connected: false, qrCode: qr.data.qrCode });
-    } catch {
-      // QR not ready yet — fall through to pending
+    } catch (qrError) {
+      note(qrError, 'reading the pairing code');
     }
 
-    // `initializing` means the gateway still holds saved credentials and is
+    /*
+      A fault wins over pending, always.
+
+      This is the whole change. The old code reached this line with six
+      failures swallowed and reported pending anyway, so an organization with
+      no gateway provisioned at all -- baseUrl empty, channel PENDING -- was
+      told its code was being prepared. It never was.
+    */
+    if (faults.length > 0) return res.json(unavailable(faults[0]));
+
+    // `initializing` means the gateway holds saved credentials and is
     // reconnecting the SAME number — no QR will ever be offered in this state.
-    // Reporting it distinctly stops the UI spinning on "preparing link code"
-    // forever and lets it explain what is actually happening.
     res.json({
       connected: false,
       pending: true,
-      state: status || 'unknown',
+      state: status || (gatewayAnswered ? 'starting' : 'unknown'),
       reconnecting: status === 'initializing',
     });
   } catch (error) {

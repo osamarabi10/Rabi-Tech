@@ -6,6 +6,7 @@ import { ChannelRail, type ChannelRailChannel } from '@/components/ui/channel-ra
 import {
   CheckCircle2,
   Loader2,
+  AlertTriangle,
   MessageCircle,
   PowerOff,
   QrCode,
@@ -67,6 +68,39 @@ type ChannelState = {
   code: string | null;
   message: string | null;
 };
+
+/**
+ * Localised copy for a pairing fault, keyed by the code on the wire.
+ *
+ * The server sends a machine-readable code plus English prose. The code is
+ * the contract and is what gets translated here; the prose is the fallback
+ * for a code this build has not been taught, so an unknown fault still says
+ * something true rather than rendering an empty panel.
+ */
+function pairingFaultCopy(
+  qr: SessionQR,
+  t: (key: string) => string,
+): { reason: string; nextStep: string } {
+  switch (qr.code) {
+    case 'CHANNEL_NOT_PROVISIONED':
+      return {
+        reason: t('لم يتم تجهيز بوابة واتساب لهذه المؤسسة بعد'),
+        nextStep: t('تواصل مع الدعم لتجهيز البوابة'),
+      };
+    case 'GATEWAY_REFUSED':
+      return {
+        reason: t('بوابة واتساب ردّت بخطأ'),
+        nextStep: t('حاول بعد دقيقة، وإذا تكرر تواصل مع الدعم'),
+      };
+    case 'GATEWAY_UNREACHABLE':
+      return {
+        reason: t('بوابة واتساب لا تستجيب'),
+        nextStep: t('يعاد تشغيل البوابة، حاول بعد دقيقة'),
+      };
+    default:
+      return { reason: qr.reason || t('سبب غير معروف'), nextStep: qr.nextStep || '' };
+  }
+}
 
 export function OrganizationChannels() {
   const { t } = useT();
@@ -167,7 +201,23 @@ export function OrganizationChannels() {
           setSessions((rows) => rows.map((row) => row.id === qrSession.id ? { ...row, connected: true, isActive: true } : row));
         }
       } catch {
-        if (active) setQr({ connected: false, pending: true });
+        /*
+          A failed request is not pending either.
+
+          This used to answer `pending: true`, which meant the screen span on
+          "preparing link code" whenever the request itself failed -- the same
+          lie the endpoint told, told again one layer up. The request failing
+          is its own unreachable state, and it says so.
+        */
+        if (active) {
+          setQr({
+            connected: false,
+            unavailable: true,
+            code: 'GATEWAY_UNREACHABLE',
+            reason: t('تعذّر الوصول إلى الخادم للتحقق من حالة القناة'),
+            nextStep: t('تحقق من اتصالك وحاول مرة أخرى بعد دقيقة'),
+          });
+        }
       } finally {
         polling = false;
       }
@@ -396,6 +446,19 @@ export function OrganizationChannels() {
           <div className="flex min-h-72 items-center justify-center">
             {qr?.connected ? <div className="flex flex-col items-center gap-3 text-success"><CheckCircle2 className="size-12" /><p className="text-small font-semibold">{t('Device linked')}</p></div>
               : qr?.qrCode ? <div className="space-y-3 text-center">{/* eslint-disable-next-line @next/next/no-img-element */}<img src={qr.qrCode} alt={t('WhatsApp linking QR code')} className="mx-auto size-64 bg-white p-2" /><p className="text-caption text-muted-foreground">{t('The code refreshes automatically.')}</p></div>
+              : qr?.unavailable ? (
+                /*
+                  The honest branch. It is placed above `reconnecting` and the
+                  spinner on purpose: a fault outranks both, because a spinner
+                  shown over a dead gateway is a promise the product cannot keep.
+                */
+                <div className="flex max-w-sm flex-col items-center gap-3 text-center" role="alert">
+                  <AlertTriangle className="size-8 text-destructive" aria-hidden />
+                  <p className="text-small font-semibold text-destructive">{t('تعذّر تجهيز رمز الربط')}</p>
+                  <p className="text-caption text-muted-foreground">{pairingFaultCopy(qr, t).reason}</p>
+                  <p className="text-caption font-medium text-foreground">{pairingFaultCopy(qr, t).nextStep}</p>
+                </div>
+              )
               : qr?.reconnecting ? <div className="flex max-w-xs flex-col items-center gap-3 text-center"><Loader2 className="size-7 animate-spin text-warning" /><p className="text-small font-medium">{t('Reconnecting the existing number')}</p><p className="text-caption text-muted-foreground">{t('Unlink the current number first when you need to pair a different one.')}</p></div>
               : <div className="flex flex-col items-center gap-3 text-muted-foreground"><Loader2 className="size-8 animate-spin" /><p className="text-caption">{t('Preparing link code')}</p></div>}
           </div>

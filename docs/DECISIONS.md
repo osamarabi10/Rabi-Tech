@@ -137,3 +137,52 @@ tooling. It is owner work at the provider consoles.
 - **Trigger:** before the first external customer, or any public exposure of the
   backend, whichever comes first.
 - **Lands in:** the provider consoles (OpenWA, the database host) and `.env`.
+
+---
+
+## D-5 · A real paid account can reach CHANNEL_NOT_PROVISIONED
+
+The pairing endpoint now reports three distinct faults instead of claiming
+`pending` for all of them. Proving that surfaced a defect underneath it: an
+account created through the real signup path has an `OrganizationChannel` row
+with `status = PENDING` and an **empty `baseUrl`**, so `provider()` throws
+before any network call and the customer is told, correctly, that no gateway
+has been set up for them.
+
+The message is now honest. The situation is not acceptable: a paying customer
+reaching "contact support so a gateway can be provisioned" as the first thing
+they do is a provisioning failure, not a messaging one.
+
+Deliberately **not** fixed in the honesty commit. Making the screen tell the
+truth and changing what the truth is are two changes, and merging them would
+have meant neither could be proved on its own.
+
+- **Owner:** UnKnowan
+- **Trigger:** the next commit.
+- **Lands in:** the provisioning path — `gateway-provisioning.service.ts` and
+  the `OrganizationChannel` row written at signup in `billing.service.ts`.
+
+---
+
+## D-6 · The OpenWA gateway rejects every key the platform holds
+
+The running `openwa` container answers `401` to both the encrypted key stored
+on `OrganizationChannel` and to `OPENWA_API_KEY` from `.env`. So OpenWA pairing
+cannot reach a real QR code in this environment at all, for any organization.
+
+This is independent of the honesty change and predates it — the endpoint now
+reports `GATEWAY_REFUSED` with the 401 instead of hiding it, which is how it
+was found. It also means the pairing path could not be demonstrated end to end:
+the three fault states are proved against the running gateway, a successful QR
+is not.
+
+Related, and possibly the same cause: both seeded organizations point at
+`http://openwa:2785`, the docker-internal hostname, which a backend running
+from source on the host cannot resolve.
+
+- **Owner:** UnKnowan
+- **Trigger:** the credential rotation in D-4 — the gateway key is one of the
+  values being rotated, and reconciling it belongs with that work rather than
+  before it.
+- **Lands in:** the gateway container environment and the `apiKeyEnc` written
+  by `PATCH /api/platform/subscribers/:id/openwa-channel`.

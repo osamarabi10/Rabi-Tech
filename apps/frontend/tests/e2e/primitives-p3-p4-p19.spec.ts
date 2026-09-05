@@ -155,6 +155,20 @@ async function expectNoPageOverflow(page: Page) {
   expect(overflow, 'page scrolls horizontally').toBeLessThanOrEqual(1);
 }
 
+
+/**
+ * What an unreachable gateway must say, per locale.
+ *
+ * The endpoint sends a machine-readable code and English prose; the screen
+ * translates the code. Asserting the translated text is the point -- an
+ * assertion on the code would pass while the panel rendered English at an
+ * Arabic operator, which is the class of defect this suite exists to catch.
+ */
+const PAIRING_UNREACHABLE: Record<string, { title: string; reason: string; nextStep: string }> = {
+  ar: { title: 'تعذّر تجهيز رمز الربط', reason: 'بوابة واتساب لا تستجيب', nextStep: 'يعاد تشغيل البوابة، حاول بعد دقيقة' },
+  he: { title: 'לא ניתן להכין את קוד החיבור', reason: 'שער וואטסאפ אינו מגיב', nextStep: 'השער מופעל מחדש, נסה בעוד דקה' },
+  en: { title: 'Could not prepare the pairing code', reason: 'The WhatsApp gateway is not responding', nextStep: 'The gateway is restarting — try again in a minute' },
+};
 for (const width of WIDTHS) {
   for (const locale of LOCALES) {
     for (const theme of THEMES) {
@@ -220,6 +234,59 @@ for (const width of WIDTHS) {
 
         // Direction follows the locale, using logical placement rather than sides.
         await expect(page.locator('html')).toHaveAttribute('dir', locale === 'en' ? 'ltr' : 'rtl');
+
+        await expectNoPageOverflow(page);
+      });
+
+      test(`pairing fault is an error, never a spinner — ${width}px ${locale} ${theme}`, async ({ page }) => {
+        await prepare(page, { width, locale, theme });
+
+        /*
+          The gateway is unreachable. Registered after prepare() so it wins:
+          Playwright prefers the most recently added handler.
+
+          This is the shape the endpoint returns when no gateway answers. It
+          used to be indistinguishable from "working on it" -- six swallowed
+          failures all became {pending: true} -- and the screen span on
+          "preparing link code" forever for a customer whose gateway was dead,
+          or who had never been given one.
+        */
+        await page.route('**/api/system/sessions/*/qr', (route) =>
+          route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              connected: false,
+              pending: false,
+              unavailable: true,
+              code: 'GATEWAY_UNREACHABLE',
+              reason: 'The WhatsApp gateway did not respond while reading the session status (ECONNREFUSED).',
+              nextStep: 'The gateway is being restarted. Try again in a minute; contact support if it persists.',
+            }),
+          }));
+
+        await page.goto('/settings/channels');
+
+        const link = page.getByRole('button', { name: /Link device|اربط جهاز|קישור מכשיר/ }).first();
+        await link.click();
+
+        const expected = PAIRING_UNREACHABLE[locale];
+        const alert = page.getByRole('alert');
+        await expect(alert).toBeVisible();
+
+        // The reason and the next step, both, in this locale. A verdict with no
+        // next step still becomes a support ticket.
+        await expect(alert).toContainText(expected.title);
+        await expect(alert).toContainText(expected.reason);
+        await expect(alert).toContainText(expected.nextStep);
+
+        /*
+          And nothing that promises progress. This is the half that regresses:
+          re-adding a spinner beside the error would satisfy every assertion
+          above while restoring the original lie.
+        */
+        await expect(page.getByText(/Preparing link code|جاري تجهيز|מכין/i)).toHaveCount(0);
+        await expect(page.locator('[role=dialog] .animate-spin')).toHaveCount(0);
 
         await expectNoPageOverflow(page);
       });
