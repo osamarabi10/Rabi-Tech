@@ -64,9 +64,26 @@ export class OpenWAGatewayProvider implements GatewayProvider {
     if (!session?.id) throw new Error(`OpenWA session ${name} was not created`);
 
     const status = String(session.status || session.state || '').toLowerCase();
-    if (!isConnectedStatus(status) && !['starting', 'authenticating'].includes(status)) {
+    /*
+      This gateway's own vocabulary, read from OpenWA 0.23.2's SessionStatus
+      enum: created · initializing · qr_ready · authenticating · ready ·
+      disconnected · failed · action_required. A session in `initializing` or
+      `qr_ready` is already running — it is waiting for a human to scan — and
+      asking it to start again is answered with 400 "Session is already
+      started", not 409. The old list knew `starting` and `authenticating`
+      only, so a session that had reached the QR was told to start, refused,
+      and the provision failed one step short of AWAITING_QR.
+    */
+    const alreadyRunning = ['starting', 'initializing', 'qr_ready', 'authenticating'];
+    if (!isConnectedStatus(status) && !alreadyRunning.includes(status)) {
       await this.client.post(`/api/sessions/${session.id}/start`).catch((error) => {
-        if (error?.response?.status !== 409) throw error;
+        // 409 from older builds, 400 "already started" from 0.23.x. Either
+        // means the session is up, which is the outcome this call wanted.
+        const code = error?.response?.status;
+        const message = String(error?.response?.data?.message || '');
+        if (code === 409) return;
+        if (code === 400 && /already started/i.test(message)) return;
+        throw error;
       });
     }
     return session.id;

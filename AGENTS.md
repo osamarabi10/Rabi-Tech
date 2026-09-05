@@ -296,6 +296,23 @@ Design rules do not catch the failures this repository actually has. These do.
   The test is whether the property can be executed, not whether a grep is
   easier to write.
 
+- **Never track a floating image tag.** `ghcr.io/rmyndharis/openwa:latest`
+  moved from an image that read `API_KEY` to one that mints its own key into
+  its data volume on first boot, and every per-tenant gateway began failing
+  401 — no code changed, no config changed, and no gate could see it, because
+  nothing in this repository had moved. Pin to a digest, in every compose file,
+  and treat a tag change as a deployment: pulled on purpose, recorded in
+  `docs/DEPLOYMENT.md`, and the gateway's authentication model re-verified
+  before a tenant is built on it.
+
+  Fifth instance of "the thing serving you is not the thing you think" — after
+  `:18080`, `:4000`, `ts-node-dev` and the host port proxy — and the first
+  where nobody changed anything at all. The earlier four were stale artifacts
+  or a dead route on this machine; this one was a fresh artifact built by
+  somebody else, arriving under a name the tree only points at. A gate can
+  compare the tree against itself. It cannot notice the world moving
+  underneath a name.
+
 ---
 
 ## Scope

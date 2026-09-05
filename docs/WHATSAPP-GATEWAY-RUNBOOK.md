@@ -82,7 +82,11 @@ returned `ready`, sends still 500.
 
 **Fix — update the gateway image:**
 ```bash
-docker pull ghcr.io/rmyndharis/openwa:latest
+# The image is pinned by digest in docker-compose.yml and in
+# deploy/openwa-organization.compose.yml (AGENTS.md, Evidence). Updating it is
+# a deployment, not a pull: pick the new digest, change the pin in BOTH files,
+# re-verify how that build authenticates (D-5), and only then:
+docker compose pull openwa
 docker compose up -d openwa
 # the container comes back with sessions "disconnected" — start them:
 curl -s -X POST -H "X-Api-Key: $KEY" http://localhost:3000/api/sessions/<ID>/start

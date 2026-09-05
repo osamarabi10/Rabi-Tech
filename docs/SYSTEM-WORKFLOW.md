@@ -60,7 +60,7 @@ flowchart TD
       M4 -- pass --> M6["Channel ACTIVE, token in the vault,<br/>session bound.<br/><b>No container. No QR.</b>"]
     end
 
-    N -. "worker not running here (D-5)" .-> OX["⚠ 236 jobs queued, nothing consuming"]
+    N -. "only when gateway:worker is running (D-5)" .-> OX["⚠ nothing builds until<br/>somebody starts the worker"]
     OX -.-> R
 
     M2 -. "all three come from Business Manager,<br/>and the product helps with none of it (D-9)" .-> MX["⚠ No guided signup"]
@@ -94,7 +94,7 @@ lapsed trial — but it is a contradiction in the shipped catalogue, not a rule.
 **And the two facts above collide.** The Meta-only editions are withdrawn from
 sale while `META_APP_SECRET` is unset, so the only sellable paid edition is
 Standard — the one edition with two lanes. Of its two, the QR lane needs a
-worker that runs nowhere and the token lane needs a WABA the product does not
+worker that nothing keeps running and the token lane needs a WABA the product does not
 help anybody obtain.
 
 **And the other thing to take from the diagram:** signup creates rows and
@@ -295,7 +295,7 @@ Honest list. Each is recorded, none is a surprise.
 | Gap | Consequence | Entry |
 |---|---|---|
 | No mail transport | Verification, password reset, dunning and suspension notices are logged, never sent. Signup survives only because the link is on screen. | D-2 |
-| `gateway:worker` runs nowhere | Jobs queue and nothing consumes them: **236 waiting**. Connect reports "being built" truthfully and the build never starts. | D-5 |
+| `gateway:worker` is started by hand or not at all | Nothing in compose or a supervisor runs it. While it is down, Connect reports "being built" truthfully and the build never starts. Run by hand on 2026-09-05 it drained the backlog into **246 failed** jobs for test organizations and produced the first real pairing. | D-5 |
 | Cloud API has no *guided* connect | The endpoint and the card work. What is missing is everything before them: Business Manager, business verification, a System User token with `whatsapp_business_management`. A form is not a flow — and it is the **only** lane Growth, Business and Enterprise have. | D-9 |
 | Free permits OpenWA and cannot build one | `allowedChannels` says yes, `autoProvisionGateway` says no. Two columns describing one capability, disagreeing. | — |
 | `META_APP_SECRET` unset | `editionOfferability` withdraws GROWTH, BUSINESS and ENTERPRISE from sale. Only FREE and STANDARD are sellable. | D-9 |

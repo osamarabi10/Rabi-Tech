@@ -6,14 +6,34 @@ services:
       - redis_data:/data
 
   openwa:
-    image: ghcr.io/rmyndharis/openwa:latest
+    # 0.23.2, built 2026-08-23, pinned by digest. A tag change is a deployment
+    # (AGENTS.md, Evidence): :latest once moved the auth model under running
+    # gateways and every one of them began answering 401 with nothing changed here.
+    image: ghcr.io/rmyndharis/openwa@sha256:e3aa888f02157544b52fcc33a1376a77cb4ab49b63712dc5d7a47cbab67d272a
     restart: always
     environment:
       NODE_ENV: production
       REDIS_HOST: redis
       REDIS_PORT: 6379
       QUEUE_ENABLED: "true"
-      API_KEY: "${OPENWA_API_KEY}"
+      # API_MASTER_KEY, not API_KEY. OpenWA 0.23.x never reads API_KEY: it seeds
+      # its key store once, on first boot with an empty store, from
+      # API_MASTER_KEY if set and from a random owa_k1_… key if not — and then
+      # authenticates only against that store. Under the old name every tenant
+      # gateway minted its own key, the provisioner's minted key was never the
+      # one the gateway held, and every readiness probe answered 401. The value
+      # is the same key the provisioner stores encrypted on the channel, so the
+      # two agree by construction again. Only a fresh data volume is seeded: a
+      # container that already booted keeps the key it minted.
+      API_MASTER_KEY: "${OPENWA_API_KEY}"
+      # The gateway's SSRF guard refuses to register a webhook whose host
+      # resolves to a private address — which is exactly where this backend
+      # lives. A tenant gateway runs on its own compose network, so it cannot
+      # resolve the main stack's `backend.local` alias at all; the only route
+      # back to the backend is the host's published :4000, reached as
+      # host.docker.internal. Allow that one host, the same way the main
+      # compose file does for the shared gateway.
+      SSRF_ALLOWED_HOSTS: "host.docker.internal"
     ports:
       - "${OPENWA_API_PORT}:2785"
       - "${OPENWA_DASHBOARD_PORT}:2886"

@@ -140,106 +140,128 @@ tooling. It is owner work at the provider consoles.
 
 ---
 
-## D-5 · Self-serve signup produces a channel belonging to neither topology
+## D-5 · Pairing works end to end; the two seeded organizations cannot pair on the shared gateway
 
-This entry replaces two that were filed separately -- "a real paid account can
-reach CHANNEL_NOT_PROVISIONED" and "the gateway rejects every key the platform
-holds". They are one defect seen from two layers.
+**Rewritten 2026-09-05, after a real pairing.** Three earlier readings of this
+entry were wrong in three different ways, and the correction dictated for this
+rewrite -- "the network, not the key" -- turned out to be half right. What
+follows is what a scan and a probe established, in the order they were found.
 
-### The two topologies
+### The four readings before this one
 
-**Per-tenant.** `gateway-provisioning.service.ts:123` mints a fresh key with
-`crypto.randomBytes(32).toString('base64url')`, stores it encrypted on
-`OrganizationChannel.apiKeyEnc`, and `gateway-runtime.ts:33` starts that
-tenant's own container with the same value. The two agree by construction --
-one generator, one store, one container.
+1. "There is a provisioning step that never runs." Wrong: it runs.
+2. "No mail transport (D-2), so the customer cannot verify, so
+   `maybeProvisionGateway` never fires." Wrong: it fired at signup, and since
+   C2 it fires on Connect.
+3. "The producer works; the consumer -- `npm run gateway:worker` -- is not
+   running, and the 401 is not a wrong key but a channel that was never given
+   one." Right about the worker. Wrong about the key: see below.
+4. "The seeded organizations' credentials and topology are correct; what
+   stopped them was the network." Right about the topology and the network.
+   Wrong about the credentials: the probe below returns 401 from inside the
+   network.
 
-**Shared.** `docker-compose.yml:42` gives the single `openwa` service
-`API_KEY=${OPENWA_API_KEY}` from `.env`. An organization pointed at it must
-hold that same value, which only `scripts/bootstrap-openwa-channel.ts` writes --
-the one path that reads `OPENWA_API_KEY` and seeds a channel from it.
+### What stood between Connect and a QR, for a self-serve organization
 
-### Signup belongs to neither
+A fresh STANDARD trial, `c2-lazy-proof-1788633943`, clicked Connect on
+2026-09-05 with the backend running **inside compose** and the worker running
+on the host. Five things had to be true before a QR rendered. Each was found
+by the run refusing at that step, not by reading.
 
-`billing.service.ts` creates an `OrganizationChannel` with `status: PENDING`,
-`provisioningState: PENDING`, an empty `baseUrl` and an empty `apiKeyEnc`. It
-does not provision a per-tenant gateway, and it does not seed against the
-shared one. The row exists and points at nothing.
+| # | What was in the way | Seen as | Where it was fixed |
+|---|---|---|---|
+| 1 | A backend started from source on the host cannot resolve `openwa:2785`, and the host port mapping `127.0.0.1:13000` now closes every connection (`curl: (52) Empty reply`) while `:4000` and `:18080` answer | connection errors, or nothing at all | not code: the backend runs inside compose -- `docs/DEPLOYMENT.md`, "The backend must run inside compose" |
+| 2 | The provisioning worker was not running anywhere | Connect returned `queued: true` and the dialog said "about a minute" forever | not code: `npm run gateway:worker` on the host, per `docs/GATEWAY-PROVISIONING.md` |
+| 3 | `ghcr.io/rmyndharis/openwa:latest` was unpinned until 2026-09-06; both compose files now pin the 0.23.2 digest. The image on this host is **0.23.2**, built 2026-08-23, and it **never reads `API_KEY`**. It seeds a key store once, on first boot with an empty data volume, from `API_MASTER_KEY` if set and from a random key it writes to `/app/data/.api-key` if not, and authenticates only against that store. Every per-tenant gateway the provisioner built therefore held a key the provisioner had never seen | readiness probe 401 on every tenant gateway; provision `FAILED` at `WAIT_FOR_PROVIDER` | `deploy/openwa-organization.compose.yml`: `API_MASTER_KEY: "${OPENWA_API_KEY}"`. Effective for **fresh volumes only** -- a container that already booted keeps the key it minted |
+| 4 | The gateway's SSRF guard refuses a webhook whose host resolves to a private address, which is where the backend lives | webhook registration 400; provision `FAILED` at the webhook step | same file: `SSRF_ALLOWED_HOSTS: "host.docker.internal"` -- the shared compose file already had it, the tenant one did not |
+| 5 | `OpenWAGatewayProvider.ensureSession` knew `starting` and `authenticating` as "already running" but not 0.23.2's `initializing` and `qr_ready`, so it told a session that had reached the QR to start again and was refused with 400 "Session is already started" | provision `FAILED` one step short of `AWAITING_QR` | `gateway-provider.ts`: the gateway's own status vocabulary, and 400-already-started treated like 409 |
 
-**So the 401 is not a wrong key. It is a channel that was never given one.**
-Whether the customer sees `CHANNEL_NOT_PROVISIONED` or `GATEWAY_REFUSED`
-depends only on which layer notices first -- `provider()` refusing a non-ACTIVE
-row, or the gateway refusing an empty credential. Both are the same absence.
+With all five: QR rendered in the product, scanned from a phone, gateway
+session `ready` with the phone number at 20:34:04Z, `session.authenticated`
+and `message.received` webhooks delivered to `host.docker.internal:4000`,
+inbound events reaching the incoming-message worker. **The earlier sentence
+"no organization in this environment can complete pairing" is withdrawn. One
+did.**
 
-That is why the earlier ruling that this was a key to be recovered was wrong:
-there is no key to recover.
+Two more things the run showed, neither fixed:
 
-### The cause, established by a run rather than assumed
+- **The product records a pairing only in the worker's `monitorConnection`
+  step.** Nothing in the request path notices a scan. When the worker died
+  (ts-node, ~390 MB, killed twice for memory on this host), the channel stayed
+  `AWAITING_QR`, and the channels list -- which refuses to probe a channel that
+  is not `ACTIVE` -- showed "Disconnected" to a person whose phone had just
+  said "device linked". Running the monitor step once by hand flipped it to
+  `ACTIVE` at 20:38:41Z. The list should probe an `AWAITING_QR` channel too, or
+  the pairing endpoint should record what it just saw.
+- **The worker's reconcile loop queues `provision` for every `PENDING` managed
+  channel every 30 seconds.** That is a fourth trigger, undocumented, and it
+  contradicts C2's "the only trigger is Connect": it built five containers for
+  stale test organizations nobody clicked, which is what exhausted the host.
+  Since C2 a click writes `PROVISIONING` before queueing, so the loop should
+  reconcile channels that are in flight, not channels that are merely unbuilt.
 
-Two earlier readings of this entry were wrong and are corrected here. The first
-said "there is a provisioning step that never runs". The second replaced it with
-a hypothesis -- no mail transport (D-2) -> the customer cannot verify ->
-`maybeProvisionGateway` never fires. **Neither is what happens.**
+### The shared gateway: the two seeded organizations
 
-A paid signup on 2026-09-05, run against the real stack, settled it:
+`rabitech-demo` and `ostudio` point at `http://openwa:2785` and hold the
+`OPENWA_API_KEY` from `.env` -- which is what `scripts/bootstrap-openwa-channel.ts`
+writes and what `docker-compose.yml:42` hands the shared container as
+`API_KEY`. Topology correct, and reachable: from inside compose the probe
+reached the gateway. But the shared container is the same 0.23.2 image, its
+data volume was first booted on 2026-08-23 (`/app/data/.api-key` is dated
+16:05 that day) with no `API_MASTER_KEY`, so it minted its own key and ignores
+the one in `.env`. Probed from inside compose on 2026-09-05 with each
+organization's own stored key, printing status only: **401, 401.**
 
-    POST /api/billing/signup, plan STANDARD, address never confirmed
-    -> Organization.status            PROVISIONING
-    -> maybeProvisionGateway          fired, reason "signup", returned true
-    -> bull:gateway-provisioning      job queued for that organization
-    -> OrganizationChannel            still PENDING, blank baseUrl, no key
-
-So the producer works. What is missing is the **consumer**:
-`startGatewayProvisioningWorker` is exported from
-`workers/gateway-provisioning.worker.ts` and is called from exactly one place --
-that file's own `require.main === module` block. It is a separate process,
-`npm run gateway:worker`, and `docs/GATEWAY-PROVISIONING.md` says so on its
-first line: the API is a queue producer only, and the worker runs on the Docker
-host because it starts containers.
-
-That process is not running in this environment, and has not been for some time:
-Redis holds **236 waiting jobs** on `bull:gateway-provisioning`, one per
-organization ever created here. Every one of them is a customer who was told
-their gateway was being prepared.
-
-**This is a deployment gap, not a code defect.** Nothing in the queueing path
-needs changing. What is missing is that the provisioning host worker is not run
-anywhere -- not by compose, not by a supervisor, not by any documented start
-sequence beyond a manual `npm run gateway:worker`. Until it is, the channel row
-stays exactly as this entry describes it, and `CHANNEL_NOT_PROVISIONED` is the
-honest answer the pairing screen now gives.
+So the 401 seen earlier through the host proxy, while that proxy still
+worked, was a real 401 and reproduces from inside the network. **The two
+seeded organizations cannot pair on the shared gateway from anywhere, and the
+reason is the key**, not the row and not the route. Re-running the bootstrap
+would not help: it writes the `.env` value, which is the value the container
+does not hold.
 
 ### What is true today
 
-- A signup-created channel is `PENDING` with a blank `baseUrl` and no key.
-- The two seeded organizations point at `http://openwa:2785`, the
-  docker-internal hostname, which a backend running from source on the host
-  cannot resolve -- a second reason the same rows cannot authenticate.
-- Consequently **no organization in this environment can complete pairing**,
-  and the successful-QR half of the pairing evidence could not be produced.
+- Self-serve: Connect -> per-tenant container -> QR -> scan -> `ACTIVE` works,
+  with the backend inside compose and the worker on the host.
+- The two seeded organizations are `ACTIVE` rows against a gateway that answers
+  them 401, which the pairing screen reports as `GATEWAY_REFUSED`.
+- `gateway-provisioning`: 246 failed jobs, 1 waiting -- the backlog the worker
+  consumed once it ran, almost all for test organizations whose containers no
+  longer exist. A `FAILED` retry resumes at the failed step and cannot recover
+  from a missing container; `resume` (`up -d`) can.
+- `docker-compose.yml:42` still passes `API_KEY`, a variable the running image
+  does not read. Changing it to `API_MASTER_KEY` takes effect only on a fresh
+  volume.
 
 ### Owner and trigger
 
-- **Owner:** UnKnowan, for the topology choice -- per-tenant or shared is a
-  cost and operations decision, not an implementation detail. The wiring that
-  follows from it is not owner work.
-- **Trigger:** the next commit, which must make signup either provision a
-  working gateway or not complete at all.
-- **Lands in:** the signup path in `apps/backend/src/modules/billing/billing.service.ts`
-  and `apps/backend/src/modules/provisioning/gateway-provisioning.service.ts`.
+- **Owner:** UnKnowan. The shared gateway has three ways out and each costs
+  something different: (1) recreate the shared data volume with
+  `API_MASTER_KEY` set -- the container will then hold the `.env` key by
+  construction, at the price of every session that volume holds, which per D-6
+  is development data; (2) copy the key the container minted into the two rows
+  -- a credential copy out of a container, which this session did not perform;
+  (3) leave the two rows as they are and accept that the shared lane is dead.
+  Independently of that choice the image is now **pinned by digest** in both
+  compose files (2026-09-06): `:latest` had moved the authentication model
+  under a running system and nothing noticed until a scan.
+- **Trigger:** before anything is demonstrated on the seeded organizations,
+  and before the next `docker pull`.
+- **Lands in:** `docker-compose.yml` (the `openwa` service: `API_MASTER_KEY`;
+  the pin is already there) and `docs/DEPLOYMENT.md`.
 
 ### Not to be confused with D-4
 
 D-4 rotates `OPENWA_API_KEY` because it is exposed in public history. That is a
-real and separate obligation. Rotating it does not fix this entry, and this
-entry does not wait on it: a channel with no key is unaffected by which key the
-shared container holds.
+real and separate obligation, and this entry changes how it is done: on
+0.23.x a gateway's key store is written once, so a rotation is a new volume or
+the gateway's own key management, never an env change alone.
 
 ---
 
 ## D-6 · Gateway topology is per-tenant; shared is development-only
 
-**Settled 2026-09-05.**
+**Settled 2026-09-05. Corrected the same day, after the first real pairing.**
 
 Each subscriber gets its own OpenWA container, its own randomly generated key,
 and its own data volume. The shared `openwa` service in `docker-compose.yml` is
@@ -252,21 +274,46 @@ so one crash or one leaked key is *everyone's*. That is disqualifying for a
 product whose pitch is "attach your business number to us". Blast radius
 outweighs the cost.
 
+### What the first version of this entry got wrong
+
+It said the per-tenant lane was "already implemented end to end" and that
+"nothing has to be kept in sync by hand", because the provisioner mints the
+key, stores it encrypted, and starts the container with the same value. That
+was true of the image the code was written against. It stopped being true
+when `ghcr.io/rmyndharis/openwa:latest` moved to 0.23.x, which does not read
+`API_KEY` at all (D-5, row 3): every tenant gateway built since then minted a
+key of its own and answered 401 to the one the provisioner held. The agreement
+was never by construction -- it rested on an unpinned tag and an environment
+variable name, and both changed without a line of this repository changing.
+
+The tenant compose file now passes `API_MASTER_KEY`, which 0.23.x reads once,
+on first boot with an empty volume. So the agreement holds again -- for
+containers built from now on. It holds only as long as the tag is pinned.
+
 ### What it costs, stated plainly
 
 Roughly one container, one data volume and one Redis volume **per paying
 customer**. Host demand scales linearly with customers rather than staying flat.
-The machine this was developed on cannot run a single full stack, which is not
-an argument against the choice but is a hard precondition on where it runs.
+Measured on 2026-09-05: with six tenant gateways and the main stack up, this
+development host killed the provisioning worker twice for memory; five of the
+six were test organizations the reconcile loop had built unasked (D-5). The
+machine this was developed on cannot run a single full stack, which is not an
+argument against the choice but is a hard precondition on where it runs.
 
-It is already implemented end to end: `gateway-provisioning.service.ts:123`
-mints the key when `apiKeyEnc` is empty, `:156` decrypts it, and
-`gateway-runtime.ts:33` starts the container with the same value. Nothing has
-to be kept in sync by hand.
+Two consequences for operations that follow from the key store being written
+once:
 
-- **Owner:** UnKnowan — for the hosting decision this bundles with. The
+- **Rotation (D-4) on a per-tenant gateway is a new volume or the gateway's own
+  key management, not an env change.** Restarting a container with a different
+  `API_MASTER_KEY` changes nothing.
+- **A tenant gateway whose container is gone cannot be recovered by retrying
+  the failed provision step.** `resume` runs `up -d` on the same volumes and can.
+
+- **Owner:** UnKnowan -- for the hosting decision this bundles with. The
   topology is settled; where N containers run is not.
-- **Trigger:** the hosting decision, before the first paying customer.
+- **Trigger:** the hosting decision, before the first paying customer. The
+  image pin did not wait for it: both compose files carry the digest since
+  2026-09-06.
 - **Lands in:** the deployment target, and `docs/DEPLOYMENT.md` once the host
   is chosen.
 

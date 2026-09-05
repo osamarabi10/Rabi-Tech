@@ -78,6 +78,40 @@ and this project does not use it.
 | `localhost:8081` | `next start` during `test:e2e` | only after `npm run build` |
 | `localhost:4000`, container stopped | `npm run dev` in `apps/backend` | **yes** |
 | `localhost:4000`, container running | compose `backend`, a built image | no, until rebuilt |
+| `openwa:2785` | the shared gateway, on the compose network | n/a -- reachable from compose services, never from the host |
+| `127.0.0.1:13000` | the host mapping of the shared gateway | n/a -- unreliable; closes connections. Do not build on it |
+
+### The backend must run inside compose when a gateway is involved
+
+The dev-server advice above stops being safe the moment the work touches
+pairing, sending or webhooks. The seeded organizations' channel rows point at
+`http://openwa:2785` -- the compose-network name, correct for the deployed
+topology and **unresolvable from a process started on the host**. The host
+port mapping that was meant to bridge that (`127.0.0.1:13000 -> openwa:2785`)
+is not reliable: on 2026-09-05 it closed every connection (`curl: (52) Empty
+reply from server`) while `:4000`, `:18080` and `:6379` on the same host
+answered normally. So a host-run backend either cannot reach the gateway at
+all, or reaches it through a proxy that can stop working without logging
+anything.
+
+For anything that talks to a gateway, run the backend as the compose service,
+rebuilt from the current tree first:
+
+```bash
+docker compose up -d --build backend     # rebuild, then serve :4000 from inside the network
+docker compose logs -f backend
+```
+
+The provisioning worker is the one exception and stays on the host by design
+(`docs/GATEWAY-PROVISIONING.md`): it starts containers, reaches each tenant
+gateway at `127.0.0.1:<apiPort>`, and tells that gateway to call back at
+`host.docker.internal:4000` -- which lands on whichever process holds `:4000`.
+
+This is the fourth instance of the same mistake -- **the thing serving you is
+not the thing you think** -- after `:18080` (a stale frontend image), `:4000`
+(a stale backend image) and `ts-node-dev`, and the first where the wrong thing
+was the network rather than the artifact. The URL looked right; the process
+behind it had no route to what the URL named.
 
 ---
 
@@ -264,6 +298,14 @@ one thing that silently fails if the origin is wrong.
 ---
 
 ## Known gap: automatic gateway provisioning
+
+**Superseded 2026-08-19; the reasoning below is kept.** Provisioning no longer
+runs in the backend container: `gateway-provisioning.worker.ts` runs on the
+Docker host and is the only process that invokes Docker Compose
+(`docs/GATEWAY-PROVISIONING.md`). That is option 2 below, taken. The socket is
+not mounted and must not be. What is still open is *where* that worker runs in
+production and who keeps it running: on 2026-09-05 it was running nowhere, and
+every Connect queued a build that nothing consumed (D-5).
 
 `gateway-runtime.ts` provisions a subscriber's WhatsApp gateway by running
 `docker compose` as a child process. **The backend container has neither the
