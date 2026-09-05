@@ -426,7 +426,9 @@ app.use('/api/auth/me/2fa', LIMITS.twoFactorManagement);
 app.use('/api/auth/signup', LIMITS.signup);
 app.use('/api/billing/signup', LIMITS.signup);
 app.use('/api/auth/verify-email', LIMITS.emailVerify);
-app.use('/api/auth/resend-verification', LIMITS.emailVerify);
+// Was '/api/auth/resend-verification', which no router ever registered -- a
+// limit guarding nothing. The resend lives with the token that mints it.
+app.use('/api/billing/email-verification/resend', LIMITS.emailVerify);
 app.use('/api/branding/public', LIMITS.publicBranding);
 app.use('/api/widgets/go', LIMITS.widgetRedirect);
 app.use('/webhooks', LIMITS.webhook);

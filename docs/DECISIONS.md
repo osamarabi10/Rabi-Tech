@@ -140,49 +140,230 @@ tooling. It is owner work at the provider consoles.
 
 ---
 
-## D-5 · A real paid account can reach CHANNEL_NOT_PROVISIONED
+## D-5 · Self-serve signup produces a channel belonging to neither topology
 
-The pairing endpoint now reports three distinct faults instead of claiming
-`pending` for all of them. Proving that surfaced a defect underneath it: an
-account created through the real signup path has an `OrganizationChannel` row
-with `status = PENDING` and an **empty `baseUrl`**, so `provider()` throws
-before any network call and the customer is told, correctly, that no gateway
-has been set up for them.
+This entry replaces two that were filed separately -- "a real paid account can
+reach CHANNEL_NOT_PROVISIONED" and "the gateway rejects every key the platform
+holds". They are one defect seen from two layers.
 
-The message is now honest. The situation is not acceptable: a paying customer
-reaching "contact support so a gateway can be provisioned" as the first thing
-they do is a provisioning failure, not a messaging one.
+### The two topologies
 
-Deliberately **not** fixed in the honesty commit. Making the screen tell the
-truth and changing what the truth is are two changes, and merging them would
-have meant neither could be proved on its own.
+**Per-tenant.** `gateway-provisioning.service.ts:123` mints a fresh key with
+`crypto.randomBytes(32).toString('base64url')`, stores it encrypted on
+`OrganizationChannel.apiKeyEnc`, and `gateway-runtime.ts:33` starts that
+tenant's own container with the same value. The two agree by construction --
+one generator, one store, one container.
 
-- **Owner:** UnKnowan
-- **Trigger:** the next commit.
-- **Lands in:** the provisioning path — `gateway-provisioning.service.ts` and
-  the `OrganizationChannel` row written at signup in `billing.service.ts`.
+**Shared.** `docker-compose.yml:42` gives the single `openwa` service
+`API_KEY=${OPENWA_API_KEY}` from `.env`. An organization pointed at it must
+hold that same value, which only `scripts/bootstrap-openwa-channel.ts` writes --
+the one path that reads `OPENWA_API_KEY` and seeds a channel from it.
+
+### Signup belongs to neither
+
+`billing.service.ts` creates an `OrganizationChannel` with `status: PENDING`,
+`provisioningState: PENDING`, an empty `baseUrl` and an empty `apiKeyEnc`. It
+does not provision a per-tenant gateway, and it does not seed against the
+shared one. The row exists and points at nothing.
+
+**So the 401 is not a wrong key. It is a channel that was never given one.**
+Whether the customer sees `CHANNEL_NOT_PROVISIONED` or `GATEWAY_REFUSED`
+depends only on which layer notices first -- `provider()` refusing a non-ACTIVE
+row, or the gateway refusing an empty credential. Both are the same absence.
+
+That is why the earlier ruling that this was a key to be recovered was wrong:
+there is no key to recover.
+
+### The cause, established by a run rather than assumed
+
+Two earlier readings of this entry were wrong and are corrected here. The first
+said "there is a provisioning step that never runs". The second replaced it with
+a hypothesis -- no mail transport (D-2) -> the customer cannot verify ->
+`maybeProvisionGateway` never fires. **Neither is what happens.**
+
+A paid signup on 2026-09-05, run against the real stack, settled it:
+
+    POST /api/billing/signup, plan STANDARD, address never confirmed
+    -> Organization.status            PROVISIONING
+    -> maybeProvisionGateway          fired, reason "signup", returned true
+    -> bull:gateway-provisioning      job queued for that organization
+    -> OrganizationChannel            still PENDING, blank baseUrl, no key
+
+So the producer works. What is missing is the **consumer**:
+`startGatewayProvisioningWorker` is exported from
+`workers/gateway-provisioning.worker.ts` and is called from exactly one place --
+that file's own `require.main === module` block. It is a separate process,
+`npm run gateway:worker`, and `docs/GATEWAY-PROVISIONING.md` says so on its
+first line: the API is a queue producer only, and the worker runs on the Docker
+host because it starts containers.
+
+That process is not running in this environment, and has not been for some time:
+Redis holds **236 waiting jobs** on `bull:gateway-provisioning`, one per
+organization ever created here. Every one of them is a customer who was told
+their gateway was being prepared.
+
+**This is a deployment gap, not a code defect.** Nothing in the queueing path
+needs changing. What is missing is that the provisioning host worker is not run
+anywhere -- not by compose, not by a supervisor, not by any documented start
+sequence beyond a manual `npm run gateway:worker`. Until it is, the channel row
+stays exactly as this entry describes it, and `CHANNEL_NOT_PROVISIONED` is the
+honest answer the pairing screen now gives.
+
+### What is true today
+
+- A signup-created channel is `PENDING` with a blank `baseUrl` and no key.
+- The two seeded organizations point at `http://openwa:2785`, the
+  docker-internal hostname, which a backend running from source on the host
+  cannot resolve -- a second reason the same rows cannot authenticate.
+- Consequently **no organization in this environment can complete pairing**,
+  and the successful-QR half of the pairing evidence could not be produced.
+
+### Owner and trigger
+
+- **Owner:** UnKnowan, for the topology choice -- per-tenant or shared is a
+  cost and operations decision, not an implementation detail. The wiring that
+  follows from it is not owner work.
+- **Trigger:** the next commit, which must make signup either provision a
+  working gateway or not complete at all.
+- **Lands in:** the signup path in `apps/backend/src/modules/billing/billing.service.ts`
+  and `apps/backend/src/modules/provisioning/gateway-provisioning.service.ts`.
+
+### Not to be confused with D-4
+
+D-4 rotates `OPENWA_API_KEY` because it is exposed in public history. That is a
+real and separate obligation. Rotating it does not fix this entry, and this
+entry does not wait on it: a channel with no key is unaffected by which key the
+shared container holds.
 
 ---
 
-## D-6 · The OpenWA gateway rejects every key the platform holds
+## D-6 · Gateway topology is per-tenant; shared is development-only
 
-The running `openwa` container answers `401` to both the encrypted key stored
-on `OrganizationChannel` and to `OPENWA_API_KEY` from `.env`. So OpenWA pairing
-cannot reach a real QR code in this environment at all, for any organization.
+**Settled 2026-09-05.**
 
-This is independent of the honesty change and predates it — the endpoint now
-reports `GATEWAY_REFUSED` with the 401 instead of hiding it, which is how it
-was found. It also means the pairing path could not be demonstrated end to end:
-the three fault states are proved against the running gateway, a successful QR
-is not.
+Each subscriber gets its own OpenWA container, its own randomly generated key,
+and its own data volume. The shared `openwa` service in `docker-compose.yml` is
+a development convenience and is not a deployment model.
 
-Related, and possibly the same cause: both seeded organizations point at
-`http://openwa:2785`, the docker-internal hostname, which a backend running
-from source on the host cannot resolve.
+### Why, in one line
+
+A shared gateway holds many businesses' live WhatsApp sessions in one process,
+so one crash or one leaked key is *everyone's*. That is disqualifying for a
+product whose pitch is "attach your business number to us". Blast radius
+outweighs the cost.
+
+### What it costs, stated plainly
+
+Roughly one container, one data volume and one Redis volume **per paying
+customer**. Host demand scales linearly with customers rather than staying flat.
+The machine this was developed on cannot run a single full stack, which is not
+an argument against the choice but is a hard precondition on where it runs.
+
+It is already implemented end to end: `gateway-provisioning.service.ts:123`
+mints the key when `apiKeyEnc` is empty, `:156` decrypts it, and
+`gateway-runtime.ts:33` starts the container with the same value. Nothing has
+to be kept in sync by hand.
+
+- **Owner:** UnKnowan — for the hosting decision this bundles with. The
+  topology is settled; where N containers run is not.
+- **Trigger:** the hosting decision, before the first paying customer.
+- **Lands in:** the deployment target, and `docs/DEPLOYMENT.md` once the host
+  is chosen.
+
+---
+
+## D-7 · FREE never provisions a gateway, so FREE cannot evaluate the product
+
+`maybeProvisionGateway` returns early for any non-paid plan
+(`billing.service.ts:565`, `isPaidPlan`). A FREE signup therefore never gets a
+gateway, never pairs a number, and never sends or receives a message.
+
+This is **an open product decision, not a defect**, and it is recorded rather
+than changed. But the consequence should be said out loud: if FREE gets no
+gateway, FREE is a signup form rather than a trial, and nobody can evaluate the
+product without paying first.
+
+Note the interaction with the editions actually on sale here: FREE and STANDARD
+are the only plans that can be signed up for at all, because GROWTH, BUSINESS
+and ENTERPRISE permit only `WHATSAPP_CLOUD`, whose required environment is
+unset, so `editionOfferability` withdraws them. That leaves exactly one
+sellable plan that provisions anything.
 
 - **Owner:** UnKnowan
-- **Trigger:** the credential rotation in D-4 — the gateway key is one of the
-  values being rotated, and reconciling it belongs with that work rather than
-  before it.
-- **Lands in:** the gateway container environment and the `apiKeyEnc` written
-  by `PATCH /api/platform/subscribers/:id/openwa-channel`.
+- **Trigger:** the pricing decision — whether FREE is a trial, a demo with a
+  shared sandbox number, or a form that collects an email.
+- **Lands in:** the edition definitions (`Plan.allowedChannels` and the
+  `autoProvisionGateway` entitlement), and `isPaidPlan` if FREE is to provision.
+
+---
+
+## D-8 · Provisioning is decoupled from email verification (transitional)
+
+**Transitional. It ships with an expiry condition, per AGENTS.md.**
+
+`maybeProvisionGateway` used to require `Organization.emailVerifiedAt`. That
+condition is removed, and provisioning is triggered at signup instead of at
+verification.
+
+### Why
+
+There is no mail transport (D-2). The only route to verification is the link
+rendered on the signup screen itself, so a customer who closes that tab has no
+way back to it -- and under the old rule, no way to ever be given a gateway.
+The gate was not protecting anything. It was making a paid product unreachable
+for anybody who blinked.
+
+### What did not change
+
+Every other guard is untouched, deliberately:
+
+- `isPaidPlan` -- a FREE plan still never provisions (D-7).
+- `channelGrantRefusal` -- the edition must permit OPENWA.
+- the `provisioningState` check -- a channel already ACTIVE, AWAITING_QR or
+  PROVISIONING is left alone.
+
+Verification itself is untouched. The token, the link, the `/verify-email`
+endpoint and `emailVerifiedAt` all still work and still record a real
+confirmation. What changed is that not having done it yet stops something
+invisible and starts something visible: an unverified organization now carries
+a persistent banner on every dashboard page, with a resend that shows the link
+when no provider delivered it.
+
+### The abuse surface, stated honestly
+
+An unconfirmed address can now reach a provisioned gateway. Two things bound
+that, and neither is verification:
+
+- **Provisioning still requires a paid plan.** `isPaidPlan` runs before
+  anything is queued, so the floor on abuse is the price of a subscription --
+  not a confirmed mailbox.
+- **Signup is rate limited to 3 per hour per IP** (`LIMITS.signup`,
+  `rate-limit.middleware.ts:155`), with a second in-service throttle of 10 per
+  hour per IP and 50 per hour per email domain (`SIGNUP_IP_LIMIT` /
+  `SIGNUP_DOMAIN_LIMIT`, unset in `.env`, so both defaults apply). The binding
+  limit is 3.
+
+The honest reading: verification was never the thing stopping abuse here,
+because an attacker who can pay can also confirm an address. What it did stop
+was the legitimate customer.
+
+### The expiry condition
+
+- **Owner:** UnKnowan
+- **Trigger:** a working mail provider (Resend, or whichever is chosen).
+- **On that trigger:** decide *deliberately* whether to restore the gate. It
+  must not be restored automatically as a side effect of configuring mail. The
+  question to answer then is whether an unconfirmed address should be able to
+  attach a business WhatsApp number -- which is a product decision, not a
+  cleanup.
+- **Lands in:** `apps/backend/src/modules/billing/billing.service.ts`, at the
+  guard in `maybeProvisionGateway` and the trigger at the end of
+  `createSignup`.
+
+### Also corrected here
+
+The signup screen said the email had to be verified "before any WhatsApp number
+is linked to the account". That sentence described the gate this entry removes,
+so it was replaced rather than left standing. A screen describing a rule the
+code no longer has is worse than a screen saying nothing: it tells the customer
+to wait for something that is not going to happen.

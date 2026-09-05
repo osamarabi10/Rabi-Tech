@@ -114,7 +114,14 @@ function SignupFlow() {
           <MailCheck className="h-8 w-8 text-primary" />
           <h1 className="mt-4 text-xl font-bold">{t('فعّل بريدك الإلكتروني')}</h1>
           <p className="mt-2 text-caption leading-6 text-muted-foreground">
-            {t('بعتنالك رابط تفعيل. لازم تفعّل البريد قبل ما نربط أي رقم واتساب بحسابك.')}
+            {/*
+              This used to say the email had to be verified before any WhatsApp
+              number would be linked. That stopped being true when provisioning
+              was decoupled from verification (docs/DECISIONS.md D-8), and a
+              sentence describing a gate that no longer exists is worse than no
+              sentence -- it tells the customer to wait for nothing.
+            */}
+            {t('Your account is ready. Confirm your address so you can recover the account later.')}
           </p>
 
           <div className="mt-5 space-y-2">

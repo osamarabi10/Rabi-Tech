@@ -6,7 +6,9 @@ import {
   getCheckoutStatus,
   getBillingSummary,
   getCurrentBilling,
+  getEmailVerificationState,
   listPlans,
+  resendVerification,
   requestGatewayForCurrentOrganization,
   verifyEmail,
 } from './billing.service';
@@ -118,6 +120,40 @@ router.get('/verify-email', async (req, res) => {
     const token = String(req.query.token || '');
     if (!token) return res.status(400).json({ error: 'Verification token is required' });
     res.json(await verifyEmail(token));
+  } catch (error) {
+    handleRouteError(res, error);
+  }
+});
+
+/**
+ * Whether this organization still has an address to confirm.
+ *
+ * Authenticated, and deliberately not on the gate's allow-list: an unconfirmed
+ * address no longer restricts anything, so a caller that cannot reach the rest
+ * of the API has a different problem and does not need this banner on top of it.
+ */
+router.get('/email-verification', async (req, res) => {
+  try {
+    res.json(await getEmailVerificationState(req.user!.organizationId, req.user!.role === 'ADMIN'));
+  } catch (error) {
+    handleRouteError(res, error);
+  }
+});
+
+/**
+ * Issue a new confirmation link for this organization's address.
+ *
+ * Administrator only, matching /request-gateway and /cancel below: it mints a
+ * credential that confirms the administrator's own address, and with no mail
+ * provider configured the response carries that link back to the caller.
+ *
+ * Rate limited as LIMITS.emailVerify in index.ts, because it writes a row and
+ * queues a message on every call.
+ */
+router.post('/email-verification/resend', async (req, res) => {
+  try {
+    if (req.user!.role !== 'ADMIN') return res.status(403).json({ error: 'Admin access required' });
+    res.json(await resendVerification(req.user!.organizationId));
   } catch (error) {
     handleRouteError(res, error);
   }

@@ -11,6 +11,7 @@ import { EntitlementsProvider } from '@/lib/entitlements';
 import { DashboardFooter } from '@/components/dashboard-footer';
 import { TrialBanner } from '@/components/trial-banner';
 import { ServiceStateBanner } from '@/components/service-state-banner';
+import { VerifyEmailBanner } from '@/components/verify-email-banner';
 import { useT } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 
@@ -91,6 +92,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <WorkspaceSwitcher />
         <ServiceStateBanner />
         <TrialBanner />
+        {/*
+          Last of the three, because it is the only one that is not about access
+          ending. An overdue invoice and a trial running out have deadlines; an
+          unconfirmed address is an obligation with no clock on it.
+        */}
+        <VerifyEmailBanner />
         {children}
         <DashboardFooter />
       </main>

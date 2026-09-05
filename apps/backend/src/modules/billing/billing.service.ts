@@ -29,8 +29,12 @@ import { editionOfferability } from '../channels/channel-viability';
 import { channelGrantRefusal } from '../channels/channel-entitlement';
 import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
 import { seedLifecycleStages } from '../lifecycle/lifecycle.service';
+import { queueMail } from '../mail/mail.service';
+import { getMailProvider } from '../mail/mail.provider';
 
 const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
+/** How long a verification link stays usable. Named once, used at signup and on resend. */
+const VERIFICATION_TTL_MS = 48 * 60 * 60 * 1000;
 const SIGNUP_IP_LIMIT = Number(process.env.SIGNUP_IP_HOURLY_LIMIT || 10);
 const SIGNUP_DOMAIN_LIMIT = Number(process.env.SIGNUP_DOMAIN_HOURLY_LIMIT || 50);
 
@@ -293,7 +297,7 @@ export async function createSignup(input: {
     const slug = await uniqueSlug(input.organizationName);
     const provider = getPaymentProvider();
     const verificationToken = crypto.randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + VERIFICATION_TTL_MS);
 
     /*
      * Whether this signup is a trial, and what it is a trial *of*.
@@ -501,6 +505,21 @@ export async function createSignup(input: {
       });
     }
 
+    /*
+      Provision now, rather than waiting for a verification that may never come.
+
+      Deliberately after the transaction and deliberately not awaited into the
+      response's success: a provisioning failure must not fail a signup that has
+      already created the organization, the admin and the subscription. The
+      channel records its own failure state, which the channel screen renders.
+    */
+    await maybeProvisionGateway(created.organization.id, 'signup').catch((error) => {
+      logger.error('Gateway provisioning could not be started at signup', {
+        organizationId: created.organization.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
     return {
       organizationId: created.organization.id,
       adminId: created.admin.id,
@@ -550,6 +569,123 @@ export async function verifyEmail(token: string) {
   });
 }
 
+/**
+ * Whether this organization's address has been confirmed, and who may ask again.
+ *
+ * Small on purpose. The banner that consumes it renders on every dashboard page
+ * for every signed-in user, and `/billing/current` -- the other place that
+ * carries `emailVerifiedAt` -- also loads twenty invoices and the whole edition
+ * catalogue to answer it.
+ *
+ * `canResend` is decided here rather than in the browser. The resend mints a
+ * link that confirms the *administrator's* address, so it is an administrator's
+ * action; a member still sees the banner, because "somebody in this workspace
+ * has to confirm an address" is true for all of them.
+ */
+export async function getEmailVerificationState(organizationId: string, isAdmin: boolean) {
+  return runAsPlatform(`billing-email-verification:${organizationId}`, async () => {
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { emailVerifiedAt: true },
+    });
+    // An organization that does not exist is not an organization with an
+    // unconfirmed address. Reporting `verified` keeps a banner off a screen
+    // whose real problem is elsewhere.
+    if (!organization || organization.emailVerifiedAt) {
+      return { verified: true, email: null as string | null, canResend: false };
+    }
+    const pending = await prisma.emailVerificationToken.findFirst({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      select: { email: true },
+    });
+    return { verified: false, email: pending?.email ?? null, canResend: isAdmin };
+  });
+}
+
+/**
+ * Mint a fresh verification link and try to send it.
+ *
+ * ## It returns the link when nothing delivered it
+ *
+ * The mail provider is `log` and `delivers: false` (see docs/DECISIONS.md D-2),
+ * so a resend that only queued a message would be a button that reports success
+ * and changes nothing -- the exact fabricated-success shape the pairing screen
+ * was fixed for. When the provider does not deliver, the caller gets the URL and
+ * the screen shows it, which is what the signup screen already does.
+ *
+ * The message is queued either way, so the outbox records what was owed. And the
+ * echo expires by itself: the moment a real provider is registered, `delivers`
+ * is true, `verificationUrl` is null, and the screen stops showing a link it
+ * should not need to.
+ *
+ * Only ever returned to a signed-in administrator of the organization the link
+ * belongs to, who could reset that address's password anyway.
+ */
+export async function resendVerification(organizationId: string) {
+  return runAsPlatform(`billing-resend-verification:${organizationId}`, async () => {
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { id: true, name: true, emailVerifiedAt: true },
+    });
+    if (!organization) throw Object.assign(new Error('Organization not found'), { status: 404 });
+    if (organization.emailVerifiedAt) {
+      return { verified: true, delivered: true, verificationUrl: null as string | null, email: null as string | null };
+    }
+
+    // The address being confirmed is the one the last link was addressed to.
+    // Falling back to the administrator's identity covers an organization
+    // created before this table had a row for it.
+    const previous = await prisma.emailVerificationToken.findFirst({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      select: { email: true },
+    });
+    let email = previous?.email ?? null;
+    if (!email) {
+      const admin = await prisma.user.findFirst({
+        where: { organizationId, role: 'ADMIN', isActive: true },
+        orderBy: { createdAt: 'asc' },
+        select: { identity: { select: { email: true } } },
+      });
+      email = admin?.identity?.email ?? null;
+    }
+    if (!email) {
+      throw Object.assign(new Error('No address to confirm for this organization'), { status: 409 });
+    }
+
+    const token = crypto.randomBytes(32).toString('base64url');
+    await prisma.emailVerificationToken.create({
+      data: {
+        organizationId,
+        email,
+        tokenHash: tokenHash(token),
+        expiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
+      },
+    });
+    const verificationUrl = `${appBaseUrl()}/verify-email?token=${encodeURIComponent(token)}`;
+
+    await queueMail({
+      to: email,
+      subject: `Confirm your email address for ${organization.name}`,
+      body: `Open this link to confirm your address:\n\n${verificationUrl}\n\nThe link is valid for 48 hours.`,
+      kind: 'email-verification',
+      organizationId,
+      // Deliberately no dedupeKey: every resend is a new link, and the previous
+      // message carries a token this one supersedes. Deduplicating would leave
+      // the outbox holding a link the customer has already been shown once.
+    });
+
+    const delivers = getMailProvider().delivers;
+    return {
+      verified: false,
+      delivered: delivers,
+      verificationUrl: delivers ? null : verificationUrl,
+      email,
+    };
+  });
+}
+
 export async function maybeProvisionGateway(organizationId: string, reason: string, explicitAdminRequest = false): Promise<boolean> {
   return runAsPlatform(`billing-provision-gate:${organizationId}:${reason}`, async () => {
     const organization = await prisma.organization.findUnique({
@@ -559,7 +695,24 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
         channels: { where: { kind: 'OPENWA' }, take: 1 },
       },
     });
-    if (!organization || !organization.emailVerifiedAt) return false;
+    if (!organization) return false;
+
+    /*
+      Verification is deliberately NOT required here. Transitional — see
+      docs/DECISIONS.md D-8, which carries the expiry condition.
+
+      This used to read `!organization.emailVerifiedAt`. No mail transport
+      exists (D-2), so the only route to verification is the link rendered on
+      the signup screen: anyone who closes that tab can never verify, and could
+      therefore never be given a gateway. The gate was not protecting anything —
+      it was making the product unreachable for a customer who blinked.
+
+      Every other guard below is unchanged. Provisioning still requires a paid
+      plan, an edition that permits OpenWA, and a channel not already being
+      built. Verification itself is untouched: the link, the endpoint and
+      emailVerifiedAt all still work, and an unverified organization is told so
+      by a banner rather than being silently held back.
+    */
     const active = organization.subscriptions[0];
     const planCode = normalizePlanCode(active?.planCode || organization.tier || 'FREE');
     if (!isPaidPlan(planCode) && !explicitAdminRequest) return false;

@@ -1000,7 +1000,14 @@ const D: Dict = {
   'عندك حساب؟': { he: 'כבר יש לכם חשבון?', en: 'Already have an account?' },
   'رقم واتساب تلقائي': { he: 'מספר וואטסאפ אוטומטי', en: 'automatic WhatsApp number' },
   'فعّل بريدك الإلكتروني': { he: 'אמתו את האימייל שלכם', en: 'Verify your email' },
-  'بعتنالك رابط تفعيل. لازم تفعّل البريد قبل ما نربط أي رقم واتساب بحسابك.': { he: 'שלחנו לכם קישור אימות. יש לאמת את האימייל לפני חיבור מספר וואטסאפ כלשהו לחשבון.', en: 'We have sent you a verification link. The email must be verified before any WhatsApp number is linked to the account.' },
+  "Your account is ready. Confirm your address so you can recover the account later.": { ar: "حسابك جاهز. أكّد عنوان بريدك حتى تقدر تسترجع الحساب لاحقاً.", he: "החשבון שלכם מוכן. אשרו את כתובת האימייל כדי שתוכלו לשחזר את החשבון בהמשך.", en: "Your account is ready. Confirm your address so you can recover the account later." },
+
+  // ---- Unverified-address banner (D-8) ----
+  "Confirm your email address": { ar: "أكّد عنوان بريدك الإلكتروني", he: "אשרו את כתובת האימייל שלכם", en: "Confirm your email address" },
+  "Send the link again": { ar: "أعِد إرسال الرابط", he: "שלחו את הקישור שוב", en: "Send the link again" },
+  "No mail provider is configured, so the link is shown here instead of being sent.": { ar: "ما في مزوّد بريد مُعدّ، فمنعرض الرابط هون بدل ما ينبعت.", he: "לא מוגדר ספק דואר, ולכן הקישור מוצג כאן במקום להישלח.", en: "No mail provider is configured, so the link is shown here instead of being sent." },
+  "The link is on its way to your inbox.": { ar: "الرابط في طريقه لبريدك.", he: "הקישור בדרך לתיבת הדואר שלכם.", en: "The link is on its way to your inbox." },
+  "Could not prepare a confirmation link": { ar: "تعذّر تجهيز رابط التأكيد", he: "לא ניתן היה להכין קישור אישור", en: "Could not prepare a confirmation link" },
   'افتح رابط التفعيل': { he: 'פתיחת קישור האימות', en: 'Open the verification link' },
   'أكمل الدفع': { he: 'השלמת התשלום', en: 'Complete payment' },
   'الدفع الإلكتروني لسا مش مفعّل. فريقنا رح يتواصل معك لتفعيل الباقة يدوياً.': { he: 'התשלום המקוון עדיין אינו פעיל. הצוות שלנו ייצור אתכם קשר להפעלת החבילה באופן ידני.', en: 'Online payment is not switched on yet. Our team will contact you to activate the plan manually.' },
