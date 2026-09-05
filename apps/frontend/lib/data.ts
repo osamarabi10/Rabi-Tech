@@ -318,8 +318,22 @@ export type Session = {
   isActive: boolean;
   /** Live gateway probe result. UNAVAILABLE is not the same as disconnected. */
   connectionStatus: 'CONNECTED' | 'DISCONNECTED' | 'UNAVAILABLE';
-  /** Whether the organization currently sends through OpenWA. */
+  /**
+   * Whether *this number's own* gateway is active.
+   *
+   * It used to mean "whether the organization sends through OpenWA", one
+   * boolean stamped onto every number alike. A subscriber running Meta on one
+   * number and OpenWA on another had both rendered with the OpenWA gateway's
+   * state, so the Meta number went dark whenever the OpenWA container did.
+   */
   isActiveChannel: boolean;
+  /**
+   * The gateway this number sends through, or null when nothing has bound it.
+   *
+   * Null is a legacy row. The send path refuses it by name rather than
+   * guessing, and the channels screen offers a gateway to pick.
+   */
+  channelKind: 'OPENWA' | 'WHATSAPP_CLOUD' | null;
 };
 export type InboxConfig = {
   sessions: { id: string; sessionName: string; label: string | null; phoneNumber: string | null; teamId: string | null }[];
@@ -1263,9 +1277,8 @@ export async function fetchSessions(): Promise<Session[]> {
     phoneNumber: s.phoneNumber ?? null,
     teamId: s.teamId ?? null,
     isActive: !!s.isActive,
-    // Older backends have no OrganizationChannel row and resolve OpenWA by
-    // default, so an absent fact carries the same legacy-active meaning.
-    isActiveChannel: s.isActiveChannel !== false,
+    isActiveChannel: s.isActiveChannel === true,
+    channelKind: s.channelKind ?? null,
   }));
 }
 
@@ -2678,7 +2691,13 @@ export type MetaChannel = {
   lastValidatedAt: string | null;
   invalidReason: string | null;
   graphVersion: string;
-  /** Whether the organization currently sends through this channel. */
+  /**
+   * Whether this gateway is usable at all.
+   *
+   * No longer "whether the organization sends through it" — numbers choose
+   * their own gateway, so a connected Meta channel is one any number may be
+   * pointed at rather than one the organization has switched to.
+   */
   isActiveChannel: boolean;
 };
 
@@ -2747,17 +2766,23 @@ export type ChannelCapabilities = {
 };
 
 /**
- * Null when the organization has no single answer — mid-switch, or two channels
- * active. The `code` says which, so the UI can describe the state instead of
- * rendering an empty card that looks like a missing feature.
+ * What one number's gateway can do.
+ *
+ * Null when that number has no answer — nothing bound to it, or a name that
+ * does not resolve. The `code` says which, so the UI can describe the state
+ * instead of rendering an empty card that looks like a missing feature.
+ *
+ * This used to ask the organization, which could only answer for a subscriber
+ * with one channel; with two it had to pick one and was wrong about the other
+ * number's composer.
  */
-export async function fetchChannelCapabilities(): Promise<{
+export async function fetchChannelCapabilities(sessionName: string): Promise<{
   capabilities: ChannelCapabilities | null;
   code: string | null;
   message: string | null;
 }> {
   try {
-    const { data } = await api.get('/api/channels/capabilities');
+    const { data } = await api.get(`/api/channels/sessions/${encodeURIComponent(sessionName)}/capabilities`);
     return { capabilities: data.capabilities ?? null, code: null, message: null };
   } catch (error: any) {
     if (error?.response?.status === 409) {
@@ -2771,9 +2796,22 @@ export async function fetchChannelCapabilities(): Promise<{
   }
 }
 
-/** Choose the channel this organization sends through. Exactly one, always. */
-export async function setActiveChannel(kind: string): Promise<ChannelCapabilities | null> {
-  const { data } = await api.post('/api/channels/active', { kind });
+/**
+ * Point one number at a gateway.
+ *
+ * Replaces `setActiveChannel`, which chose a gateway for the whole
+ * organization. There is no organization-level sending channel any more, so
+ * that function is gone rather than renamed: a call that still compiled under
+ * the old name would have kept its old meaning in the reader's head.
+ */
+export async function bindSessionChannel(
+  sessionName: string,
+  kind: 'OPENWA' | 'WHATSAPP_CLOUD',
+): Promise<ChannelCapabilities | null> {
+  const { data } = await api.post(
+    `/api/channels/sessions/${encodeURIComponent(sessionName)}/channel`,
+    { kind },
+  );
   return data.capabilities ?? null;
 }
 

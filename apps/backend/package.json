@@ -21,6 +21,7 @@
     "test:workflow-p2": "npm run build && node scripts/verify-workflow-p2.js",
     "test:meta-templates": "npm run build && node scripts/verify-meta-template-send.js",
     "test:collaborators": "npm run build && node scripts/verify-collaborators.js",
+    "test:session-routing": "npm run build && node scripts/verify-session-routing.js",
     "test:inbox-views": "npm run build && node scripts/inbox-views-check.js",
     "backup:now": "npm run build && node scripts/run-backup.js",
     "test:snooze": "npm run build && node scripts/verify-snooze-wake.js",

@@ -776,11 +776,25 @@ async function seedOrganization(raw, key, volume) {
   await raw.workspaceMember.create({
     data: { id: `bleed_wsm_${key}`, organizationId, workspaceId, userId, role: 'ADMIN' },
   });
+  // The gateway this organization's number sends through. A session's channel
+  // is not optional — the send path refuses an unbound session by name — so
+  // the fixture creates one rather than producing a row no send could resolve.
+  const channel = await raw.organizationChannel.create({
+    data: {
+      organizationId,
+      kind: 'OPENWA',
+      baseUrl: '',
+      apiKeyEnc: '',
+      webhookToken: `bleed_token_${key}`,
+      status: 'PENDING',
+    },
+  });
   await fixtureWriter.whatsappSession.create({
     data: {
       id: sessionId,
       organizationId,
       workspaceId,
+      channelId: channel.id,
       sessionName: 'it-support',
       label: 'WhatsApp',
     },
@@ -860,15 +874,9 @@ async function seedProvisioningOrganization(raw, key) {
   await raw.workspace.create({
     data: { id: `ws_${organizationId}`, organizationId, name: slug, isDefault: true },
   });
-  await fixtureWriter.whatsappSession.create({
-    data: {
-      organizationId,
-      workspaceId: `ws_${organizationId}`,
-      sessionName: `${slug}-primary`,
-      label: 'WhatsApp',
-    },
-  });
-  await raw.organizationChannel.create({
+  // Above the session, matching signup: the number binds to this row, so it
+  // has to exist first.
+  const channel = await raw.organizationChannel.create({
     data: {
       organizationId,
       kind: 'OPENWA',
@@ -879,6 +887,15 @@ async function seedProvisioningOrganization(raw, key) {
       managedByProvisioner: true,
       provisioningState: 'PENDING',
       provisioningStep: 'ALLOCATE_RESOURCES',
+    },
+  });
+  await fixtureWriter.whatsappSession.create({
+    data: {
+      organizationId,
+      workspaceId: `ws_${organizationId}`,
+      channelId: channel.id,
+      sessionName: `${slug}-primary`,
+      label: 'WhatsApp',
     },
   });
   return { organizationId, slug };
@@ -5795,61 +5812,138 @@ async function databaseAudits() {
       }
     });
 
-    await check('channels: two ACTIVE channels are refused, never silently picked', async () => {
-      const { ChannelService, setActiveChannelKind } = require('../src/modules/channels/channel.service');
+    await check('channels: two ACTIVE channels route per number, never silently picked', async () => {
+      /*
+        This check used to assert the opposite: that two ACTIVE channels raised
+        CHANNEL_AMBIGUOUS. That was right while the send path asked the
+        *organization* which channel to use — the old resolver took
+        findFirst({status:'ACTIVE'}) with no ordering, so the same tenant could
+        send through OpenWA on one request and Meta on the next, and raising was
+        the only honest answer available.
 
-      const ids = ['bleed_chan_openwa', 'bleed_chan_meta'];
+        It is replaced rather than deleted, because the property it guarded is
+        still the one that matters: **a reply must never leave through a
+        gateway nobody chose.** What changed is that the choice is now recorded
+        on the number, so the answer is a lookup instead of a refusal — and two
+        ACTIVE channels is the state a Growth subscriber is sold rather than a
+        corruption to raise on.
+      */
+      const { ChannelService } = require('../src/modules/channels/channel.service');
+
+      /*
+        The organization's own OpenWA row, not a second one.
+
+        OrganizationChannel is unique on (organizationId, kind), and every
+        fixture organization is seeded with an OpenWA gateway now — a number's
+        channel is not optional, so seedOrganization has to give it one. This
+        check adds the Meta half and borrows the OpenWA half, which is also the
+        shape a real subscriber reaches: they have OpenWA from signup and
+        connect Meta later.
+      */
+      const existingOpenwa = await raw.organizationChannel.findFirstOrThrow({
+        where: { organizationId: orgA.organizationId, kind: 'OPENWA' },
+        select: { id: true, status: true, baseUrl: true },
+      });
+      await raw.organizationChannel.update({
+        where: { id: existingOpenwa.id },
+        data: { status: 'ACTIVE', baseUrl: 'http://openwa.invalid' },
+      });
+
+      const metaChannelId = 'bleed_chan_meta';
       await raw.organizationChannel.create({ data: {
-        id: ids[0], organizationId: orgA.organizationId, kind: 'OPENWA', status: 'ACTIVE',
-        baseUrl: 'http://openwa.invalid', apiKeyEnc: '', webhookToken: 'bleed-switch-openwa',
-      } });
-      await raw.organizationChannel.create({ data: {
-        id: ids[1], organizationId: orgA.organizationId, kind: 'WHATSAPP_CLOUD', status: 'ACTIVE',
+        id: metaChannelId, organizationId: orgA.organizationId, kind: 'WHATSAPP_CLOUD', status: 'ACTIVE',
         baseUrl: 'https://graph.facebook.com/v21.0', apiKeyEnc: '', webhookToken: 'bleed-switch-meta',
       } });
+      const ids = [existingOpenwa.id, metaChannelId];
+
+      const sessionIds = ['bleed_route_openwa', 'bleed_route_meta', 'bleed_route_unbound'];
+      await fixtureWriter.whatsappSession.create({ data: {
+        id: sessionIds[0], organizationId: orgA.organizationId, channelId: existingOpenwa.id,
+        sessionName: 'route-openwa', label: 'OpenWA number', isActive: false,
+      } });
+      await fixtureWriter.whatsappSession.create({ data: {
+        id: sessionIds[1], organizationId: orgA.organizationId, channelId: metaChannelId,
+        sessionName: 'route-meta', label: 'Meta number', isActive: false,
+      } });
+      await fixtureWriter.whatsappSession.create({ data: {
+        id: sessionIds[2], organizationId: orgA.organizationId, channelId: null,
+        sessionName: 'route-unbound', label: 'Unbound number', isActive: false,
+      } });
+
+      /** Which transport a send reached, judged by how it failed. */
+      const sendOutcome = async (sessionName) => {
+        try {
+          await runAsOrganization(orgA.organizationId, () =>
+            ChannelService.sendText(sessionName, '+972500000001', 'hello'));
+          return 'SENT';
+        } catch (error) {
+          return String(error && error.message);
+        }
+      };
 
       try {
-        // The old resolver took findFirst({status:'ACTIVE'}) with no ordering,
-        // so this exact state resolved to whichever row came back first: the
-        // same tenant could send through OpenWA on one request and Meta on the
-        // next, with nothing raised and no way to notice except customers
-        // replying to a number that was not the one they wrote to.
-        await assert.rejects(
-          () => runAsOrganization(orgA.organizationId, () =>
-            ChannelService.sendText('session', '+972500000001', 'hello')),
+        /*
+          The Meta number reaches Meta's rule. SERVICE_WINDOW_NEVER_OPENED is
+          raised by assertSendable before any transport call, and only for an
+          adapter that declares requiresServiceWindow — so it is proof of which
+          adapter was chosen, not merely of a failure.
+        */
+        assert.match(
+          await sendOutcome('route-meta'),
+          /SERVICE_WINDOW_NEVER_OPENED|CHANNEL_CREDENTIAL_INVALID/,
+          'the Meta number must resolve the Meta adapter, with both channels ACTIVE',
+        );
+
+        /*
+          The OpenWA number reaches OpenWA's transport, and openwa.invalid does
+          not resolve. Any service-window error here would mean it had been
+          handed the Meta adapter — the defect this check exists for.
+        */
+        const openwaOutcome = await sendOutcome('route-openwa');
+        assert.doesNotMatch(
+          openwaOutcome,
+          /SERVICE_WINDOW/,
+          'the OpenWA number must not be handed the Meta adapter: ' + openwaOutcome,
+        );
+        assert.doesNotMatch(
+          openwaOutcome,
           /CHANNEL_AMBIGUOUS/,
-          'two ACTIVE channels must raise, not resolve to an arbitrary one',
+          'two ACTIVE channels is a supported state now, not an ambiguity',
         );
 
-        // The switch leaves exactly one active, and leaves it in one statement
-        // so nothing can observe zero.
-        await runAsOrganization(orgA.organizationId, () => setActiveChannelKind('OPENWA'));
-        const after = await raw.organizationChannel.findMany({
-          where: { organizationId: orgA.organizationId, id: { in: ids } },
-          select: { kind: true, status: true },
-        });
-        assert.equal(
-          after.filter((row) => row.status === 'ACTIVE').length,
-          1,
-          'after a switch exactly one channel must be ACTIVE',
+        // A number with no gateway is refused by name. Never a fallback: with
+        // two channels present, guessing would be a coin flip between two of
+        // the business's own numbers.
+        assert.match(
+          await sendOutcome('route-unbound'),
+          /SESSION_NOT_BOUND/,
+          'an unbound number must be named, not resolved to some other channel',
         );
-        assert.equal(after.find((row) => row.status === 'ACTIVE').kind, 'OPENWA');
 
-        // A workspace with channels but none active must say so distinctly. The
+        // A number whose gateway is switched off is named distinctly. The
         // generic OpenWA failure sends an agent to debug a healthy gateway.
         await raw.organizationChannel.updateMany({
           where: { organizationId: orgA.organizationId, id: { in: ids } },
           data: { status: 'INACTIVE' },
         });
-        await assert.rejects(
-          () => runAsOrganization(orgA.organizationId, () =>
-            ChannelService.sendText('session', '+972500000001', 'hello')),
+        assert.match(
+          await sendOutcome('route-openwa'),
           /CHANNEL_NOT_ACTIVE/,
-          'no active channel must be named, not reported as a gateway fault',
+          'a deactivated gateway must be named, not reported as a gateway fault',
         );
       } finally {
+        await raw.whatsappSession.deleteMany({
+          where: { organizationId: orgA.organizationId, id: { in: sessionIds } },
+        });
+        // Only the Meta row was created here; the OpenWA one belongs to the
+        // fixture and is restored rather than deleted, or every later check
+        // loses the gateway its own number is bound to.
         await raw.organizationChannel.deleteMany({
-          where: { organizationId: orgA.organizationId, id: { in: ids } },
+          where: { organizationId: orgA.organizationId, id: metaChannelId },
+        });
+        await raw.organizationChannel.update({
+          where: { id: existingOpenwa.id },
+          data: { status: existingOpenwa.status, baseUrl: existingOpenwa.baseUrl },
         });
       }
     });
@@ -6246,11 +6340,20 @@ async function databaseAudits() {
     await fixtureWriter.workspace.create({
       data: { id: wsSecond, organizationId: orgA.organizationId, name: 'Second', isDefault: false },
     });
+    // Bound to the same gateway as orgA's first number. Two numbers on one
+    // channel is the ordinary case; two channels under one organization is
+    // what the routing gate covers separately.
+    const orgAChannel = await raw.organizationChannel.findFirst({
+      where: { organizationId: orgA.organizationId, kind: 'OPENWA' },
+      select: { id: true },
+    });
+    assert.ok(orgAChannel, 'orgA fixture must have an OPENWA channel to bind its sessions to');
     await fixtureWriter.whatsappSession.create({
       data: {
         id: 'bleed_session_a_second',
         organizationId: orgA.organizationId,
         workspaceId: wsSecond,
+        channelId: orgAChannel.id,
         sessionName: 'second-workspace',
         label: 'WhatsApp Second',
       },

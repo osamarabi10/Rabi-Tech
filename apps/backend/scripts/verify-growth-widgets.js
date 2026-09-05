@@ -295,12 +295,20 @@ async function main() {
     const setup = await runAsPlatform('verify-growth-widgets:setup', async () => {
       const org = await prisma.organization.findFirst({ orderBy: { id: 'asc' }, select: { id: true } });
       if (!org) throw new Error('no organization exists to test against');
+      // The organization's gateway. A session's channel is not optional, and a
+      // fixture that leaves it null would be caught by check:session-channel.
+      const gateChannel = await prisma.organizationChannel.findFirst({
+        where: { organizationId: org.id, kind: 'OPENWA' },
+        select: { id: true },
+      });
+      if (!gateChannel) throw new Error('no OPENWA channel on the organization under test');
       const session = await prisma.whatsappSession.create({
         data: {
           // Named explicitly: this runs under platform scope, where the
           // extension injects nothing on purpose.
           organizationId: org.id,
           workspaceId: 'ws_' + org.id,
+          channelId: gateChannel.id,
           sessionName: 'widget-gate-' + stamp,
           label: 'gate',
           isActive: false,

@@ -915,6 +915,10 @@ model OrganizationChannel {
 
   organization    Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   metaCredentials MetaChannelCredential[]
+  /// The numbers that send through this gateway. Several per channel is the
+  /// point: a Growth subscriber runs three numbers, and which gateway each one
+  /// uses is that number's property, not the organization's.
+  sessions        WhatsappSession[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, kind])
@@ -1259,13 +1263,38 @@ model WhatsappSession {
   sessionName    String
   phoneNumber    String?
   teamId         String?
+  /// The gateway this number sends through.
+  ///
+  /// An outbound message leaves through the gateway of the session its
+  /// conversation belongs to. Not a default, not the organization's channel,
+  /// not a resolution step that can return more than one answer — the binding
+  /// is stored here so there is nothing left to disambiguate at send time.
+  /// That is what replaced the one-ACTIVE-channel-per-organization invariant
+  /// and the CHANNEL_AMBIGUOUS error that policed it.
+  ///
+  /// Nullable **only** for rows that predate the binding. Every creation path
+  /// sets it, and check:session-channel fails on a null row created after the
+  /// backfill — because the composite foreign key below is MATCH SIMPLE, so
+  /// Postgres skips the check entirely when channelId is null. The constraint
+  /// enforces nothing on exactly the rows that need watching, which is why the
+  /// watching is a gate rather than a column type.
+  ///
+  /// A null is never resolved to a fallback. The send path raises
+  /// SESSION_NOT_BOUND, because guessing which of a business's numbers a reply
+  /// should leave from is the one failure this whole design exists to prevent.
+  channelId      String?
   label          String
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
 
-  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  workspace     Workspace      @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
-  team          Team?          @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  organization  Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace     Workspace            @relation(fields: [workspaceId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  team          Team?                @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  /// Restrict, not Cascade: a channel with numbers bound to it is not a channel
+  /// anybody may delete out from under them. Nothing deletes an
+  /// OrganizationChannel today; this keeps that true by construction rather
+  /// than by nobody having written the query yet.
+  channel       OrganizationChannel? @relation(fields: [channelId, organizationId], references: [id, organizationId], onDelete: Restrict)
   conversations Conversation[]
   campaigns     Campaign[]
   growthWidgets GrowthWidget[]
@@ -1280,6 +1309,9 @@ model WhatsappSession {
   /// The channels list. GET /api/system/sessions lists a workspace's channels;
   /// the inbound worker also resolves a session's workspace on every message.
   @@index([organizationId, workspaceId])
+  /// Read on every send, to resolve the session's gateway from its name, and by
+  /// check:session-channel to count unbound rows.
+  @@index([organizationId, channelId])
 }
 
 model Contact {

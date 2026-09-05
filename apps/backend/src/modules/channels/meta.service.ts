@@ -312,18 +312,23 @@ async function persist(input: {
   return prisma.$transaction(async (tx) => {
     // The channel row the credential hangs from.
     //
-    // status stays PENDING, not ACTIVE, and that is not an oversight. The
-    // outbound adapter for WHATSAPP_CLOUD does not exist yet, and
-    // ChannelService picks the organization's ACTIVE channel — so activating
-    // this row would make an org that has both channels resolve to whichever
-    // came back first, and start throwing on sends that work today. Activation
-    // belongs to the step that builds the send path.
+    // ACTIVE on connect, which it could not be before.
+    //
+    // This used to stay PENDING with the reason recorded here: ChannelService
+    // picked the organization's ACTIVE channel, so a second ACTIVE row made an
+    // organization with both kinds resolve to whichever came back first, and
+    // sends that worked today would start throwing CHANNEL_AMBIGUOUS.
+    //
+    // Routing is per session now. A Meta channel being ACTIVE says only that
+    // this gateway is usable, and it affects no number that is not bound to it
+    // — which is exactly the capability the ladder sells at Growth: one number
+    // on OpenWA and another on Cloud API, at the same time.
     const channel = await tx.organizationChannel.upsert({
       where: { organizationId_kind: { organizationId: input.organizationId, kind: 'WHATSAPP_CLOUD' } },
       create: {
         organizationId: input.organizationId,
         kind: 'WHATSAPP_CLOUD',
-        status: 'PENDING',
+        status: 'ACTIVE',
         // The Graph base this channel was connected against. Recording the
         // version here means a later version bump can tell which channels were
         // validated under the old one.
@@ -396,13 +401,22 @@ async function persist(input: {
         organizationId: input.organizationId,
         sessionName: metaSessionName(input.phoneNumberId),
         phoneNumber: input.displayPhoneNumber,
+        // Never null on a created row. check:session-channel fails on one.
+        channelId: channel.id,
         label: input.verifiedName || 'WhatsApp Cloud API',
       },
       // Meta may have changed the display number or verified name since the
       // last connect; the session name is derived from the phone number id and
       // never moves.
+      //
+      // channelId is written on update as well, which is how a legacy row left
+      // null by the backfill repairs itself the next time the number is
+      // reconnected. It cannot move a binding to the wrong channel: the row is
+      // keyed by a session name derived from this phone number id, so the only
+      // channel it could ever belong to is this one.
       update: {
         phoneNumber: input.displayPhoneNumber,
+        channelId: channel.id,
         label: input.verifiedName || 'WhatsApp Cloud API',
       },
     });
@@ -512,7 +526,7 @@ export function metaSessionName(phoneNumberId: string): string {
  * invalid — a known-dead token should not be spent on a send that will fail and
  * cost quality rating.
  */
-export async function activeMetaCredential(): Promise<{
+export async function activeMetaCredential(channelId?: string): Promise<{
   id: string;
   phoneNumberId: string;
   accessToken: string;
@@ -520,7 +534,12 @@ export async function activeMetaCredential(): Promise<{
   qualityRating: string | null;
 } | null> {
   const row = await prisma.metaChannelCredential.findFirst({
-    where: { status: 'ACTIVE' },
+    // Narrowed to one channel when the caller knows which number it is sending
+    // from. Omitting it asks the organization-wide question, which is still
+    // the right one for the template path — that path has no session and
+    // OrganizationChannel is unique on (organizationId, kind), so there is at
+    // most one Meta channel to find.
+    where: { status: 'ACTIVE', ...(channelId ? { channelId } : {}) },
     select: {
       id: true,
       phoneNumberId: true,

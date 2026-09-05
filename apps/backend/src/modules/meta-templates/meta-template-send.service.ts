@@ -7,7 +7,7 @@ import {
   type MetaTemplateSendComponent,
 } from '../channels/meta.client';
 import { activeMetaCredential } from '../channels/meta.service';
-import { channelCapabilities } from '../channels/channel.service';
+import { createMetaAdapter } from '../channels/meta.adapter';
 import { isMetaTemplateSendable } from './meta-templates.service';
 
 /** Meta's tier ceiling is per rolling 24 hours, not per calendar day. */
@@ -38,10 +38,17 @@ const CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
  *
  * ## Where the ceiling comes from
  *
- * `channelCapabilities()`, whose own comment says it is for "UI gating and
- * send-time rules". Not from re-deriving the number out of `messagingTier`
- * here: that mapping lives in `meta.adapter.ts`, and a second copy would be
- * free to disagree with the one the console shows the customer.
+ * The Meta adapter built from the credential this send is going out on. Not
+ * from re-deriving the number out of `messagingTier` here: that mapping lives in
+ * `meta.adapter.ts`, and a second copy would be free to disagree with the one the
+ * console shows the customer.
+ *
+ * It used to come from `channelCapabilities()`, which asked the organization which channel it
+ * sends through. That question has no organization-level answer any more --
+ * routing is per number -- and this path has no session to name, so it reads
+ * the capabilities off the credential it has already resolved. Same mapping,
+ * one fewer lookup, and no guess about which of a subscriber's channels was
+ * meant.
  *
  * A null ceiling means the tier is unknown or unlimited and **nothing is
  * enforced**. That is deliberate rather than fail-closed: the value is absent
@@ -66,8 +73,9 @@ const CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
 async function assertWithinRecipientCap(
   organizationId: string,
   recipientPhone: string,
+  credential: Parameters<typeof createMetaAdapter>[0],
 ): Promise<void> {
-  const { maxUniqueRecipientsPer24h: ceiling } = await channelCapabilities();
+  const { maxUniqueRecipientsPer24h: ceiling } = createMetaAdapter(credential).capabilities;
   if (ceiling === null || ceiling === undefined) return;
 
   const since = new Date(Date.now() - CAP_WINDOW_MS);
@@ -258,7 +266,7 @@ export async function sendMetaTemplate(input: TemplateSendInput) {
     But it must come before the reservation, or the row written to hold a slot
     would itself be counted as one.
   */
-  await assertWithinRecipientCap(organizationId, contact.phone);
+  await assertWithinRecipientCap(organizationId, contact.phone, credential);
 
   const reservation = await prisma.metaTemplateSend.create({
     data: {

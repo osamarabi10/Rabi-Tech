@@ -55,66 +55,110 @@ export function isChannelSendError(error: unknown): error is ChannelSendError {
 }
 
 /**
- * Which channel this organization sends through.
+ * The gateway a number sends through.
  *
- * **Exactly one ACTIVE channel, or none.** The previous implementation took
- * `findFirst({ status: 'ACTIVE' })` with no ordering, which is fine while every
- * organization has one channel and becomes a coin-flip the moment one has two:
- * the same tenant could resolve to OpenWA on one request and Meta on the next,
- * with no error and no way to notice except customers receiving replies from a
- * number that is not the one they wrote to.
+ * **An outbound message leaves through the gateway of the session its
+ * conversation belongs to.** Not a default, not the organization's channel, not
+ * a resolution step that can return more than one answer.
  *
- * Determinism here is an invariant, not an ordering. Ordering would make the
- * choice repeatable while leaving it arbitrary - the tenant still would not have
- * chosen it. Activation is therefore an explicit switch that deactivates the
- * other channel in the same transaction, and finding two ACTIVE rows is treated
- * as corruption and raised, because picking either would be guessing which
- * number a business meant to send from.
+ * ## What this replaced, and why the replacement is smaller
+ *
+ * This used to ask the organization: read every channel row, keep the ACTIVE
+ * ones, and raise CHANNEL_AMBIGUOUS if there were two — because with two ACTIVE
+ * channels there was genuinely no way to know which of a business's numbers a
+ * reply should leave from, and guessing would send a customer an answer from a
+ * number they have never seen. That is unrecoverable and reads as a scam.
+ *
+ * The invariant that made the guess safe — at most one ACTIVE channel per
+ * organization — was also the invariant that made a Growth subscriber unable to
+ * run OpenWA on one number and Meta's Cloud API on another. Both are gone. The
+ * binding now lives on WhatsappSession, so there is nothing left to
+ * disambiguate: **ambiguity is impossible by construction rather than caught.**
+ *
+ * ## No fallback, deliberately
+ *
+ * A session with no channel raises. It does not fall back to the
+ * organization's channel, to OpenWA, or to the first row found — every one of
+ * those is the mistake this design exists to prevent, and the differential
+ * proof for this commit mutates exactly that fallback back in to watch the
+ * assertion go red.
+ *
+ * The routing key is the session *name*, which is what all sixteen send call
+ * sites already pass. Nothing about their signatures changed; the information
+ * needed to route per number was always at the call site and was being
+ * discarded here.
  */
-async function resolveChannelKind(): Promise<ChannelKind> {
-  const channels = await prisma.organizationChannel.findMany({
-    select: { id: true, kind: true, status: true },
+async function channelForSession(routingKey: string): Promise<{ id: string; kind: ChannelKind }> {
+  const organizationId = getTenantId();
+  const session = await prisma.whatsappSession.findUnique({
+    where: { organizationId_sessionName: { organizationId, sessionName: routingKey } },
+    select: { channel: { select: { id: true, kind: true, status: true } } },
   });
 
-  const active = channels.filter((channel) => channel.status === 'ACTIVE');
-
-  if (active.length > 1) {
+  if (!session) {
     throw new ChannelSendError(
-      'CHANNEL_AMBIGUOUS',
-      'مساحة العمل فيها أكثر من قناة مفعّلة، وما بنقدر نحزر من أي رقم لازم تنبعث الرسالة. راجع إعدادات القنوات.',
-      { activeKinds: active.map((channel) => channel.kind) },
+      'SESSION_UNKNOWN',
+      'ما لقينا الرقم اللي المفروض تنبعت منه هالرسالة. حدّث الصفحة، وإذا ضلّت المشكلة راجع إعدادات القنوات.',
+      { routingKey },
     );
   }
 
-  if (active.length === 1) return active[0].kind as ChannelKind;
+  if (!session.channel) {
+    /*
+      A number with no gateway. Legacy rows only: the backfill in
+      20261017090000_session_channel_binding left null exactly where an
+      organization had no channel to bind to, and every creation path since
+      sets it — check:session-channel fails on a new one.
 
-  // No ACTIVE channel, but the organization HAS channels. This is the window
-  // the switch could leave open, and it must not present as a generic OpenWA
-  // failure ("Active OpenWA channel is not configured") - that sends an agent
-  // to debug a gateway that is fine. Named distinctly so the UI can say the
-  // channel is between states and the send is worth retrying.
-  if (channels.length > 0) {
+      Named distinctly rather than reported as a gateway fault, because the
+      remedy is a person choosing a gateway for this number, not anybody
+      debugging a container that is fine.
+    */
+    throw new ChannelSendError(
+      'SESSION_NOT_BOUND',
+      'هالرقم مش مربوط بأي بوابة إرسال، وما منخمّن من أي بوابة تنبعت الرسالة. افتح إعدادات القنوات واختار بوابة لهالرقم.',
+      { routingKey },
+    );
+  }
+
+  if (session.channel.status !== 'ACTIVE') {
+    /*
+      The number has a gateway and the gateway is switched off.
+
+      This error survived the move from organization-level routing, and it had
+      to: the alternative is what happens without it — OpenWA's transport
+      throws "Active OpenWA channel is not configured", which sends an agent to
+      debug a gateway that is fine when the real answer is that this number's
+      channel is disabled. Same distinction as before, now asked about one
+      number instead of the whole organization.
+    */
     throw new ChannelSendError(
       'CHANNEL_NOT_ACTIVE',
-      'ما في قناة مفعّلة حالياً لمساحة العمل. إذا كنت عم تبدّل بين القنوات، جرّب بعد لحظة؛ وإلا فعّل قناة من الإعدادات.',
-      { channelKinds: channels.map((channel) => channel.kind) },
+      'البوابة المربوطة بهالرقم مش مفعّلة حالياً. إذا كنت عم تعدّل إعدادات القنوات جرّب بعد لحظة، وإلا فعّل البوابة من الإعدادات.',
+      { routingKey, kind: session.channel.kind },
     );
   }
 
-  // No channel rows at all. Organizations predating OrganizationChannel send
-  // through OpenWA off their WhatsappSession, and that must keep working.
-  return 'OPENWA';
+  return { id: session.channel.id, kind: session.channel.kind as ChannelKind };
 }
 
-/** Resolve the organization's outbound adapter, cached per tenant scope. */
-async function adapter(): Promise<ChannelAdapter> {
-  const organizationId = getTenantId();
+/**
+ * Resolve a *number's* outbound adapter, cached per channel within the tenant
+ * scope.
+ *
+ * Keyed by channel id rather than by organization, which is the whole point: an
+ * organization with two channels now has two adapters, and one entry per tenant
+ * would hand a Meta number the OpenWA adapter for the rest of the request. Two
+ * numbers on the same channel still share one entry.
+ */
+async function adapter(routingKey: string): Promise<ChannelAdapter> {
+  const channel = await channelForSession(routingKey);
   const cache = getTenantCache();
-  const cacheKey = `channel-adapter:${organizationId}`;
+  const cacheKey = `channel-adapter:${channel.id}`;
   const cached = cache.get(cacheKey) as ChannelAdapter | undefined;
   if (cached) return cached;
 
-  const kind = await resolveChannelKind();
+  const kind = channel.kind;
 
   let instance: ChannelAdapter;
   switch (kind) {
@@ -122,7 +166,11 @@ async function adapter(): Promise<ChannelAdapter> {
       instance = OpenWASendAdapter;
       break;
     case 'WHATSAPP_CLOUD': {
-      const credential = await activeMetaCredential();
+      // Scoped to this session's channel, not to the organization. Equivalent
+      // today, because OrganizationChannel is unique on (organizationId, kind)
+      // and there is therefore one Meta channel at most — but correct by
+      // construction rather than by a uniqueness constraint somewhere else.
+      const credential = await activeMetaCredential(channel.id);
       if (!credential) {
         // The channel is ACTIVE but its credential is gone or already marked
         // invalid. Refusing here is the point of marking it: a known-dead token
@@ -150,9 +198,17 @@ async function adapter(): Promise<ChannelAdapter> {
   return instance;
 }
 
-/** What this organization's channel can do. For UI gating and send-time rules. */
-export async function channelCapabilities() {
-  return (await adapter()).capabilities;
+/**
+ * What a given number's channel can do. For UI gating and send-time rules.
+ *
+ * Takes the session, because capabilities are the channel's and the channel is
+ * the number's. An organization-level answer would have to pick one of a Growth
+ * subscriber's channels and would be wrong about the others — telling a
+ * composer there is no service window on a Meta number, say, which is how a
+ * send gets refused by Meta after the agent was told it was fine.
+ */
+export async function channelCapabilities(routingKey: string) {
+  return (await adapter(routingKey)).capabilities;
 }
 
 /**
@@ -217,7 +273,7 @@ export const ChannelService = {
     message: string,
     options: OutboundUsageOptions = {},
   ): Promise<ChannelSendResult> => {
-    const instance = await adapter();
+    const instance = await adapter(routingKey);
     // Window first, quota second. A send the channel will refuse must not
     // consume the tenant's allowance on its way to being refused.
     await assertSendable(to, instance);
@@ -232,68 +288,9 @@ export const ChannelService = {
     options: SendMediaOptions = {},
   ): Promise<ChannelSendResult> => {
     const { mediaType, fileName, ...usage } = options;
-    const instance = await adapter();
+    const instance = await adapter(routingKey);
     await assertSendable(to, instance);
     return meteredSend(to, usage, () =>
       instance.sendMedia(routingKey, to, url, caption, { mediaType, fileName }));
   },
 };
-
-/**
- * Switch which channel this organization sends through.
- *
- * One transaction, deliberately. The invariant `resolveChannelKind` relies on -
- * at most one ACTIVE channel - is only safe if nothing can observe the moment
- * between deactivating one and activating the other. Postgres at READ COMMITTED
- * shows a concurrent reader either the state before this transaction or the
- * state after it, never the gap, so an in-flight send resolves to exactly one
- * channel throughout. Doing this as two statements outside a transaction would
- * open a real window in which sends fail with "no active channel" for no reason
- * the tenant could understand.
- *
- * A tenant that genuinely has no active channel - Meta connected but never
- * switched to, say - still gets CHANNEL_NOT_ACTIVE from the resolver, which is
- * a different and honest answer: nothing is mid-flight, they simply have not
- * chosen.
- */
-export async function setActiveChannelKind(kind: ChannelKind): Promise<void> {
-  const organizationId = getTenantId();
-
-  await prisma.$transaction(async (tx) => {
-    const target = await tx.organizationChannel.findUnique({
-      where: { organizationId_kind: { organizationId, kind } },
-      select: { id: true },
-    });
-    if (!target) {
-      throw new ChannelSendError(
-        'CHANNEL_NOT_CONNECTED',
-        'ما في قناة من هالنوع مربوطة بمساحة العمل، فما فينا نفعّلها.',
-        { kind },
-      );
-    }
-
-    // Meta must not be made the sending channel on a dead token: every send
-    // would fail and each failure costs the customer's own quality rating.
-    if (kind === 'WHATSAPP_CLOUD') {
-      const credential = await tx.metaChannelCredential.findFirst({
-        where: { organizationId, channelId: target.id, status: 'ACTIVE' },
-        select: { id: true },
-      });
-      if (!credential) {
-        throw new ChannelSendError(
-          'CHANNEL_CREDENTIAL_INVALID',
-          'ما فينا نفعّل قناة Meta قبل ما يكون فيها توكن صالح. أعد ربط الرقم أولاً.',
-        );
-      }
-    }
-
-    await tx.organizationChannel.updateMany({
-      where: { organizationId, status: 'ACTIVE' },
-      data: { status: 'INACTIVE' },
-    });
-    await tx.organizationChannel.update({
-      where: { id: target.id },
-      data: { status: 'ACTIVE', connectedAt: new Date() },
-    });
-  });
-}

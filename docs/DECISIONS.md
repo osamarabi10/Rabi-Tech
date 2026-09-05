@@ -367,3 +367,44 @@ is linked to the account". That sentence described the gate this entry removes,
 so it was replaced rather than left standing. A screen describing a rule the
 code no longer has is worse than a screen saying nothing: it tells the customer
 to wait for something that is not going to happen.
+
+---
+
+## D-9 · The Cloud API lane has no connect screen, and Growth sells both
+
+C1 made the gateway a property of the number, so one organization can run
+OpenWA on one number and Meta's Cloud API on another. The ladder sells that at
+Growth. **The customer cannot reach half of it.**
+
+### What exists on each lane
+
+OpenWA has a complete self-serve path: a channel row at signup, provisioning,
+a QR dialog that reports three distinct faults honestly (D-8 era work), and a
+per-number gateway control. A customer connects a number without talking to
+anybody.
+
+Cloud API has `POST /api/channels/meta/connect`, which takes a phone number id,
+a WABA id and an access token, and a card that collects those three fields. That
+is not a connect screen — it is a form for values the customer has to obtain
+from Meta first, through Business Manager, business verification and a System
+User token. Nothing in the product explains or assists any of it.
+
+### Why it is recorded rather than built
+
+The work is not a screen. It is an embedded-signup flow against Meta's
+JavaScript SDK, which requires a Meta app with `whatsapp_business_management`
+and `whatsapp_business_messaging`, App Review for both, and a verified
+business. None of those are code, and two of them take weeks of somebody
+else's time.
+
+Also true and worth saying plainly: `META_APP_SECRET` and
+`META_WEBHOOK_VERIFY_TOKEN` are unset, so `editionOfferability` withdraws every
+Cloud-API-only edition from sale. GROWTH, BUSINESS and ENTERPRISE are
+unsellable today for that reason alone. The missing connect screen is the
+defect that outlives fixing the environment.
+
+- **Owner:** UnKnowan
+- **Trigger:** the Meta keys and business verification — the point at which a
+  Cloud API number can be connected at all.
+- **Lands in:** the channels screen, beside the QR flow, so the two lanes are
+  one surface rather than a self-serve path and a form.

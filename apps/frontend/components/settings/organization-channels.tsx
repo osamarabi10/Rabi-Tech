@@ -22,7 +22,7 @@ import {
   fetchSessions,
   fetchTeams,
   fetchOrganizationUsers,
-  setActiveChannel,
+  bindSessionChannel,
   type ChannelCapabilities,
   type Session,
   type SessionQR,
@@ -161,20 +161,14 @@ export function OrganizationChannels() {
     if (showLoader) setLoading(true);
     setFailed(false);
     try {
-      const [sessionRows, teamRows, roster, activeChannel] = await Promise.all([
+      const [sessionRows, teamRows, roster] = await Promise.all([
         fetchSessions(),
         fetchTeams(),
         fetchOrganizationUsers(),
-        fetchChannelCapabilities().catch(() => ({
-          capabilities: null,
-          code: 'CHANNEL_CAPABILITIES_UNAVAILABLE',
-          message: null,
-        })),
       ]);
       setSessions(sessionRows);
       setTeams(teamRows);
       setCapabilities(roster.capabilities);
-      setChannelState(activeChannel);
       setSelected((current) => current ? sessionRows.find((row) => row.id === current.id) || null : null);
     } catch {
       setFailed(true);
@@ -232,13 +226,30 @@ export function OrganizationChannels() {
     };
   }, [qrSession]);
 
+  /*
+    What the *selected* number's gateway can do.
+
+    This used to be one organization-wide answer fetched beside the session
+    list. Capabilities are the gateway's and the gateway is the number's, so an
+    organization-level answer had to pick one of a subscriber's channels and was
+    wrong about the others — telling a composer there is no service window on a
+    Meta number, which is how a send gets refused by Meta after the agent was
+    told it was fine.
+  */
+  useEffect(() => {
+    if (!selected) {
+      setChannelState({ capabilities: null, code: null, message: null });
+      return;
+    }
+    let cancelled = false;
+    fetchChannelCapabilities(selected.sessionName)
+      .catch(() => ({ capabilities: null, code: 'CHANNEL_CAPABILITIES_UNAVAILABLE', message: null }))
+      .then((state) => { if (!cancelled) setChannelState(state); });
+    return () => { cancelled = true; };
+  }, [selected]);
+
   const teamNames = useMemo(() => new Map(teams.map((team) => [team.id, team.name])), [teams]);
   const label = (session: Session) => session.label || t('WhatsApp channel');
-  const openWAIsActive = sessions.some((session) => session.isActiveChannel);
-  const openWAConnected = sessions.some((session) => session.connected);
-  const openWAProbeUnavailable = !openWAConnected && sessions.some((session) => session.connectionStatus === 'UNAVAILABLE');
-  const repairAmbiguous = channelState.code === 'CHANNEL_AMBIGUOUS';
-  const offerOpenWASwitch = capabilities.canManage && (!openWAIsActive || repairAmbiguous);
 
   const runAction = async () => {
     if (!action) return;
@@ -261,18 +272,51 @@ export function OrganizationChannels() {
   }, [load]);
 
   const activateOpenWA = async () => {
+    if (!selected) return;
     setBusy(true);
     try {
-      await setActiveChannel('OPENWA');
+      await bindSessionChannel(selected.sessionName, 'OPENWA');
       setConfirmOpenWA(false);
       await channelChanged();
-      toast.success(t('This organization now sends through OpenWA'));
+      toast.success(t('This number now sends through OpenWA'));
     } catch (error: any) {
-      toast.error(error?.response?.data?.error || t('Could not switch the sending channel'));
+      toast.error(error?.response?.data?.error || t('Could not change the gateway for this number'));
     } finally {
       setBusy(false);
     }
   };
+
+  const bindToMeta = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await bindSessionChannel(selected.sessionName, 'WHATSAPP_CLOUD');
+      await channelChanged();
+      toast.success(t('This number now sends through Meta'));
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || t('Could not change the gateway for this number'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * The gateway a number sends through, in words.
+   *
+   * A lookup rather than a chain of comparisons, and not only for tidiness:
+   * the tenancy audit forbids a UI component branching on channel identity,
+   * because a component that asks "is this Meta?" has to be edited every time a
+   * channel is added. A table keyed by kind is the same principle honoured —
+   * these are proper nouns, and an unknown kind renders its own code rather
+   * than falling into whichever branch happened to be last.
+   */
+  const gatewayLabel = (session: Session) =>
+    session.channelKind
+      ? GATEWAY_NAMES[session.channelKind] ?? session.channelKind
+      : t('No gateway set');
+
+  /** Is this number already on that gateway? The kind travels as data. */
+  const alreadyOn = (kind: 'OPENWA' | 'WHATSAPP_CLOUD') => selected?.channelKind === kind;
 
   const channelProblem = channelState.code
     ? channelProblemCopy(channelState.code, t)
@@ -340,42 +384,13 @@ export function OrganizationChannels() {
 
         {channelState.capabilities && <ChannelCapabilitiesPanel capabilities={channelState.capabilities} />}
 
-        {!!sessions.length && (
-          <section className="mb-4 flex flex-wrap items-start justify-between gap-3" aria-labelledby="openwa-channel-heading">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 id="openwa-channel-heading" className="text-small font-semibold">OpenWA</h2>
-                <ActiveChannelStatus
-                  active={openWAIsActive && !repairAmbiguous}
-                  activeLabel={t('Active sending channel')}
-                  inactiveLabel={repairAmbiguous ? t('Sending channel needs selection') : t('Inactive sending channel')}
-                />
-              </div>
-              <p className="mt-1 text-caption text-muted-foreground">{t('QR-linked WhatsApp sessions for this organization.')}</p>
-            </div>
-            {offerOpenWASwitch && (
-              <div className="max-w-md text-end">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={busy || !openWAConnected}
-                  onClick={() => setConfirmOpenWA(true)}
-                >
-                  {busy ? <Loader2 className="size-4 animate-spin" /> : <Radio className="size-4" />}
-                  {repairAmbiguous ? t('Use OpenWA and repair sending') : t('Send through OpenWA')}
-                </Button>
-                {!openWAConnected && (
-                  <p role="status" className="mt-2 text-micro text-warning">
-                    {openWAProbeUnavailable
-                      ? t('RabiTech could not check whether OpenWA is connected. Check again before switching.')
-                      : t('Connect an OpenWA session before switching to it.')}
-                  </p>
-                )}
-              </div>
-            )}
-          </section>
-        )}
+        {/*
+          The organization-level "send through OpenWA" switch is gone, not
+          moved. There is no organization sending channel any more: each number
+          carries its own gateway, and the control for changing it lives on the
+          number, in the drawer below. A switch that kept the old name here
+          would describe a concept the product no longer has.
+        */}
 
         {!sessions.length ? (
           <EmptyState icon={MessageCircle} title={t('No channels configured')} description={t('A channel appears here after organization provisioning completes.')} />
@@ -392,7 +407,7 @@ export function OrganizationChannels() {
                 </div>
 
                 <dl className="mt-5 grid grid-cols-2 gap-x-3 gap-y-2 text-caption">
-                  <dt className="text-muted-foreground">{t('Provider')}</dt><dd className="text-end font-medium">OpenWA</dd>
+                  <dt className="text-muted-foreground">{t('Provider')}</dt><dd className="text-end font-medium">{gatewayLabel(session)}</dd>
                   <dt className="text-muted-foreground">{t('Team')}</dt><dd className="truncate text-end font-medium">{session.teamId ? teamNames.get(session.teamId) || t('Unknown team') : t('No team')}</dd>
                   <dt className="text-muted-foreground">{t('Session')}</dt><dd className="truncate text-end font-mono text-micro" dir="ltr">{session.sessionName}</dd>
                 </dl>
@@ -408,7 +423,6 @@ export function OrganizationChannels() {
 
         <MetaChannelCard
           canManage={capabilities.canManage}
-          resolutionCode={channelState.code}
           refreshToken={channelRevision}
           onChannelChanged={channelChanged}
         />
@@ -421,11 +435,40 @@ export function OrganizationChannels() {
             <section className="space-y-3">
               <div className="flex items-center justify-between gap-3"><h2 className="text-small font-semibold">{t('Connection')}</h2><ChannelStatus connected={selected.connected} connectedLabel={t('Connected')} disconnectedLabel={t('Disconnected')} /></div>
               <dl className="divide-y divide-border border-y border-border text-small">
-                <Detail label={t('Provider')} value="OpenWA" />
+                <Detail label={t('Provider')} value={gatewayLabel(selected)} />
                 <Detail label={t('Linked number')} value={selected.phoneNumber || t('No number linked')} ltr />
                 <Detail label={t('Team')} value={selected.teamId ? teamNames.get(selected.teamId) || t('Unknown team') : t('No team')} />
                 <Detail label={t('Session ID')} value={selected.sessionName} ltr />
               </dl>
+              {capabilities.canManage && (
+                <div className="space-y-2">
+                  <p className="text-caption text-muted-foreground">
+                    {t('Messages from this number leave through its own gateway. Changing it here changes nothing for any other number.')}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={busy || alreadyOn('OPENWA')}
+                      onClick={() => setConfirmOpenWA(true)}
+                    >
+                      {busy ? <Loader2 className="size-4 animate-spin" /> : <Radio className="size-4" />}
+                      {t('Send through OpenWA')}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={busy || alreadyOn('WHATSAPP_CLOUD')}
+                      onClick={bindToMeta}
+                    >
+                      {busy ? <Loader2 className="size-4 animate-spin" /> : <Radio className="size-4" />}
+                      {t('Send through Meta')}
+                    </Button>
+                  </div>
+                </div>
+              )}
               {!selected.connected && capabilities.canManage && <Button type="button" onClick={() => setQrSession(selected)}><QrCode className="size-4" />{t('Link device')}</Button>}
             </section>
 
@@ -468,10 +511,10 @@ export function OrganizationChannels() {
       <ConfirmDialog
         open={confirmOpenWA}
         onOpenChange={setConfirmOpenWA}
-        title={t('Switch sending channel to OpenWA?')}
-        description={t('Future messages and automatic replies will use OpenWA. The Meta credential stays saved, but customer messages sent to the inactive Meta number will not reach RabiTech until Meta is reactivated. Existing conversations and message history remain saved.')}
+        title={t('Send this number through OpenWA?')}
+        description={t('Messages from this number will leave through the OpenWA gateway. Every other number keeps the gateway it already has, and existing conversations and message history remain saved.')}
         cancelLabel={t('Cancel')}
-        confirmLabel={repairAmbiguous ? t('Use OpenWA and repair sending') : t('Send through OpenWA')}
+        confirmLabel={t('Send through OpenWA')}
         onConfirm={activateOpenWA}
         busy={busy}
         destructive={false}
@@ -492,30 +535,50 @@ export function OrganizationChannels() {
   );
 }
 
+/**
+ * What each gateway is called, for a human.
+ *
+ * Proper nouns, so they are not translated and not composed by the server —
+ * "OpenWA" is OpenWA in every locale. A kind absent from this table renders its
+ * own code, which is ugly and true, rather than being silently labelled as
+ * whichever gateway the last branch named.
+ */
+const GATEWAY_NAMES: Record<string, string> = {
+  OPENWA: 'OpenWA',
+  WHATSAPP_CLOUD: 'WhatsApp Cloud API',
+};
+
 function ChannelStatus({ connected, connectedLabel, disconnectedLabel }: { connected: boolean; connectedLabel: string; disconnectedLabel: string }) {
   return <span className={connected ? 'inline-flex items-center gap-1.5 text-caption font-medium text-success' : 'inline-flex items-center gap-1.5 text-caption font-medium text-warning'}><span className="size-2 rounded-full bg-current" />{connected ? connectedLabel : disconnectedLabel}</span>;
 }
 
-function ActiveChannelStatus({ active, activeLabel, inactiveLabel }: { active: boolean; activeLabel: string; inactiveLabel: string }) {
-  return <span className={active ? 'inline-flex items-center gap-1.5 text-caption font-medium text-success' : 'inline-flex items-center gap-1.5 text-caption font-medium text-warning'}><span className="size-2 rounded-full bg-current" />{active ? activeLabel : inactiveLabel}</span>;
-}
-
+/**
+ * What is wrong with the selected number's gateway, in words.
+ *
+ * Every entry here used to speak for the organization — "no sending channel is
+ * active", "an organization owner must select one channel". Those sentences
+ * described a product where one channel served everybody. They are about one
+ * number now, because the server's answer is.
+ *
+ * CHANNEL_AMBIGUOUS is gone rather than reworded: it cannot occur. A number
+ * carries its gateway, so there is never more than one answer to disambiguate.
+ */
 function channelProblemCopy(code: string, t: (key: string) => string) {
-  if (code === 'CHANNEL_NOT_ACTIVE') {
+  if (code === 'SESSION_NOT_BOUND') {
     return {
-      title: t('No sending channel is active'),
-      description: t('Sending is paused. An organization owner must choose a connected channel below.'),
+      title: t('This number has no gateway'),
+      description: t('Nothing will send from it until a gateway is chosen. RabiTech does not pick one for you: a reply leaving from the wrong number cannot be taken back.'),
     };
   }
-  if (code === 'CHANNEL_AMBIGUOUS') {
+  if (code === 'CHANNEL_NOT_ACTIVE') {
     return {
-      title: t('More than one sending channel is active'),
-      description: t('Sending is paused to prevent messages leaving from the wrong number. An organization owner must select one channel below.'),
+      title: t('This number\'s gateway is not active'),
+      description: t('Sending from this number is paused until its gateway is running. Other numbers are unaffected.'),
     };
   }
   return {
-    title: t('Could not check the sending channel'),
-    description: t('RabiTech could not read the active channel capabilities. Check again before changing channel settings.'),
+    title: t('Could not check this number\'s gateway'),
+    description: t('RabiTech could not read the gateway capabilities for this number. Check again before changing its channel settings.'),
   };
 }
 

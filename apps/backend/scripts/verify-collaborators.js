@@ -156,9 +156,16 @@ async function behaviourChecks() {
       orderBy: { id: 'asc' }, take: 2, select: { id: true },
     });
 
+    // The organization's gateway. A session's channel is not optional, and a
+    // fixture that leaves it null would be caught by check:session-channel.
+    const gateChannel = await prisma.organizationChannel.findFirst({
+      where: { organizationId: org.id, kind: 'OPENWA' },
+      select: { id: true },
+    });
+    if (!gateChannel) throw new Error('no OPENWA channel on the organization under test');
     const session = await prisma.whatsappSession.create({
       // Explicit workspace: platform scope injects nothing.
-      data: { organizationId: org.id, workspaceId: 'ws_' + org.id, sessionName: 'collab-gate-' + Date.now(), label: 'gate', isActive: false },
+      data: { organizationId: org.id, workspaceId: 'ws_' + org.id, channelId: gateChannel.id, sessionName: 'collab-gate-' + Date.now(), label: 'gate', isActive: false },
       select: { id: true },
     });
     const contact = await prisma.contact.create({

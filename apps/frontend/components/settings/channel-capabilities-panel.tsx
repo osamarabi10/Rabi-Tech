@@ -9,7 +9,7 @@ export function ChannelCapabilitiesPanel({ capabilities }: { capabilities: Chann
 
   return (
     <section className="mb-6 border-y border-border py-4" aria-labelledby="active-channel-capabilities">
-      <h2 id="active-channel-capabilities" className="text-small font-semibold">{t('Active sending channel capabilities')}</h2>
+      <h2 id="active-channel-capabilities" className="text-small font-semibold">{t('What this number can do')}</h2>
       <dl className="mt-3 grid gap-x-6 gap-y-3 text-caption sm:grid-cols-2 xl:grid-cols-4">
         <Capability label={t('Start new conversations')} available={capabilities.canInitiateConversations} />
         <Capability label={t('Approved message templates')} available={capabilities.supportsTemplates} />

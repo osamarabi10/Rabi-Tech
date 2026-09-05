@@ -1,13 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Cloud, Loader2, Radio, Trash2 } from 'lucide-react';
+import { AlertTriangle, Cloud, Loader2, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   connectMetaChannel,
   disconnectMetaChannel,
   fetchMetaChannel,
-  setActiveChannel,
   type MetaChannel,
 } from '@/lib/data';
 import { useT } from '@/lib/i18n';
@@ -65,9 +64,8 @@ const PROBLEM_TEXT: Record<string, string> = {
 
 const EMPTY_FORM = { phoneNumberId: '', wabaId: '', businessPortfolioId: '', accessToken: '' };
 
-export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onChannelChanged }: {
+export function MetaChannelCard({ canManage, refreshToken, onChannelChanged }: {
   canManage: boolean;
-  resolutionCode: string | null;
   refreshToken: number;
   onChannelChanged: () => Promise<void>;
 }) {
@@ -79,7 +77,6 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const [confirmActivate, setConfirmActivate] = useState(false);
   const canSubmit = Boolean(
     form.phoneNumberId.trim()
     && form.wabaId.trim()
@@ -134,24 +131,6 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
         || serverMessage
         || t('Could not connect the Meta channel'),
       );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const activate = async () => {
-    setBusy(true);
-    try {
-      // The kind travels as data, never as a comparison. Which channel this card
-      // manages is this component's own subject; what that channel can DO is
-      // read from the capability descriptor, never inferred from its name.
-      await setActiveChannel('WHATSAPP_CLOUD');
-      setConfirmActivate(false);
-      await onChannelChanged();
-      setChannel(await fetchMetaChannel());
-      toast.success(t('This organization now sends through Meta'));
-    } catch (error: any) {
-      toast.error(error?.response?.data?.error || t('Could not switch the sending channel'));
     } finally {
       setBusy(false);
     }
@@ -214,17 +193,19 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
             </p>
           )}
 
-          {(!channel.isActiveChannel || resolutionCode === 'CHANNEL_AMBIGUOUS') && (
-            <div className="mt-4 space-y-2">
-              <p className="text-micro text-muted-foreground">
-                {t('Connected, but this organization still sends through its other channel.')}
-              </p>
-              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setConfirmActivate(true)}>
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <Radio className="size-4" />}
-                {resolutionCode === 'CHANNEL_AMBIGUOUS' ? t('Use Meta and repair sending') : t('Send through this channel')}
-              </Button>
-            </div>
-          )}
+          {/*
+            No "send through this channel" button any more.
+
+            It used to switch the whole organization onto Meta, because exactly
+            one channel could be the sending channel. Numbers choose their own
+            gateway now, so a connected Meta channel is simply available — and
+            pointing a particular number at it is done on that number, in the
+            channels list above, where it is visible which number is being
+            changed.
+          */}
+          <p className="mt-4 text-micro text-muted-foreground">
+            {t('Any number in this organization can be pointed at this gateway from the channels list above.')}
+          </p>
 
           <DangerZone
             className="mt-5"
@@ -306,17 +287,6 @@ export function MetaChannelCard({ canManage, resolutionCode, refreshToken, onCha
         </DialogContent>
       </Dialog>
 
-      <ConfirmDialog
-        open={confirmActivate}
-        onOpenChange={setConfirmActivate}
-        title={t('Switch sending channel to Meta?')}
-        description={t('Future messages and automatic replies will use Meta. Customer messages sent to inactive OpenWA numbers will not reach RabiTech until OpenWA is reactivated. Existing conversations and message history remain saved.')}
-        cancelLabel={t('Cancel')}
-        confirmLabel={resolutionCode === 'CHANNEL_AMBIGUOUS' ? t('Use Meta and repair sending') : t('Send through this channel')}
-        onConfirm={activate}
-        busy={busy}
-        destructive={false}
-      />
 
       <ConfirmDialog
         open={confirmRemove}

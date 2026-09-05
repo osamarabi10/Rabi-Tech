@@ -30,12 +30,12 @@ const SESSIONS = [
   {
     id: 'ch-connected', sessionName: 'primary', label: 'القناة الأساسية', connected: true,
     phoneNumber: '970599123456', teamId: null, isActive: true,
-    connectionStatus: 'CONNECTED', isActiveChannel: true,
+    connectionStatus: 'CONNECTED', isActiveChannel: true, channelKind: 'OPENWA',
   },
   {
     id: 'ch-down', sessionName: 'backup', label: 'قناة احتياطية', connected: false,
     phoneNumber: '970599654321', teamId: null, isActive: true,
-    connectionStatus: 'DISCONNECTED', isActiveChannel: false,
+    connectionStatus: 'DISCONNECTED', isActiveChannel: false, channelKind: 'OPENWA',
   },
 ];
 

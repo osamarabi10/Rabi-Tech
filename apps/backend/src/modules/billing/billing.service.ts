@@ -422,6 +422,32 @@ export async function createSignup(input: {
         data: workspaceMemberData(organization.id, admin.id, admin.role),
       });
 
+      /*
+        The gateway row, created before the number that sends through it.
+
+        It moved above the session deliberately. A number's channel is not
+        optional — the send path refuses an unbound session rather than
+        guessing — so the row the session binds to has to exist first, and
+        ordering the two by their dependency makes that visible at the call
+        site instead of being repaired by a later update.
+
+        No container is started here. This is a row with an empty baseUrl and
+        no key, in PENDING; provisioning is a separate act.
+      */
+      const openwaChannel = await tx.organizationChannel.create({
+        data: {
+          organizationId: organization.id,
+          kind: 'OPENWA',
+          baseUrl: '',
+          apiKeyEnc: '',
+          webhookToken: crypto.randomBytes(32).toString('hex'),
+          status: 'PENDING',
+          managedByProvisioner: true,
+          provisioningState: 'PENDING',
+          provisioningStep: 'ALLOCATE_RESOURCES',
+        },
+      });
+
       const whatsappSession = await tx.whatsappSession.create({
         data: {
           // The explicit id, not currentOrganizationId(): that resolver reads
@@ -432,6 +458,8 @@ export async function createSignup(input: {
           sessionName: `${slug}-primary`,
           phoneNumber: null,
           teamId: generalTeam.id,
+          // Never null on a created row. check:session-channel fails on one.
+          channelId: openwaChannel.id,
           label: 'WhatsApp',
           isActive: true,
         },
@@ -453,19 +481,6 @@ export async function createSignup(input: {
           { organizationId: organization.id, kind: 'ticketLabel', value: 0 },
           { organizationId: organization.id, kind: 'conversationDisplayId', value: 0 },
         ],
-      });
-      await tx.organizationChannel.create({
-        data: {
-          organizationId: organization.id,
-          kind: 'OPENWA',
-          baseUrl: '',
-          apiKeyEnc: '',
-          webhookToken: crypto.randomBytes(32).toString('hex'),
-          status: 'PENDING',
-          managedByProvisioner: true,
-          provisioningState: 'PENDING',
-          provisioningStep: 'ALLOCATE_RESOURCES',
-        },
       });
       const subscription = await tx.subscription.create({
         data: {

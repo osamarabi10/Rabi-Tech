@@ -1122,26 +1122,51 @@ router.patch('/organization-config', requireAdmin, async (req, res) => {
   res.json(row);
 });
 
-// GET /api/system/sessions — WhatsApp session list + live connection state
+/**
+ * GET /api/system/sessions — the numbers, each with the gateway it sends
+ * through and that gateway's live state.
+ *
+ * `isActiveChannel` used to be one boolean computed from the organization's
+ * OpenWA row and stamped onto every session alike. That was the same
+ * organization-level assumption the send path carried, seen from the UI: a
+ * Growth subscriber running Meta on one number and OpenWA on another would have
+ * had both rendered with the OpenWA channel's state, and the Meta number would
+ * have reported disconnected whenever the OpenWA gateway was.
+ *
+ * It is per session now, read from that session's own channel.
+ */
 router.get('/sessions', async (_req, res) => {
   try {
-    const [sessions, channel] = await Promise.all([
-      prisma.whatsappSession.findMany(),
-      prisma.organizationChannel.findUnique({
-        where: {
-          organizationId_kind: {
-            organizationId: getTenantId(),
-            kind: 'OPENWA',
-          },
-        },
-        select: { status: true },
-      }),
-    ]);
-    // Organizations predating OrganizationChannel still resolve through
-    // OpenWA, so a missing row is active for display just as it is for sends.
-    const isActiveChannel = !channel || channel.status === 'ACTIVE';
+    const sessions = await prisma.whatsappSession.findMany({
+      include: { channel: { select: { kind: true, status: true } } },
+    });
     const withStatus = await Promise.all(
       sessions.map(async (s) => {
+        // A number with no gateway, or one that is switched off. Both are
+        // states the send path names rather than guesses at, and the list says
+        // the same thing rather than reporting a connection it cannot have.
+        const isActiveChannel = s.channel?.status === 'ACTIVE';
+        const channelKind = s.channel?.kind ?? null;
+
+        /*
+          Only OpenWA numbers are probed.
+
+          The probe asks an OpenWA gateway whether its QR pairing is live, which
+          is not a question Meta's Cloud API has — a Meta number is connected
+          when its credential is valid, and there is no session to scan. Probing
+          one used to report UNAVAILABLE on every poll, which rendered as a
+          broken channel that was working.
+        */
+        if (channelKind !== 'OPENWA') {
+          return {
+            ...s,
+            connected: isActiveChannel,
+            connectionStatus: (isActiveChannel ? 'CONNECTED' : 'DISCONNECTED') as 'CONNECTED' | 'DISCONNECTED' | 'UNAVAILABLE',
+            isActiveChannel,
+            channelKind,
+          };
+        }
+
         let connected = false;
         let connectionStatus: 'CONNECTED' | 'DISCONNECTED' | 'UNAVAILABLE' = 'DISCONNECTED';
         let livePhone: string | null = null;
@@ -1179,7 +1204,7 @@ router.get('/sessions', async (_req, res) => {
               );
           }
         }
-        return { ...s, connected, connectionStatus, isActiveChannel };
+        return { ...s, connected, connectionStatus, isActiveChannel, channelKind };
       })
     );
     res.json(withStatus);

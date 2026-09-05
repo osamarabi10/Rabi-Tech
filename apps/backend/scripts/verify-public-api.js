@@ -362,20 +362,28 @@ async function main() {
       bitten by that class once — the finance gate drew a different organization
       between runs because its selection was unordered.
     */
-    const session = await runAsPlatform('verify-public-api:setup', () =>
-      prisma.whatsappSession.create({
+    const session = await runAsPlatform('verify-public-api:setup', async () => {
+      // The organization's gateway. A session's channel is not optional, and a
+      // fixture that leaves it null would be caught by check:session-channel.
+      const gateChannel = await prisma.organizationChannel.findFirst({
+        where: { organizationId: orgA.id, kind: 'OPENWA' },
+        select: { id: true },
+      });
+      if (!gateChannel) throw new Error('no OPENWA channel on the organization under test');
+      return prisma.whatsappSession.create({
         data: {
           // Named explicitly: this runs under platform scope, where the
           // extension injects nothing on purpose.
           organizationId: orgA.id,
           workspaceId: 'ws_' + orgA.id,
+          channelId: gateChannel.id,
           sessionName: 'gate-session-' + stamp,
           label: 'gate',
           isActive: false,
         },
         select: { id: true },
-      }),
-    );
+      });
+    });
     sessionId = session.id;
 
     const thread = await runAsPlatform('verify-public-api:setup', () =>

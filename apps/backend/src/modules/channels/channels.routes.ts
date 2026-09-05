@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { auditLog } from '../../lib/audit';
 import { requireAdmin, requirePermission } from '../../middleware/rbac.middleware';
 import { ChannelKind } from './channel.types';
-import { channelCapabilities, isChannelSendError, setActiveChannelKind } from './channel.service';
+import { channelCapabilities, isChannelSendError } from './channel.service';
+import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
 import { detectMimeType } from '../../utils/mime';
 import { readMessageMedia, verifyMessageMediaSignature } from './meta-media';
@@ -182,7 +183,13 @@ router.delete('/meta', requireAdmin, requirePermission('integration:manage'), as
 });
 
 /**
- * What the organization's channel can do.
+ * What one number's channel can do.
+ *
+ * Keyed by session name, because capabilities are the channel's and the channel
+ * is the number's. The organization-level version of this endpoint could only
+ * answer for a subscriber with one channel; asked by a Growth subscriber
+ * running OpenWA on one number and Meta on another it had to pick one, and
+ * whichever it picked was wrong for the other number's composer.
  *
  * Not admin-only, unlike the rest of this file. The composer and the campaign
  * builder need it to decide what to offer an agent, and an agent who cannot
@@ -190,12 +197,13 @@ router.delete('/meta', requireAdmin, requirePermission('integration:manage'), as
  * failure this endpoint exists to prevent. Nothing here is a secret: it
  * describes the shape of the channel, never its credentials.
  */
-router.get('/capabilities', async (_req, res) => {
+router.get('/sessions/:name/capabilities', async (req, res) => {
   try {
-    res.json({ capabilities: await channelCapabilities() });
+    res.json({ capabilities: await channelCapabilities(req.params.name) });
   } catch (error) {
-    // An organization mid-switch, or with two active channels, has no single answer.
-    // Reported as a named state rather than a 500, so the UI can say so.
+    // A number nobody has bound to a gateway has no answer, and neither does a
+    // session name that does not exist. Reported as a named state rather than a
+    // 500, so the UI can say which.
     if (isChannelSendError(error)) {
       return res.status(409).json({
         error: error.userMessage,
@@ -208,21 +216,27 @@ router.get('/capabilities', async (_req, res) => {
 });
 
 /**
- * Choose which channel this organization sends through.
+ * Choose the gateway one number sends through.
  *
- * A switch, not a toggle: exactly one channel is active afterwards, and the
- * transaction behind it is why a send in flight never sees zero.
+ * This replaces `POST /channels/active`, which chose a gateway for the whole
+ * organization. That endpoint is deleted rather than repurposed as a bulk bind:
+ * there is no organization-level active channel any more, and a control that
+ * kept the name would describe a concept the product no longer has.
+ *
+ * The edition gate is the same one activation always carried. Binding a number
+ * to a kind the subscriber's edition does not include is the same grant as
+ * connecting that kind, so checking only /meta/connect would leave it
+ * reachable by another door.
  */
-router.post('/active', requireAdmin, requirePermission('integration:manage'), async (req: any, res) => {
+router.post('/sessions/:name/channel', requireAdmin, requirePermission('integration:manage'), async (req: any, res) => {
   const kind = String(req.body?.kind || '') as ChannelKind;
   if (kind !== 'OPENWA' && kind !== 'WHATSAPP_CLOUD') {
     return res.status(400).json({ error: 'نوع القناة غير معروف.', code: 'CHANNEL_KIND_UNKNOWN' });
   }
 
-  // Activating a channel is the same grant as connecting one, so it is the
-  // same gate. Checking only /meta/connect would leave a tenant able to switch
-  // to a channel their edition does not include.
-  const refused = await channelRefusal(req.user!.organizationId, kind);
+  const organizationId = req.user!.organizationId;
+
+  const refused = await channelRefusal(organizationId, kind);
   if (refused) {
     return res.status(402).json({
       error: refused.requiredPlan
@@ -234,26 +248,50 @@ router.post('/active', requireAdmin, requirePermission('integration:manage'), as
     });
   }
 
-  try {
-    await setActiveChannelKind(kind);
-  } catch (error) {
-    if (isChannelSendError(error)) {
-      return res.status(422).json({ error: error.userMessage, code: error.code });
-    }
-    throw error;
+  const session = await prisma.whatsappSession.findUnique({
+    where: { organizationId_sessionName: { organizationId, sessionName: req.params.name } },
+    select: { id: true },
+  });
+  if (!session) {
+    return res.status(404).json({ error: 'ما لقينا هالرقم.', code: 'SESSION_UNKNOWN' });
   }
+
+  const channel = await prisma.organizationChannel.findUnique({
+    where: { organizationId_kind: { organizationId, kind } },
+    select: { id: true },
+  });
+  if (!channel) {
+    return res.status(409).json({
+      error: 'ما في قناة من هالنوع مربوطة بمساحة العمل، فما فينا نوجّه الرقم عليها.',
+      code: 'CHANNEL_NOT_CONNECTED',
+    });
+  }
+
+  /*
+    A single UPDATE, and no transaction.
+
+    The old switch needed one because it deactivated one row and activated
+    another, and a send observing the gap would have found no active channel.
+    Binding a number writes one column on one row: there is no gap to observe,
+    and a send in flight either reads the old gateway or the new one — both of
+    which are gateways this subscriber owns and this number is entitled to.
+  */
+  await prisma.whatsappSession.update({
+    where: { id: session.id },
+    data: { channelId: channel.id },
+  });
 
   await auditLog({
     userId: req.user?.id,
-    action: 'channel.activated',
-    resource: 'OrganizationChannel',
-    resourceId: kind,
-    description: `active channel set to ${kind}`,
+    action: 'channel.session-bound',
+    resource: 'WhatsappSession',
+    resourceId: session.id,
+    description: `${req.params.name} now sends through ${kind}`,
     ipAddress: req.ip,
     userAgent: req.get('user-agent'),
   });
 
-  return res.json({ activeKind: kind, capabilities: await channelCapabilities() });
+  return res.json({ sessionName: req.params.name, kind, capabilities: await channelCapabilities(req.params.name) });
 });
 
 export default router;

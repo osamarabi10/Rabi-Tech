@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { seedDefaultAutoReplies } from '../src/utils/seed-auto-replies';
+import { defaultWorkspaceData, defaultWorkspaceIdFor } from '../src/lib/workspace-provisioning';
 
 const prisma = new PrismaClient();
 
@@ -95,6 +96,40 @@ async function main() {
     teamIdBySlug[t.slug] = team.id;
   }
 
+  // The default workspace every row below hangs from.
+  //
+  // Derived through defaultWorkspaceData so this file and migration
+  // 20261013090000_workspaces_schema cannot drift into two conventions for the
+  // same id. Absent here until now, which is why the seed could not run: the
+  // column has been required since that migration.
+  await prisma.workspace.upsert({
+    where: { id: defaultWorkspaceIdFor(organizationId) },
+    update: {},
+    create: defaultWorkspaceData(organizationId, 'RabiTech Demo'),
+  });
+
+  // The gateway the demo number sends through.
+  //
+  // A row, not a container: empty baseUrl, no key, PENDING. It exists because
+  // a session's channel is not optional — the send path refuses an unbound
+  // session by name rather than guessing which gateway a reply should leave
+  // through.
+  const demoChannel = await prisma.organizationChannel.upsert({
+    where: { organizationId_kind: { organizationId, kind: 'OPENWA' } },
+    update: {},
+    create: {
+      organizationId,
+      kind: 'OPENWA',
+      baseUrl: '',
+      apiKeyEnc: '',
+      webhookToken: crypto.randomBytes(32).toString('hex'),
+      status: 'PENDING',
+      managedByProvisioner: true,
+      provisioningState: 'PENDING',
+      provisioningStep: 'ALLOCATE_RESOURCES',
+    },
+  });
+
   // One demo WhatsApp session on the Support team, deliberately unlinked.
   //
   // A freshly seeded session starts with no phone number — the admin links a
@@ -103,11 +138,16 @@ async function main() {
   // WhatsApp number to a brand-new demo organization.
   await prisma.whatsappSession.upsert({
     where: { organizationId_sessionName: { organizationId, sessionName: 'rabitech-demo-primary' } },
-    update: { label: 'الدعم', isActive: true, teamId: teamIdBySlug.support },
+    // Written on update too, so re-seeding repairs a row left unbound by an
+    // earlier run of this file.
+    update: { label: 'الدعم', isActive: true, teamId: teamIdBySlug.support, channelId: demoChannel.id },
     create: {
       organizationId,
+      workspaceId: defaultWorkspaceIdFor(organizationId),
       sessionName: 'rabitech-demo-primary',
       teamId: teamIdBySlug.support,
+      // Never null on a created row. check:session-channel fails on one.
+      channelId: demoChannel.id,
       label: 'الدعم',
     },
   });

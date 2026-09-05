@@ -476,6 +476,22 @@ router.post('/subscribers', requirePlatformOwner, async (req, res) => {
         data: workspaceMemberData(organization.id, admin.id, admin.role),
       });
 
+      // Above the session, and for the reason billing.service.ts states: the
+      // number binds to this row, so it has to exist first.
+      const openwaChannel = await tx.organizationChannel.create({
+        data: {
+          organizationId: organization.id,
+          kind: 'OPENWA',
+          baseUrl: '',
+          apiKeyEnc: '',
+          webhookToken: crypto.randomBytes(32).toString('hex'),
+          status: 'PENDING',
+          managedByProvisioner: true,
+          provisioningState: 'PENDING',
+          provisioningStep: 'ALLOCATE_RESOURCES',
+        },
+      });
+
       const whatsappSession = await tx.whatsappSession.create({
         data: {
           // Explicit, not resolved: see the note in billing.service.ts —
@@ -485,6 +501,8 @@ router.post('/subscribers', requirePlatformOwner, async (req, res) => {
           sessionName: `${normalizedSlug}-primary`,
           phoneNumber: null,
           teamId: generalTeam.id,
+          // Never null on a created row. check:session-channel fails on one.
+          channelId: openwaChannel.id,
           label: 'WhatsApp',
           isActive: true,
         },
@@ -509,19 +527,6 @@ router.post('/subscribers', requirePlatformOwner, async (req, res) => {
           { organizationId: organization.id, kind: 'ticketLabel', value: 0 },
           { organizationId: organization.id, kind: 'conversationDisplayId', value: 0 },
         ],
-      });
-      await tx.organizationChannel.create({
-        data: {
-          organizationId: organization.id,
-          kind: 'OPENWA',
-          baseUrl: '',
-          apiKeyEnc: '',
-          webhookToken: crypto.randomBytes(32).toString('hex'),
-          status: 'PENDING',
-          managedByProvisioner: true,
-          provisioningState: 'PENDING',
-          provisioningStep: 'ALLOCATE_RESOURCES',
-        },
       });
       return { organization, admin, whatsappSession };
     });

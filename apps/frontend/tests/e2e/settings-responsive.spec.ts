@@ -214,12 +214,12 @@ async function prepareSettings(
     {
       id: 'session-sales', sessionName: 'sales-whatsapp', label: 'Sales WhatsApp',
       connected: true, phoneNumber: '+970599111222', teamId: 'team-sales', isActive: true,
-      connectionStatus: 'CONNECTED', isActiveChannel: true,
+      connectionStatus: 'CONNECTED', isActiveChannel: true, channelKind: 'OPENWA',
     },
     {
       id: 'session-support', sessionName: 'support-whatsapp', label: 'Support WhatsApp',
       connected: false, phoneNumber: null, teamId: 'team-support', isActive: false,
-      connectionStatus: 'DISCONNECTED', isActiveChannel: true,
+      connectionStatus: 'DISCONNECTED', isActiveChannel: true, channelKind: 'OPENWA',
     },
   ];
   await page.route('**/api/system/sessions**', async (route) => {
@@ -256,7 +256,10 @@ async function prepareSettings(
   await page.route('**/api/channels/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (request.method() === 'GET' && path === '/api/channels/capabilities') {
+    // Capabilities are asked per number now: /api/channels/sessions/:name/capabilities.
+    // The organization-level endpoint is gone, because it could only answer for a
+    // subscriber with one channel.
+    if (request.method() === 'GET' && /^\/api\/channels\/sessions\/[^/]+\/capabilities$/.test(path)) {
       // The capability descriptor the card reads instead of asking which
       // channel it is. OpenWA shape: no window, can start conversations.
       await route.fulfill({ json: { capabilities: {
@@ -266,8 +269,10 @@ async function prepareSettings(
       } } });
       return;
     }
-    if (request.method() === 'POST' && path === '/api/channels/active') {
-      await route.fulfill({ json: { activeKind: request.postDataJSON()?.kind, capabilities: null } });
+    // Binding one number to a gateway. This replaced POST /api/channels/active,
+    // which switched the whole organization.
+    if (request.method() === 'POST' && /^\/api\/channels\/sessions\/[^/]+\/channel$/.test(path)) {
+      await route.fulfill({ json: { sessionName: path.split('/')[4], kind: request.postDataJSON()?.kind, capabilities: null } });
       return;
     }
     if (request.method() === 'GET' && path === '/api/channels/meta') {
@@ -735,10 +740,24 @@ test('channel settings disconnect safely and expose QR pairing for an unlinked s
   await page.screenshot({ path: testInfo.outputPath('channel-qr-pairing.png'), fullPage: true });
 });
 
-test('channel settings show capabilities and require the explicit Meta loss warning before switching to OpenWA', async ({ page }) => {
+/*
+  These three replace an earlier trio that asserted the organization-level
+  sending switch: the Meta-loss warning before switching to OpenWA, the refusal
+  to switch onto a gateway whose live probe had failed, and the CHANNEL_AMBIGUOUS
+  repair flow.
+
+  All three described a product where one channel was *the* channel. Binding is
+  per number now, so the states they covered either cannot occur
+  (CHANNEL_AMBIGUOUS) or mean something different (switching costs no other
+  number anything). They are replaced rather than deleted, because the property
+  underneath is the one that still matters: **changing where a number sends from
+  is deliberate, scoped, and visible.**
+*/
+
+test('a number names its own gateway, and binding it says what does not change', async ({ page }) => {
   await prepareSettings(page, { locale: 'en', theme: 'light', width: 1440, height: 900 });
-  let openWAActive = false;
-  const activationRequests: Record<string, unknown>[] = [];
+  let kind: 'OPENWA' | 'WHATSAPP_CLOUD' = 'WHATSAPP_CLOUD';
+  const bindRequests: { session: string; body: Record<string, unknown> }[] = [];
 
   await page.unroute('**/api/system/sessions**');
   await page.route('**/api/system/sessions**', async (route) => {
@@ -747,7 +766,7 @@ test('channel settings show capabilities and require the explicit Meta loss warn
       await route.fulfill({ json: [{
         id: 'session-sales', sessionName: 'sales-whatsapp', label: 'Sales WhatsApp',
         connected: true, connectionStatus: 'CONNECTED', phoneNumber: '+970599111222',
-        teamId: 'team-sales', isActive: true, isActiveChannel: openWAActive,
+        teamId: 'team-sales', isActive: true, isActiveChannel: true, channelKind: kind,
       }] });
       return;
     }
@@ -758,8 +777,8 @@ test('channel settings show capabilities and require the explicit Meta loss warn
   await page.route('**/api/channels/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (request.method() === 'GET' && path === '/api/channels/capabilities') {
-      await route.fulfill({ json: { capabilities: openWAActive ? {
+    if (request.method() === 'GET' && /^\/api\/channels\/sessions\/[^/]+\/capabilities$/.test(path)) {
+      await route.fulfill({ json: { capabilities: kind === 'OPENWA' ? {
         kind: 'OPENWA', requiresServiceWindow: false, supportsTemplates: false,
         supportsQrPairing: true, maxUniqueRecipientsPer24h: null,
         canInitiateConversations: true, messagingTier: null, qualityRating: null,
@@ -770,79 +789,65 @@ test('channel settings show capabilities and require the explicit Meta loss warn
       } } });
       return;
     }
+    if (request.method() === 'POST' && /^\/api\/channels\/sessions\/[^/]+\/channel$/.test(path)) {
+      bindRequests.push({ session: decodeURIComponent(path.split('/')[4]), body: request.postDataJSON() });
+      kind = 'OPENWA';
+      await route.fulfill({ json: { sessionName: 'sales-whatsapp', kind: 'OPENWA', capabilities: null } });
+      return;
+    }
     if (request.method() === 'GET' && path === '/api/channels/meta') {
       await route.fulfill({ json: { channel: {
         connected: true, status: 'ACTIVE', phoneNumberId: '123456789',
         displayPhoneNumber: '+970599333444', verifiedName: 'RabiTech Demo',
         qualityRating: 'GREEN', messagingTier: 'TIER_250', lastValidatedAt: null,
-        invalidReason: null, graphVersion: 'v21.0', isActiveChannel: !openWAActive,
+        invalidReason: null, graphVersion: 'v21.0', isActiveChannel: true,
       } } });
-      return;
-    }
-    if (request.method() === 'POST' && path === '/api/channels/active') {
-      activationRequests.push(request.postDataJSON());
-      openWAActive = true;
-      await route.fulfill({ json: { activeKind: 'OPENWA', capabilities: null } });
       return;
     }
     await route.continue();
   });
 
   await page.goto('/settings/channels');
-  await expect(page.getByText('Start new conversations', { exact: true })).toBeVisible();
-  await expect(page.getByText('Unavailable', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText(/broadcasts and first-contact messages will be refused/)).toBeVisible();
+
+  // The card names the gateway this number sends through — not "OpenWA" for
+  // every number alike, which is what it said when the organization had one.
+  const salesCard = page.locator('article').filter({ hasText: 'Sales WhatsApp' });
+  await expect(salesCard.getByText('WhatsApp Cloud API', { exact: true })).toBeVisible();
+
+  await salesCard.getByRole('button', { name: 'View channel' }).click();
+  await expect(page.getByText('Messages from this number leave through its own gateway. Changing it here changes nothing for any other number.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Send through OpenWA' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Switch sending channel to OpenWA?' });
-  await expect(dialog).toContainText('customer messages sent to the inactive Meta number will not reach RabiTech until Meta is reactivated');
-  expect(activationRequests).toEqual([]);
+  const dialog = page.getByRole('dialog', { name: 'Send this number through OpenWA?' });
+  await expect(dialog).toContainText('Every other number keeps the gateway it already has');
+  expect(bindRequests).toEqual([]);
+
   await dialog.getByRole('button', { name: 'Send through OpenWA' }).click();
-  await expect.poll(() => activationRequests).toEqual([{ kind: 'OPENWA' }]);
+  await expect.poll(() => bindRequests).toEqual([{ session: 'sales-whatsapp', body: { kind: 'OPENWA' } }]);
 });
 
-test('OpenWA activation explains a failed live connection probe', async ({ page }) => {
+test('a number with no gateway says so, and the send path is what refuses it', async ({ page }) => {
   await prepareSettings(page, { locale: 'en', theme: 'light', width: 1440, height: 900 });
+
   await page.unroute('**/api/system/sessions**');
   await page.route('**/api/system/sessions**', async (route) => {
     await route.fulfill({ json: [{
       id: 'session-sales', sessionName: 'sales-whatsapp', label: 'Sales WhatsApp',
-      connected: false, connectionStatus: 'UNAVAILABLE', phoneNumber: '+970599111222',
-      teamId: 'team-sales', isActive: true, isActiveChannel: false,
+      connected: false, connectionStatus: 'DISCONNECTED', phoneNumber: '+970599111222',
+      teamId: 'team-sales', isActive: true, isActiveChannel: false, channelKind: null,
     }] });
   });
 
-  await page.goto('/settings/channels');
-  await expect(page.getByRole('button', { name: 'Send through OpenWA' })).toBeDisabled();
-  await expect(page.getByText('RabiTech could not check whether OpenWA is connected. Check again before switching.')).toBeVisible();
-});
-
-test('CHANNEL_AMBIGUOUS renders and repairs through the transactional active-channel endpoint', async ({ page }) => {
-  await prepareSettings(page, { locale: 'en', theme: 'light', width: 1440, height: 900 });
-  let ambiguous = true;
-  const activationRequests: Record<string, unknown>[] = [];
   await page.unroute('**/api/channels/**');
   await page.route('**/api/channels/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (request.method() === 'GET' && path === '/api/channels/capabilities') {
-      if (ambiguous) {
-        await route.fulfill({ status: 409, json: {
-          code: 'CHANNEL_AMBIGUOUS', error: 'ambiguous', capabilities: null,
-        } });
-      } else {
-        await route.fulfill({ json: { capabilities: {
-          kind: 'OPENWA', requiresServiceWindow: false, supportsTemplates: false,
-          supportsQrPairing: true, maxUniqueRecipientsPer24h: null,
-          canInitiateConversations: true, messagingTier: null, qualityRating: null,
-        } } });
-      }
-      return;
-    }
-    if (request.method() === 'POST' && path === '/api/channels/active') {
-      activationRequests.push(request.postDataJSON());
-      ambiguous = false;
-      await route.fulfill({ json: { activeKind: 'OPENWA', capabilities: null } });
+    if (request.method() === 'GET' && /^\/api\/channels\/sessions\/[^/]+\/capabilities$/.test(path)) {
+      // What the server answers for an unbound number. It does not guess a
+      // gateway, so there are no capabilities to describe.
+      await route.fulfill({ status: 409, json: {
+        code: 'SESSION_NOT_BOUND', error: 'this number is not bound to a gateway', capabilities: null,
+      } });
       return;
     }
     if (request.method() === 'GET' && path === '/api/channels/meta') {
@@ -853,12 +858,15 @@ test('CHANNEL_AMBIGUOUS renders and repairs through the transactional active-cha
   });
 
   await page.goto('/settings/channels');
-  await expect(page.getByText('More than one sending channel is active')).toBeVisible();
-  await page.getByRole('button', { name: 'Use OpenWA and repair sending' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Switch sending channel to OpenWA?' });
-  await dialog.getByRole('button', { name: 'Use OpenWA and repair sending' }).click();
-  await expect.poll(() => activationRequests).toEqual([{ kind: 'OPENWA' }]);
-  await expect(page.getByText('More than one sending channel is active')).not.toBeVisible();
+
+  const salesCard = page.locator('article').filter({ hasText: 'Sales WhatsApp' });
+  await expect(salesCard.getByText('No gateway set', { exact: true })).toBeVisible();
+
+  // Both gateways are offered, because neither is currently in use by this
+  // number. The old screen had one button, for the organization.
+  await salesCard.getByRole('button', { name: 'View channel' }).click();
+  await expect(page.getByRole('button', { name: 'Send through OpenWA' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Send through Meta' })).toBeEnabled();
 });
 
 test('lifecycle settings create, reorder, select default, and reassign contacts on delete', async ({ page }, testInfo) => {

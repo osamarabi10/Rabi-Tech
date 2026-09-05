@@ -262,6 +262,19 @@ Design rules do not catch the failures this repository actually has. These do.
   database. Exercise a reversal before claiming one, and never read "we have
   guarded down migrations" as "we can roll back".
 
+- **Anything the project relies on to reproduce state — seeds, fixtures,
+  bootstrap scripts — must be exercised by a gate.** `prisma/seed.ts` had been
+  broken since the workspaces migration made `workspaceId` required: it omitted
+  the column, so `npm run db:seed` could not create a session and the whole seed
+  failed. It stayed broken for four commits and **all twelve gates were green
+  the entire time**, because not one of them runs it. It is also outside
+  `tsconfig`'s `include`, so `tsc` never looked at it either.
+
+  A script that cannot run is a script nobody can verify, and the first person
+  to find out is whoever needs a working database in a hurry. Either a gate
+  invokes it, or it is dead code that should be deleted — those are the two
+  honest states, and "it is there if we need it" is neither.
+
 ---
 
 ## Scope
