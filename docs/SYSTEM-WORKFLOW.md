@@ -32,26 +32,74 @@ flowchart TD
     F --> H["Customer logs in<br/><i>POST /api/auth/login</i>"]
     H --> I["Dashboard.<br/>No container exists yet."]
 
-    I --> J["Clicks <b>Link device</b><br/><i>organization-channels.tsx connectAndPair</i>"]
-    J --> K["POST /api/channels/sessions/:name/connect<br/><i>channels.routes.ts</i>"]
-    K --> L{"Guard chain<br/>(section 3)"}
+    I --> LANE{"Which lanes does the<br/>edition open?<br/><i>Plan.allowedChannels</i>"}
 
-    L -- refused --> M["402 naming the upgrade,<br/>dialog stays shut"]
-    L -- queued --> N["Channel → PROVISIONING<br/>job on bull:gateway-provisioning"]
+    LANE -- "OPENWA<br/>trial · Standard" --> J
+    LANE -- "WHATSAPP_CLOUD<br/>trial · Standard · Growth<br/>Business · Enterprise" --> M1
 
-    N -. "worker not running here (D-5)" .-> OX["⚠ 236 jobs waiting"]
-    N --> P["Pairing dialog polls<br/><i>GET /sessions/:name/qr</i>"]
-    P --> Q["GATEWAY_PROVISIONING<br/>“this takes about a minute”"]
+    subgraph OW ["OpenWA lane — our container, a QR"]
+      J["Clicks <b>Link device</b><br/><i>organization-channels.tsx connectAndPair</i>"]
+      J --> K["POST /api/channels/sessions/:name/connect<br/><i>channels.routes.ts</i>"]
+      K --> L{"Guard chain<br/>(section 3)"}
+      L -- refused --> LX["402 naming the upgrade,<br/>dialog stays shut"]
+      L -- queued --> N["Channel → PROVISIONING<br/>job on bull:gateway-provisioning"]
+      N --> P["Pairing dialog polls<br/><i>GET /sessions/:name/qr</i>"]
+      P --> Q["GATEWAY_PROVISIONING<br/>“this takes about a minute”"]
+      R["gateway:worker builds the container<br/><i>gateway-provisioning.worker.ts</i>"]
+      R --> S1["Channel → AWAITING_QR"]
+      S1 --> T["QR renders, customer scans"]
+      T --> U["Channel → ACTIVE"]
+    end
 
-    OX -.-> R["gateway:worker builds the container<br/><i>gateway-provisioning.worker.ts</i>"]
-    R --> S["Channel → AWAITING_QR"]
-    S --> T["QR renders, customer scans"]
-    T --> U["Channel → ACTIVE. Messaging works."]
+    subgraph MC ["Cloud API lane — their WABA, a token"]
+      M1["Clicks <b>Link a Meta number</b><br/><i>meta-channel-card.tsx</i>"]
+      M1 --> M2["Pastes three values:<br/>phoneNumberId, wabaId, accessToken"]
+      M2 --> M3["POST /api/channels/meta/connect<br/><i>meta.service.ts connectMetaChannel</i>"]
+      M3 --> M4{"Four checks<br/>(section 5)"}
+      M4 -- "any of the first three fails" --> M5["Nothing saved.<br/>The reason names the field."]
+      M4 -- pass --> M6["Channel ACTIVE, token in the vault,<br/>session bound.<br/><b>No container. No QR.</b>"]
+    end
+
+    N -. "worker not running here (D-5)" .-> OX["⚠ 236 jobs queued, nothing consuming"]
+    OX -.-> R
+
+    M2 -. "all three come from Business Manager,<br/>and the product helps with none of it (D-9)" .-> MX["⚠ No guided signup"]
+    LANE -. "META_APP_SECRET unset, so every<br/>Cloud-API-only edition is unsellable (D-9)" .-> MY["⚠ Growth, Business, Enterprise<br/>withdrawn from sale"]
+
+    U --> V["Messaging works"]
+    M6 --> V
 ```
 
-**The one thing to take from this diagram:** signup creates rows and nothing
-else. A workspace costs a row; a container costs RAM for as long as it exists,
-so it waits for somebody to ask.
+### Which lanes each edition opens
+
+Not a customer choice — `Plan.allowedChannels`, enforced by
+`channelGrantRefusal` at both connect paths. Live values, owner-editable from
+the console:
+
+| Edition | OpenWA (QR) | Cloud API (token) | |
+|---|---|---|---|
+| **Free trial** | yes | yes | **two lanes** — a trial runs on Standard, not on Free |
+| **Standard** | yes | yes | **two lanes** — the only edition that sells both |
+| **Growth** | — | yes | Meta alone |
+| **Business** | — | yes | Meta alone |
+| **Enterprise** | — | yes | Meta alone |
+| Free (a lapsed trial) | listed | yes | see below |
+
+**Free is listed for OpenWA and can never have one.** `allowedChannels` permits
+it, but `autoProvisionGateway` is false, so the guard chain answers
+PLAN_UPGRADE_REQUIRED and no container is ever built. Two columns describing one
+capability, disagreeing. It is not reachable today — nobody is on Free except a
+lapsed trial — but it is a contradiction in the shipped catalogue, not a rule.
+
+**And the two facts above collide.** The Meta-only editions are withdrawn from
+sale while `META_APP_SECRET` is unset, so the only sellable paid edition is
+Standard — the one edition with two lanes. Of its two, the QR lane needs a
+worker that runs nowhere and the token lane needs a WABA the product does not
+help anybody obtain.
+
+**And the other thing to take from the diagram:** signup creates rows and
+nothing else. A workspace costs a row; a container costs RAM for as long as it
+exists, so it waits for somebody to ask.
 
 ---
 
@@ -125,7 +173,58 @@ action that also deletes the organization.
 
 ---
 
-## 5. Which gateway a message leaves through
+## 5. Connecting a Cloud API number
+
+No container, no queue, no QR. `connectMetaChannel` in `meta.service.ts` runs
+four checks against Meta's Graph API and either saves everything or nothing.
+
+```mermaid
+flowchart TD
+    P0{"vault unlocked?<br/>all three fields present?"}
+    P0 -- no --> F0["Refused before any network call"]
+    P0 -- yes --> P1
+
+    P1["<b>1 of 4</b> · fetchPhoneNumber<br/>does the id resolve, and can this token see it?"]
+    P1 -- fails --> F1["META_PHONE_NUMBER_INVALID<br/><i>the field most often wrong: Meta's console shows<br/>the display number beside the id</i>"]
+    P1 --> P2
+
+    P2["<b>2 of 4</b> · fetchWabaPhoneNumbers<br/>can the token manage the WABA,<br/>and does the number belong to it?"]
+    P2 -- fails --> F2["META_WABA_ACCESS_DENIED<br/>or META_WABA_PHONE_MISMATCH"]
+    P2 --> P3
+
+    P3["<b>3 of 4</b> · subscribeApp<br/>subscribe our app to this WABA's webhooks"]
+    P3 -- fails --> F3["META_SUBSCRIBE_FAILED — <b>fatal</b>"]
+    P3 --> P4
+
+    P4["<b>4 of 4</b> · fetchPhoneNumberStanding<br/>messaging tier and quality rating"]
+    P4 -- fails --> W["Warning only. Fields stay null."]
+    P4 --> SAVE
+    W --> SAVE
+
+    SAVE[("persist(): channel ACTIVE,<br/>credential encrypted in the vault,<br/>session bound to it")]
+```
+
+**Step 3 is the one worth understanding.** A valid token routes nothing on its
+own — without an active webhook subscription Meta has nowhere to deliver, so the
+channel sends fine and never receives. The business experiences that as
+customers being ignored, and every screen in this product would show a working
+connection. So a failure there aborts the whole connect rather than being saved
+as a degraded state.
+
+Step 4 is deliberately non-fatal: by then the token has proven it can read the
+number, manage the WABA and subscribe the app, so refusing a demonstrably
+working channel because a display banner has nothing to show would be choosing
+the label over the thing.
+
+**The channel is ACTIVE the moment those checks pass.** It used to be left
+PENDING, because the send path picked the organization's single ACTIVE channel
+and a second one made it ambiguous. Routing is per number now, so a Meta channel
+being ACTIVE affects no number that is not bound to it — which is exactly what
+lets a Standard subscriber run OpenWA on one number and Cloud API on another.
+
+---
+
+## 6. Which gateway a message leaves through
 
 The C1 invariant, `channel.service.ts`:
 
@@ -154,7 +253,7 @@ channel" any more; `POST /channels/active` was deleted, not renamed.
 
 ---
 
-## 6. Inbound
+## 7. Inbound
 
 ```mermaid
 flowchart LR
@@ -169,7 +268,7 @@ flowchart LR
 
 ---
 
-## 7. What an organization is entitled to
+## 8. What an organization is entitled to
 
 `resolveEntitlements`, one resolution order, read at every enforcement site:
 
@@ -189,7 +288,7 @@ cannot fail and the audit trail cannot disagree with what is enforced.
 
 ---
 
-## 8. What is not wired
+## 9. What is not wired
 
 Honest list. Each is recorded, none is a surprise.
 
@@ -197,7 +296,8 @@ Honest list. Each is recorded, none is a surprise.
 |---|---|---|
 | No mail transport | Verification, password reset, dunning and suspension notices are logged, never sent. Signup survives only because the link is on screen. | D-2 |
 | `gateway:worker` runs nowhere | Jobs queue and nothing consumes them: **236 waiting**. Connect reports "being built" truthfully and the build never starts. | D-5 |
-| Cloud API has no connect screen | OpenWA is self-serve; Meta is a form for three values the customer must fetch from Business Manager unaided. Growth sells both. | D-9 |
+| Cloud API has no *guided* connect | The endpoint and the card work. What is missing is everything before them: Business Manager, business verification, a System User token with `whatsapp_business_management`. A form is not a flow — and it is the **only** lane Growth, Business and Enterprise have. | D-9 |
+| Free permits OpenWA and cannot build one | `allowedChannels` says yes, `autoProvisionGateway` says no. Two columns describing one capability, disagreeing. | — |
 | `META_APP_SECRET` unset | `editionOfferability` withdraws GROWTH, BUSINESS and ENTERPRISE from sale. Only FREE and STANDARD are sellable. | D-9 |
 | No numbers meter | The ladder prices per number; nothing counts them. | — |
 | MAC is enforced but should not be priced | `active_contacts` blocks outbound today. The ladder meters seats and numbers instead. | D-3 |
@@ -206,7 +306,7 @@ Honest list. Each is recorded, none is a surprise.
 
 ---
 
-## 9. Where the rules live
+## 10. Where the rules live
 
 | Question | One place |
 |---|---|
