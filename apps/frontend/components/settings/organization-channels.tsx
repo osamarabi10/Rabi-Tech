@@ -23,6 +23,7 @@ import {
   fetchTeams,
   fetchOrganizationUsers,
   bindSessionChannel,
+  connectSessionGateway,
   type ChannelCapabilities,
   type Session,
   type SessionQR,
@@ -96,6 +97,13 @@ function pairingFaultCopy(
       return {
         reason: t('بوابة واتساب لا تستجيب'),
         nextStep: t('يعاد تشغيل البوابة، حاول بعد دقيقة'),
+      };
+    case 'GATEWAY_PROVISIONING':
+      // Being built, which is neither a fault nor a reason to promise a QR
+      // code that is not there yet. The dialog stays open and says so.
+      return {
+        reason: t('عم نجهّز بوابة واتساب لهالرقم'),
+        nextStep: t('بياخد دقيقة تقريباً. خلّي الشاشة مفتوحة ورمز QR بيطلع لحاله'),
       };
     default:
       return { reason: qr.reason || t('سبب غير معروف'), nextStep: qr.nextStep || '' };
@@ -318,6 +326,30 @@ export function OrganizationChannels() {
   /** Is this number already on that gateway? The kind travels as data. */
   const alreadyOn = (kind: 'OPENWA' | 'WHATSAPP_CLOUD') => selected?.channelKind === kind;
 
+  /**
+   * Ask for the gateway, then open the pairing dialog.
+   *
+   * The request comes first and the dialog second, deliberately. Opening the
+   * dialog first would show CHANNEL_NOT_PROVISIONED for the moment before the
+   * request lands — telling the customer to press the button they just pressed.
+   *
+   * A refusal keeps the dialog shut. There is nothing to pair with, and a QR
+   * screen over a gateway that will never be built is the spinner-over-a-dead-
+   * gateway shape in a different costume.
+   */
+  const connectAndPair = async (session: Session) => {
+    setBusy(true);
+    try {
+      await connectSessionGateway(session.sessionName);
+      setQrSession(session);
+      await load(false);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || t('Could not start building the gateway for this number'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const channelProblem = channelState.code
     ? channelProblemCopy(channelState.code, t)
     : null;
@@ -414,7 +446,7 @@ export function OrganizationChannels() {
 
                 <div className="mt-auto flex flex-wrap justify-end gap-2 border-t border-border pt-4">
                   <Button type="button" variant="outline" size="sm" onClick={() => setSelected(session)}>{t('View channel')}</Button>
-                  {!session.connected && capabilities.canManage && <Button type="button" size="sm" onClick={() => setQrSession(session)}><QrCode className="size-4" />{t('Link device')}</Button>}
+                  {!session.connected && capabilities.canManage && <Button type="button" size="sm" disabled={busy} onClick={() => connectAndPair(session)}><QrCode className="size-4" />{t('Link device')}</Button>}
                 </div>
               </article>
             ))}
@@ -469,7 +501,7 @@ export function OrganizationChannels() {
                   </div>
                 </div>
               )}
-              {!selected.connected && capabilities.canManage && <Button type="button" onClick={() => setQrSession(selected)}><QrCode className="size-4" />{t('Link device')}</Button>}
+              {!selected.connected && capabilities.canManage && <Button type="button" disabled={busy} onClick={() => connectAndPair(selected)}><QrCode className="size-4" />{t('Link device')}</Button>}
             </section>
 
             {capabilities.canManage && <DangerZone title={t('Connection controls')} description={t('Conversation history remains in RabiTech when a WhatsApp connection is stopped or unlinked.')}>
@@ -495,12 +527,32 @@ export function OrganizationChannels() {
                   spinner on purpose: a fault outranks both, because a spinner
                   shown over a dead gateway is a promise the product cannot keep.
                 */
-                <div className="flex max-w-sm flex-col items-center gap-3 text-center" role="alert">
-                  <AlertTriangle className="size-8 text-destructive" aria-hidden />
-                  <p className="text-small font-semibold text-destructive">{t('تعذّر تجهيز رمز الربط')}</p>
-                  <p className="text-caption text-muted-foreground">{pairingFaultCopy(qr, t).reason}</p>
-                  <p className="text-caption font-medium text-foreground">{pairingFaultCopy(qr, t).nextStep}</p>
-                </div>
+                qr.code === 'GATEWAY_PROVISIONING' ? (
+                  /*
+                    Being built is not a fault, and must not be dressed as one.
+
+                    It arrives through the same `unavailable` shape as the three
+                    real faults — the endpoint has one way to say "no QR yet" —
+                    but a red triangle over "could not prepare the pairing code"
+                    would be false: nothing failed, the customer pressed Connect
+                    a moment ago and the container is starting. Same channel,
+                    opposite meaning, so it gets its own presentation: a
+                    progress role, no destructive colour, and a spinner that is
+                    honest here precisely because something *is* happening.
+                  */
+                  <div className="flex max-w-sm flex-col items-center gap-3 text-center" role="status">
+                    <Loader2 className="size-8 animate-spin text-primary" aria-hidden />
+                    <p className="text-small font-semibold">{pairingFaultCopy(qr, t).reason}</p>
+                    <p className="text-caption text-muted-foreground">{pairingFaultCopy(qr, t).nextStep}</p>
+                  </div>
+                ) : (
+                  <div className="flex max-w-sm flex-col items-center gap-3 text-center" role="alert">
+                    <AlertTriangle className="size-8 text-destructive" aria-hidden />
+                    <p className="text-small font-semibold text-destructive">{t('تعذّر تجهيز رمز الربط')}</p>
+                    <p className="text-caption text-muted-foreground">{pairingFaultCopy(qr, t).reason}</p>
+                    <p className="text-caption font-medium text-foreground">{pairingFaultCopy(qr, t).nextStep}</p>
+                  </div>
+                )
               )
               : qr?.reconnecting ? <div className="flex max-w-xs flex-col items-center gap-3 text-center"><Loader2 className="size-7 animate-spin text-warning" /><p className="text-small font-medium">{t('Reconnecting the existing number')}</p><p className="text-caption text-muted-foreground">{t('Unlink the current number first when you need to pair a different one.')}</p></div>
               : <div className="flex flex-col items-center gap-3 text-muted-foreground"><Loader2 className="size-8 animate-spin" /><p className="text-caption">{t('Preparing link code')}</p></div>}

@@ -9,7 +9,6 @@ import {
   getEmailVerificationState,
   listPlans,
   resendVerification,
-  requestGatewayForCurrentOrganization,
   verifyEmail,
 } from './billing.service';
 import { resolveTrial } from './trial.service';
@@ -182,16 +181,6 @@ router.get('/current', async (req, res) => {
 router.get('/summary', async (req, res) => {
   try {
     res.json(await getBillingSummary(req.user!.organizationId));
-  } catch (error) {
-    handleRouteError(res, error);
-  }
-});
-
-router.post('/request-gateway', async (req, res) => {
-  try {
-    if (req.user!.role !== 'ADMIN') return res.status(403).json({ error: 'Admin access required' });
-    const queued = await requestGatewayForCurrentOrganization(req.user!.organizationId);
-    res.status(202).json({ queued });
   } catch (error) {
     handleRouteError(res, error);
   }

@@ -23,7 +23,7 @@ import { getPaymentProvider, paymentProviderFor } from './provider-registry';
 // as trial.service.ts's TRIAL_PLAN_DEFAULT, which is a real use, so the constant
 // stays; it simply has no activation consumer any more.
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
-import { getEdition, getEditions, getEditionEditedAt } from './editions.service';
+import { cheapestUpgradeGranting, getEdition, getEditions, getEditionEditedAt } from './editions.service';
 import { resolveEntitlements } from './entitlements.resolver';
 import { editionOfferability } from '../channels/channel-viability';
 import { channelGrantRefusal } from '../channels/channel-entitlement';
@@ -521,20 +521,18 @@ export async function createSignup(input: {
     }
 
     /*
-      Provision now, rather than waiting for a verification that may never come.
+      No gateway is built here, and that is the point of lazy provisioning.
 
-      Deliberately after the transaction and deliberately not awaited into the
-      response's success: a provisioning failure must not fail a signup that has
-      already created the organization, the admin and the subscription. The
-      channel records its own failure state, which the channel screen renders.
+      Signup creates rows. A workspace row costs nothing; a container costs RAM
+      for as long as it exists, whether or not anybody ever pairs a number to
+      it. The previous commit triggered provisioning here as a transitional
+      step, said so, and this closes it: the trigger is the customer's first
+      "Connect WhatsApp" click, which is the first moment we know they want one.
+
+      The channel row is still created inside the transaction above — empty
+      baseUrl, no key, PENDING. It is the thing a number binds to, and it costs
+      a row.
     */
-    await maybeProvisionGateway(created.organization.id, 'signup').catch((error) => {
-      logger.error('Gateway provisioning could not be started at signup', {
-        organizationId: created.organization.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-
     return {
       organizationId: created.organization.id,
       adminId: created.admin.id,
@@ -579,7 +577,14 @@ export async function verifyEmail(token: string) {
         */
       },
     });
-    await maybeProvisionGateway(row.organizationId, 'email-verified');
+    /*
+      Verification does not build a gateway either.
+
+      D-8 removed verification as a *gate* on provisioning. This removes it as a
+      *trigger*, which is the same coupling seen from the other side: confirming
+      an address should not start a container the customer has not asked for,
+      any more than failing to confirm one should stop them having it.
+    */
     return { organizationId: row.organizationId, verified: true };
   });
 }
@@ -701,7 +706,35 @@ export async function resendVerification(organizationId: string) {
   });
 }
 
-export async function maybeProvisionGateway(organizationId: string, reason: string, explicitAdminRequest = false): Promise<boolean> {
+/**
+ * Why a provision was not started, or that it was.
+ *
+ * A boolean was enough while every caller was a background step nobody was
+ * watching. It stopped being enough the moment a customer clicks a button and
+ * waits: `false` covered "your plan does not include this", "your edition
+ * forbids this channel", "one is already being built" and "there is no channel
+ * row", which are four different sentences and two different remedies.
+ *
+ * A button that reports success when nothing happened is the fabricated-success
+ * shape this codebase has now fixed three times. So the reason travels.
+ */
+export type ProvisionOutcome =
+  | { queued: true }
+  | { queued: false; code: 'UNKNOWN_ORGANIZATION' }
+  | { queued: false; code: 'PLAN_UPGRADE_REQUIRED'; planName: string; requiredPlan: string | null }
+  | { queued: false; code: 'CHANNEL_NOT_PERMITTED'; planName: string; requiredPlan: string | null }
+  | { queued: false; code: 'NO_CHANNEL_ROW' }
+  | { queued: false; code: 'ALREADY_IN_FLIGHT'; state: string };
+
+/**
+ * Start building a gateway, if this organization may have one.
+ *
+ * Called from exactly one place now: the customer's connect request. Signup,
+ * email verification and payment activation all used to call it, and each was a
+ * container built for somebody who had not asked and might never pair a number
+ * to it.
+ */
+export async function maybeProvisionGateway(organizationId: string, reason: string, explicitAdminRequest = false): Promise<ProvisionOutcome> {
   return runAsPlatform(`billing-provision-gate:${organizationId}:${reason}`, async () => {
     const organization = await prisma.organization.findUnique({
       where: { id: organizationId },
@@ -710,7 +743,7 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
         channels: { where: { kind: 'OPENWA' }, take: 1 },
       },
     });
-    if (!organization) return false;
+    if (!organization) return { queued: false, code: 'UNKNOWN_ORGANIZATION' };
 
     /*
       Verification is deliberately NOT required here. Transitional — see
@@ -730,7 +763,37 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
     */
     const active = organization.subscriptions[0];
     const planCode = normalizePlanCode(active?.planCode || organization.tier || 'FREE');
-    if (!isPaidPlan(planCode) && !explicitAdminRequest) return false;
+    const edition = getEdition(planCode);
+
+    /*
+      Two questions, not one, and they are genuinely different.
+
+      `isPaidPlan` is the pricing rule: FREE provisions nothing (D-7).
+      `autoProvisionGateway` is the edition's own switch, editable from the
+      console — an owner may sell a paid edition that includes no gateway.
+
+      The flag used to be read at payment activation, deciding *when* a gateway
+      was built. Lazy provisioning removed that moment, so it is read here
+      instead, deciding *whether* the edition includes one at all. Losing the
+      reader entirely would have left a console switch that granted nothing,
+      which is the defect this repository keeps finding.
+    */
+    if (!isPaidPlan(planCode) && !explicitAdminRequest) {
+      return {
+        queued: false,
+        code: 'PLAN_UPGRADE_REQUIRED',
+        planName: edition.name,
+        requiredPlan: cheapestUpgradeGranting(planCode, (candidate: PlanEntitlements) => isPaidPlan(candidate.code) && candidate.autoProvisionGateway),
+      };
+    }
+    if (!edition.autoProvisionGateway && !explicitAdminRequest) {
+      return {
+        queued: false,
+        code: 'PLAN_UPGRADE_REQUIRED',
+        planName: edition.name,
+        requiredPlan: cheapestUpgradeGranting(planCode, (candidate: PlanEntitlements) => candidate.autoProvisionGateway),
+      };
+    }
     const channel = organization.channels[0];
 
     /*
@@ -759,13 +822,55 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
         kind: 'OPENWA',
         reason,
       });
-      return false;
+      return {
+        queued: false,
+        code: 'CHANNEL_NOT_PERMITTED',
+        planName: forbidden.planName,
+        requiredPlan: forbidden.requiredPlan,
+      };
     }
 
-    if (!channel || ['ACTIVE', 'AWAITING_QR', 'PROVISIONING'].includes(channel.provisioningState)) return false;
-    await prisma.organization.update({ where: { id: organizationId }, data: { status: 'PROVISIONING' } });
+    if (!channel) return { queued: false, code: 'NO_CHANNEL_ROW' };
+    /*
+      Already being built, or already built. Not an error: the customer clicked
+      twice, or opened the screen while the worker was mid-flight. The caller
+      renders the state rather than a refusal.
+    */
+    if (['ACTIVE', 'AWAITING_QR', 'PROVISIONING'].includes(channel.provisioningState)) {
+      return { queued: false, code: 'ALREADY_IN_FLIGHT', state: channel.provisioningState };
+    }
+    /*
+      The channel records the request, not just the organization.
+
+      This used to set only `Organization.status`, leaving
+      `channel.provisioningState` at PENDING until the host worker picked the
+      job up and advanced it. That was survivable while the trigger was a
+      background step; it is not survivable now that a customer clicks a button,
+      because the guard above reads the *channel's* state — so a second click
+      before the worker ran found PENDING, decided nothing was in flight, and
+      answered "queued" again. The queue deduplicates by job id so no second
+      container was ever built, but the customer was told a build had started
+      twice, and the endpoint had no way to say "already going".
+
+      Writing it here is idempotent with the worker: `persistStep` writes the
+      same PROVISIONING at the start of the job, and reconcileGateways treats a
+      PROVISIONING channel as one to keep working on.
+    */
+    await prisma.$transaction([
+      prisma.organization.update({ where: { id: organizationId }, data: { status: 'PROVISIONING' } }),
+      prisma.organizationChannel.update({
+        where: { id: channel.id },
+        data: {
+          provisioningState: 'PROVISIONING',
+          provisioningStep: 'ALLOCATE_RESOURCES',
+          provisioningStartedAt: new Date(),
+          failureReason: null,
+          failureStep: null,
+        },
+      }),
+    ]);
     await queueGatewayAction(organizationId, 'provision');
-    return true;
+    return { queued: true };
   });
 }
 
@@ -895,9 +1000,16 @@ export async function activateManualSubscription(
       No organization is on STANDARD, so nothing changes today. What changes is
       that the flag now decides, which is what the console has been claiming.
     */
-    if (getEdition(planCode).autoProvisionGateway) {
-      await maybeProvisionGateway(organizationId, 'manual-activation');
-    }
+    /*
+      Paying does not build a gateway either. See the note in createSignup: the
+      only trigger is the customer asking for one.
+
+      `autoProvisionGateway` has not lost its reader — it moved into
+      maybeProvisionGateway itself, where it now answers "does this edition
+      include a gateway at all" rather than "should one be built the moment
+      money arrives". Same column, same console switch, asked at the moment the
+      customer clicks instead of at a moment nobody is watching.
+    */
 
     /*
       Activated, but with a reference the provider has never heard of.
@@ -941,9 +1053,16 @@ export async function activateManualSubscription(
   });
 }
 
-export async function requestGatewayForCurrentOrganization(organizationId: string): Promise<boolean> {
-  return maybeProvisionGateway(organizationId, 'admin-request', true);
-}
+/*
+  `requestGatewayForCurrentOrganization` is deleted, with the POST
+  /api/billing/request-gateway route it served.
+
+  It called maybeProvisionGateway with explicitAdminRequest: true, which skips
+  the paid-plan check — a second door onto the same action with weaker rules
+  than the front one, and no caller anywhere in the frontend. A door nobody uses
+  that skips a rule everybody else obeys is the shape the collaborators gate was
+  written about. There is now one way to start a gateway: the customer asks.
+*/
 
 export async function markPaymentFailed(organizationId: string, reason = 'Payment failed'): Promise<void> {
   await runAsPlatform(`billing-payment-failed:${organizationId}`, async () => {

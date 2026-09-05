@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { auditLog } from '../../lib/audit';
+import logger from '../../lib/logger';
 import { requireAdmin, requirePermission } from '../../middleware/rbac.middleware';
 import { ChannelKind } from './channel.types';
 import { channelCapabilities, isChannelSendError } from './channel.service';
@@ -12,6 +13,7 @@ import {
   disconnectMetaChannel,
   getMetaChannel,
 } from './meta.service';
+import { maybeProvisionGateway } from '../billing/billing.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { cheapestUpgradeGranting, getEdition } from '../billing/editions.service';
 
@@ -212,6 +214,83 @@ router.get('/sessions/:name/capabilities', async (req, res) => {
       });
     }
     throw error;
+  }
+});
+
+/**
+ * Build this number a gateway, because the customer just asked for one.
+ *
+ * **The only trigger for provisioning.** Signup, email verification and payment
+ * activation each used to start a container, and each was one built for
+ * somebody who had not asked and might never pair a number to it. A workspace
+ * row costs nothing; a container costs RAM for as long as it exists.
+ *
+ * Idempotent by outcome rather than by luck: a second click on a gateway
+ * already being built answers 200 with the state it is in, not an error and not
+ * a second job. The queue would deduplicate anyway — `queueGatewayAction` keys
+ * jobs by organization and action — but a customer clicking twice deserves to
+ * be told what is happening rather than to have their click quietly discarded.
+ *
+ * OpenWA only, and that is not a limitation of this endpoint. A Cloud API
+ * number is connected by handing Meta a token, not by starting a container and
+ * scanning a code; there is no connect flow for it yet at all (D-9).
+ */
+router.post('/sessions/:name/connect', requireAdmin, requirePermission('integration:manage'), async (req: any, res) => {
+  const organizationId = req.user!.organizationId;
+
+  const session = await prisma.whatsappSession.findUnique({
+    where: { organizationId_sessionName: { organizationId, sessionName: req.params.name } },
+    select: { id: true, channel: { select: { kind: true, provisioningState: true } } },
+  });
+  if (!session) {
+    return res.status(404).json({ error: 'ما لقينا هالرقم.', code: 'SESSION_UNKNOWN' });
+  }
+  if (!session.channel) {
+    return res.status(409).json({
+      error: 'هالرقم مش مربوط بأي بوابة إرسال. اختار بوابة إله أولاً.',
+      code: 'SESSION_NOT_BOUND',
+    });
+  }
+  if (session.channel.kind !== 'OPENWA') {
+    return res.status(409).json({
+      error: 'هالرقم على قناة Meta، وربطها بيصير بتوكن مش بمسح رمز QR.',
+      code: 'CHANNEL_HAS_NO_QR_FLOW',
+    });
+  }
+
+  const outcome = await maybeProvisionGateway(organizationId, 'connect-requested');
+
+  if (outcome.queued) {
+    return res.status(202).json({ state: 'PROVISIONING' });
+  }
+
+  switch (outcome.code) {
+    case 'ALREADY_IN_FLIGHT':
+      // Not a refusal. The gateway is being built, or is built already.
+      return res.status(200).json({ state: outcome.state });
+    case 'PLAN_UPGRADE_REQUIRED':
+    case 'CHANNEL_NOT_PERMITTED':
+      return res.status(402).json({
+        error: outcome.requiredPlan
+          ? `باقة ${outcome.planName} ما بتشمل بوابة واتساب. رقّي إلى ${outcome.requiredPlan} لتفعيلها.`
+          : `باقة ${outcome.planName} ما بتشمل بوابة واتساب.`,
+        code: 'PLAN_UPGRADE_REQUIRED',
+        requiredPlan: outcome.requiredPlan,
+      });
+    default:
+      /*
+        NO_CHANNEL_ROW and UNKNOWN_ORGANIZATION. Both mean the data underneath
+        this request is not what the request assumes, and neither is something
+        the customer can act on — so it is a 500 with a code rather than a
+        cheerful 200 that starts nothing.
+      */
+      logger.error('Connect request could not start provisioning', {
+        organizationId, sessionName: req.params.name, code: outcome.code,
+      });
+      return res.status(500).json({
+        error: 'ما قدرنا نبدأ تجهيز البوابة. جرّب بعد شوي، وإذا ضلّت المشكلة تواصل معنا.',
+        code: outcome.code,
+      });
   }
 });
 

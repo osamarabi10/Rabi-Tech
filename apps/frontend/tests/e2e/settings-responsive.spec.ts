@@ -269,6 +269,13 @@ async function prepareSettings(
       } } });
       return;
     }
+    // Asking for the gateway to be built. The Link device button posts this
+    // before opening the pairing dialog, so an unmocked route leaves the
+    // dialog shut and the QR assertion looking like a rendering fault.
+    if (request.method() === 'POST' && /^\/api\/channels\/sessions\/[^/]+\/connect$/.test(path)) {
+      await route.fulfill({ status: 202, json: { state: 'PROVISIONING' } });
+      return;
+    }
     // Binding one number to a gateway. This replaced POST /api/channels/active,
     // which switched the whole organization.
     if (request.method() === 'POST' && /^\/api\/channels\/sessions\/[^/]+\/channel$/.test(path)) {

@@ -2797,6 +2797,21 @@ export async function fetchChannelCapabilities(sessionName: string): Promise<{
 }
 
 /**
+ * Ask for this number's gateway to be built.
+ *
+ * The only trigger for provisioning. Nothing is built at signup, at email
+ * verification or when a payment lands — a container costs RAM for as long as
+ * it exists, and until somebody clicks this we do not know they want one.
+ *
+ * Returns the state rather than a bare success: a second click while one is
+ * being built is answered with PROVISIONING, not an error and not a lie.
+ */
+export async function connectSessionGateway(sessionName: string): Promise<{ state: string }> {
+  const { data } = await api.post(`/api/channels/sessions/${encodeURIComponent(sessionName)}/connect`);
+  return { state: data.state ?? 'PROVISIONING' };
+}
+
+/**
  * Point one number at a gateway.
  *
  * Replaces `setActiveChannel`, which chose a gateway for the whole

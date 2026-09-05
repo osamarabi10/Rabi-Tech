@@ -1377,10 +1377,17 @@ function classifyGatewayFault(error: unknown, during: string): PairingFault | nu
   // usable OpenWA channel row. Distinct from a gateway being down, because
   // nothing was ever provisioned and waiting will not help.
   if (typeof err?.message === "string" && err.message.includes("not configured for organization")) {
+    /*
+      The next step used to be "contact support so a gateway can be provisioned
+      for you", which was true while provisioning happened somewhere the
+      customer could not reach. Under lazy provisioning they start it
+      themselves, and telling them to open a ticket for a button they are
+      already looking at is worse than saying nothing.
+    */
     return {
       code: "CHANNEL_NOT_PROVISIONED",
-      reason: "No WhatsApp gateway has been set up for this organization yet.",
-      nextStep: "Contact support so a gateway can be provisioned for you.",
+      reason: "No WhatsApp gateway has been built for this number yet.",
+      nextStep: "Choose Connect on this number to build one.",
     };
   }
 
@@ -1449,6 +1456,26 @@ router.get('/sessions/:name/qr', requireAdmin, async (req, res) => {
       pending is a promise that something is happening, and a fault means
       nothing is.
     */
+    /*
+      Being built right now, which is a different answer from "no gateway".
+
+      Checked before any gateway call, because there is nothing to call yet: the
+      container does not exist. Reported as its own state so the pairing screen
+      can say "this takes a minute" instead of CHANNEL_NOT_PROVISIONED's "choose
+      Connect" — advice to press a button the customer has already pressed.
+    */
+    const provisioning = await prisma.organizationChannel.findUnique({
+      where: { organizationId_kind: { organizationId: getTenantId(), kind: 'OPENWA' } },
+      select: { provisioningState: true },
+    });
+    if (provisioning?.provisioningState === 'PROVISIONING') {
+      return res.json(unavailable({
+        code: 'GATEWAY_PROVISIONING',
+        reason: 'The WhatsApp gateway for this number is still being built.',
+        nextStep: 'This usually takes about a minute. Leave this open; the QR code appears by itself.',
+      }));
+    }
+
     const faults: PairingFault[] = [];
     const note = (error: unknown, during: string) => {
       const fault = classifyGatewayFault(error, during);

@@ -275,6 +275,27 @@ Design rules do not catch the failures this repository actually has. These do.
   invokes it, or it is dead code that should be deleted — those are the two
   honest states, and "it is there if we need it" is neither.
 
+- **An audit that greps for a literal tests spelling, not behaviour.** Two
+  audits fired in two consecutive commits on code whose enforcement had got
+  strictly *stronger*, because a checked expression was assigned to a local and
+  the string they searched for stopped appearing. One demanded
+  `getEdition(planCode).autoProvisionGateway` in `billing.service.ts`; the flag
+  had just moved from gating an automatic trigger to gating the provision
+  itself, which is more enforcement in a better place, and the gate called it a
+  regression.
+
+  **Where a gate can be behavioural, it must be:** toggle the flag, assert the
+  refusal, toggle it back, assert the action. That cannot be satisfied by
+  spelling and cannot be broken by a rename. `verify-collaborators.js` records
+  the same lesson from the other direction — it began as a grep for
+  `if (shouldAdd)` and stayed green when the compiled output was mutated to
+  `if (true)`, which is exactly the defect it existed to catch.
+
+  A grep is still right for what has no behaviour to observe: an annotation, a
+  forbidden import, a comment convention, a rule about which files may exist.
+  The test is whether the property can be executed, not whether a grep is
+  easier to write.
+
 ---
 
 ## Scope

@@ -4473,21 +4473,64 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
       assert.equal(getEdition('GROWTH').maskContactDetails, true);
 
-      // autoProvisionGateway IS enforced now. This assertion used to require
-      // the opposite, as a tripwire that would fire the day someone wired it —
-      // which is what happened. Inverted rather than deleted, so it still fails
-      // if the gate is ever quietly removed and the flag goes back to being a
-      // switch that grants nothing.
-      //
-      // The specific defect it guards against: provisioning was gated on
-      // isPaidPlan(planCode), a hidden name-check running beside a flag the
-      // console displayed. They disagreed on STANDARD.
-      const billingSource = fs
-        .readFileSync(path.join(ROOT, 'src/modules/billing/billing.service.ts'), 'utf8');
-      assert.ok(
-        billingSource.includes('getEdition(planCode).autoProvisionGateway'),
-        'gateway provisioning must be gated on the edition flag, not on a plan-code name check',
-      );
+      /*
+        autoProvisionGateway is enforced, asserted by behaviour rather than by
+        spelling.
+
+        This was a grep for the literal `getEdition(planCode).autoProvisionGateway`
+        in billing.service.ts. It fired the first time the same expression was
+        assigned to a local — enforcement strictly stronger than before, on a
+        path the flag had never guarded, and the check called it a regression.
+        A source assertion cannot tell those apart, which is the same lesson the
+        collaborators gate records: it initially asserted `if (shouldAdd)` was
+        present and stayed green when the compiled output was mutated to
+        `if (true)`.
+
+        So it toggles the flag and watches the decision change. The defect it
+        guards against is unchanged: provisioning gated on isPaidPlan alone, a
+        hidden name-check running beside a flag the console displays, which
+        disagreed with it on STANDARD.
+      */
+      const { maybeProvisionGateway } = require('../src/modules/billing/billing.service');
+      const flagOrgId = 'bleed_flag_org';
+      const flagChannelId = 'bleed_flag_channel';
+      await raw.organization.create({
+        data: { id: flagOrgId, name: 'Flag Org', slug: 'bleed-flag', status: 'ACTIVE', tier: 'STANDARD' },
+      });
+      await raw.organizationChannel.create({
+        data: {
+          id: flagChannelId, organizationId: flagOrgId, kind: 'OPENWA', status: 'PENDING',
+          baseUrl: '', apiKeyEnc: '', webhookToken: 'bleed-flag-token',
+        },
+      });
+      const standardBefore = await raw.plan.findUnique({ where: { code: 'STANDARD' } });
+      try {
+        // Off: the edition does not include a gateway, so the customer is told
+        // to upgrade rather than having one built.
+        await raw.plan.update({ where: { code: 'STANDARD' }, data: { autoProvisionGateway: false } });
+        await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+        const refused = await maybeProvisionGateway(flagOrgId, 'bleed-flag-off');
+        assert.equal(refused.queued, false, 'a gateway must not be built for an edition that excludes one');
+        assert.equal(refused.code, 'PLAN_UPGRADE_REQUIRED', JSON.stringify(refused));
+
+        // On: the same organization, the same plan code, the same everything
+        // else — only the console switch moved.
+        await raw.plan.update({ where: { code: 'STANDARD' }, data: { autoProvisionGateway: true } });
+        await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+        const allowed = await maybeProvisionGateway(flagOrgId, 'bleed-flag-on');
+        assert.equal(allowed.queued, true, 'the flag must be what decides, and it must grant as well as deny');
+      } finally {
+        await raw.plan.update({
+          where: { code: 'STANDARD' },
+          data: { autoProvisionGateway: standardBefore.autoProvisionGateway },
+        });
+        await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+        const { gatewayProvisioningQueue } = require('../src/workers/gateway-provisioning.queue');
+        const job = await gatewayProvisioningQueue.getJob(`${flagOrgId}--gateway--provision`);
+        if (job) await job.remove();
+        await raw.organizationChannel.deleteMany({ where: { organizationId: flagOrgId } });
+        await raw.organization.deleteMany({ where: { id: flagOrgId } });
+      }
 
       // Restore the seeded values so later checks see the catalogue as shipped.
       await raw.plan.update({

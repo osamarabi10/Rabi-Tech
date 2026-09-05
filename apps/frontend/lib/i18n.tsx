@@ -1003,6 +1003,11 @@ const D: Dict = {
   "Your account is ready. Confirm your address so you can recover the account later.": { ar: "حسابك جاهز. أكّد عنوان بريدك حتى تقدر تسترجع الحساب لاحقاً.", he: "החשבון שלכם מוכן. אשרו את כתובת האימייל כדי שתוכלו לשחזר את החשבון בהמשך.", en: "Your account is ready. Confirm your address so you can recover the account later." },
 
 
+  // ---- Lazy provisioning (C2) ----
+  "Could not start building the gateway for this number": { ar: "تعذّر بدء تجهيز البوابة لهالرقم", he: "לא ניתן היה להתחיל בבניית השער עבור המספר הזה", en: "Could not start building the gateway for this number" },
+  'عم نجهّز بوابة واتساب لهالرقم': { he: 'אנחנו בונים את שער הוואטסאפ למספר הזה', en: 'We are building the WhatsApp gateway for this number' },
+  'بياخد دقيقة تقريباً. خلّي الشاشة مفتوحة ورمز QR بيطلع لحاله': { he: 'זה לוקח בערך דקה. השאירו את המסך פתוח וקוד ה-QR יופיע מעצמו', en: 'It takes about a minute. Leave this open and the QR code appears by itself' },
+
   // ---- Per-number gateway routing (C1) ----
   "What this number can do": { ar: "شو بيقدر يعمل هالرقم", he: "מה המספר הזה יכול לעשות", en: "What this number can do" },
   "This number has no gateway": { ar: "هالرقم ما إله بوابة", he: "למספר הזה אין שער", en: "This number has no gateway" },
