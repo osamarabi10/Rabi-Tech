@@ -313,6 +313,33 @@ Design rules do not catch the failures this repository actually has. These do.
   compare the tree against itself. It cannot notice the world moving
   underneath a name.
 
+- **`docker kill` does not test a restart policy.** The daemon treats it as a
+  requested stop and suppresses the policy, so `restart: always` correctly does
+  nothing. On 2026-09-06 that first attempt read as a failure and was not one —
+  the service was right and the instrument was wrong. To test supervision, kill
+  the process **inside** the container and let the daemon observe an exit it did
+  not ask for; `RestartCount` incrementing is the evidence.
+
+  Same class as every other instrument in this file that looked at the wrong
+  property: a green that means the check could not see, and a red that means the
+  check asked the wrong question. Before believing either, confirm the
+  instrument observes the property claimed.
+
+- **A gate must never enqueue onto the real queue.** `verify-lazy-provisioning`
+  asserts that a connect request *queues a build*, and did so by putting a real
+  job on the real `gateway-provisioning` queue and deleting it during cleanup.
+  That was survivable only while nothing consumed the queue. The moment the
+  worker became a supervised service it won the race, and one gate run **built
+  two actual tenant gateways** — containers, volumes, published ports — for its
+  own fixture organizations, then failed its cleanup because the jobs were
+  locked by a worker.
+
+  "Run it with the worker stopped" is a workaround, and it is recorded as the
+  contract in `docs/DEPLOYMENT.md` only until this is fixed properly. A test
+  uses an isolated queue name or prefix. **A test that can change production
+  infrastructure is not a test** — it is production, running unattended, with
+  assertions attached.
+
 ---
 
 ## Scope

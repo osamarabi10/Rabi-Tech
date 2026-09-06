@@ -226,9 +226,21 @@ does not hold.
 - The two seeded organizations are `ACTIVE` rows against a gateway that answers
   them 401, which the pairing screen reports as `GATEWAY_REFUSED`.
 - `gateway-provisioning`: 246 failed jobs, 1 waiting -- the backlog the worker
-  consumed once it ran, almost all for test organizations whose containers no
-  longer exist. A `FAILED` retry resumes at the failed step and cannot recover
-  from a missing container; `resume` (`up -d`) can.
+  consumed once it ran. A `FAILED` retry resumes at the failed step and cannot
+  recover from a missing container; `resume` (`up -d`) can.
+
+  **Corrected 2026-09-06, having read the whole set rather than a sample of
+  four.** These were described here and in conversation as the pre-pin 401 era.
+  They were not. Grouped by reason: **238 `No OrganizationChannel found`**, 5
+  `OpenWA did not become ready: 401`, 2 a `tx.organizationChannel.update()`
+  failure, 1 a `400`. The bulk is debris from organizations that had already
+  been deleted, leaving jobs referencing channels that no longer existed — not
+  authentication at all. The first sample drawn was the four newest, which were
+  401s, and the conclusion was extended to all 246. Sampling the newest of a
+  queue and describing the population is the same error as reading a gate that
+  could not see.
+
+  Drained to zero on 2026-09-06 after the tenant teardown.
 - `docker-compose.yml:42` still passes `API_KEY`, a variable the running image
   does not read. Changing it to `API_MASTER_KEY` takes effect only on a fresh
   volume.
@@ -676,6 +688,64 @@ carried the right value all along, which is its own lesson about which file peop
 - **Lands in:** `docker-compose.yml`, `deploy/openwa-organization.compose.yml`,
   `apps/backend/src/lib/gateway-host.ts`, `.env` (untracked), and
   `docs/WHATSAPP-GATEWAY-RUNBOOK.md`.
+
+---
+
+---
+
+## D-15 · `destroyGateway` deletes the tenant, not the gateway
+
+**Status:** open, recorded not fixed · **Owner:** UnKnowan · **Trigger:** the
+delete-account work, where deletion belongs and where it will be audited
+
+`destroyGateway(organizationId, runtime)` in
+`apps/backend/src/modules/provisioning/gateway-provisioning.service.ts` tears down
+the Compose project, and then:
+
+```ts
+await prisma.organization.delete({ where: { id: organizationId } });
+await prisma.identity.deleteMany({ /* orphaned identities */ });
+```
+
+It deletes the **organization** — and by cascade its users, workspaces, contacts,
+conversations, messages, invoices and every other tenant-owned row — plus the
+identities left behind. Reached through `processGatewayAction(org, 'destroy', …)`,
+which is queued by the reconcile loop for any channel carrying
+`deletionRequestedAt` or the `DESTROY_GATEWAY` step.
+
+**This is a defect, not a design.** A function named for destroying a gateway must
+not destroy the tenant. Three things make it worse than a naming complaint:
+
+1. **The caller cannot see it.** `processGatewayAction(org, 'destroy')` reads as
+   gateway lifecycle, alongside `suspend`, `resume` and `restart`, all of which do
+   exactly what their names say and are reversible. `destroy` is the one that is
+   not, and nothing at the call site distinguishes them.
+2. **It is reachable from a queue, not only from a person.** The reconcile loop
+   queues `destroy` from a database flag. A row set wrongly — by a bug, a migration,
+   an operator, or a retry against a stale channel — is a tenant deleted by a
+   background worker with no confirmation step anywhere on the path.
+3. **It is the wrong place to audit deletion.** Deleting a customer's account is a
+   commercial and legal act: it needs a confirmation, an actor, a record of who and
+   when, a retention decision, and very likely an export first. None of that belongs
+   in a provisioning state machine, and none of it is there.
+
+**Not fixed now, deliberately.** Splitting it is a small change; deciding what
+account deletion *should* do is not, and doing the small change first would leave
+`deletionRequestedAt` pointing at nothing while making the dangerous path look
+handled. The two belong together, in the delete-account work.
+
+**Until then: do not call it.** The teardown of nine probe organizations on
+2026-09-06 was done by tearing down each Compose project directly and marking the
+channel `FAILED`, then deleting the organization rows in a separate, explicit step —
+specifically to avoid this function. `docs/GATEWAY-PROVISIONING.md` carries the same
+warning where the lifecycle is documented.
+
+- **Shape of the fix:** `destroy` retires the gateway and stops there — Compose down,
+  volumes removed, channel terminal. Organization deletion moves behind an explicit
+  account-deletion path with confirmation, an audit record naming the actor, and an
+  export offered first.
+- **Lands in:** `gateway-provisioning.service.ts`, the reconcile loop's action
+  mapping, and whatever the delete-account work adds.
 
 ---
 

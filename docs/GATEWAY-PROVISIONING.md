@@ -4,16 +4,32 @@ Implemented: 2026-08-19
 
 ## Runtime boundary
 
-The backend API is a queue producer only. `gateway-provisioning.worker.ts` runs on the Docker host
-and is the only application process that invokes Docker Compose. Install it once on the Windows
-host with:
+The backend API is a queue producer only. `gateway-provisioning.worker.ts` is the only application
+process that invokes Docker Compose, and since 2026-09-06 it runs as the **`gateway-worker` compose
+service** with `restart: always`:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy\install-gateway-provisioner-task.ps1
+```bash
+docker compose up -d gateway-worker
+docker compose logs -f gateway-worker
 ```
 
-For foreground diagnostics, run `npm run gateway:worker` from `apps/backend`. Runtime logs and the
-PID file are stored under `.runtime/gateway-provisioner/`.
+It is the only process that records a pairing, so an unsupervised one fails silently and totally:
+the customer scans, their phone says *device linked*, and the product says Disconnected forever.
+It mounts `/var/run/docker.sock` — root-equivalent host access, on this service only, accepted
+deliberately in D-13.
+
+The Windows scheduled-task installer this section used to document was deleted on 2026-09-06. It
+started a competing worker on the same queue through `npm run gateway:worker`, which is ts-node at
+~390 MB and the configuration the OOM killer took twice. Never run two: they race for jobs.
+
+For foreground diagnostics, stop the service first and run the compiled entry point, inverting the
+one value that differs on a host (see `GATEWAY_HOST_ACCESS` below):
+
+```bash
+docker compose stop gateway-worker
+cd apps/backend && GATEWAY_HOST_ACCESS=127.0.0.1 \
+  node -r ./scripts/load-env dist/workers/gateway-provisioning.worker.js
+```
 
 ## Persisted machine
 
@@ -28,15 +44,22 @@ The lifecycle is:
 
 Terminal retries move the channel to `FAILED`, preserve the failed step/reason, and create a
 `PlatformAlert`. The platform owner can retry, suspend, resume, restart, or destroy the gateway.
-Suspension stops containers without removing volumes; destruction runs Compose `down --volumes`
-before deleting the organization.
+Suspension stops containers without removing volumes.
+
+**Do not call `destroy`.** It runs Compose `down --volumes` and then deletes the Organization row
+and its identities — the tenant, not just the gateway. That is a defect, recorded as D-15, and it
+is unfixed. Retire a gateway by tearing down its Compose project directly and marking the channel
+`FAILED`.
 
 ## Configuration
 
 - `GATEWAY_PORT_START` / `GATEWAY_PORT_END`: host allocation range, default `3100..3999`.
 - `GATEWAY_BACKEND_HOST`: hostname the backend container uses for a host gateway, default
   `host.docker.internal`.
-- `GATEWAY_HOST_ACCESS`: hostname the host worker uses for health calls, default `127.0.0.1`.
+- `GATEWAY_HOST_ACCESS`: hostname the worker uses to reach a tenant gateway's published port,
+  default `host.docker.internal`. It was `127.0.0.1`, correct only while the worker ran on the
+  host; inside a container that is the container, and every readiness probe dials itself. Set it
+  back to `127.0.0.1` when running the worker on the host. See D-14.
 - `BACKEND_INTERNAL_URL`: webhook base reachable from subscriber containers, default
   `http://host.docker.internal:4000`.
 - `GATEWAY_COMPOSE_FILE`: optional absolute Compose template path.
