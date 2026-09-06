@@ -9,11 +9,20 @@
 # Usage:  bash scripts/run-gate-sweep.sh [run-dir]
 set -u
 
-RUN_DIR="${1:-.gate-runs/$(date +%Y%m%d-%H%M%S)}"
-mkdir -p "$RUN_DIR"
-STARTED=$(date +%s)
 BACKEND="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$BACKEND/../.." && pwd)"
+
+# Absolute, and that is load-bearing: this script cd's into apps/frontend for
+# the last three gates, so a relative run directory stops resolving halfway
+# through. It was relative on the first run of C4 and the three frontend gates
+# wrote nothing at all — the redirect itself failed. Nine greens out of twelve,
+# which is precisely the shape the manifest exists to refuse: it reported NO
+# RESULT for all three and failed the sweep, rather than letting a partial run
+# read as a clean one.
+RUN_DIR="${1:-$BACKEND/.gate-runs/$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$RUN_DIR"
+RUN_DIR="$(cd "$RUN_DIR" && pwd)"
+STARTED=$(date +%s)
 
 echo "sweep -> $RUN_DIR"
 echo

@@ -2213,7 +2213,21 @@ async function databaseAudits() {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ customFooter: '' }),
       });
-      assert.equal(response.status, 403);
+      /*
+        402, and it was 403 until C4.
+
+        403 says "you may not do this" — a permissions fault, which sends an
+        agent to their administrator. This is not that: the caller is a
+        permitted admin and the PLAN is what refuses, which an administrator
+        fixes by buying rather than by granting a role. Every other plan
+        refusal in the product has answered 402 for that reason; branding was
+        the last one out of step, and it got its 403 from a substring match on
+        the error message.
+      */
+      assert.equal(response.status, 402);
+      const refusal = await response.clone().json();
+      assert.equal(refusal.code, 'PLAN_UPGRADE_REQUIRED');
+      assert.equal(refusal.capability, 'whiteLabel');
       const current = await fetch(`${baseUrl}/api/branding/current`, {
         headers: { Authorization: `Bearer ${token}` },
       }).then((r) => r.json());
@@ -4672,14 +4686,28 @@ async function databaseAudits() {
       const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
       const { canCustomizeFooter, assertFooterEntitlement } = require('../src/modules/branding/branding.service');
 
+      /*
+        assertFooterEntitlement takes the RESOLVED entitlements since C4, not a
+        plan code — a code is the one thing a capability decision must not be
+        made from. This file is JavaScript, so it kept passing the string and
+        the compiler could not see it; the refusal came back as
+        "باقة undefined" and the check went red, which is how the gap was found.
+
+        Only feature capabilities are asked here, and those are decided from a
+        column on the edition named by `plan`, so this two-field fixture is the
+        whole snapshot the decision reads. capabilities.ts now refuses loudly if
+        it is ever handed less than this.
+      */
+      const resolvedFor = (code) => ({ plan: code, planName: getEdition(code).name });
+
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
       // Baseline: the seeded catalogue says GROWTH grants neither.
       assert.equal(getEdition('GROWTH').whiteLabel, false);
       assert.equal(getEdition('GROWTH').customDomain, false);
       assert.equal(canCustomizeFooter('GROWTH'), false, 'GROWTH must not customise the footer');
-      assert.throws(() => assertFooterEntitlement('GROWTH', { customFooter: 'x' }));
-      assert.throws(() => assertFooterEntitlement('GROWTH', { customDomain: 'x.example' }));
+      assert.throws(() => assertFooterEntitlement(resolvedFor('GROWTH'), { customFooter: 'x' }));
+      assert.throws(() => assertFooterEntitlement(resolvedFor('GROWTH'), { customDomain: 'x.example' }));
 
       // Grant both on the edition. If branding still consulted its own tier
       // Sets this would change nothing, which is exactly the defect being
@@ -4688,8 +4716,13 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
       assert.equal(canCustomizeFooter('GROWTH'), true, 'the catalogue must be what branding reads');
-      assert.doesNotThrow(() => assertFooterEntitlement('GROWTH', { customFooter: 'Mine' }));
-      assert.doesNotThrow(() => assertFooterEntitlement('GROWTH', { customDomain: 'x.example' }));
+      assert.doesNotThrow(() => assertFooterEntitlement(resolvedFor('GROWTH'), { customFooter: 'Mine' }));
+      assert.doesNotThrow(() => assertFooterEntitlement(resolvedFor('GROWTH'), { customDomain: 'x.example' }));
+
+      // And the guard that found this: a plan code is not a snapshot, and being
+      // handed one must refuse rather than quietly deny everything.
+      assert.throws(() => assertFooterEntitlement('GROWTH', { customFooter: 'Mine' }),
+        'a bare plan code must be refused, not silently treated as no plan at all');
 
       // maskContactDetails resolves from the same catalogue.
       await editionWrite(raw, 'GROWTH', { maskContactDetails: true });
@@ -6754,31 +6787,128 @@ async function databaseAudits() {
         'the workspace-scoped email unique must exist');
     });
 
-    await check('workspace: the create ceiling comes from the resolved entitlement', async () => {
+    /**
+     * A tenant HTTP client for a freshly seeded organization.
+     *
+     * The ceiling checks below need an organization nobody else has touched:
+     * they count what exists and then push it over the edge, so borrowing orgA
+     * would both perturb the snapshots taken earlier and depend on how many
+     * fixtures happened to run first.
+     */
+    async function seedTenantClient(key, planCode) {
+      const org = await seedOrganization(raw, key, 1);
+      await grantPlan(raw, org.organizationId, planCode);
+      const tenantToken = jwt.sign({
+        scope: 'ORGANIZATION',
+        id: org.userId,
+        email: `bleed-${key}@rabitech.test`,
+        name: `Admin ${key}`,
+        role: 'ADMIN',
+        organizationId: org.organizationId,
+        tokenVersion: 0,
+      }, jwtSecret, { expiresIn: '10m' });
+      const call = (method, route, body) => fetch(`${baseUrl}${route}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${tenantToken}`,
+          'Content-Type': 'application/json',
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(10000),
+      });
+      return { org, call };
+    }
+
+    await check('workspace: the create ceiling is enforced over HTTP, override included', async () => {
       /*
-        The gate must read resolveEntitlements, not the plan code.
+        This replaced a literal grep of workspaces.routes.ts in C4.
 
-        Comparing plan codes would work and would silently ignore a
-        platform-owner override — an organization overridden to BUSINESS would
-        be refused a second branch by a check that never heard of overrides, and
-        the person who granted the override would have no way to see why it did
-        not take. Kept as a literal grep for the same reason the capability rule
-        is: the alternative is a principle in a comment.
+        The grep asserted the source contained `entitlements.maxWorkspaces`, a
+        `resolveEntitlements(` call and the string `402`. All three were true of
+        code that has since been deleted, and all three would be true of code
+        that never ran — it tested spelling, which is the failure this
+        repository has now shipped twice.
+
+        What it was standing in for is a behaviour: the ceiling must follow the
+        RESOLVED entitlement, so a platform-owner override raises it. That is
+        exactly what a source grep cannot show and what this drives end to end —
+        the real endpoint, a real organization, a real override.
       */
-      const route = fs.readFileSync(
-        path.join(ROOT, 'src', 'modules', 'workspaces', 'workspaces.routes.ts'), 'utf8');
+      const { org, call } = await seedTenantClient('wsceiling', 'FREE');
 
-      assert.ok(route.includes('entitlements.maxWorkspaces'),
-        'the create endpoint must compare against the resolved entitlement');
-      assert.ok(/resolveEntitlements\(/.test(route),
-        'the create endpoint must resolve entitlements rather than read a tier');
-      assert.ok(!/plan\s*===\s*['"`](?:BUSINESS|ENTERPRISE)['"`]/.test(route),
-        'the create endpoint must not branch on a plan code');
+      const listed = await (await call('GET', '/api/workspaces')).json();
+      assert.equal(listed.maxWorkspaces, 1, 'FREE must allow exactly the default workspace');
+      assert.equal(listed.workspaceCount, 1);
+      assert.equal(listed.canCreate, false, 'the switcher must already say there is no room');
 
-      // 402 and not 403: the caller is permitted, the plan refuses, and the UI
-      // needs to tell those apart to offer an upgrade instead of reporting a
-      // permissions fault.
-      assert.ok(route.includes('402'), 'a plan refusal must be 402, not 403');
+      const refused = await call('POST', '/api/workspaces', { name: 'Second branch' });
+      assert.equal(refused.status, 402, 'a plan ceiling is 402 — not 403, and not 429');
+      const body = await refused.json();
+      assert.equal(body.code, 'PLAN_LIMIT_REACHED');
+      assert.equal(body.capability, 'workspaces');
+      assert.equal(body.limit, 1, 'the refusal must state the ceiling');
+      assert.equal(body.current, 1, 'and how many are already held');
+      assert.ok(body.message, 'the workspace switcher renders data.message');
+      assert.ok(body.requiredPlan,
+        'the refusal must name an edition that would actually fit');
+
+      /*
+        The half a grep could never reach. An organization the owner has
+        upgraded by exception must be able to use what it was given — and the
+        screen must say so before the click, not after a 402.
+      */
+      await raw.organization.update({
+        where: { id: org.organizationId },
+        data: {
+          planOverride: 'BUSINESS',
+          overrideReason: 'harness: workspace ceiling',
+          overrideSetAt: new Date(),
+        },
+      });
+
+      const lifted = await (await call('GET', '/api/workspaces')).json();
+      assert.equal(lifted.maxWorkspaces, 5, 'the override must raise the ceiling the screen shows');
+      assert.equal(lifted.canCreate, true, 'and canCreate must move with it');
+      const created = await call('POST', '/api/workspaces', { name: 'Second branch' });
+      assert.equal(created.status, 201, 'the override must raise the ceiling the server enforces');
+    });
+
+    await check('custom fields: a full ceiling answers 402, not the 429 it used to', async () => {
+      /*
+        A status code is a contract, and this one was wrong.
+
+        429 means "you are going too fast, retry later". A plan ceiling does not
+        clear by waiting, so a client that honours 429 — which the public API
+        documentation tells integrators to do — retries a refusal forever. The
+        change is customer-visible, so it is asserted at the wire rather than
+        inferred from the module that raises it.
+
+        Driven to the boundary rather than assumed: five are created and the
+        fifth must succeed, because a check that only proves the sixth fails
+        would also pass if the ceiling were one.
+      */
+      const { call } = await seedTenantClient('fieldceiling', 'FREE');
+      const limit = 5; // FREE.customFieldsLimit
+
+      for (let index = 1; index <= limit; index += 1) {
+        const response = await call('POST', '/api/contacts/custom-fields', {
+          name: `Harness field ${index}`,
+          dataType: 'text',
+        });
+        assert.equal(response.status, 201,
+          `field ${index} of ${limit} must be allowed, got ${response.status}`);
+      }
+
+      const refused = await call('POST', '/api/contacts/custom-fields', {
+        name: 'Harness field over the line',
+        dataType: 'text',
+      });
+      assert.equal(refused.status, 402, 'a plan ceiling must not answer 429');
+      const body = await refused.json();
+      assert.equal(body.code, 'PLAN_LIMIT_REACHED');
+      assert.equal(body.capability, 'customFields');
+      assert.equal(body.limit, limit);
+      assert.equal(body.current, limit);
     });
 
     await check('workspace: every shipped edition carries a workspace ceiling', async () => {

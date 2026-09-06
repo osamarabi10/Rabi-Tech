@@ -25,6 +25,18 @@
  * the fields being distinguished — code and entitlements — are made to differ
  * independently, so a decision that reads the wrong one cannot come out right
  * by coincidence.
+ *
+ * ## Part 3 — the counted ceilings (C4)
+ *
+ * Seats, workspaces, custom fields and workflows are one question asked four
+ * times, and before C4 they were four implementations with three status codes
+ * between them. These checks hold the shape: where the boundary is, that
+ * "never included" and "full" stay different answers, that the upgrade named
+ * for a full ceiling is one that would actually fit, and — the property the
+ * customer feels — that the function a screen uses to grey out a control can
+ * never disagree with the one the server refuses with.
+ *
+ * Still hermetic. No Postgres, no Redis, no clock.
  */
 const assert = require('assert/strict');
 const path = require('path');
@@ -46,6 +58,7 @@ function check(name, fn) {
 
 const {
   decide, limitOf, grantsCapability, assertCanFrom, isCapabilityRefused,
+  assertWithinLimitFrom, withinLimit, editionLimitOf, isLimitReached,
   FEATURE_CAPABILITIES, COUNTED_LIMITS,
 } = require('../src/modules/billing/capabilities');
 const { PLAN_ENTITLEMENTS } = require('../src/modules/billing/plans');
@@ -229,6 +242,167 @@ async function main() {
         );
       }
     }
+  });
+
+  /* ── Part 3: the counted ceilings ─────────────────────────────────── */
+
+  /** Call assertWithinLimitFrom and hand back what it threw, or null. */
+  function refusalOf(snap, capability, current) {
+    try {
+      assertWithinLimitFrom(snap, capability, current, 'org-test');
+      return null;
+    } catch (error) {
+      return error;
+    }
+  }
+
+  check('counted: the boundary is "one more would not fit", not "already over"', () => {
+    // BUSINESS carries 5 workspaces, and 5 is the interesting number: at four
+    // held there is room for a fifth, at five there is not. An off-by-one here
+    // either sells a workspace nobody can create or refuses one already paid
+    // for, and both look correct in any fixture that is not sitting on the
+    // boundary.
+    const snap = snapshot('BUSINESS');
+    assert.equal(limitOf(snap, 'workspaces'), 5, 'fixture assumption: BUSINESS allows five');
+    assert.equal(refusalOf(snap, 'workspaces', 4), null, 'four held must leave room for a fifth');
+    assert.ok(refusalOf(snap, 'workspaces', 5), 'five held must refuse a sixth');
+    assert.ok(refusalOf(snap, 'workspaces', 6), 'over the ceiling must refuse too');
+  });
+
+  check('counted: "never included" and "full" are different refusals', () => {
+    /*
+      They resolve differently, so they must read differently. A ceiling that
+      is full also clears by deactivating a user or deleting a workspace; a
+      capability the edition never included clears only by paying. Collapsing
+      them into one message sells an upgrade to somebody who needed to tidy up.
+    */
+    const full = refusalOf(snapshot('FREE'), 'workspaces', 1);
+    assert.ok(isLimitReached(full), 'a full ceiling must raise LimitReached');
+    assert.equal(full.status, 402);
+    assert.equal(full.code, 'PLAN_LIMIT_REACHED');
+    assert.equal(full.current, 1, 'the refusal must say how many are held');
+
+    const never = refusalOf(snapshot('FREE', { limits: { campaign_sends: 0 } }), 'campaign_sends', 0);
+    assert.ok(isCapabilityRefused(never), 'a capability at zero must raise CapabilityRefused');
+    assert.equal(never.status, 402);
+    assert.equal(never.code, 'PLAN_UPGRADE_REQUIRED');
+    assert.notEqual(never.code, full.code, 'the two refusals must not be one code');
+  });
+
+  check('counted: unlimited never refuses, however much is held', () => {
+    const snap = snapshot('ENTERPRISE');
+    assert.equal(limitOf(snap, 'workspaces'), null, 'fixture assumption: ENTERPRISE is unlimited');
+    assert.equal(refusalOf(snap, 'workspaces', 10_000), null,
+      'null is unlimited and must never be read as a ceiling of zero');
+  });
+
+  check('counted: the upgrade named for a full ceiling is one that would fit', () => {
+    /*
+      The distinction this check exists for: FREE, STANDARD and GROWTH all allow
+      exactly one workspace. A subscriber on FREE holding one is refused, and
+      "the cheapest edition that grants workspaces at all" answers STANDARD —
+      which allows exactly the one they already have. The upgrade must clear the
+      ceiling, not merely possess it.
+    */
+    const refusal = refusalOf(snapshot('FREE'), 'workspaces', 1);
+    assert.ok(isLimitReached(refusal));
+    const named = refusal.decision.requiredPlan;
+    assert.ok(named, 'a refusal must name an upgrade while one exists');
+
+    const ladder = editions.getEditions();
+    const target = ladder.find((edition) => edition.name === named);
+    assert.ok(target, `the named upgrade ${named} must be a published edition`);
+    const allowed = editionLimitOf(target, 'workspaces');
+    assert.ok(allowed === null || allowed > 1,
+      `${named} allows ${allowed} workspaces, which does not clear a ceiling of 1`);
+  });
+
+  check('counted: every edition refuses every counted ceiling in one shape', () => {
+    // Four ceilings, three status codes and four response bodies before C4.
+    // One question must give one answer whichever ceiling was hit.
+    const wrong = [];
+    for (const code of Object.keys(PLAN_ENTITLEMENTS)) {
+      const snap = snapshot(code);
+      for (const capability of COUNTED_LIMITS) {
+        const allowed = limitOf(snap, capability);
+        if (allowed === null || allowed === 0) continue; // unlimited, or never included
+        const refusal = refusalOf(snap, capability, allowed);
+        if (!isLimitReached(refusal)) {
+          wrong.push(`${code}/${capability}: ${refusal ? refusal.name : 'no refusal at all'}`);
+          continue;
+        }
+        if (refusal.status !== 402 || refusal.code !== 'PLAN_LIMIT_REACHED') {
+          wrong.push(`${code}/${capability}: ${refusal.status} ${refusal.code}`);
+        }
+      }
+    }
+    assert.deepEqual(wrong, [], 'these ceilings answered with something other than 402 PLAN_LIMIT_REACHED:\n  ' + wrong.join('\n  '));
+  });
+
+  check('counted: what a screen greys out and what the server refuses cannot differ', () => {
+    /*
+      withinLimit() drives canCreate, atLimit and a disabled Invite button.
+      assertWithinLimitFrom() is what actually refuses. They are two functions,
+      so they can disagree — and a disagreement is either a control that says no
+      when there is room, or one that invites the customer into a 402.
+
+      Driven across every edition, every counted capability and the counts on
+      either side of each boundary, which is where a disagreement would live.
+    */
+    const disagreements = [];
+    for (const code of Object.keys(PLAN_ENTITLEMENTS)) {
+      const snap = snapshot(code);
+      for (const capability of COUNTED_LIMITS) {
+        const allowed = limitOf(snap, capability);
+        const counts = allowed === null ? [0, 1, 9_999] : [0, allowed - 1, allowed, allowed + 1];
+        for (const current of counts) {
+          if (current < 0) continue;
+          const shown = withinLimit(snap, capability, current);
+          const enforced = refusalOf(snap, capability, current) === null;
+          if (shown !== enforced) {
+            disagreements.push(`${code}/${capability} at ${current}: shown=${shown} enforced=${enforced}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(disagreements, [],
+      'the displayed answer and the enforced answer diverged:\n  ' + disagreements.join('\n  '));
+  });
+
+  check('behavioural: the ladder walk searches above the asker, not from the bottom', () => {
+    /*
+      Non-monotonic on purpose, and with the real ladder rather than a stub.
+
+      The predicate grants the first and last published editions and nothing
+      between. Asking from the middle, the honest answer is the last one: it is
+      genuinely above the asker and it genuinely grants. The old implementation
+      found the FIRST match anywhere in the ladder, saw it was below the asker,
+      and returned null — so a subscriber was told nothing would grant what the
+      most expensive edition grants.
+
+      This is not hypothetical shape-fitting: the catalogue is owner-editable,
+      allowedChannels is already granted downward, and the same walk names the
+      upgrade in every refusal the product issues.
+    */
+    const ladder = editions.getEditions();
+    assert.ok(ladder.length >= 3, 'this check needs at least three published editions');
+    const bottom = ladder[0];
+    const middle = ladder[Math.floor(ladder.length / 2)];
+    const top = ladder[ladder.length - 1];
+    assert.notEqual(bottom.code, middle.code);
+    assert.notEqual(middle.code, top.code);
+
+    const grantsEndsOnly = (edition) => edition.code === bottom.code || edition.code === top.code;
+    assert.equal(
+      editions.cheapestUpgradeGranting(middle.code, grantsEndsOnly), top.name,
+      'an edition above the asker that grants must be named, even when a lower '
+      + 'one grants too',
+    );
+    // And the other half of the rule, unchanged: nothing above means no advice.
+    assert.equal(
+      editions.cheapestUpgradeGranting(top.code, (edition) => edition.code === bottom.code), null,
+      'an edition below the asker is not an upgrade and must not be named',
+    );
   });
 
   const failed = results.filter((r) => !r.passed);

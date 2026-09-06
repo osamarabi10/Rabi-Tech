@@ -22,6 +22,12 @@ import { prisma } from '../../prisma';
 import { verifyToken } from '../auth/auth.middleware';
 import { requireAdmin } from '../../middleware/rbac.middleware';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { limitOf, withinLimit } from '../billing/capabilities';
+import {
+  assertWithinLimit,
+  isEntitlementError,
+  entitlementErrorResponse,
+} from '../billing/entitlement-facade';
 import logger from '../../lib/logger';
 import memberRoutes from './members.routes';
 
@@ -61,10 +67,14 @@ router.get('/', async (req, res) => {
       activeWorkspaceId: (req as any).activeWorkspaceId ?? null,
       // The switcher needs to know whether another can be created, and the
       // badge needs to know whether the answer is a plan limit rather than a
-      // permission. Both come from the same resolved entitlement.
-      maxWorkspaces: entitlements.maxWorkspaces,
+      // permission. Both come from the same resolved entitlement — and now
+      // through the same two functions the create endpoint uses, so this is
+      // not merely the same *number* but the same *comparison*. A screen that
+      // recomputes "is there room" agrees until it does not, and the day it
+      // stops is the day a customer clicks an enabled button and gets a 402.
+      maxWorkspaces: limitOf(entitlements, 'workspaces'),
       workspaceCount: total,
-      canCreate: entitlements.maxWorkspaces === null || total < entitlements.maxWorkspaces,
+      canCreate: withinLimit(entitlements, 'workspaces', total),
       planName: entitlements.planName,
     });
   } catch (err) {
@@ -92,27 +102,21 @@ router.post('/', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'invalid_request', message: 'الاسم أطول من اللازم' });
     }
 
-    const entitlements = await resolveEntitlements(req.user!.organizationId);
+    /*
+      402, not 403, and the façade rather than a comparison written here.
+
+      The caller is permitted; the plan is what refuses. That distinction is the
+      whole reason the UI can offer an upgrade here instead of reporting a
+      permissions fault, and an agent told "you do not have permission" for
+      something their admin could buy in a minute goes and asks the wrong person.
+
+      The count stays here because only this route knows what a workspace is.
+      Everything after it — resolving the plan, honouring an override, comparing,
+      naming the upgrade — belongs to one implementation shared with seats,
+      custom fields and workflows.
+    */
     const existing = await prisma.workspace.count();
-
-    if (entitlements.maxWorkspaces !== null && existing >= entitlements.maxWorkspaces) {
-      /*
-        402, not 403.
-
-        The caller is permitted; the plan is what refuses. That distinction is
-        the whole reason the UI can offer an upgrade here instead of reporting a
-        permissions fault, and an agent told "you do not have permission" for
-        something their admin could buy in a minute goes and asks the wrong
-        person.
-      */
-      return res.status(402).json({
-        error: 'plan_limit',
-        message: `باقتك (${entitlements.planName}) بتسمح بـ ${entitlements.maxWorkspaces} مساحة عمل.`,
-        limit: entitlements.maxWorkspaces,
-        current: existing,
-        planName: entitlements.planName,
-      });
-    }
+    await assertWithinLimit(req.user!.organizationId, 'workspaces', existing);
 
     const duplicate = await prisma.workspace.findFirst({ where: { name }, select: { id: true } });
     if (duplicate) {
@@ -140,6 +144,7 @@ router.post('/', requireAdmin, async (req, res) => {
 
     return res.status(201).json(created);
   } catch (err) {
+    if (isEntitlementError(err)) return res.status(err.status).json(entitlementErrorResponse(err));
     logger.error('workspace create failed', { error: (err as Error)?.message, requestId: (req as any).id });
     return res.status(500).json({ error: 'server_error' });
   }

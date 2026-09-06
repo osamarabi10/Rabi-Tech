@@ -24,6 +24,7 @@ import { getPaymentProvider, paymentProviderFor } from './provider-registry';
 // stays; it simply has no activation consumer any more.
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
 import { cheapestUpgradeGranting, getEdition, getEditions, getEditionEditedAt, CATALOGUE_QUERY, createEditionRows, flattenEdition } from './editions.service';
+import { grantsCapability, limitOf, withinLimit, type Capability } from './capabilities';
 import {
   SUBSCRIPTION_PLAN_SELECT,
   currentVersionIdForPlan,
@@ -1625,7 +1626,31 @@ export async function getBillingSummary(organizationId: string) {
       name: plan.name,
       monthlyPriceCents: effective.listPriceCents,
     },
-    entitlements: plan,
+    /*
+      The edition, with the resolved limits laid over the top.
+
+      This field is named `entitlements` and was the raw edition, which is the
+      one thing entitlements are not: a negotiated MAC quota is folded into the
+      resolver and was missing here, so an organization on a raised allowance
+      would have been shown the edition's number by anything reading it. The
+      usage bars escaped that only because they read getCurrentUsage(), which
+      resolves properly — the two disagreed and the wrong one happened to be
+      unused. A loaded gun is still a gun.
+    */
+    entitlements: {
+      ...plan,
+      monthlyOutboundMessagesLimit: effective.limits.messages_outbound,
+      monthlyActiveContactsLimit: effective.limits.active_contacts,
+      monthlyCampaignSendsLimit: effective.limits.campaign_sends,
+      monthlyAiTokensInLimit: effective.limits.ai_tokens_in === null
+        ? null
+        : BigInt(effective.limits.ai_tokens_in),
+      monthlyAiTokensOutLimit: effective.limits.ai_tokens_out === null
+        ? null
+        : BigInt(effective.limits.ai_tokens_out),
+      usersLimit: effective.seatLimit,
+      maxWorkspaces: effective.maxWorkspaces,
+    },
     /*
       The cheapest published edition that grants each gated feature, by name.
 
@@ -1648,23 +1673,43 @@ export async function getBillingSummary(organizationId: string) {
       caller must render as "no upgrade unlocks this" rather than as a name.
     */
     featureUpgrades: (() => {
-      const published = getEditions();
-      const cheapest = (grants: (edition: PlanEntitlements) => boolean) =>
-        published.find(grants)?.name ?? null;
+      /*
+        One walk of the ladder, shared with every refusal.
+
+        This was a fourth hand-rolled copy of "cheapest edition that grants X",
+        with its own predicates, and it had already diverged in two ways. It
+        searched the whole published ladder from the bottom and took the first
+        match — the same answer as "cheapest upgrade" only while the ladder
+        grants monotonically, which an owner-editable catalogue need not, so a
+        Business customer could be told to upgrade to Standard. And its
+        predicates were written out again here, so moving a capability to a
+        different column would have had to be remembered in two files.
+
+        Now the upsell on a locked button and the 402 the user gets when they
+        press it are produced by the same function reading the same fields.
+      */
+      const upgrade = (capability: Capability) => cheapestUpgradeGranting(
+        effective.plan,
+        (candidate) => grantsCapability(candidate, capability),
+      );
       return {
-        broadcasts: cheapest((e) => e.monthlyCampaignSendsLimit === null || e.monthlyCampaignSendsLimit > 0),
-        autoGateway: cheapest((e) => e.autoProvisionGateway),
-        customDomain: cheapest((e) => e.customDomain),
-        whiteLabel: cheapest((e) => e.whiteLabel),
+        broadcasts: upgrade('campaign_sends'),
+        autoGateway: upgrade('autoProvisionGateway'),
+        customDomain: upgrade('customDomain'),
+        whiteLabel: upgrade('whiteLabel'),
       };
     })(),
     subscription: detail.subscription,
     organization: detail.organization,
     seats: {
       used: seatsUsed,
-      limit: seatLimit,
+      limit: limitOf(effective, 'seats'),
       remaining: seatLimit === null ? null : Math.max(0, seatLimit - seatsUsed),
-      atLimit: seatLimit !== null && seatsUsed >= seatLimit,
+      // The same comparison assertSeatAvailable applies, not a second one that
+      // agrees today. This drives a disabled Invite button, so a disagreement
+      // is either a button that refuses when there is room or one that invites
+      // into a 402.
+      atLimit: !withinLimit(effective, 'seats', seatsUsed),
     },
     usage,
     invoices: detail.invoices,

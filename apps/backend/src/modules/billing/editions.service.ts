@@ -793,13 +793,24 @@ export function cheapestUpgradeGranting(
   grants: (edition: PlanEntitlements) => boolean,
 ): string | null {
   const ladder = getEditions();
-  const grantingIndex = ladder.findIndex(grants);
-  if (grantingIndex < 0) return null;
-
   const askingIndex = ladder.findIndex((edition) => edition.code === askingCode);
-  if (askingIndex >= 0 && grantingIndex <= askingIndex) return null;
 
-  return ladder[grantingIndex].name;
+  /*
+    Search strictly above the asker, rather than searching the whole ladder and
+    then rejecting a match that turned out to be below them.
+
+    Those are the same answer only while the ladder grants monotonically, and
+    the catalogue is owner-editable, so it need not. Give ENTERPRISE back a
+    capability that FREE also has and the old form found FREE first, saw it was
+    below the asker and returned null — telling a GROWTH subscriber that nothing
+    would grant what ENTERPRISE grants. The paragraphs above always described
+    "the cheapest edition genuinely above them"; this is that sentence as code.
+  */
+  const from = askingIndex >= 0 ? askingIndex + 1 : 0;
+  for (let index = from; index < ladder.length; index += 1) {
+    if (grants(ladder[index])) return ladder[index].name;
+  }
+  return null;
 }
 
 /**

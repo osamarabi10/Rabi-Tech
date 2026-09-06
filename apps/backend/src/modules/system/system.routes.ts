@@ -20,11 +20,7 @@ import {
   inboxConfig,
   invalidateOrganizationConfig,
 } from '../../utils/whatsapp-sessions';
-import {
-  assertSeatAvailable,
-  isSeatLimitError,
-  seatLimitResponse,
-} from '../usage/entitlements';
+import { assertSeatAvailable } from '../usage/entitlements';
 import { resolveTeamId } from '../../utils/teams';
 import { auditLog } from '../../lib/audit';
 import { getTenantId } from '../../lib/tenant-context';
@@ -33,9 +29,11 @@ import { resolveEntitlements } from '../billing/entitlements.resolver';
 import {
   assertCan,
   isCapabilityRefused,
+  isEntitlementError,
   capabilityRefusalResponse,
+  entitlementErrorResponse,
 } from '../billing/entitlement-facade';
-import { getEdition } from '../billing/editions.service';
+import { decide } from '../billing/capabilities';
 import { channelGrantRefusal } from '../channels/channel-entitlement';
 import { MAX_FILES_PER_MESSAGE } from '../conversations/message-limits';
 
@@ -583,7 +581,12 @@ router.get('/users', async (req, res) => {
         canInvite: ['ADMIN', 'SUPERVISOR'].includes(req.user!.role || ''),
         canManage: req.user!.role === 'ADMIN',
         managerInviteRole: 'AGENT',
-        maskPhoneAndEmail: getEdition(effective.plan).maskContactDetails,
+        // The same decision the PATCH below enforces, from the same function.
+        // This flag is what makes the masking toggle appear, so reading the
+        // edition column here while the refusal goes through the façade is the
+        // shown-and-enforced pair drifting by construction: a screen offering a
+        // control the server will refuse.
+        maskPhoneAndEmail: decide(effective, 'maskContactDetails').granted,
         callsAvailable: false,
       },
     });
@@ -644,7 +647,7 @@ router.post('/user-invitations', requirePermission('user:create'), async (req, r
     });
     res.status(201).json(invitation);
   } catch (error) {
-    if (isSeatLimitError(error)) return res.status(error.status).json(seatLimitResponse(error));
+    if (isEntitlementError(error)) return res.status(error.status).json(entitlementErrorResponse(error));
     const message = String((error as Error).message || error);
     res.status(message.includes('already') ? 409 : 400).json({ error: message });
   }
@@ -763,8 +766,8 @@ router.post('/users', requireAdmin, requirePermission('user:create'), async (req
       identity: undefined,
     });
   } catch (error) {
-    if (isSeatLimitError(error)) {
-      return res.status(error.status).json(seatLimitResponse(error));
+    if (isEntitlementError(error)) {
+      return res.status(error.status).json(entitlementErrorResponse(error));
     }
     logger.error('User creation failed', { error: error instanceof Error ? error.stack : String(error) });
     res.status(500).json({ error: 'فشل إنشاء المستخدم' });

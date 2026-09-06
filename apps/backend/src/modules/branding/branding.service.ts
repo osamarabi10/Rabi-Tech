@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import { getEdition } from '../billing/editions.service';
+import { assertCanFrom } from '../billing/capabilities';
+import type { EffectiveEntitlements } from '../billing/entitlements.resolver';
 import { normalizePlanCode, PlanEntitlements } from '../billing/plans';
 import fs from 'fs/promises';
 import path from 'path';
@@ -196,16 +198,33 @@ export function normalizeBrandingInput(input: BrandingInput): BrandingInput {
   return Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined)) as BrandingInput;
 }
 
-export function assertFooterEntitlement(tier: string, input: BrandingInput): void {
-  const edition = editionFor(tier);
-  if (Object.prototype.hasOwnProperty.call(input, 'customFooter') && !edition.whiteLabel) {
-    throw new Error('Current plan requires Powered by RabiTech attribution');
+/**
+ * Refuse a branding edit the edition does not include.
+ *
+ * Takes the resolved entitlements rather than a plan code, because a code is
+ * the one thing a capability decision must not be made from — and because the
+ * two callers had already resolved them and were handing over just the name.
+ *
+ * Previously threw a bare Error, which the route turned into 400, or 403 when
+ * it recognised a substring of the message. Both were wrong in the same way: a
+ * plan refusal is 402, the caller is permitted, and the fix is a purchase. It
+ * also carried no upgrade target, so the one refusal in the product that could
+ * most usefully name a price named nothing.
+ */
+export function assertFooterEntitlement(
+  entitlements: EffectiveEntitlements,
+  input: BrandingInput,
+  organizationId?: string,
+): void {
+  if (Object.prototype.hasOwnProperty.call(input, 'customFooter')) {
+    assertCanFrom(entitlements, 'whiteLabel', organizationId);
   }
   // Deliberately does not name a tier. Which editions grant custom domains is
-  // now owner-editable, so a message promising "Business or higher" would start
-  // lying the first time the catalogue is changed.
-  if (input.customDomain && !edition.customDomain) {
-    throw new Error('Custom domains are not included in the current plan');
+  // owner-editable, so a message promising "Business or higher" would start
+  // lying the first time the catalogue is changed — the façade reads it from
+  // the ladder at the moment of refusal instead.
+  if (input.customDomain) {
+    assertCanFrom(entitlements, 'customDomain', organizationId);
   }
 }
 

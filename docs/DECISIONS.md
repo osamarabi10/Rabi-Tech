@@ -1136,3 +1136,88 @@ the others would vanish without trace) and a changed plan count.
 
 ---
 
+---
+
+## D-20 · One question, one refusal — and the status codes that had to move
+
+**Status:** decided 2026-09-06 · **Owner:** UnKnowan
+
+Four counted ceilings — seats, workspaces, custom fields, workflows — were one
+question asked four times, with **three different status codes and four
+response bodies** between them. C4 routes all four through
+`assertWithinLimit`, and they now answer `402 PLAN_LIMIT_REACHED`.
+
+That is a customer-visible change to a documented API, so it is recorded here
+rather than left in a commit message.
+
+| Site | Before | After |
+|---|---|---|
+| Custom fields | **429** `Current plan allows N custom fields` | 402 `PLAN_LIMIT_REACHED` |
+| Workflows | **429** `الباقة الحالية تسمح بـ N أتمتة` | 402 `PLAN_LIMIT_REACHED` |
+| Workspaces | 402 `error: plan_limit` | 402 `code: PLAN_LIMIT_REACHED` |
+| Seats | 402 `SEAT_LIMIT_REACHED` | 402 `PLAN_LIMIT_REACHED` |
+| Branding footer / domain | **403**, bare `Error`, no upgrade target | 402 `PLAN_UPGRADE_REQUIRED` |
+
+### Why 429 was wrong, not merely inconsistent
+
+429 means *you are going too fast, retry later*. That is true of a monthly
+meter and false of a plan ceiling: waiting clears nothing. The public API tells
+integrators to back off and retry on 429, so a client doing exactly what the
+documentation says would retry a refusal forever. The old code was the defect;
+consistency is the by-product.
+
+403 was wrong in the mirror image. It says *you may not do this*, which sends
+an agent to their administrator — but the caller here is already a permitted
+admin and the **plan** is what refuses, which is fixed by buying rather than by
+granting a role. Branding was the last refusal out of step, and it got its 403
+from a substring match on the error message, so renaming a customer-facing
+sentence would silently have turned it into a 400.
+
+### The price, stated
+
+Any integrator branching on `SEAT_LIMIT_REACHED`, `plan_limit`, or a 429 from
+those two endpoints breaks. **In-tree that is nobody**: the frontend branches
+only on `status === 402` (`workspace-switcher.tsx`) and renders
+`data.message`, and both survive — the shared body carries the sentence in
+`error` *and* `message` precisely so one shape could replace four without a
+frontend change. Outside the tree it is unknowable, and the honest reading is
+that an integrator who handled 429 correctly was being harmed by it.
+
+**Trigger for revisiting: before the first external API integrator.** After
+that, a change of this kind needs a deprecation window rather than a commit.
+
+### What was deliberately NOT unified
+
+`QuotaExceededError` (429, a monthly meter that really does reset) and
+`CapabilityNotIncludedError` (402, never included) stay distinct types.
+`campaign.worker.ts` branches on exactly that difference to decide whether a
+recipient is retryable — collapsing them would leave campaign recipients
+`pending` forever, waiting on a reset that grants nothing. That is a bug this
+repository has already shipped once.
+
+`PLAN_UPGRADE_REQUIRED` and `PLAN_LIMIT_REACHED` are also kept apart, because
+the customer can do different things about them. A capability never included
+clears only by upgrading. A ceiling that is full also clears by freeing one —
+deactivating a user, deleting a workspace — and offering only the upgrade sells
+somebody something they did not need.
+
+### Recorded, not fixed: a successful send can go unmetered
+
+`recordSuccessfulOutboundSend` wraps its metering in try/catch and logs on
+failure. The message has already left, so the send is not undone — but nothing
+durable records that it was never counted, and the organization is under-billed
+with the evidence in a log line.
+
+Not fixed in C4, deliberately. Throwing would report a failure for a message
+the customer can see was delivered, which is worse; the real fix is a durable
+discrepancy record and a reconciliation, which is billing-provider work.
+**Owner: UnKnowan. Trigger: before the first invoice is issued from metered
+usage.**
+
+Stated as a property rather than a defect in the meantime: usage is *derived*
+from `UsageEvent` rows, never from a counter, so the shown number and the
+enforced number cannot drift from each other — they are the same aggregate. The
+gap is between the send and the row, not between two copies of the count. A
+materialised counter was considered for C4 and rejected for that reason: it
+would be a second store of a number already derivable, which is the shape the
+AGENTS Design rule forbids.

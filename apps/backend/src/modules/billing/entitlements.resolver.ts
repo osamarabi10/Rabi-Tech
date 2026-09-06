@@ -341,12 +341,11 @@ export async function resolveEntitlements(
  *
  * `null` means unlimited.
  */
-export async function resolveMetricLimit(
-  organizationId: string,
-  metric: UsageMetric,
-  now = new Date(),
-): Promise<bigint | null> {
-  const entitlements = await resolveEntitlements(organizationId, now);
-  const limit = entitlements.limits[metric];
-  return limit === null ? null : BigInt(limit);
-}
+/*
+  resolveMetricLimit lived here and was deleted in C4.
+
+  It had one caller — assertMetricAvailable — and it answered half of what that
+  caller needed: the number, but not whether the capability was included nor
+  which edition would grant it, so the other half was hand-rolled beside it and
+  drifted. limitOf() and decide() in the façade answer both from one resolution.
+*/

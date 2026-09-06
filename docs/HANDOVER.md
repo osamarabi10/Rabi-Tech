@@ -23,11 +23,12 @@ ranked risks.
 ## 0 · Current state — 2026-09-06
 
 **Read this section, `docs/DEPLOYMENT-READINESS.md`, and `docs/DECISIONS.md`
-D-10 to D-19. The rest of this file is background from 2026-09-02 and parts of
+D-10 to D-20. The rest of this file is background from 2026-09-02 and parts of
 it are superseded; each such section says so.**
 
-The working tree is clean. `main` and `editions-ladder` are level at
-`f9c79ee1`, both pushed.
+The working tree is clean, and `main` and `editions-ladder` are level and
+pushed. The table below names each commit by sha except the newest, which
+cannot carry its own — `git log --oneline -3` is the head.
 
 ### What changed today, in one line each
 
@@ -42,6 +43,8 @@ The working tree is clean. `main` and `editions-ladder` are level at
 | `0a4d3e96` | `Organization.tier` deleted — the plan has one home (C3a) |
 | `e9d21cbf` | `PlanVersion` and `Price`; subscriptions pin a version (C3b) |
 | `f9c79ee1` | The `can / limit / usage / assertCan` façade, and a sweep that proves it completed (C3c) |
+| `c04de082` | The unknown key must be loud; §0 says why C4 exists |
+| _head_ | Six enforcement sites onto the façade; one refusal shape for four ceilings (C4) |
 
 Four more commits are AGENTS rules earned by the work above, not by principle.
 
@@ -90,32 +93,38 @@ building the façade touch disjoint code and each has its own provable property,
 so a failure in any one of them inside a combined commit would have been hard
 to attribute.
 
-**C3c shipped the façade without finishing the move onto it**, and that is the
-one thing a fresh session needs to know about it. `can / limit / usage /
-assertCan` exist, are pure, and are proved behaviourally — but
-`assertMetricAvailable` and `assertSeatAvailable` still resolve and decide for
-themselves, and the workspace ceiling is still an inline count-and-compare in
-its route. So the façade is *a* way to ask, not yet *the* way. That is C4, and
-it is the reason C4 exists.
+**C4 finished the move onto the façade.** Six sites ask one way now:
+`assertMetricAvailable`, `assertSeatAvailable`, the workspace ceiling, custom
+fields, workflows, and the branding footer/domain refusal. The four counted
+ceilings answer one code, `402 PLAN_LIMIT_REACHED` — two of them answered 429
+before, which tells an integrator to retry a refusal that waiting never clears.
+**D-20 records the customer-visible half and its price.**
+
+Three things C4 found rather than built. `cheapestUpgradeGranting` searched the
+whole ladder and then rejected a match below the asker, instead of searching
+above it — the same answer only while the ladder grants monotonically, which an
+owner-editable catalogue need not. `getBillingSummary` returned the raw edition
+in a field named `entitlements`, so a negotiated MAC quota was absent from it.
+And `featureUpgrades` was a fourth hand-rolled copy of the ladder walk, able to
+tell a Business customer to upgrade to Standard.
+
+Still open, recorded in D-20 rather than fixed: a successful send whose metering
+throws is logged and dropped, so the organization is under-billed with the
+evidence in a log line. Owner UnKnowan, before the first invoice from metered
+usage.
 
 ### What is next
 
 C4 through C8 of the editions ladder, in `.claude/plans/prancy-puzzling-anchor.md`:
 
-1. **C4 — adoption.** The façade is built (C3c); C4 is what makes it the only
-   surface. Route `assertMetricAvailable` and `assertSeatAvailable` through
-   `can`/`limit`, bring the workspace ceiling onto the same path, and keep the
-   shown number and the enforced number reading from one source. Two ways to
-   ask one question is the condition the façade exists to end, and it is the
-   state the tree is in until this lands.
-2. **C5** — the numbers meter (`maxNumbers`), the brief's second meter and the
+1. **C5** — the numbers meter (`maxNumbers`), the brief's second meter and the
    only wholly missing one.
-3. **C6** — the plan editor writes a **new version** rather than editing the
+2. **C6** — the plan editor writes a **new version** rather than editing the
    current one in place, and the existing preview is retargeted at versions.
    C3b deliberately left editing in place; this is where that changes.
-4. **C7** — MAC: keep measuring, stop enforcing. A pricing act, so it is visible
+3. **C7** — MAC: keep measuring, stop enforcing. A pricing act, so it is visible
    on its own.
-5. **C8** — billing provider wiring, one-way outward.
+4. **C8** — billing provider wiring, one-way outward.
 
 Also open and not in that ladder:
 

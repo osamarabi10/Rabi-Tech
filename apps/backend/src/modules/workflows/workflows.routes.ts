@@ -4,8 +4,11 @@ import { prisma } from '../../prisma';
 import logger from '../../lib/logger';
 import { verifyToken } from '../auth/auth.middleware';
 import { requirePermission } from '../../middleware/rbac.middleware';
-import { getEdition } from '../billing/editions.service';
-import { resolveEntitlements } from '../billing/entitlements.resolver';
+import {
+  assertWithinLimit,
+  isEntitlementError,
+  entitlementErrorResponse,
+} from '../billing/entitlement-facade';
 import { validateWorkflowConfig, workflowVocabulary } from './workflow-schema';
 import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
 
@@ -34,6 +37,12 @@ const WORKFLOW_SELECT = {
 } as const;
 
 function fail(res: import('express').Response, err: unknown, context: string) {
+  // A plan refusal is an answer, not a fault: it must not be logged as a server
+  // error and must not become a 500, which is what every route sharing this
+  // helper would otherwise do with one.
+  if (isEntitlementError(err)) {
+    return res.status(err.status).json(entitlementErrorResponse(err));
+  }
   if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
     return res.status(400).json({ error: 'يوجد أتمتة بهذا الاسم' });
   }
@@ -105,22 +114,21 @@ router.post('/', requirePermission('workflow:manage'), async (req, res) => {
       return res.status(400).json({ error: 'إعداد الأتمتة غير صالح', details: validation.errors });
     }
 
-    // The effective plan, not the plan of record: honouring an override for
-    // quotas but not for features is half an upgrade, which is worse than none.
-    const effective = await resolveEntitlements(req.user!.organizationId);
-    const limit = getEdition(effective.plan).workflowsLimit;
-    if (limit !== null) {
-      const existing = await prisma.workflow.count();
-      if (existing >= limit) {
-        // 429, matching how the custom-field ceiling answers: this is a quota
-        // refusal, not a malformed request and not a permission problem.
-        return res.status(429).json({
-          error: `الباقة الحالية تسمح بـ ${limit} أتمتة`,
-          limit,
-          current: existing,
-        });
-      }
-    }
+    /*
+      The effective plan, not the plan of record: honouring an override for
+      quotas but not for features is half an upgrade, which is worse than none.
+      That is the façade's job now, and it reads the resolved entitlement where
+      this read the edition — so the override is honoured here for the first
+      time.
+
+      402, not the 429 it used to answer, for the reason spelled out at the
+      custom-field ceiling: waiting does not clear a plan limit.
+
+      The count is unconditional now. It was skipped on unlimited plans, which
+      saved a COUNT and cost the ability to state one rule for every edition.
+    */
+    const existing = await prisma.workflow.count();
+    await assertWithinLimit(req.user!.organizationId, 'workflows', existing);
 
     const workflow = await prisma.workflow.create({
       data: {

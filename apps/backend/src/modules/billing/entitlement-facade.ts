@@ -3,8 +3,10 @@ import { getMetricUsage } from '../usage/usage.service';
 import { resolveEntitlements } from './entitlements.resolver';
 import {
   assertCanFrom,
+  assertWithinLimitFrom,
   decide,
   limitOf,
+  withinLimit,
   type Capability,
   type Decision,
   type LimitValue,
@@ -21,6 +23,13 @@ import {
  *   limit(org, cap)      — how much, null for unlimited
  *   usage(metric)        — how much has been consumed
  *   assertCan(org, cap)  — throw and log unless granted
+ *
+ * and one more for the counted allowances, because "granted" and "has room"
+ * are the two halves every ceiling needs, and hand-rolling the pair at each
+ * site is what produced four different refusals to one question:
+ *
+ *   assertWithinLimit(org, cap, current) — throw unless granted AND not full
+ *   hasRoomFor(org, cap, current)        — the same arithmetic, without throwing
  *
  * A caller that needs "granted AND not yet exhausted" wants `assertCan`
  * followed by the quota check; they are different questions and conflating
@@ -56,9 +65,39 @@ export async function assertCan(
   return assertCanFrom(entitlements, capability, organizationId);
 }
 
+/**
+ * Throw unless the capability is granted and one more would fit.
+ *
+ * The caller supplies the count because only it knows what is being counted —
+ * active users, workspaces in this organization, fields on this contact model.
+ * Counting here would mean this module knowing every schema it guards.
+ */
+export async function assertWithinLimit(
+  organizationId: string,
+  capability: Capability,
+  current: number,
+): Promise<Decision> {
+  const entitlements = await resolveEntitlements(organizationId);
+  return assertWithinLimitFrom(entitlements, capability, current, organizationId);
+}
+
+/** Whether one more would fit, for a screen that wants to say so in advance. */
+export async function hasRoomFor(
+  organizationId: string,
+  capability: Capability,
+  current: number,
+): Promise<boolean> {
+  const entitlements = await resolveEntitlements(organizationId);
+  return withinLimit(entitlements, capability, current);
+}
+
 export type { Capability, Decision, LimitValue } from './capabilities';
 export {
   CapabilityRefused,
+  LimitReached,
   isCapabilityRefused,
+  isLimitReached,
+  isEntitlementError,
   capabilityRefusalResponse,
+  entitlementErrorResponse,
 } from './capabilities';

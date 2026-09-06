@@ -10,9 +10,12 @@ import {
   filterVocabulary,
 } from '../../lib/contact-filter-dsl';
 import { normalizePlanCode } from '../billing/plans';
-import { getEdition } from '../billing/editions.service';
 import { setContactConsent } from '../../utils/consent';
-import { resolveEntitlements } from '../billing/entitlements.resolver';
+import {
+  assertWithinLimit,
+  isEntitlementError,
+  entitlementErrorResponse,
+} from '../billing/entitlement-facade';
 import { dispatchWorkflowEvent } from '../../workers/workflow.worker';
 import { ImportError, importContacts } from './import.service';
 import logger from '../../lib/logger';
@@ -398,10 +401,17 @@ router.post('/custom-fields', requireSupervisor, async (req, res) => {
     if (STANDARD_CONTACT_FIELDS.some((field) => field.name.toLowerCase() === name.toLowerCase())) {
       return res.status(409).json({ error: 'Custom field names must differ from standard Contact fields' });
     }
-    const effective = await resolveEntitlements(req.user!.organizationId);
-    const limit = getEdition(effective.plan).customFieldsLimit;
+    /*
+      Through the façade, and 402 rather than the 429 this used to answer.
+
+      429 means "you are going too fast, retry later". A plan ceiling does not
+      clear by waiting, so a client that honours 429 — which the public API
+      documents — retries a refusal forever. It also read the edition directly
+      rather than the resolved entitlement, so a platform-owner override raising
+      the ceiling was ignored here while being honoured for seats.
+    */
     const existing = await prisma.customFieldDefinition.count();
-    if (limit !== null && existing >= limit) return res.status(429).json({ error: `Current plan allows ${limit} custom fields` });
+    await assertWithinLimit(req.user!.organizationId, 'customFields', existing);
     const maxOrder = await prisma.customFieldDefinition.aggregate({ _max: { sortOrder: true } });
     const definition = await prisma.customFieldDefinition.create({
       data: {
@@ -418,6 +428,7 @@ router.post('/custom-fields', requireSupervisor, async (req, res) => {
     await auditLog({ userId: req.user!.id, action: 'contact-field.created', resource: 'contact-field', resourceId: definition.id, changes: { after: definition }, ipAddress: req.ip, userAgent: req.get('user-agent') });
     res.status(201).json(definition);
   } catch (err: any) {
+    if (isEntitlementError(err)) return res.status(err.status).json(entitlementErrorResponse(err));
     if (err?.code === 'P2002') return res.status(409).json({ error: 'A Contact field with this name or ID already exists' });
     res.status(400).json({ error: String(err?.message || err) });
   }

@@ -10,10 +10,9 @@ import {
   recordMessageUsage,
   recordUsageEvents,
 } from './usage.service';
-import { PLAN_METRIC_FIELDS } from './metrics';
-import { cheapestUpgradeGranting } from '../billing/editions.service';
-import type { PlanCode, PlanEntitlements } from '../billing/plans';
-import { resolveEntitlements, resolveMetricLimit } from '../billing/entitlements.resolver';
+import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { decide } from '../billing/capabilities';
+import { assertWithinLimit } from '../billing/entitlement-facade';
 
 export const ENTITLEMENTS: Record<UsageMetric, { blocksOutbound: boolean }> = {
   messages_inbound: { blocksOutbound: false },
@@ -89,55 +88,24 @@ export function capabilityErrorResponse(error: CapabilityNotIncludedError) {
   };
 }
 
-/**
- * The cheapest active edition that grants a metric at all.
- *
- * Active means both columns: not withdrawn from sale, and not archived. This
- * names an upgrade target, so it is an offer question - the same one
- * getEditions() answers - and an archived edition must never be advertised. If
- * every granting edition has been archived the result is null and the refusal
- * names no upgrade at all, which is the right outcome: better to say only what
- * is forbidden than to point at something nobody can buy.
- *
- * Read from the catalogue, never hardcoded. A literal "requires Growth" starts
- * lying the first time the owner moves a capability, and the console already
- * carries one such map that will need the same treatment.
- *
- * Ordered by `sortOrder`, not price: ENTERPRISE is stored at zero because its
- * price is negotiated, so ordering by price would answer "Enterprise" for
- * everything. Ladder position is the honest ordering until pricingModel lands.
- *
- * Runs only when a capability has already been refused — once per rejected
- * request, never on the send path — so the extra read costs nothing that
- * matters.
- */
-async function editionGranting(metric: UsageMetric, askingPlan: PlanCode): Promise<string | null> {
-  const field = (PLAN_METRIC_FIELDS as Record<string, string | undefined>)[metric];
-  if (!field) return null;
-  try {
-    /*
-      Reads the published ladder from the catalogue cache rather than the
-      database, so it shares one definition of "is this actually an upgrade"
-      with channelRefusal. The two carried the identical assumption and would
-      have had to be fixed twice; now they are the same function.
+/*
+  editionGranting() lived here and was deleted in C4.
 
-      The cache is already ordered by sortOrder with code breaking ties, which
-      is what made the previous query's own ordering necessary.
-    */
-    return cheapestUpgradeGranting(askingPlan, (edition: PlanEntitlements) => {
-      const value = (edition as unknown as Record<string, unknown>)[field];
-      return value === null || Number(value) > 0;
-    });
-  } catch (error) {
-    // The refusal stands either way. Failing to name the upgrade is a worse
-    // message, not a reason to let the request through.
-    logger.warn('Could not determine the edition granting a capability', {
-      metric,
-      error: String(error),
-    });
-    return null;
-  }
-}
+  It was a second implementation of "which edition would grant this", written
+  before the façade existed, and it had already diverged from the one in
+  capabilities.ts: it walked the whole ladder and took the first match, where
+  cheapestUpgradeGranting searches strictly above the asker. Two answers to one
+  question, and the one a customer saw depended on which refusal they hit.
+
+  decide() names the upgrade now, from the same walk every other refusal uses,
+  and the three properties this function was careful about are properties of
+  that walk rather than of this file: it reads the published catalogue, so an
+  archived edition is never advertised and a refusal with nothing left to
+  recommend says nothing rather than naming something nobody can buy; the order
+  is sortOrder and not price, because ENTERPRISE is stored at zero and price
+  order would answer "Enterprise" for everything; and it runs only once a
+  refusal has already been decided, never on the send path.
+*/
 
 export function quotaErrorResponse(error: QuotaExceededError) {
   return {
@@ -157,10 +125,17 @@ export async function assertMetricAvailable(
 ): Promise<void> {
   if (!ENTITLEMENTS[metric].blocksOutbound) return;
   const organizationId = getTenantId();
-  // Resolver, not OrganizationConfig: a platform-owner override has to be
-  // honoured here or an enterprise deal is agreed and then not enforced.
-  const limit = await resolveMetricLimit(organizationId, metric, reference);
-  if (limit === null) return;
+  /*
+    One resolution, and the façade decides from it.
+
+    Resolver, not OrganizationConfig: a platform-owner override has to be
+    honoured here or an enterprise deal is agreed and then not enforced. And
+    decide() rather than a bare limit lookup, because the refusal needs the
+    upgrade target too — reading the number here and naming the edition
+    somewhere else is exactly how the two drifted apart.
+  */
+  const entitlements = await resolveEntitlements(organizationId, reference);
+  const decision = decide(entitlements, metric);
 
   /*
     Zero is not a quota. It is the catalogue saying this edition does not
@@ -170,74 +145,60 @@ export async function assertMetricAvailable(
     forever because the worker treats a quota error as retryable.
 
     Checked before usage is read, since no amount of usage is relevant to a
-    capability that was never included.
-  */
-  if (limit === BigInt(0)) {
-    const entitlements = await resolveEntitlements(organizationId, reference);
-    throw new CapabilityNotIncludedError(
-      metric,
-      entitlements.planName,
-      await editionGranting(metric, entitlements.plan),
-    );
-  }
+    capability that was never included. decide() reports exactly this as
+    "not granted": a limit of 0 refuses, null is unlimited, and the two are
+    never conflated.
 
+    Still CapabilityNotIncludedError and not the façade's CapabilityRefused,
+    deliberately. The campaign worker branches on this type to decide whether a
+    recipient is retryable, and the public API maps it to a 402 that tells a
+    client to stop. Unifying the type would be a shape change wearing the word
+    consistency, and it would strand campaign recipients as `pending` forever.
+  */
+  if (!decision.granted) {
+    throw new CapabilityNotIncludedError(metric, decision.planName, decision.requiredPlan);
+  }
+  if (decision.limit === null) return;
+
+  const limit = BigInt(decision.limit);
   const current = await getMetricUsage(metric, reference);
   if (current + BigInt(quantity) > limit) {
     throw new QuotaExceededError(metric, current, limit, monthRange(reference).end);
   }
 }
 
-/**
- * Raised when a plan's seat allowance is already used up.
- *
- * Separate from QuotaExceededError because seats are not a metered monthly
- * counter — there is no reset date, only an upgrade.
- */
-export class SeatLimitError extends Error {
-  readonly status = 402;
-  readonly code = 'SEAT_LIMIT_REACHED';
+/*
+  SeatLimitError lived here and was deleted in C4.
 
-  constructor(readonly current: number, readonly limit: number, readonly planName: string) {
-    super(`باقة ${planName} تسمح بـ ${limit} مستخدم. لإضافة المزيد، رقّي الباقة.`);
-    this.name = 'SeatLimitError';
-  }
-}
+  Seats were the third of four counted ceilings, each with its own error class,
+  its own status code and its own response body — 402 SEAT_LIMIT_REACHED here,
+  402 plan_limit for workspaces, 429 for custom fields and workflows. One
+  question, four answers, and a client had to learn all four to handle "your
+  plan is full".
 
-export function isSeatLimitError(error: unknown): error is SeatLimitError {
-  return error instanceof SeatLimitError;
-}
-
-export function seatLimitResponse(error: SeatLimitError) {
-  return {
-    error: error.message,
-    code: error.code,
-    current: error.current,
-    limit: error.limit,
-    plan: error.planName,
-    upgradeRequired: true,
-  };
-}
+  LimitReached in capabilities.ts replaces all four. It keeps 402 and keeps the
+  noun in the sentence, so nothing a customer reads got more generic.
+*/
 
 /**
  * Refuses a new seat once the plan's user allowance is spent.
  *
  * Only active users count: deactivating an agent should free their seat, or a
- * tenant can never replace someone who left without paying more.
+ * tenant can never replace someone who left without paying more. That query is
+ * the one thing this function still owns — the façade cannot count seats
+ * without knowing the User schema, and the whole point of it is that it does
+ * not know any schema it guards.
  *
- * @throws {SeatLimitError} when the plan has no seat left
+ * Everything else — resolving the effective plan, honouring an override,
+ * comparing, naming the upgrade, logging the refusal — is the façade's.
+ *
+ * @throws {LimitReached} when the plan has no seat left
+ * @throws {CapabilityRefused} when the edition grants no seats at all
  */
 export async function assertSeatAvailable(): Promise<void> {
   const organizationId = getTenantId();
-  // Seats follow the effective plan too. Reading Organization.tier directly
-  // would grant an overridden org the quotas of its new plan but the seats of
-  // its old one — half an upgrade, which is worse than none.
-  const entitlements = await resolveEntitlements(organizationId);
-  if (entitlements.seatLimit === null) return;
-
   const current = await prisma.user.count({ where: { isActive: true } });
-  if (current >= entitlements.seatLimit) {
-    throw new SeatLimitError(current, entitlements.seatLimit, entitlements.planName);
-  }
+  await assertWithinLimit(organizationId, 'seats', current);
 }
 
 function normalizedDirectAddress(address: string): string | null {

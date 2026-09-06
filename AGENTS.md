@@ -519,6 +519,25 @@ Design rules do not catch the failures this repository actually has. These do.
   make the question unaskable. What must never exist is the third option:
   returning a value that reads as permission.
 
+- **Changing a signature? The JavaScript gates are callers the compiler cannot
+  see.** `tsc` proves every TypeScript call site was updated and says nothing
+  about `scripts/*.js`, which `require()` the same modules and pass whatever
+  they like. A green typecheck after a signature change is half an answer.
+
+  C4 changed `assertFooterEntitlement` to take resolved entitlements instead of
+  a plan code. `tsc` was clean, both production call sites were correct, and the
+  tenancy harness kept passing the string — so `getEdition(undefined)` fell to
+  the deny-everything floor and the refusal read *"باقة undefined لا تشمل هذه
+  الميزة"*. It failed **closed**, which is why it was survivable, and it failed
+  **silently**, which is why it took a red gate to find rather than a log line.
+
+  Two things follow. Grep the `scripts/` directory for the symbol whenever a
+  signature moves — it is the one place the compiler is not looking. And where a
+  function takes a structured argument, have it **check the shape and say so**:
+  the façade now refuses at `error` level when handed something that is not a
+  resolved snapshot, which turns this class of mistake from a mystifying refusal
+  into a named one.
+
 ---
 
 ## Scope

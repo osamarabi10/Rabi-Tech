@@ -19,6 +19,10 @@ import {
   verifyBrandingAssetSignature,
 } from './branding.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
+import {
+  isEntitlementError,
+  entitlementErrorResponse,
+} from '../billing/entitlement-facade';
 import logger from '../../lib/logger';
 
 const router = Router();
@@ -38,10 +42,15 @@ type EditableBranding = OrganizationBranding & {
   organization?: { subscriptions: SubscriptionWithPlan[] } | null;
 };
 
-function errorStatus(error: unknown): number {
-  const message = String((error as Error).message || error);
-  return message.includes('Powered by RabiTech attribution') ? 403 : 400;
-}
+/*
+  errorStatus() lived here and was deleted in C4.
+
+  It read the 403 case out of a substring of the error message — so renaming a
+  sentence a customer reads would silently have turned a plan refusal into a
+  400. That refusal is now a typed CapabilityRefused carrying its own 402, and
+  the branch below tests the type. Everything else this file throws is a
+  malformed request, which is what 400 is for.
+*/
 
 function editableBranding(row: EditableBranding) {
   return {
@@ -85,7 +94,7 @@ router.patch('/current', requireAdmin, async (req, res) => {
     // The effective plan, so an organization overridden to BUSINESS can
     // actually remove the footer it is now paying to remove.
     const effective = await resolveEntitlements(req.user!.organizationId);
-    assertFooterEntitlement(effective.plan, normalized);
+    assertFooterEntitlement(effective, normalized, req.params.organizationId ?? req.user?.organizationId);
     if (!Object.keys(normalized).length) {
       return res.status(400).json({ error: 'No branding fields supplied' });
     }
@@ -101,7 +110,10 @@ router.patch('/current', requireAdmin, async (req, res) => {
     });
     res.json(editableBranding(row));
   } catch (error) {
-    res.status(errorStatus(error)).json({ error: String((error as Error).message || error) });
+    if (isEntitlementError(error)) {
+      return res.status(error.status).json(entitlementErrorResponse(error));
+    }
+    res.status(400).json({ error: String((error as Error).message || error) });
   }
 });
 
@@ -187,7 +199,7 @@ router.patch('/organizations/:organizationId', async (req, res) => {
       // own footer while the owner editing on its behalf was refused. Same
       // feature, two answers.
       const effective = await resolveEntitlements(req.params.organizationId);
-      assertFooterEntitlement(effective.plan, normalized);
+      assertFooterEntitlement(effective, normalized, req.params.organizationId ?? req.user?.organizationId);
       const current = await prisma.organizationBranding.findUnique({
         where: { organizationId: req.params.organizationId },
       });
@@ -201,7 +213,10 @@ router.patch('/organizations/:organizationId', async (req, res) => {
     });
     res.json(editableBranding(row));
   } catch (error) {
-    res.status(errorStatus(error)).json({ error: String((error as Error).message || error) });
+    if (isEntitlementError(error)) {
+      return res.status(error.status).json(entitlementErrorResponse(error));
+    }
+    res.status(400).json({ error: String((error as Error).message || error) });
   }
 });
 
