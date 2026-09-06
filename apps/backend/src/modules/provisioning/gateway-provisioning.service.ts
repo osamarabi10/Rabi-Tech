@@ -7,6 +7,7 @@ import {
 import { encryptCredential, decryptCredential } from '../../lib/credential-crypto';
 import { gatewayBackendHost, hostAccessName, webhookBaseUrl } from '../../lib/gateway-host';
 import { runAsPlatform } from '../../lib/tenant-context';
+import { markGatewayActive, recordGatewayObservation } from './gateway-state';
 import { prisma } from '../../prisma';
 import {
   GatewayDeployment,
@@ -186,34 +187,11 @@ async function completeAwaitingQr(organizationId: string): Promise<void> {
   });
 }
 
-async function markActive(organizationId: string): Promise<void> {
-  await runAsPlatform(platformReason(organizationId, 'connected'), async () => {
-    await prisma.$transaction(async (tx) => {
-      await tx.organizationChannel.update({
-        where: { organizationId_kind: { organizationId, kind: 'OPENWA' } },
-        data: {
-          status: 'ACTIVE',
-          provisioningState: 'ACTIVE',
-          provisioningStep: 'COMPLETE',
-          failureReason: null,
-          failureStep: null,
-          connectedAt: new Date(),
-          lastCheckedAt: new Date(),
-          suspendedAt: null,
-        },
-      });
-      await tx.organization.update({ where: { id: organizationId }, data: { status: 'ACTIVE' } });
-      await tx.platformAlert.updateMany({
-        where: {
-          organizationId,
-          type: 'GATEWAY_PROVISIONING_FAILED',
-          resolvedAt: null,
-        },
-        data: { resolvedAt: new Date() },
-      });
-    });
-  });
-}
+/**
+ * The promote half of the transition. It lives in gateway-state.ts beside the
+ * demote half, because keeping them apart is how one of them went missing.
+ */
+const markActive = markGatewayActive;
 
 async function processProvision(
   organizationId: string,
@@ -291,17 +269,11 @@ async function monitorConnection(
   const sessionName = channel.organization.whatsappSessions[0]?.sessionName;
   if (!sessionName) throw new Error('Organization has no WhatsApp session');
   const status = await providerFor(channel, providerFactory).sessionStatus(sessionName);
-  if (isConnectedStatus(status)) {
-    if (channel.provisioningState !== 'ACTIVE') await markActive(organizationId);
-    return true;
-  }
-  await runAsPlatform(platformReason(organizationId, 'connection-check'), () =>
-    prisma.organizationChannel.update({
-      where: { id: channel.id },
-      data: { lastCheckedAt: new Date() },
-    }),
-  );
-  return false;
+  // One recorder, both directions. This used to promote on a good reading and
+  // write only lastCheckedAt on a bad one, which is why a dropped session left
+  // the channel claiming ACTIVE for ever (D-16).
+  await recordGatewayObservation(organizationId, { reported: status, source: 'monitor' });
+  return isConnectedStatus(status);
 }
 
 async function suspendGateway(organizationId: string, runtime: GatewayRuntime): Promise<void> {

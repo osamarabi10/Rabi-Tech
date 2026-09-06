@@ -749,3 +749,127 @@ warning where the lifecycle is documented.
 
 ---
 
+---
+
+## D-16 · The gateway state machine promoted and never demoted
+
+**Status:** fixed 2026-09-06 · **Owner:** UnKnowan
+
+A channel that reached `ACTIVE` stayed `ACTIVE` for ever. Nothing in this
+codebase could move one back, and two separate places moved channels *into* it
+(`clearStaleFailure` and `reconcileProvisioningFailures`, both on a good probe).
+The state machine only climbed.
+
+**Four components observed a disconnect. Not one wrote it down.**
+
+| Component | What it saw | What it did |
+|---|---|---|
+| `health-monitor` status probe | the gateway's own status word | raised a `PlatformAlert`, logged `[GATEWAY_UNHEALTHY]`, left the row |
+| `session.disconnected` webhook | the gateway saying so itself | emitted a socket event; queued a monitor **only** for connect-ish states |
+| `monitorConnection` | the same status word as the probe | wrote `lastCheckedAt`, returned `false` |
+| reconcile loop | — | **did not select `ACTIVE` channels at all** |
+
+The last row is why the other three rarely got the chance. `reconcileProvisioning`
+selected `PENDING`, `PROVISIONING`, `AWAITING_QR` and suspended-mid-step. A
+tenant that finished pairing was never selected again, so no monitor job was
+ever queued for it. **The organizations being watched were the ones mid-setup;
+the ones actually being paid for were not watched at all.**
+
+### Observed, not theorised
+
+Organization `mark` paired at `07:02:11` on 2026-09-06 — a real scan, a real
+number. Its session dropped by `07:27`. At `11:00` the channel row still read:
+
+```
+status ACTIVE · provisioningState ACTIVE · connectedAt 07:02:11 · lastCheckedAt 07:02:11
+```
+
+`lastCheckedAt` frozen at the instant it connected is the whole defect in one
+field: nothing had looked at this tenant in four hours. Meanwhile the gateway
+itself reported `qr_ready` — up, healthy, and displaying a QR code for somebody
+to scan.
+
+**This is the mirror of the defect that opened the 2026-09-05 session.** There,
+a paired gateway was reported as Disconnected because only the worker recorded a
+pairing and the worker was dead. Here, an unpaired gateway is reported as
+Connected. The second is worse: the customer believes it, sends, and the sends
+fail silently. A product that says "not connected" when it is sends the user to
+support; a product that says "connected" when it is not sends them nowhere.
+
+### The fix is a mechanism, not a branch
+
+`apps/backend/src/modules/provisioning/gateway-state.ts` is the single place an
+observation becomes channel state, and all four components call it. Fixing one
+branch would have left three, which is how this survived: each component's
+author could reasonably assume one of the others was recording it.
+
+The status vocabulary is split three ways, and the split is the substance:
+
+- **connected** (`connected`, `authenticated`, `working`, `ready`) — promote.
+- **unpaired** (`qr_ready`, `disconnected`, `failed`, `action_required`,
+  `stopped`) — demote. `qr_ready` is the important one: the gateway is asking to
+  be scanned.
+- **transient or unreachable** (`created`, `initializing`, `starting`,
+  `authenticating`, no answer at all) — **no evidence, write nothing.** A
+  container that is down needs a restart, not a human with a phone. Demoting on
+  an unreachable gateway would flap every tenant during a thirty-second outage
+  and train everyone to ignore the state.
+
+Two further constraints:
+
+- **Only `ACTIVE` is demoted.** `PENDING`, `PROVISIONING`, `AWAITING_QR`,
+  `SUSPENDED` and `FAILED` all already mean something an unpaired reading does
+  not contradict — the same reasoning `clearStaleFailure` gives for only ever
+  clearing `FAILED`. A suspended gateway reporting no session is still suspended.
+- **The demotion target is `AWAITING_QR`, not `FAILED`**, because that is what is
+  true: the gateway is up and wants a scan. It also returns the channel to the
+  pairing window, so a tenant nobody re-scans is eventually retired with a reason
+  rather than polled for ever. `provider(false)` refuses anything that is not
+  `ACTIVE`, so the product stops claiming a usable channel the moment the row
+  moves.
+
+### Proof
+
+Three checks in the tenancy harness (151/151), hermetic against the fake runtime
+so they never touch the real queue:
+
+1. pair a gateway, drop the session to `qr_ready`, assert the row demotes, the
+   reason tells the customer what to do, and `lastCheckedAt` advances;
+2. rescan promotes it back and clears the reason — and four inconclusive
+   readings (`initializing`, `authenticating`, empty, undefined) each return
+   `no-evidence` and leave `ACTIVE` untouched;
+3. the four non-`ACTIVE` states are each held against an unpaired reading, and
+   the reconcile loop is asserted to select `ACTIVE`.
+
+**Differential mutation:** disabling the demotion write took the harness to
+148/151 — exactly the two checks that assert demotion, plus the typecheck
+baseline. The third stayed green, correctly: it asserts demotion does *not*
+reach other states, which is still true when demotion does nothing. Restored
+byte-identical (sha256 `98f1b47a…`) and back to 151/151.
+
+**And it was proved by causing it, on the real system.** `mark` was left in the
+live broken state. The rebuilt worker started at `08:24:36` and one second later:
+
+```
+[GATEWAY_DISCONNECTED] channel demoted from ACTIVE
+  organizationId=cmtpgjf22000p10yooijweyeu  reported=qr_ready  source=monitor
+```
+
+The row now reads `AWAITING_QR` / `PENDING`, with
+*"The WhatsApp session is no longer connected. Scan the QR code again to
+reconnect this number."* — and `lastCheckedAt` is moving.
+
+### Left alone
+
+`expireUnpairedGateways` retires an unscanned channel after two hours with the
+message *"The WhatsApp QR code was never scanned"*. For a channel that arrived at
+`AWAITING_QR` by dropping rather than by never pairing, that sentence is
+slightly wrong. Not changed here: it is customer-visible copy on a path with its
+own gate assertions, and the fix belongs with whoever next touches that message.
+
+- **Lands in:** `gateway-state.ts` (new), `gateway-provisioning.service.ts`,
+  `gateway-provisioning.worker.ts`, `openwa.webhook.ts`, `health-monitor.ts`,
+  `tenancy-bleed-harness.js`.
+
+---
+

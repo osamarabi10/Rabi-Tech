@@ -5,6 +5,7 @@ import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { OpenWARawSend, OpenWAService } from '../whatsapp/openwa.service';
 import { isConnectedStatus } from '../provisioning/gateway-provider';
 import { decryptCredential } from '../../lib/credential-crypto';
+import { recordGatewayObservation } from '../provisioning/gateway-state';
 
 /**
  * Gateway health monitoring (H1).
@@ -283,6 +284,13 @@ async function runProbe(candidate: Candidate, probe: HealthProbe): Promise<Healt
         // "connected" means.
         const state = (response as { data?: { status?: unknown; state?: unknown } })?.data;
         const reported = state?.status ?? state?.state;
+        // Record before throwing. This probe is the component that first
+        // noticed `mark` had dropped, and all it did with the knowledge was
+        // put it in an alert nobody had wired to anything (D-16).
+        await recordGatewayObservation(candidate.organizationId, {
+          reported: String(reported ?? ''),
+          source: 'health-probe',
+        });
         if (!isConnectedStatus(reported)) {
           throw new Error(`session reported status "${String(reported ?? 'unknown')}"`);
         }

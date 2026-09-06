@@ -3083,6 +3083,101 @@ async function databaseAudits() {
       assert.ok(!fakes.destroyed.has(channel.deploymentName));
       assert.equal(resumed.dataVolumeName, channel.dataVolumeName);
     });
+    await check('provisioning: a paired gateway that drops is demoted out of ACTIVE', async () => {
+      const { processGatewayAction } = require('../src/modules/provisioning/gateway-provisioning.service');
+      const { hostAccessName } = require('../src/lib/gateway-host');
+      const fakes = provisioningFakes();
+      const org = await seedProvisioningOrganization(raw, 'dropped');
+      await processGatewayAction(org.organizationId, 'provision', fakes.runtime, fakes.providerFactory);
+      const channel = await raw.organizationChannel.findUniqueOrThrow({
+        where: { organizationId_kind: { organizationId: org.organizationId, kind: 'OPENWA' } },
+      });
+      const state = fakes.providerStates.get(`http://${hostAccessName()}:${channel.apiPort}`);
+
+      // Pair it for real, the way the worker does.
+      state.status = 'connected';
+      await processGatewayAction(org.organizationId, 'monitor', fakes.runtime, fakes.providerFactory);
+      const paired = await raw.organizationChannel.findUniqueOrThrow({ where: { id: channel.id } });
+      assert.equal(paired.provisioningState, 'ACTIVE');
+
+      // Now the session drops. The gateway is up and showing a QR code again.
+      state.status = 'qr_ready';
+      await processGatewayAction(org.organizationId, 'monitor', fakes.runtime, fakes.providerFactory);
+      const dropped = await raw.organizationChannel.findUniqueOrThrow({ where: { id: channel.id } });
+
+      // The row must say so. Until D-16 it stayed ACTIVE for ever and the
+      // product kept telling the customer they were Connected.
+      assert.equal(dropped.provisioningState, 'AWAITING_QR');
+      assert.notEqual(dropped.status, 'ACTIVE');
+      assert.ok(/scan the qr code again/i.test(dropped.failureReason || ''),
+        'the demotion must say what the customer has to do about it');
+      // lastCheckedAt has to move, or nothing can tell a fresh observation
+      // from a stale row that simply stopped being looked at.
+      assert.ok(dropped.lastCheckedAt > paired.lastCheckedAt);
+    });
+    await check('provisioning: a rescan promotes it back, and an unreachable gateway changes nothing', async () => {
+      const { processGatewayAction } = require('../src/modules/provisioning/gateway-provisioning.service');
+      const { recordGatewayObservation } = require('../src/modules/provisioning/gateway-state');
+      const { hostAccessName } = require('../src/lib/gateway-host');
+      const fakes = provisioningFakes();
+      const org = await seedProvisioningOrganization(raw, 'rescan');
+      await processGatewayAction(org.organizationId, 'provision', fakes.runtime, fakes.providerFactory);
+      const channel = await raw.organizationChannel.findUniqueOrThrow({
+        where: { organizationId_kind: { organizationId: org.organizationId, kind: 'OPENWA' } },
+      });
+      const state = fakes.providerStates.get(`http://${hostAccessName()}:${channel.apiPort}`);
+      state.status = 'connected';
+      await processGatewayAction(org.organizationId, 'monitor', fakes.runtime, fakes.providerFactory);
+      state.status = 'qr_ready';
+      await processGatewayAction(org.organizationId, 'monitor', fakes.runtime, fakes.providerFactory);
+      assert.equal((await raw.organizationChannel.findUniqueOrThrow({ where: { id: channel.id } })).provisioningState, 'AWAITING_QR');
+
+      // Somebody scans. It must climb back on its own.
+      state.status = 'ready';
+      await processGatewayAction(org.organizationId, 'monitor', fakes.runtime, fakes.providerFactory);
+      const back = await raw.organizationChannel.findUniqueOrThrow({ where: { id: channel.id } });
+      assert.equal(back.provisioningState, 'ACTIVE');
+      assert.equal(back.failureReason, null);
+
+      // An unreachable or still-booting gateway is NOT evidence that the
+      // pairing is gone: the container being down needs a restart, not a
+      // human with a phone. Demoting on it would flap every tenant during a
+      // brief outage.
+      for (const inconclusive of ['initializing', 'authenticating', '', undefined]) {
+        const outcome = await recordGatewayObservation(org.organizationId, {
+          reported: inconclusive, source: 'health-probe',
+        });
+        assert.equal(outcome, 'no-evidence');
+        assert.equal((await raw.organizationChannel.findUniqueOrThrow({ where: { id: channel.id } })).provisioningState, 'ACTIVE');
+      }
+    });
+    await check('provisioning: only ACTIVE is demoted, and the reconcile loop watches live tenants', async () => {
+      const { recordGatewayObservation } = require('../src/modules/provisioning/gateway-state');
+      const { processGatewayAction } = require('../src/modules/provisioning/gateway-provisioning.service');
+      const fakes = provisioningFakes();
+      const org = await seedProvisioningOrganization(raw, 'suspended-drop');
+      await processGatewayAction(org.organizationId, 'provision', fakes.runtime, fakes.providerFactory);
+      const channel = await raw.organizationChannel.findUniqueOrThrow({
+        where: { organizationId_kind: { organizationId: org.organizationId, kind: 'OPENWA' } },
+      });
+
+      // A suspended gateway reporting no session is still suspended. Same
+      // reasoning clearStaleFailure gives for only ever clearing FAILED.
+      for (const held of ['SUSPENDED', 'PENDING', 'PROVISIONING', 'FAILED']) {
+        await raw.organizationChannel.update({ where: { id: channel.id }, data: { provisioningState: held } });
+        await recordGatewayObservation(org.organizationId, { reported: 'qr_ready', source: 'monitor' });
+        const after = await raw.organizationChannel.findUniqueOrThrow({ where: { id: channel.id } });
+        assert.equal(after.provisioningState, held,
+          `${held} must not be demoted by an unpaired reading`);
+      }
+
+      // The reconcile loop has to select ACTIVE, or a paired tenant is never
+      // looked at again and none of the above ever runs for a real customer.
+      const worker = fs.readFileSync(require('path').join(__dirname, '../src/workers/gateway-provisioning.worker.ts'), 'utf8');
+      const where = worker.slice(worker.indexOf('reconcileProvisioning'), worker.indexOf('await Promise.all'));
+      assert.ok(/provisioningState: 'ACTIVE'/.test(where),
+        'reconcileProvisioning must select ACTIVE channels');
+    });
     await check('provisioning: destroy removes runtime resources before organization data', async () => {
       const { processGatewayAction } = require('../src/modules/provisioning/gateway-provisioning.service');
       const fakes = provisioningFakes();

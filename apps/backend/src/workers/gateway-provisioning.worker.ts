@@ -136,6 +136,12 @@ async function reconcileProvisioning(): Promise<void> {
         managedByProvisioner: true,
         OR: [
           { provisioningState: { in: ['PENDING', 'PROVISIONING', 'AWAITING_QR'] } },
+          // ACTIVE is here because it was not, and that was the hole: a tenant
+          // that finished pairing was never selected again, so nothing ever
+          // asked whether it was still connected. The customers being watched
+          // were the ones mid-setup; the ones actually being paid for were not
+          // watched at all (D-16).
+          { provisioningState: 'ACTIVE' },
           { provisioningState: 'SUSPENDED', provisioningStep: 'SUSPEND_GATEWAY' },
         ],
       },
@@ -152,6 +158,7 @@ async function reconcileProvisioning(): Promise<void> {
     let action: GatewayAction = 'provision';
     if (channel.deletionRequestedAt || channel.provisioningStep === 'DESTROY_GATEWAY') action = 'destroy';
     else if (channel.provisioningState === 'AWAITING_QR') action = 'monitor';
+    else if (channel.provisioningState === 'ACTIVE') action = 'monitor';
     else if (channel.provisioningState === 'SUSPENDED') action = 'suspend';
     return queueGatewayAction(channel.organizationId, action);
   }));

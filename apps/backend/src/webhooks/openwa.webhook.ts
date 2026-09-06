@@ -11,6 +11,7 @@ import { getTenantId, runAsOrganization, runAsPlatform } from '../lib/tenant-con
 import { advanceCampaignRecipientStatus, advanceMessageStatus } from '../utils/message-status';
 import { recordMessageUsage } from '../modules/usage/usage.service';
 import { queueGatewayAction } from '../workers/gateway-provisioning.queue';
+import { recordGatewayObservation } from '../modules/provisioning/gateway-state';
 import { recordDelivery } from '../modules/webhooks/webhook-log.service';
 
 /**
@@ -221,11 +222,18 @@ router.post('/webhooks/openwa/:webhookToken', async (req, res, next) => {
         session,
         state: data?.state || data?.status || event.split('.')[1],
       });
-      if (event === 'session.authenticated' || ['connected', 'authenticated', 'working', 'ready'].includes(
-        String(data?.state || data?.status || '').toLowerCase(),
-      )) {
+      const reported = String(data?.state || data?.status || '').toLowerCase();
+      if (event === 'session.authenticated' || ['connected', 'authenticated', 'working', 'ready'].includes(reported)) {
         await queueGatewayAction(organizationId, 'monitor');
       }
+      // The gateway telling us it disconnected is the most authoritative
+      // signal there is — better than any poll, because it is the endpoint
+      // itself. It was previously used only to emit a socket event, so the
+      // channel row went on saying ACTIVE (D-16).
+      await recordGatewayObservation(organizationId, {
+        reported: event === 'session.disconnected' ? 'disconnected' : reported,
+        source: 'webhook',
+      });
     }
     await recordDelivery({
       direction: 'INBOUND',
