@@ -43,18 +43,33 @@ repairs it. Registration is idempotent.
 The combination that satisfies both:
 
 ```yaml
-# backend service — a dotted alias on the compose network
-networks: { default: { aliases: [backend.local] } }
+# every service that crosses the host boundary — this is what makes the name
+# real on a Linux host and not only on Docker Desktop
+extra_hosts:
+  - "host.docker.internal:host-gateway"
 
 # gateway service — allowlist it rather than disabling the guard
-SSRF_ALLOWED_HOSTS=backend.local,host.docker.internal
+SSRF_ALLOWED_HOSTS=host.docker.internal
 ```
-with `BACKEND_INTERNAL_URL=http://backend.local:4000`.
+with `BACKEND_INTERNAL_URL=http://host.docker.internal:4000`.
 
-Do **not** use `host.docker.internal` as the webhook host: it is Docker-Desktop
-only and resolves to nothing on a Linux VPS, so inbound would break the moment
-you deploy to a real server. Do **not** set `WEBHOOK_SSRF_PROTECT=false` either —
-that disables the guard globally, including for tenant-supplied URLs later.
+This page said the opposite until 2026-09-06: use `backend.local`, and
+**not** `host.docker.internal`, because the latter is Docker-Desktop-only and
+would resolve to nothing on a Linux VPS. That warning was true and the advice
+that followed from it was wrong. `backend.local` is an alias on the *main*
+compose network, so it resolves for the shared development gateway and for
+nothing else — a per-tenant gateway runs in its own compose project, on its own
+network, and cannot see it. Every managed tenant got a webhook URL pointing at a
+name that did not resolve, and nothing said so: registering the webhook succeeds
+without resolving it, and only delivery fails, inside a container nobody reads.
+
+The `extra_hosts` line above is what removes the choice. `host-gateway` is
+resolved by the Docker daemon on any host (20.10+), so the name is real on a
+Linux VPS too. Add it to any new service that has to reach across the boundary.
+See D-14.
+
+Do **not** set `WEBHOOK_SSRF_PROTECT=false` — that disables the guard globally,
+including for tenant-supplied URLs later.
 
 ### 2. Nothing can be sent
 

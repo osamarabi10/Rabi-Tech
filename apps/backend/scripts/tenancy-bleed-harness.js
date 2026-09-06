@@ -3063,7 +3063,11 @@ async function databaseAudits() {
       const channel = await raw.organizationChannel.findUniqueOrThrow({
         where: { organizationId_kind: { organizationId: org.organizationId, kind: 'OPENWA' } },
       });
-      const providerState = fakes.providerStates.get(`http://127.0.0.1:${channel.apiPort}`);
+      // Keyed by the same name the code dials, not a literal: GATEWAY_HOST_ACCESS
+      // moved from 127.0.0.1 to host.docker.internal when the worker became a
+      // container, and a hardcoded key here silently returned undefined (D-14).
+      const { hostAccessName } = require('../src/lib/gateway-host');
+      const providerState = fakes.providerStates.get(`http://${hostAccessName()}:${channel.apiPort}`);
       providerState.status = 'connected';
       await processGatewayAction(org.organizationId, 'monitor', fakes.runtime, fakes.providerFactory);
       await processGatewayAction(org.organizationId, 'suspend', fakes.runtime, fakes.providerFactory);

@@ -455,3 +455,227 @@ defect that outlives fixing the environment.
   Cloud API number can be connected at all.
 - **Lands in:** the channels screen, beside the QR flow, so the two lanes are
   one surface rather than a self-serve path and a form.
+
+---
+
+## D-10 · A first Connect on a cold gateway shows the customer an error, then quietly succeeds
+
+**Status:** open, recorded not fixed · **Owner:** UnKnowan · **Trigger:** before the
+first external customer
+
+`CREATE_SESSION` calls the gateway with a 10 second axios timeout. A gateway that has
+just been created is still booting Chromium, and answers later than that.
+
+Observed on 2026-09-06, on the fresh-organization demo that proved pairing works:
+
+```
+10:00:04  enter-create_session
+10:00:14  Gateway provisioning job failed  error="timeout of 10000ms exceeded"
+10:00:19  enter-register_webhook          (retry, straight through)
+10:00:19  awaiting-qr
+```
+
+The session **had** been created by the first attempt. The timeout expired while the
+gateway was still starting, BullMQ retried, and the second attempt found the session
+already there and continued. Five seconds of wall-clock, one `failed` row in the queue,
+and a correct final state.
+
+What makes this worth an entry rather than a shrug is what the customer sees. The
+provisioning state machine marks the job failed before it retries, so the Connect
+dialog shows a failure for those five seconds — an honest-looking screen carrying the
+wrong answer. The user is told their gateway did not start, at the moment it did. Some
+of them will click again, and some will conclude the product is broken and leave.
+
+- **Not fixed here** because the fix is a judgement about how long a cold Chromium may
+  take on the smallest machine we intend to sell on, and that number should come from
+  the hosting decision (D-11), not from this laptop.
+- **Shape of the fix:** a longer timeout for `CREATE_SESSION` specifically — it is the
+  only step that races a cold container — or a distinction in the UI between "retrying"
+  and "failed", which the state machine already knows and does not currently say.
+- **Lands in:** `gateway-provider.ts` (`GATEWAY_READY_TIMEOUT_MS` is already the seam)
+  and the Connect dialog.
+
+---
+
+## D-11 · One Chromium per tenant, and the number is now measured
+
+**Status:** open, recorded not fixed · **Owner:** UnKnowan · **Trigger:** the hosting
+decision, before the first paying customer
+
+Every tenant gateway is a full WhatsApp Web session driving a headless Chromium. Until
+2026-09-06 the cost of that was an adjective. Measured on this host, with eight
+gateways up:
+
+| | Resident |
+|---|---|
+| Docker VM, total | **7.727 GiB** |
+| A gateway that is provisioned but **unpaired** | ~135 MiB |
+| A gateway with a **live paired session** (`mark`, 972547234560) | **900 MiB** |
+| Platform services (postgres, redis, backend, frontend, shared gateway) | ~413 MiB |
+
+The 6.7× gap between an idle gateway and a live one is the whole finding. Capacity
+planned on the idle number is wrong by a factor of seven, and the idle number is what
+an empty test environment shows you.
+
+**On this machine that is roughly six to eight simultaneously active tenants**, with no
+headroom for the send path, campaign workers, or a second Chromium spike during
+pairing. It is not a platform ceiling — it is this laptop's — but it is the first hard
+number the hosting decision has, and it prices the per-tenant architecture chosen in
+D-6: a tenant costs about 900 MiB of RAM, continuously, whether or not they are
+messaging anyone.
+
+- **Not fixed here** because there is nothing to fix in this repository. The decision is
+  where this runs and on what, and it is the owner's.
+- **Bearing on the ladder:** at 900 MiB a tenant, a FREE edition that provisions a
+  gateway is a standing cost per signup with no revenue against it. D-7 already records
+  that FREE never provisions; this is the number that says why that should stay true.
+
+---
+
+## D-12 · Both seeded organizations point at a lane with nothing in it
+
+**Status:** open, owner decision · **Owner:** UnKnowan · **Trigger:** whenever the two
+demo organizations next matter
+
+`ostudio` and `rabitech-demo` both carry an OPENWA channel with
+`managedByProvisioner: false` and `baseUrl: http://openwa:2785` — the shared development
+gateway, not the per-tenant lane that D-6 chose and that now works.
+
+Asked for its session list on 2026-09-06, using the key it minted itself, that container
+answered:
+
+```
+[]
+```
+
+**Zero sessions.** Not a broken pairing — no pairing. What the database records for
+these two is what was seeded, not what exists:
+
+| | `rabitech-demo` | `ostudio` |
+|---|---|---|
+| Numbers on record | `972524141422`, `972524426212`, one unnumbered | `972547234560` + six synthetic `99100…` |
+| Those rows written | 2026-06-11, all within 6 ms — a seed | primary 2026-08-19 |
+| Sessions active | — | all `isActive: false` |
+| Real inbound WhatsApp traffic | **none, ever** | **17 messages, 2026-08-20 12:59 → 08-21 19:44** |
+| Everything since | last outbound 2026-06-21 | 48 null-id rows, 1 e2e fixture, 10 gate fixtures |
+
+`ostudio` genuinely worked for about 31 hours in August — real contacts
+`972559677085`, `905346655055`, `8613314961808` reached it — and has been silent for
+16 days. `rabitech-demo`'s two numbers never received a single message.
+
+This corrects the premise D-5 was written under. The shared volume was preserved on the
+belief that recreating it would destroy two pairings that needed physical access to
+other people's phones to restore. There are no pairings on it. The only real number
+involved, `972547234560`, is the owner's own phone, which has since paired twice through
+the managed lane.
+
+- **Not acted on here** because retire / re-pair / convert-to-managed is a product
+  decision about two demo organizations, not a cleanup.
+- **What is cheap now:** converting either to `managedByProvisioner: true` gives it a
+  working gateway on the pinned image with a key the provisioner holds. Nothing is lost
+  by doing so, which was not true when D-5 was written.
+
+---
+
+## D-13 · The gateway worker holds the Docker socket, and that is root on the host
+
+**Status:** accepted, price recorded · **Owner:** UnKnowan · **Trigger:** before the
+first external customer
+
+The `gateway-worker` service mounts `/var/run/docker.sock`. Anything that can talk to
+that socket can start a container with the host filesystem bind-mounted and become root
+on the host. **A compromise of this image is therefore equivalent to root on the
+machine**, and no amount of care inside the Node process changes that: the socket is the
+privilege, not the code above it.
+
+This is stated at full weight because it is easy to write down as a checkbox and it is
+not one. It is the largest single privilege in the deployment.
+
+**Accepted anyway, because the alternative is worse and was already observed.** The
+worker is the only thing that records a pairing — `monitorConnection` → `markActive`.
+Nothing in the request path notices a scan. An unsupervised worker fails like this: a
+customer scans the QR, their phone says *device linked*, the worker is not running, and
+the product says **Disconnected forever**. That is not hypothetical. It is the bug this
+session opened with, on 2026-09-05, caused by a hand-started worker that had been
+OOM-killed, and it took an evening to diagnose because every layer looked healthy.
+
+Weighed plainly: the socket is a risk that requires an attacker to first compromise the
+image. An unsupervised worker is a defect that arrives on its own, silently, and lands
+on the customer.
+
+**Blast radius kept to one container.** The socket is mounted on `gateway-worker` only,
+never on `backend`. Both run from the same image; only one is given the daemon.
+
+**Mitigations, named now so they are not re-derived later.** Neither is built yet, and
+neither should be built before the trigger:
+
+1. **A socket proxy** in front of the daemon, restricting the API surface to what
+   `docker compose up/stop/down` actually needs — container create, start, stop, remove,
+   plus the network and volume calls compose makes. This narrows the privilege without
+   removing it; compose needs enough of the API that the residue is still significant.
+2. **Provisioning on its own host**, holding nothing else — no database, no application
+   secrets, no customer data. Root on that machine buys an attacker the gateways they
+   could already reach, and nothing more. This is the stronger of the two and it is a
+   hosting decision, so it belongs with D-11.
+
+- **Lands in:** `docker-compose.yml` (the `gateway-worker` service) and
+  `docs/DEPLOYMENT.md`.
+
+---
+
+## D-14 · Three names cross the host boundary; they disagreed, and the odd one out was invisible
+
+**Status:** fixed 2026-09-06 · **Owner:** UnKnowan
+
+A tenant gateway and this backend reach each other across the Docker host boundary.
+Three values name that boundary, and until 2026-09-06 they gave two different answers:
+
+| Value | Default was | Reaches |
+|---|---|---|
+| `GATEWAY_HOST_ACCESS` | `127.0.0.1` | a tenant gateway's published port, from this process |
+| `GATEWAY_BACKEND_HOST` | `host.docker.internal` | the same gateway, recorded in the channel's `baseUrl` |
+| `BACKEND_INTERNAL_URL` | **`http://backend.local:4000`** | this backend, from inside a gateway container |
+
+`backend.local` is a real network alias, declared on the `backend` service. It resolves
+for anything on the **main** compose network — which the shared development gateway is,
+and which no per-tenant gateway ever is: each runs in its own compose project with its
+own network. Every managed tenant was therefore handed a webhook URL that resolved to
+nothing.
+
+The failure has no signal at the point of the mistake. Registering the webhook succeeds
+— the gateway stores the URL without resolving it — and only delivery fails, later,
+inside a container nobody reads. Pairing completes, the gateway goes `ready`, and
+inbound messages simply never arrive.
+
+**Why the wrong value was chosen is the part worth keeping.** The comment defending it
+was correct: `host.docker.internal` is a Docker Desktop convenience that does not exist
+on a Linux host, and pointing the webhook at it would have broken silently on a VPS. The
+argument was right; the conclusion did not follow. Both options were wrong, and picking
+the better-argued of two wrong options is how this survived.
+
+**The fix is to stop choosing between them and make one of them true.**
+`extra_hosts: "host.docker.internal:host-gateway"` on every service that crosses the
+boundary — the shared gateway, the backend, the worker, and every per-tenant gateway —
+makes the name resolve on a Linux host as well. With the name guaranteed, all three
+values follow one rule and `lib/gateway-host.ts` is the single place that states it.
+
+Two smaller things fell out of the same defect:
+
+- `GATEWAY_HOST_ACCESS`'s `127.0.0.1` default was correct only while the worker ran on
+  the host. In a container it is the container: every readiness probe would dial itself.
+- `gatewayReachableAssetUrl` in `snippet-storage.ts` carried a fourth copy of the same
+  default, so snippet media sent through a managed tenant fetched from an address the
+  gateway could not resolve. Fixed by the same change, and it had never been noticed.
+
+**The general lesson, and the reason this is a decision rather than a bug report:** a
+value that is correct for the lane you test on and wrong for the lane you sell is not
+caught by any gate in this repository. The shared gateway made `backend.local` work
+every time anyone checked. `docs/DEPLOYMENT.md` records the rule; `.env.example` had
+carried the right value all along, which is its own lesson about which file people read.
+
+- **Lands in:** `docker-compose.yml`, `deploy/openwa-organization.compose.yml`,
+  `apps/backend/src/lib/gateway-host.ts`, `.env` (untracked), and
+  `docs/WHATSAPP-GATEWAY-RUNBOOK.md`.
+
+---
+

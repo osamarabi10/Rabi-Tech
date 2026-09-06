@@ -14,18 +14,14 @@ export const WEBHOOK_EVENTS = [
 ] as const;
 
 /**
- * Base URL the gateway container uses to reach this backend.
- *
- * Note this is the *gateway's* view of us, not a public URL — the gateway runs
- * beside the backend. Two constraints shape the default: the gateway's URL
- * validator rejects single-label hosts (`backend`), and its SSRF guard must
- * allowlist whatever host we pick (`SSRF_ALLOWED_HOSTS` on the gateway).
- * `backend.local` is a compose network alias, so it works on any Docker host —
- * unlike host.docker.internal, which only exists on Docker Desktop.
+ * Re-exported so existing callers keep their import site. The definition and
+ * the reasoning live in lib/gateway-host.ts, which is a leaf module: the
+ * provisioning worker needs the same value and must not pull this file in,
+ * which reaches OpenWAService and most of the send path behind it.
  */
-export function webhookBaseUrl(): string {
-  return (process.env.BACKEND_INTERNAL_URL || 'http://backend.local:4000').replace(/\/$/, '');
-}
+import { webhookBaseUrl } from '../lib/gateway-host';
+
+export { webhookBaseUrl };
 
 /**
  * Makes sure the current organization's gateway session posts events back to us.

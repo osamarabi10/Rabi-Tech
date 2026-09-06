@@ -81,6 +81,67 @@ and this project does not use it.
 | `openwa:2785` | the shared gateway, on the compose network | n/a -- reachable from compose services, never from the host |
 | `127.0.0.1:13000` | the host mapping of the shared gateway | n/a -- unreliable; closes connections. Do not build on it |
 
+### The provisioning worker is a service, not a shell command
+
+Bring the whole stack up, worker included:
+
+```bash
+docker compose up -d --build
+docker compose logs -f gateway-worker
+```
+
+`gateway-worker` runs `dist/workers/gateway-provisioning.worker.js` from the
+backend image with `restart: always`. It is the only process that records a
+pairing — `monitorConnection` marks the channel ACTIVE, and nothing in the
+request path notices a scan. If it is not running, a customer can scan the QR,
+see *device linked* on their phone, and be shown **Disconnected** by the product
+indefinitely. That happened on 2026-09-05, to a worker started by hand in a
+shell and killed by the OOM killer; the restart policy is the whole point of the
+service.
+
+Two things about it are load-bearing and easy to undo by accident:
+
+- **It mounts `/var/run/docker.sock`**, because it builds per-tenant gateways by
+  shelling out to `docker compose`. That is root-equivalent access to the host.
+  It is mounted on this service **only** — never on `backend`, which runs from
+  the same image — so the blast radius stays one container. D-13 records the
+  acceptance in full and names the two mitigations.
+- **`GATEWAY_HOST_ACCESS=host.docker.internal`.** The code default is
+  `127.0.0.1`, which was right while the worker ran on the host and is the
+  container itself once it does not. Left unset in a container, every gateway
+  readiness probe dials itself and times out.
+
+To run the worker on the host again — debugging, or a machine without a socket
+to spare — stop the service and invert that one value:
+
+```bash
+docker compose stop gateway-worker
+cd apps/backend
+GATEWAY_HOST_ACCESS=127.0.0.1 node -r ./scripts/load-env \
+  dist/workers/gateway-provisioning.worker.js
+```
+
+Never run both. They consume the same BullMQ queue and will race for jobs.
+
+#### Stop the worker before running the gates
+
+```bash
+docker compose stop gateway-worker
+# ... run gates ...
+docker compose start gateway-worker
+```
+
+This is not tidiness. `verify-lazy-provisioning` asserts that a connect request
+*queues* a build, which means it puts a real job on the real queue and deletes it
+again during cleanup. With a worker running, the worker wins the race: it claims
+the job, **builds actual tenant containers for the throwaway organizations**, and
+the gate then fails its own cleanup with `could not be removed because it is
+locked by another worker`. Observed on 2026-09-06 — two orphaned gateway projects,
+`lazy-free-…` and `lazy-paid-…`, from a single gate run.
+
+The gate is not wrong; it was written when nothing consumed the queue. Until it
+is given its own queue prefix, stopping the worker is the contract.
+
 ### The backend must run inside compose when a gateway is involved
 
 The dev-server advice above stops being safe the moment the work touches
@@ -299,6 +360,11 @@ one thing that silently fails if the origin is wrong.
 
 ## Known gap: automatic gateway provisioning
 
+> **Superseded 2026-09-06.** Provisioning is no longer a gap and no longer runs
+> from a shell. It is the `gateway-worker` compose service, described under
+> *The provisioning worker is a service, not a shell command* above, and it
+> mounts the Docker socket deliberately — see D-13 for the price and the two
+> named mitigations. The text below is kept for the reasoning that led here.
 **Superseded 2026-08-19; the reasoning below is kept.** Provisioning no longer
 runs in the backend container: `gateway-provisioning.worker.ts` runs on the
 Docker host and is the only process that invokes Docker Compose

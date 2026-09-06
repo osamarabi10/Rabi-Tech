@@ -34,6 +34,12 @@ services:
       # host.docker.internal. Allow that one host, the same way the main
       # compose file does for the shared gateway.
       SSRF_ALLOWED_HOSTS: "host.docker.internal"
+    # host.docker.internal is a Docker Desktop convenience and does not exist
+    # on a Linux host unless it is mapped. Without this line the webhook URL
+    # registered on this gateway resolves to nothing the moment the platform
+    # leaves a laptop, and inbound stops with no error visible here (D-14).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${OPENWA_API_PORT}:2785"
       - "${OPENWA_DASHBOARD_PORT}:2886"

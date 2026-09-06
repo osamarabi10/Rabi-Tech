@@ -50,6 +50,11 @@ services:
       # to private addresses — which is exactly where our backend lives. Allow
       # only the backend's own alias rather than turning the guard off.
       - SSRF_ALLOWED_HOSTS=backend.local,host.docker.internal
+    # Makes host.docker.internal a real name on every Docker host, not just
+    # Docker Desktop. Without it the name is Desktop-only, which is why the
+    # webhook host was once pinned to backend.local instead (D-14).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - redis
     volumes:
@@ -124,12 +129,20 @@ services:
       - BACKUP_DRILL_CRON=${BACKUP_DRILL_CRON:-}
       - BACKUP_REPLICA_MAX_AGE_HOURS=${BACKUP_REPLICA_MAX_AGE_HOURS:-}
       - SNIPPET_UPLOAD_DIR=${SNIPPET_UPLOAD_DIR:-/app/uploads/snippets}
-      # How the gateway container reaches this backend to deliver webhooks.
-      # Must be a dotted host (the gateway's URL validator rejects single-label
-      # names like "backend") — hence the backend.local network alias below.
-      # Not host.docker.internal: that is Docker-Desktop-only and would break
-      # silently on a Linux VPS.
-      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://backend.local:4000}
+      # How a gateway container reaches this backend to deliver webhooks.
+      # Must be a dotted host: the gateway's URL validator rejects single-label
+      # names like "backend".
+      #
+      # This was backend.local until 2026-09-06, on the argument that
+      # host.docker.internal is Docker-Desktop-only and would break silently on
+      # a Linux VPS. The argument was right and the conclusion was wrong:
+      # backend.local is an alias on THIS compose network, so a per-tenant
+      # gateway — which runs in its own compose project, on its own network —
+      # cannot resolve it at all. Every managed tenant got a webhook URL that
+      # resolved to nothing. The fix is `extra_hosts: host-gateway` on every
+      # service that crosses the host boundary, which makes
+      # host.docker.internal real on Linux too. See D-14.
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://host.docker.internal:4000}
       # Billing. Without PAYMENT_WEBHOOK_SECRET every provider webhook is
       # rejected as unsigned, so activation never happens.
       - PAYMENT_PROVIDER=${PAYMENT_PROVIDER:-manual}
@@ -187,10 +200,75 @@ services:
       # here, which is exactly the silent-default case this file guards against.
       - EDITION_REFRESH_MS=${EDITION_REFRESH_MS:-30000}
       - EDITION_STALE_AFTER_MS=${EDITION_STALE_AFTER_MS:-600000}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       default:
         aliases:
+          # Retained: the shared development gateway on this network still
+          # reaches the backend by this name. Per-tenant gateways cannot (D-14).
           - backend.local
+
+  # The gateway provisioning worker.
+  #
+  # This is the only process that records a pairing: monitorConnection ->
+  # markActive. Run it in a shell and the failure mode is silent and total —
+  # a customer scans the QR, their phone says "device linked", the worker is
+  # not running, and the product says Disconnected forever. That is not a
+  # hypothetical: it is the bug this session opened with, and the cause was a
+  # hand-started process that had been OOM-killed.
+  #
+  # restart: always is therefore the entire point of this service.
+  gateway-worker:
+    build: ./apps/backend
+    restart: always
+    command: node dist/workers/gateway-provisioning.worker.js
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      # The daemon socket. This grants root-equivalent control of the host to
+      # this container, and it is mounted HERE ONLY — never on backend — so the
+      # blast radius is the one process that genuinely needs it. Accepted
+      # deliberately over an unsupervised worker; mitigations named in D-13.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The per-tenant compose file, read by the docker CLI in this container.
+      # Read-only: the worker renders no templates, it only invokes this file.
+      - ./deploy:/app/deploy:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Enumerated one per line for the same reason the backend service is:
+      # anything missing here silently takes a default inside the container.
+      - DATABASE_URL=postgresql://admin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/rabitech
+      - REDIS_URL=redis://redis:6379
+      - CHANNEL_ENCRYPTION_KEY=${CHANNEL_ENCRYPTION_KEY}
+      - NODE_ENV=production
+      - LOG_LEVEL=${LOG_LEVEL:-}
+      # Where the tenant compose file lives INSIDE this container, matching the
+      # read-only bind above. Without it the runtime resolves a path relative to
+      # process.cwd() that does not exist here.
+      - GATEWAY_COMPOSE_FILE=/app/deploy/openwa-organization.compose.yml
+      # The three host-crossing names, all set explicitly so none of them falls
+      # back to a code default (D-14).
+      #
+      # GATEWAY_HOST_ACCESS is how THIS container dials a tenant gateway on its
+      # published host port. The code default is 127.0.0.1, which from inside a
+      # container is the container itself — every readiness probe would dial
+      # itself and time out.
+      - GATEWAY_HOST_ACCESS=${GATEWAY_HOST_ACCESS:-host.docker.internal}
+      - GATEWAY_BACKEND_HOST=${GATEWAY_BACKEND_HOST:-host.docker.internal}
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://host.docker.internal:4000}
+      # Host port range allocated to tenant gateways.
+      - GATEWAY_PORT_START=${GATEWAY_PORT_START:-}
+      - GATEWAY_PORT_END=${GATEWAY_PORT_END:-}
+      # Pacing and bounds. GATEWAY_PAIRING_WINDOW_MS is how long a gateway may
+      # sit unscanned before it is retired to FAILED with a reason.
+      - GATEWAY_READY_TIMEOUT_MS=${GATEWAY_READY_TIMEOUT_MS:-}
+      - GATEWAY_WORKER_CONCURRENCY=${GATEWAY_WORKER_CONCURRENCY:-4}
+      - GATEWAY_RECONCILE_INTERVAL_MS=${GATEWAY_RECONCILE_INTERVAL_MS:-30000}
+      - GATEWAY_MONITOR_INTERVAL_MS=${GATEWAY_MONITOR_INTERVAL_MS:-15000}
+      - GATEWAY_PAIRING_WINDOW_MS=${GATEWAY_PAIRING_WINDOW_MS:-}
 
   frontend:
     build:

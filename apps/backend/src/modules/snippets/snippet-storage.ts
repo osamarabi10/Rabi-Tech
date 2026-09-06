@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { signingSecret } from '../../lib/signing-secret';
+import { webhookBaseUrl } from '../../lib/gateway-host';
 
 export const MAX_SNIPPET_FILES = 5;
 export const MAX_SNIPPET_FILE_BYTES = 20 * 1024 * 1024;
@@ -78,8 +79,14 @@ export function verifySnippetAssetSignature(organizationId: string, storageKey: 
   return expected.length === supplied.length && crypto.timingSafeEqual(expected, supplied);
 }
 
+/**
+ * Absolute URL for a snippet asset, addressed as the *gateway* must fetch it.
+ *
+ * Same host requirement as the webhook base, and the same former bug: while
+ * this defaulted to `backend.local`, a per-tenant gateway could not resolve it,
+ * so snippet media sent through a managed tenant fetched from nothing (D-14).
+ */
 export function gatewayReachableAssetUrl(url: string): string {
   if (!url.startsWith('/')) return url;
-  const origin = String(process.env.BACKEND_INTERNAL_URL || 'http://backend.local:4000').replace(/\/$/, '');
-  return origin + url;
+  return webhookBaseUrl() + url;
 }

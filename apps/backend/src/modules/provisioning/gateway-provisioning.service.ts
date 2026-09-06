@@ -5,6 +5,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { encryptCredential, decryptCredential } from '../../lib/credential-crypto';
+import { gatewayBackendHost, hostAccessName, webhookBaseUrl } from '../../lib/gateway-host';
 import { runAsPlatform } from '../../lib/tenant-context';
 import { prisma } from '../../prisma';
 import {
@@ -119,7 +120,9 @@ async function allocateResources(organizationId: string): Promise<void> {
               dashboardPort: apiPort + 1,
               dataVolumeName: `rabitech_${slug}_openwa_data`,
               redisVolumeName: `rabitech_${slug}_openwa_redis`,
-              baseUrl: `http://${process.env.GATEWAY_BACKEND_HOST || 'host.docker.internal'}:${apiPort}`,
+              // How this platform reaches the tenant gateway: its published
+              // host port. lib/gateway-host.ts carries the shared rule.
+              baseUrl: `http://${gatewayBackendHost()}:${apiPort}`,
               apiKeyEnc: channel.apiKeyEnc || encryptCredential(crypto.randomBytes(32).toString('base64url')),
               webhookToken: channel.webhookToken || crypto.randomBytes(32).toString('hex'),
             },
@@ -161,7 +164,7 @@ function providerFor(
   channel: Awaited<ReturnType<typeof channelFor>>,
   factory: GatewayProviderFactory,
 ): GatewayProvider {
-  const hostBaseUrl = `http://${process.env.GATEWAY_HOST_ACCESS || '127.0.0.1'}:${channel.apiPort}`;
+  const hostBaseUrl = `http://${hostAccessName()}:${channel.apiPort}`;
   return factory(hostBaseUrl, decryptCredential(channel.apiKeyEnc));
 }
 
@@ -262,7 +265,7 @@ async function processProvision(
         const provider = providerFor(channel, providerFactory);
         const sessionName = channel.organization.whatsappSessions[0]?.sessionName || `${channel.organization.slug}-primary`;
         const sessionId = await provider.ensureSession(sessionName);
-        const webhookBase = (process.env.BACKEND_INTERNAL_URL || 'http://backend.local:4000').replace(/\/$/, '');
+        const webhookBase = webhookBaseUrl();
         await provider.ensureWebhook(sessionId, `${webhookBase}/webhooks/openwa/${channel.webhookToken}`);
         await persistStep(organizationId, 'PROVISIONING', 'AWAIT_CONNECTION');
         break;
