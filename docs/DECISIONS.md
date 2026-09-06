@@ -873,3 +873,42 @@ own gate assertions, and the fix belongs with whoever next touches that message.
 
 ---
 
+---
+
+## D-17 · The shared `openwa` service is a second lane nothing uses
+
+**Status:** open, owner decision · **Owner:** UnKnowan · **Trigger:** the
+hosting decision, or the next time the compose file is edited for production
+
+`docker-compose.yml` runs a shared `openwa` gateway alongside the per-tenant
+ones. D-6 chose per-tenant topology and called this one development-only. D-12
+established that its container reports `[]` — **zero sessions**, and no real
+traffic has reached it since 2026-08-21.
+
+It costs ~146 MiB resident on a 7.727 GiB VM, which is about a sixth of a live
+tenant (D-11). That is not the reason to remove it.
+
+The reason is that it is a **second lane that still resolves**. Two
+organizations point at it today (D-12), `backend.local` exists as an alias
+largely to serve it, and `SSRF_ALLOWED_HOSTS` on the main compose file carries
+an extra host for it. Every one of those is a path a future change can take by
+accident, and each looked correct the last four times somebody read it:
+`backend.local` worked *because* this container could resolve it, which is
+precisely why the per-tenant lane's inability to resolve it went unnoticed for
+weeks (D-14).
+
+A dead lane that still answers is worse than one that is gone. It makes the
+wrong configuration keep passing.
+
+- **Not removed here** because two organizations still reference it and what
+  happens to them is D-12, which is the owner's call with the phones in hand.
+  Removing the service before deciding that would strand those rows pointing at
+  a host that no longer exists — a worse state than the one they are in.
+- **Order:** settle D-12 first (retire, re-pair, or convert to the managed
+  lane), then remove the service, the `backend.local` alias if nothing else
+  needs it, and the extra `SSRF_ALLOWED_HOSTS` entry, together.
+- **Lands in:** `docker-compose.yml`, and `docs/DEPLOYMENT.md` where the shared
+  lane is still documented as a thing that exists.
+
+---
+

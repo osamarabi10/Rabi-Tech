@@ -113,7 +113,7 @@ services:
       # this repository would be the one path that looks configured and protects
       # against nothing. Uncomment, set the host path, then set
       # BACKUP_REPLICA_DIR=/app/replica and BACKUP_REPLICA_OFFHOST=1 in .env.
-      # - D:/rabitech-replica:/app/replica
+      - D:/rabitech-replica:/app/replica
     depends_on:
       - postgres
       - redis

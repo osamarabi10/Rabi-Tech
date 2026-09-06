@@ -81,6 +81,39 @@ and this project does not use it.
 | `openwa:2785` | the shared gateway, on the compose network | n/a -- reachable from compose services, never from the host |
 | `127.0.0.1:13000` | the host mapping of the shared gateway | n/a -- unreliable; closes connections. Do not build on it |
 
+### Backups are replicated off-host, and the restore has been drilled
+
+Configured 2026-09-06. The replica bind points at `D:/rabitech-replica` —
+a different physical device from the `C:` volume holding the database. A copy
+on the same disk is not a backup of a disk failure.
+
+```
+backup    2.94 MB dump, verified, replicated   12.75 s
+drill     download -> decrypt -> restore -> count from the off-host copy
+          58 conversations, 121 messages, 60 contacts   10.35 s
+```
+
+**Recovery from the off-host copy takes about ten seconds at this data size.**
+That number is the point of recording it: it is the one figure you cannot
+guess during an outage, and it will grow with the database.
+
+The drill is the real test, not the nightly verify. `runBackup` restores the
+*local* dump, which proves `pg_dump` produced something usable and says
+nothing about the copy you would actually reach for — that one went through
+encryption and transfer, and both can fail leaving a file of plausible size.
+The drill downloads, decrypts, restores and counts. It also fails on a copy
+older than `BACKUP_REPLICA_MAX_AGE_HOURS`, because replication stopping
+quietly while the drill keeps restoring the last good file is exactly the
+green-that-means-blind failure this repository keeps collecting.
+
+Schedules: backup `20 3 * * *`, drill `50 3 * * 0`, keeping 14.
+
+> ⬛ **The encryption key currently exists only on the machine it protects.**
+> That makes it useless in the disaster it is for: lose the host and the
+> backups are ciphertext nobody can open. Copy `BACKUP_ENCRYPTION_KEY` into a
+> password manager held somewhere else. This is the owner's to do and it is
+> not done.
+
 ### The provisioning worker is a service, not a shell command
 
 Bring the whole stack up, worker included:

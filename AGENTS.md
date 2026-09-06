@@ -340,6 +340,19 @@ Design rules do not catch the failures this repository actually has. These do.
   infrastructure is not a test** — it is production, running unattended, with
   assertions attached.
 
+  **And it must clean up what it enqueues.** The same rule ran the other way
+  round on 2026-09-06: the tenancy harness deletes its fixture organizations
+  and leaves their scheduled jobs behind in Redis, where they fail for ever
+  against an organization that no longer exists. Fourteen delayed jobs and
+  twenty-six failures for one deleted `bleed_org_a`, **accumulating two more
+  on every run** — the harness was run seven times that day and left seven
+  pairs. The failures are `TENANT_ISOLATION_VIOLATION`, so the guard is
+  working; what is broken is that the debris outlives its own test.
+
+  Deleting a fixture row is not cleanup while a queue still holds work for
+  it. Enqueue and delete are one transaction in the test's mind and two in
+  the system, and the second one is the one everybody forgets.
+
 ---
 
 ## Scope
