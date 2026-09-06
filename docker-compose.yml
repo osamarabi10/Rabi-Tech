@@ -18,6 +18,19 @@ services:
       # first here, and host-run Prisma and the tenancy harness dial localhost.
       - "127.0.0.1:15432:5432"
       - "[::1]:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d rabitech"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # Limits exist so one runaway cannot take the host down with it. Every
+    # tenant gateway is a Chromium at ~900 MiB when paired (D-11), against a
+    # 7.727 GiB VM, so the platform services have to be bounded or a pairing
+    # spike evicts the database. Sized with headroom over observed steady
+    # state, not tight: a limit that kills a healthy process is worse than
+    # none, and the provisioning worker has already been OOM-killed twice.
+    mem_limit: 512m
 
   redis:
     image: redis:7-alpine
@@ -27,6 +40,12 @@ services:
       # is the whole security boundary.
       - "127.0.0.1:6379:6379"
       - "[::1]:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 256m
 
   openwa:
     # 0.23.2, built 2026-08-23, pinned by digest. A tag change is a deployment
@@ -55,6 +74,15 @@ services:
     # webhook host was once pinned to backend.local instead (D-14).
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # No healthcheck override here on purpose: this image declares its own
+    # (curl -f http://localhost:2785/api/health/ready, every 30s) and it works.
+    # Replacing it with a wget probe would break it — there is no wget in this
+    # image, and a healthcheck that cannot run marks the container unhealthy
+    # for ever.
+    # A gateway holds a Chromium. This one is unpaired and development-only
+    # (D-6, D-12) so it sits near 145 MiB, but the ceiling is set for a
+    # paired one so the limit does not become the thing that breaks pairing.
+    mem_limit: 1200m
     depends_on:
       - redis
     volumes:
@@ -64,7 +92,16 @@ services:
     build: ./apps/backend
     restart: always
     ports:
-      - "4000:4000"
+      # Loopback only, both families — matching postgres, redis and openwa,
+      # which always were. This published on every interface until
+      # 2026-09-06, which on a VPS is the API directly on the internet with
+      # no TLS in front of it. Nothing outside this host should reach the
+      # API except through a reverse proxy that terminates TLS.
+      #
+      # Tenant gateways reach it as host.docker.internal:4000, which resolves
+      # to the host and is unaffected by binding to loopback.
+      - "127.0.0.1:4000:4000"
+      - "[::1]:4000:4000"
     volumes:
       # Backups land on the host, not inside the container. A backup that lives
       # in the thing it is backing up is not a backup.
@@ -200,6 +237,16 @@ services:
       # here, which is exactly the silent-default case this file guards against.
       - EDITION_REFRESH_MS=${EDITION_REFRESH_MS:-30000}
       - EDITION_STALE_AFTER_MS=${EDITION_STALE_AFTER_MS:-600000}
+    healthcheck:
+      # 127.0.0.1, not localhost: localhost resolves to ::1 inside this
+      # container and the server listens on IPv4, so the probe would be
+      # refused and the container permanently unhealthy.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    mem_limit: 1g
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -269,6 +316,21 @@ services:
       - GATEWAY_RECONCILE_INTERVAL_MS=${GATEWAY_RECONCILE_INTERVAL_MS:-30000}
       - GATEWAY_MONITOR_INTERVAL_MS=${GATEWAY_MONITOR_INTERVAL_MS:-15000}
       - GATEWAY_PAIRING_WINDOW_MS=${GATEWAY_PAIRING_WINDOW_MS:-}
+    healthcheck:
+      # No port to probe: this is a queue consumer. Liveness is the process
+      # being alive, which is what a supervisor can act on — a wedged worker
+      # still records no pairings, so restart: always plus this is the whole
+      # safety net (D-13).
+      test: ["CMD-SHELL", "pgrep -f gateway-provisioning.worker >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Observed at ~33 MiB running from dist. The generous ceiling is because
+    # the ts-node form of this process was OOM-killed twice at ~390 MiB, and
+    # a limit that reproduces that failure would defeat the point of the
+    # service.
+    mem_limit: 512m
 
   frontend:
     build:
@@ -288,7 +350,20 @@ services:
     ports:
       # 8081 is deliberately skipped: Playwright starts its own Next server
       # there with reuseExistingServer false.
-      - "18080:8080"
+      #
+      # Loopback only, both families, for the same reason as the backend: on
+      # a VPS this was the application on every interface with no TLS. The
+      # reverse proxy that terminates TLS is what should reach it.
+      - "127.0.0.1:18080:8080"
+      - "[::1]:18080:8080"
+    healthcheck:
+      # 127.0.0.1 for the same reason as the backend.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    mem_limit: 768m
     depends_on:
       - backend
     environment:
