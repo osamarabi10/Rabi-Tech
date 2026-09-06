@@ -1,6 +1,8 @@
 # Handover — read this before touching anything
 
-Written 2026-09-02 for a session that has none of the preceding conversation.
+Refreshed 2026-09-06. §0 is the current state; everything from §1 onward was
+written 2026-09-02 and is kept for the reasoning behind rules that still hold.
+Where a later section is out of date, it says so at the top.
 
 **The working tree is clean.** It was not when this was written — §1 described
 sixteen uncommitted files across two unrelated bodies of work, and most of this
@@ -15,6 +17,151 @@ relaxed.
 Longer background: [SESSION-STATE-AND-AUDIT.md](SESSION-STATE-AND-AUDIT.md) —
 what was built, every defect found, the recurring failure pattern, and the
 ranked risks.
+
+---
+
+## 0 · Current state — 2026-09-06
+
+**Read this section, `docs/DEPLOYMENT-READINESS.md`, and `docs/DECISIONS.md`
+D-10 to D-19. The rest of this file is background from 2026-09-02 and parts of
+it are superseded; each such section says so.**
+
+The working tree is clean. `main` and `editions-ladder` are level at
+`e9d21cbf`, both pushed.
+
+### What changed today, in one line each
+
+| commit | |
+|---|---|
+| `5fe07cc5` | The provisioning worker became a supervised compose service; one rule for the host boundary |
+| `8b331be1` | Deleted the competing supervisor scripts; two AGENTS rules about instruments that lie |
+| `d5d8325b` | The gateway state machine learned to **demote**, not only promote |
+| `b16acabb` | API and app bound to loopback; healthcheck and memory limit on all six services |
+| `9388e106` | Off-host backups configured and the restore **drilled**; `DEPLOYMENT-READINESS.md` written |
+| `68c14628` | Every organization deleted on owner instruction; D-12 resolved, D-17 unblocked |
+| `0a4d3e96` | `Organization.tier` deleted — the plan has one home (C3a) |
+| `e9d21cbf` | `PlanVersion` and `Price`; subscriptions pin a version (C3b) |
+
+Four more commits are AGENTS rules earned by the work above, not by principle.
+
+### The two bugs that shaped the day, and they are mirrors
+
+The session opened with a customer scanning a QR, their phone saying *device
+linked*, and the product saying **Disconnected forever**. Cause: the only thing
+that records a pairing is the provisioning worker, and it was a hand-started
+process the OOM killer had taken.
+
+Fixing that exposed the reflection. A gateway that **drops** was never recorded
+as dropped: four components observed a disconnect and not one wrote it down,
+and the reconcile loop did not even select `ACTIVE` channels — so the tenants
+being watched were the ones mid-setup, and the ones being paid for were not
+watched at all. Organization `mark` sat reading `ACTIVE` for four hours while
+its gateway displayed a QR code.
+
+The second is worse. A product that says *not connected* when it is sends the
+user to support; one that says *connected* when it is not sends them nowhere.
+See D-16.
+
+### The database is empty
+
+No organizations, subscriptions, channels, sessions, conversations, messages or
+contacts. The owner deleted all three remaining ones — `mark`, `rabitech-demo`
+and `ostudio`, the last explicitly, accepting the loss of its 17 real inbound
+messages — after a backup verified by a full restore drill. 5,357 rows across 38
+tables in one transaction.
+
+Retained: the five-edition Plan catalogue, the OWNER identity, platform
+settings, the platform audit log.
+
+**Two consequences that outlive the deletion.** The first real customer will
+genuinely be the first — nothing may rest on *"it works for the existing
+tenants"* any more. And schema migrations are nearly free right now, with no
+legacy rows to grandfather; that is the condition C3 was done under and it will
+not last.
+
+### In flight
+
+Nothing. C3 is complete in two commits and every gate is green.
+
+**C3 was split deliberately.** Deleting `tier` and restructuring the catalogue
+touch disjoint code and each has its own provable property, so a failure in
+either half of one combined commit would have been hard to attribute.
+
+### What is next
+
+C4 through C8 of the editions ladder, in `.claude/plans/prancy-puzzling-anchor.md`:
+
+1. **C4** — the `can / limit / usage / assertCan` façade as the only entitlement
+   surface; delete the two real plan-name checks; add the gate.
+2. **C5** — the numbers meter (`maxNumbers`), the brief's second meter and the
+   only wholly missing one.
+3. **C6** — the plan editor writes a **new version** rather than editing the
+   current one in place, and the existing preview is retargeted at versions.
+   C3b deliberately left editing in place; this is where that changes.
+4. **C7** — MAC: keep measuring, stop enforcing. A pricing act, so it is visible
+   on its own.
+5. **C8** — billing provider wiring, one-way outward.
+
+Also open and not in that ladder:
+
+- **D-10** — a first Connect on a cold gateway shows the customer an error for
+  five seconds and then silently succeeds. Recorded, not fixed; the timeout
+  belongs with the hosting decision.
+- **D-15** — `destroyGateway` deletes the Organization as a side effect of
+  retiring a gateway. **Do not call it.** Recorded for the delete-account work.
+- **D-17** — the shared `openwa` service is a dead lane that still resolves.
+  Its blocker is gone; removing it is a compose change nobody has asked for.
+- **The tenancy harness leaves debris.** It deletes its fixture organizations
+  and leaves their scheduled jobs in Redis, two more per run. AGENTS records it;
+  nothing fixes it.
+- **`verify-lazy-provisioning` enqueues on the real queue.** Stop
+  `gateway-worker` before running gates, or the worker claims the job and builds
+  real tenant containers. Documented in `DEPLOYMENT.md`; the proper fix is an
+  isolated queue prefix.
+
+### Owner-only — nothing engineering does substitutes for these
+
+⬛ marks them in `DEPLOYMENT-READINESS.md` too.
+
+1. **Rotate the exposed credentials, then clear `ALLOW_INSECURE_SECRETS=1`.**
+   The flag is set today, which bypasses the boot gate that refuses shipped
+   defaults. It must be cleared before the box goes up, and clearing it requires
+   rotating first. §7 below still describes the credentials.
+2. **Copy `BACKUP_ENCRYPTION_KEY` somewhere else.** It exists only on the
+   machine it protects, which makes it useless in the disaster it is for. The
+   backups are otherwise working and drilled: recovery from the off-host copy
+   took 10.35 s.
+3. **TLS, a reverse proxy, and the domain.** Both ports are loopback-bound now;
+   that is the half that needed no decision. `FRONTEND_URL` and `APP_BASE_URL`
+   still point at localhost.
+4. **Firewall host ports 3100–3999**, the tenant gateway range.
+5. **SMTP.** No email is delivered by anything (D-2).
+6. **Stripe, then Meta.** Revenue rather than safety, and last for that reason.
+   Meta's absence is why three of five editions cannot be sold at all (D-9).
+7. **CI has been red since before this session** and is still red — the
+   *Tenancy bleed gate* workflow, every run. It is **not the code**: the
+   committed tree passes 153/153 from a clean export with only the workflow's
+   five environment variables, on Linux time. The failing step is
+   `npm run test:tenancy` and the log needs admin rights to read. Paste the last
+   ~40 lines of that step and it can be closed. A red gate nobody reads trains
+   everyone to ignore the one that matters. Also move to
+   `actions/checkout@v5` / `setup-node@v5` in the same commit.
+8. **Unlink stale WhatsApp devices on the phone.** Every gateway they belonged
+   to is gone; the entries are dead and each occupies one of four slots.
+
+### Capacity, measured rather than asserted
+
+Docker VM 7.727 GiB. An **idle** gateway is ~135 MiB; a **live paired** one is
+**900 MiB** — 6.7×, and the idle number is what an empty staging environment
+shows you. Roughly six to eight active tenants on this machine. That is the
+hosting decision with a number attached (D-11).
+
+### Two operational rules that will bite a fresh session
+
+- **Stop `gateway-worker` before running gates.** See above.
+- **The gates run `dist/`.** A stale build produces failures that read like code
+  faults; `verify-lazy-provisioning` reported `Unknown argument tier` from
+  compiled output while the source was already clean.
 
 ---
 
@@ -210,6 +357,15 @@ issuing five separate requests is a different act, bounded by the rate limiter.
 
 ## 5 · Gates
 
+> **Counts updated 2026-09-06.** `test:tenancy` is **153**, not 143: three
+> checks for gateway disconnect detection (D-16), two guarding the deleted
+> `Organization.tier` and the shipped signup rate limit (D-18). A new gate
+> joined them, `node scripts/c3-entitlement-snapshot.js`, which seeds eight
+> organizations through the real signup path and asserts resolved
+> entitlements are byte-identical across the edition migrations.
+>
+> **Stop `gateway-worker` before running any of them** — see §0.
+
 ```bash
 cd apps/backend
 npm run test:tenancy          # 143  — isolation, now on two axes; a red gate is a release blocker
@@ -400,6 +556,10 @@ ones become read-only, and the billing screen names exactly which and why.
 
 ## 6 · What is left
 
+> **Superseded for the editions track by §0.** C3 is done; C4–C8 and the
+> open decisions are listed there. The table below is still accurate for
+> the product surface — Meta caps, widgets, reports, the canvas, AI.
+
 | | |
 |---|---|
 | **Meta 250-caps** | **(a) landed** in `1f652be7` — the per-24h messaging tier limit is enforced in `sendMetaTemplate` from `maxUniqueRecipientsPer24h`, counting distinct recipients with `releasedAt: null` inside a rolling window. D-24 is closed. **(b) still open** — the per-broadcast unverified-business ceiling is a different denominator, modelled nowhere, and belongs to the broadcast path. **When that path is built:** refuse-per-recipient-and-continue, not halt. `assertWithinRecipientCap` returns early for a recipient already inside the window, so halting on the first refusal would also refuse sends that were permitted. The campaign worker's existing split is the precedent — a rolling cap resets, so it behaves like `QuotaExceededError` (`pending`), not like a capability (`failed`) |
@@ -420,6 +580,10 @@ unbuilt.
 ---
 
 ## 7 · Owner-only, and unmoved
+
+> **See §0 for the current list**, which is shorter and ordered. This
+> section still carries the detail on the exposed credentials, and item 1
+> there depends on it. Nothing here has been done.
 
 Nothing engineering does substitutes for these.
 
