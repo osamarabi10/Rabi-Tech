@@ -409,6 +409,27 @@ Design rules do not catch the failures this repository actually has. These do.
   restarts for ever looks like a crash loop, and sends everybody hunting the
   service instead of the probe.
 
+- **A baseline is only meaningful if the system was healthy when it was
+  taken.** A reference captured from a degraded system does not record the
+  correct answer — it records the fault, and then certifies it. Every
+  comparison afterwards passes, because the thing being compared against is
+  already wrong.
+
+  The first C3 entitlement baseline was captured while the edition catalogue
+  was stale: *"Edition catalogue is stale; serving the restricted floor. Every
+  entitlement read is now denying."* It would have recorded zero allowances as
+  the correct entitlements for every edition, and every post-migration
+  comparison would have passed against nothing — a green proving that a
+  deny-everything floor still denies everything.
+
+  This is the same family as the gates that report on their environment, with
+  the failure moved one step earlier: there the check was blind, here the
+  *expectation* was. It is worse, because a blind check can be spotted by
+  reading it, and a poisoned baseline looks exactly like a correct one for as
+  long as it is believed. Assert the preconditions before capturing — the
+  catalogue loaded, the migrations applied, the services healthy — and record
+  that assertion beside the reference.
+
 ---
 
 ## Scope
