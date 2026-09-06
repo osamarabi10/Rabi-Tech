@@ -27,7 +27,7 @@ D-10 to D-19. The rest of this file is background from 2026-09-02 and parts of
 it are superseded; each such section says so.**
 
 The working tree is clean. `main` and `editions-ladder` are level at
-`e9d21cbf`, both pushed.
+`f9c79ee1`, both pushed.
 
 ### What changed today, in one line each
 
@@ -41,6 +41,7 @@ The working tree is clean. `main` and `editions-ladder` are level at
 | `68c14628` | Every organization deleted on owner instruction; D-12 resolved, D-17 unblocked |
 | `0a4d3e96` | `Organization.tier` deleted — the plan has one home (C3a) |
 | `e9d21cbf` | `PlanVersion` and `Price`; subscriptions pin a version (C3b) |
+| `f9c79ee1` | The `can / limit / usage / assertCan` façade, and a sweep that proves it completed (C3c) |
 
 Four more commits are AGENTS rules earned by the work above, not by principle.
 
@@ -81,18 +82,32 @@ not last.
 
 ### In flight
 
-Nothing. C3 is complete in two commits and every gate is green.
+Nothing. C3 is complete in three commits and every gate is green — a sweep of
+all twelve, manifest-verified, is the last thing that ran.
 
-**C3 was split deliberately.** Deleting `tier` and restructuring the catalogue
-touch disjoint code and each has its own provable property, so a failure in
-either half of one combined commit would have been hard to attribute.
+**C3 was split deliberately.** Deleting `tier`, restructuring the catalogue and
+building the façade touch disjoint code and each has its own provable property,
+so a failure in any one of them inside a combined commit would have been hard
+to attribute.
+
+**C3c shipped the façade without finishing the move onto it**, and that is the
+one thing a fresh session needs to know about it. `can / limit / usage /
+assertCan` exist, are pure, and are proved behaviourally — but
+`assertMetricAvailable` and `assertSeatAvailable` still resolve and decide for
+themselves, and the workspace ceiling is still an inline count-and-compare in
+its route. So the façade is *a* way to ask, not yet *the* way. That is C4, and
+it is the reason C4 exists.
 
 ### What is next
 
 C4 through C8 of the editions ladder, in `.claude/plans/prancy-puzzling-anchor.md`:
 
-1. **C4** — the `can / limit / usage / assertCan` façade as the only entitlement
-   surface; delete the two real plan-name checks; add the gate.
+1. **C4 — adoption.** The façade is built (C3c); C4 is what makes it the only
+   surface. Route `assertMetricAvailable` and `assertSeatAvailable` through
+   `can`/`limit`, bring the workspace ceiling onto the same path, and keep the
+   shown number and the enforced number reading from one source. Two ways to
+   ask one question is the condition the façade exists to end, and it is the
+   state the tree is in until this lands.
 2. **C5** — the numbers meter (`maxNumbers`), the brief's second meter and the
    only wholly missing one.
 3. **C6** — the plan editor writes a **new version** rather than editing the
@@ -156,9 +171,16 @@ Docker VM 7.727 GiB. An **idle** gateway is ~135 MiB; a **live paired** one is
 shows you. Roughly six to eight active tenants on this machine. That is the
 hosting decision with a number attached (D-11).
 
-### Two operational rules that will bite a fresh session
+### Three operational rules that will bite a fresh session
 
-- **Stop `gateway-worker` before running gates.** See above.
+- **Run the sweep with its runner, not by hand.**
+  `bash apps/backend/scripts/run-gate-sweep.sh` runs all twelve gates, stops
+  `gateway-worker` for the duration and restarts it on the way out, and ends
+  with a manifest that fails if any gate is missing, stale, empty or non-zero.
+  Results land in `.gate-runs/<timestamp>/`, which is gitignored. Adding a gate
+  means adding it to the manifest in `verify-gate-sweep.js`.
+- **Stop `gateway-worker` before running gates.** The runner above does it for
+  you; doing it by hand is what this is for.
 - **The gates run `dist/`.** A stale build produces failures that read like code
   faults; `verify-lazy-provisioning` reported `Unknown argument tier` from
   compiled output while the source was already clean.

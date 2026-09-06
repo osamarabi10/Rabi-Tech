@@ -506,6 +506,19 @@ Design rules do not catch the failures this repository actually has. These do.
   asks whether a name the code has never heard of is refused, and that is not
   a case anyone writes while thinking about the happy path.
 
+  **The unknown key must be loud, not merely refused.** It is a programming
+  error wearing a customer error message: the caller is shown "your plan does
+  not include this" and goes to sales, while the typo that caused it appears
+  nowhere. So it logs at `error`, separately from the `warn` that a genuine
+  refusal gets — the two need different levels because they need different
+  readers. A silent refusal is better than a silent grant and still bad.
+
+  **Refusing is not always throwing, and the difference is deliberate.** The
+  pure core *returns* a refusal so `can()` can ask without exception flow;
+  `assertCan` is where a refusal becomes a throw. Making the core throw would
+  make the question unaskable. What must never exist is the third option:
+  returning a value that reads as permission.
+
 ---
 
 ## Scope
