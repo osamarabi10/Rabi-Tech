@@ -44,6 +44,28 @@ works, **scope** governs what you are allowed to touch.
 - **Make architectural decisions for the long term.** Do not accept a stopgap
   whose removal has no owner and no trigger.
 
+- **Prefer the schema's declared cascade to a hand-written delete order.** A
+  hand-listed sequence of child deletes is a second copy of the dependency
+  graph, maintained by whoever last remembered it. It drifts at the first
+  migration that adds a table and keeps looking careful while doing so —
+  which is worse than an obvious omission, because the care is what stops
+  anyone re-checking it. The database already holds that graph, and
+  `ON DELETE CASCADE` traverses it in an order that is correct by
+  construction.
+
+  Evidence: deleting three organizations on 2026-09-06 removed **5,357 rows
+  across 38 tables** in one transaction with no hand-ordering and no foreign
+  key violation, confirmed by counting every table in the schema before and
+  after. A hand-written list would have had to name roughly 57 child
+  relations to achieve the same thing.
+
+  The rule has a limit, and it is the reason to state it as a preference
+  rather than a law: a cascade is only correct if the schema actually
+  declares it. Where a relation is `onDelete: Restrict` or `SetNull` on
+  purpose, that is a decision about what deletion *means*, and reaching for
+  a manual delete to get around it is overriding the decision rather than
+  implementing it.
+
 ---
 
 ## Evidence
