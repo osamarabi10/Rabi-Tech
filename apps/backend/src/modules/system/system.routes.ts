@@ -30,6 +30,11 @@ import { auditLog } from '../../lib/audit';
 import { getTenantId } from '../../lib/tenant-context';
 import { issueUserInvitation } from './user-invitations.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
+import {
+  assertCan,
+  isCapabilityRefused,
+  capabilityRefusalResponse,
+} from '../billing/entitlement-facade';
 import { getEdition } from '../billing/editions.service';
 import { channelGrantRefusal } from '../channels/channel-entitlement';
 import { MAX_FILES_PER_MESSAGE } from '../conversations/message-limits';
@@ -823,13 +828,24 @@ router.patch('/users/:id', requireAdmin, requirePermission('user:update'), async
       return res.status(400).json({ error: 'Contact visibility scope must be TEAM or SELF' });
     }
     if (maskPhoneAndEmail === true) {
-      const effective = await resolveEntitlements(req.user!.organizationId);
-      if (!getEdition(effective.plan).maskContactDetails) {
-        return res.status(402).json({
-          error: 'Masking contact phone numbers and email addresses requires Business or Enterprise',
-          code: 'PLAN_UPGRADE_REQUIRED',
-          requiredPlan: 'BUSINESS',
-        });
+      /*
+        Through the façade, and the upgrade target is named from the ladder.
+
+        The decision here was always entitlement-driven — it read
+        maskContactDetails, correctly. What was wrong was the *advice*:
+        `requiredPlan: 'BUSINESS'` and "requires Business or Enterprise"
+        were written down, so repricing, reordering or archiving an edition
+        left the refusal confidently recommending the wrong thing. A
+        hardcoded upgrade target is stale the moment the ladder moves and
+        reads as authoritative while it is (C3c).
+      */
+      try {
+        await assertCan(req.user!.organizationId, 'maskContactDetails');
+      } catch (error) {
+        if (isCapabilityRefused(error)) {
+          return res.status(error.status).json(capabilityRefusalResponse(error));
+        }
+        throw error;
       }
     }
 

@@ -474,6 +474,38 @@ Design rules do not catch the failures this repository actually has. These do.
   choose the rows that disagree, and prefer the expensive edition over the
   free one: it is the one whose numbers are furthest from everything else.
 
+- **A gate sweep must be able to prove it completed.** Each gate writes its
+  summary to a named file; a manifest check then asserts every expected file
+  exists, is newer than the run started, and is not empty. Missing fails,
+  stale fails, empty fails.
+
+  Without it, a partial sweep is indistinguishable from a complete one,
+  because the only evidence is the results that *did* arrive. On 2026-09-06 a
+  background shell was reaped for memory after the entitlement proof wrote its
+  log and before the three frontend gates ran. Nothing failed. Nothing said
+  anything. The gap was caught only because the missing files happened to be
+  looked at — and a run that reports eleven greens out of twelve expected,
+  with the twelfth simply absent, reads exactly like a clean run.
+
+  **Absence of a result must fail loudly, not read as silence.** This is the
+  same family as a gate that reports on its environment, one level up: there
+  the check could not see, here the *sweep* could not. `run-gate-sweep.sh` and
+  `verify-gate-sweep.js` are the implementation; adding a gate means adding it
+  to the manifest, and a gate absent from the manifest is one whose absence
+  nobody will notice.
+
+- **A guard whose failure mode is "allow" is not a guard.** Unknown input must
+  refuse. Two absences are easy to conflate — *unknown* and *unlimited* are
+  both "no number" — and collapsing them points the wrong way: the entitlement
+  façade let an unrecognised capability fall through to a metric lookup that
+  produced `undefined`, normalised it to `null`, and `null` means unlimited. A
+  mistyped capability granted everything it was supposed to guard.
+
+  Its own gate caught it on the first run, which is the argument for writing
+  the adversarial case before believing the module: the check that found it
+  asks whether a name the code has never heard of is refused, and that is not
+  a case anyone writes while thinking about the happy path.
+
 ---
 
 ## Scope

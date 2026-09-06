@@ -287,6 +287,41 @@ async function main() {
   if (failures) process.exitCode = 1;
 }
 
+/**
+ * Close the queue handles this gate opened without meaning to.
+ *
+ * Seeding goes through the real signup path, which reaches
+ * maybeProvisionGateway, which constructs a BullMQ queue at module scope and
+ * opens a Redis connection. The gate then printed its result and never
+ * exited — two of these were found still resident hours later, and they were
+ * part of why this machine ran out of memory.
+ *
+ * Same fix the tenancy harness already carries, for the same reason: a gate
+ * may fail, but it may not hang.
+ */
+async function closeLoadedQueues() {
+  const modules = [
+    ['../src/workers/gateway-provisioning.queue', 'gatewayProvisioningQueue'],
+    ['../src/workers/incoming-message.worker', 'incomingMessageQueue'],
+  ];
+  await Promise.allSettled(modules.map(async ([specifier, exportName]) => {
+    let resolved;
+    try { resolved = require.resolve(specifier); } catch { return; }
+    if (!require.cache[resolved]) return;
+    const queue = require(specifier)[exportName];
+    if (queue && typeof queue.close === 'function') await queue.close().catch(() => {});
+  }));
+}
+
 main()
   .catch((e) => { console.error(e.message || e); process.exitCode = 1; })
-  .finally(async () => { await prisma.$disconnect(); });
+  .finally(async () => {
+    await closeLoadedQueues();
+    await prisma.$disconnect();
+    // The net under whatever is not on that list. unref'd, so it never fires
+    // on the normal path and cannot truncate a result; if something still
+    // holds the loop five seconds after the summary was written, an abrupt
+    // exit carrying the right code beats a process nobody can read.
+    const drainGuard = setTimeout(() => process.exit(process.exitCode || 0), 5000);
+    drainGuard.unref?.();
+  });

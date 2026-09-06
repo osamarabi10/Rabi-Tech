@@ -46,3 +46,6 @@ Thumbs.db
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Gate sweep results. Evidence of one run on one machine, not shared state.
+.gate-runs/
