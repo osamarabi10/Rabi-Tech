@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import express, { Router } from 'express';
-import { OrganizationBranding } from '@prisma/client';
+import { OrganizationBranding, Prisma } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { requireAdmin } from '../../middleware/rbac.middleware';
 import { runAsPlatform } from '../../lib/tenant-context';
@@ -22,7 +22,20 @@ import logger from '../../lib/logger';
 
 const router = Router();
 
-type EditableBranding = OrganizationBranding & { organization?: { tier: string } | null };
+/** Mirrors ORGANIZATION_PLAN_SELECT in branding.service: the plan comes from
+ *  the live subscription, not from a column duplicating it (D-18). */
+const ORGANIZATION_PLAN_SELECT = {
+  subscriptions: {
+    where: { status: { in: ['ACTIVE', 'TRIALING'] } },
+    select: { planCode: true },
+    orderBy: { createdAt: 'desc' },
+    take: 1,
+  },
+} satisfies Prisma.OrganizationSelect;
+
+type EditableBranding = OrganizationBranding & {
+  organization?: { subscriptions: { planCode: string }[] } | null;
+};
 
 function errorStatus(error: unknown): number {
   const message = String((error as Error).message || error);
@@ -56,7 +69,7 @@ router.get('/current', async (req, res) => {
   try {
     const row = await prisma.organizationBranding.findUnique({
       where: { organizationId: req.user!.organizationId },
-      include: { organization: { select: { tier: true } } },
+      include: { organization: { select: ORGANIZATION_PLAN_SELECT } },
     });
     res.json(row ? editableBranding(row) : { ...publicBranding(null), customDomain: null, customFooter: null });
   } catch (error) {
@@ -83,7 +96,7 @@ router.patch('/current', requireAdmin, async (req, res) => {
       where: { organizationId: req.user!.organizationId },
       create: { ...data, organizationId: req.user!.organizationId },
       update: data,
-      include: { organization: { select: { tier: true } } },
+      include: { organization: { select: ORGANIZATION_PLAN_SELECT } },
     });
     res.json(editableBranding(row));
   } catch (error) {
@@ -105,7 +118,7 @@ router.post(
         where: { organizationId: req.user!.organizationId },
         create: { organizationId: req.user!.organizationId, [field]: url },
         update: { [field]: url },
-        include: { organization: { select: { tier: true } } },
+        include: { organization: { select: ORGANIZATION_PLAN_SELECT } },
       });
       res.json(editableBranding(row));
     } catch (error) {
@@ -118,7 +131,7 @@ router.get('/current/domain-verification', requireAdmin, async (req, res) => {
   try {
     const row = await prisma.organizationBranding.findUnique({
       where: { organizationId: req.user!.organizationId },
-      include: { organization: { select: { tier: true } } },
+      include: { organization: { select: ORGANIZATION_PLAN_SELECT } },
     });
     if (!row?.customDomain) {
       return res.json({ customDomain: null, verified: false, record: null, token: null });
@@ -168,7 +181,7 @@ router.patch('/organizations/:organizationId', async (req, res) => {
     }
     const row = await runAsPlatform(`branding-platform-update:${req.params.organizationId}`, async () => {
       // The effective plan, not the raw tier. This path used to read
-      // Organization.tier directly while the tenant-facing one resolved
+      // Organization.tier directly (a column since deleted, D-18) while the
       // entitlements, so an organization overridden to BUSINESS could remove its
       // own footer while the owner editing on its behalf was refused. Same
       // feature, two answers.
@@ -182,7 +195,7 @@ router.patch('/organizations/:organizationId', async (req, res) => {
         where: { organizationId: req.params.organizationId },
         create: { ...data, organizationId: req.params.organizationId },
         update: data,
-        include: { organization: { select: { tier: true } } },
+        include: { organization: { select: ORGANIZATION_PLAN_SELECT } },
       });
     });
     res.json(editableBranding(row));

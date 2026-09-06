@@ -151,9 +151,21 @@ export const LIMITS = {
     message: 'محاولات تحقق كثيرة — جرّب بعد ١٥ دقيقة',
   }),
 
-  /** Each signup can provision a container. Strictest limit on the platform. */
+  /**
+   * Each signup can provision a container. Strictest limit on the platform.
+   *
+   * SIGNUP_RATE_PER_HOUR raises it for the C3 entitlement proof, which has to
+   * create seven organizations through the real signup path in one run and
+   * would otherwise throttle itself into a partial proof. Same reasoning, and
+   * the same precedent, as PUBLIC_API_RATE_PER_SECOND below: a gate that
+   * cannot exercise the path proves nothing, and routing around the HTTP
+   * endpoint instead would prove only that the service agrees with itself.
+   *
+   * The shipped value is asserted by the tenancy harness, so this override
+   * cannot quietly become the default that ships.
+   */
   signup: rateLimit('signup', {
-    max: 3,
+    max: Number(process.env.SIGNUP_RATE_PER_HOUR) || 3,
     windowMs: 60 * 60_000,
     message: 'محاولات تسجيل كثيرة — جرّب بعد ساعة',
   }),

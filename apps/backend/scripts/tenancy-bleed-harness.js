@@ -126,6 +126,9 @@ function staticAudits() {
     'scripts/cleanup-test-data.ts',
     'scripts/fix-lid-contact.ts',
     'scripts/list-convs.ts',
+    // Seeds through the real signup path and resolves entitlements either
+    // side of a migration; it is a gate, not application code (D-18).
+    'scripts/c3-entitlement-snapshot.js',
   ]);
   const bareClients = [];
   for (const file of projectFiles) {
@@ -901,6 +904,32 @@ async function seedProvisioningOrganization(raw, key) {
   return { organizationId, slug };
 }
 
+/**
+ * Put an organization on an edition, the way the product now does.
+ *
+ * These fixtures used to write `Organization.tier`. That column is gone: the
+ * plan lives on the subscription and nowhere else (D-18). FREE is the absence
+ * of a live subscription rather than a value, which is why granting it means
+ * removing rows rather than writing one.
+ *
+ * Existing subscriptions are cleared first. Several fixtures are reused
+ * across checks and would otherwise accumulate live subscriptions, leaving
+ * the newest one to win for reasons the check never stated.
+ */
+async function grantPlan(raw, organizationId, planCode) {
+  await raw.subscription.deleteMany({ where: { organizationId } });
+  if (planCode === 'FREE') return;
+  await raw.subscription.create({
+    data: {
+      organizationId,
+      planCode,
+      status: 'ACTIVE',
+      provider: 'manual',
+      activatedAt: new Date(),
+    },
+  });
+}
+
 function provisioningFakes() {
   const deployments = new Map();
   const stopped = new Set();
@@ -1495,7 +1524,7 @@ async function databaseAudits() {
     });
 
     await check('workspace users: Manager invitations are Agent-only, tenant-scoped, and single-use', async () => {
-      await raw.organization.update({ where: { id: orgA.organizationId }, data: { tier: 'BUSINESS' } });
+      await grantPlan(raw, orgA.organizationId, 'BUSINESS');
       const supervisorIdentity = await raw.identity.create({
         data: {
           email: 'bleed-manager@rabitech.test',
@@ -1665,7 +1694,7 @@ async function databaseAudits() {
       await raw.identity.delete({ where: { id: restrictedAgentIdentityId } });
       await raw.user.delete({ where: { id: invitedSupervisorId } });
       await raw.identity.delete({ where: { id: invitedSupervisorIdentityId } });
-      await raw.organization.update({ where: { id: orgA.organizationId }, data: { tier: 'FREE' } });
+      await grantPlan(raw, orgA.organizationId, 'FREE');
     });
 
     await check('teams: membership replacement is atomic and tenant-scoped', async () => {
@@ -2106,10 +2135,8 @@ async function databaseAudits() {
     });
 
     await check('branding: org-scoped settings cannot bleed across subscribers', async () => {
-      await raw.organization.updateMany({
-        where: { id: { in: [orgA.organizationId, orgB.organizationId] } },
-        data: { tier: 'BUSINESS' },
-      });
+      await grantPlan(raw, orgA.organizationId, 'BUSINESS');
+      await grantPlan(raw, orgB.organizationId, 'BUSINESS');
       const domainA = `brand-a-${Date.now()}.example.com`;
       const domainB = `brand-b-${Date.now()}.example.com`;
       const updateA = await fetch(`${baseUrl}/api/branding/current`, {
@@ -2149,7 +2176,7 @@ async function databaseAudits() {
     });
 
     await check('branding: FREE tier cannot remove required attribution via API', async () => {
-      await raw.organization.update({ where: { id: orgA.organizationId }, data: { tier: 'FREE' } });
+      await grantPlan(raw, orgA.organizationId, 'FREE');
       const response = await fetch(`${baseUrl}/api/branding/current`, {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -3083,6 +3110,56 @@ async function databaseAudits() {
       assert.ok(!fakes.destroyed.has(channel.deploymentName));
       assert.equal(resumed.dataVolumeName, channel.dataVolumeName);
     });
+    await check('editions: the plan has exactly one home, and Organization.tier is not it', async () => {
+      /*
+        Organization.tier was a second column holding a plan code, written
+        alongside Subscription.planCode at every activation, trial, downgrade
+        and cancellation. It agreed with the subscription only while every one
+        of those sites remembered to keep it agreeing (D-18).
+
+        This check exists because the cheapest way to reintroduce the defect is
+        to add the column back "just for the console" — it reads as a harmless
+        denormalisation right up until the two disagree, and then it is a
+        customer on a plan they did not buy.
+      */
+      const schema = fs.readFileSync(path.join(ROOT, 'prisma', 'schema.prisma'), 'utf8');
+      const organizationModel = schema.slice(
+        schema.indexOf('model Organization {'),
+        schema.indexOf('model ', schema.indexOf('model Organization {') + 10),
+      );
+      const declarations = organizationModel
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('//') && !line.trim().startsWith('///'));
+      assert.ok(
+        !declarations.some((line) => /^\s*tier\s+/.test(line)),
+        'Organization must not carry a tier column: the plan lives on Subscription (D-18)',
+      );
+
+      // The resolver must not grow a third source either. A fallback reading
+      // any other column would be the same defect wearing a different name.
+      const resolver = fs.readFileSync(
+        path.join(ROOT, 'src', 'modules', 'billing', 'entitlements.resolver.ts'), 'utf8');
+      const code = resolver.split('\n')
+        .filter((line) => !line.trim().startsWith('*') && !line.trim().startsWith('//') && !line.trim().startsWith('/*'))
+        .join('\n');
+      assert.doesNotMatch(code, /organization\.tier/,
+        'the resolver must not read a tier column');
+      assert.doesNotMatch(code, /[\x27"`]tier[\x27"`]/,
+        "EntitlementSource must not carry a 'tier' value: it names a column that no longer exists");
+    });
+    await check('editions: the shipped signup rate limit is 3 per hour', async () => {
+      /*
+        SIGNUP_RATE_PER_HOUR exists so the C3 entitlement proof can create
+        seven organizations through the real signup path in one run. An
+        override added for a test is one edit away from becoming the shipped
+        default, and the shipped default here is a real defence: each signup
+        can provision a container.
+      */
+      const limiter = fs.readFileSync(
+        path.join(ROOT, 'src', 'middleware', 'rate-limit.middleware.ts'), 'utf8');
+      assert.match(limiter, /max:\s*Number\(process\.env\.SIGNUP_RATE_PER_HOUR\)\s*\|\|\s*3,/,
+        'the signup limiter must fall back to 3 per hour when the override is unset');
+    });
     await check('provisioning: a paired gateway that drops is demoted out of ACTIVE', async () => {
       const { processGatewayAction } = require('../src/modules/provisioning/gateway-provisioning.service');
       const { hostAccessName } = require('../src/lib/gateway-host');
@@ -3273,14 +3350,30 @@ async function databaseAudits() {
         ['ACTIVE', 'PROVISIONING'].includes(organization.status),
         `expected the organization off PENDING, got ${organization.status}`,
       );
-      // The trial runs on a real paid plan, and tier must agree with the
-      // subscription or detectQuotaDrift fires on every trial in the system.
-      assert.notEqual(organization.tier, 'FREE');
       const subscription = await raw.subscription.findFirstOrThrow({
         where: { organizationId: signup.organizationId },
       });
       assert.equal(subscription.status, 'TRIALING');
-      assert.equal(subscription.planCode, organization.tier);
+      /*
+        The trial runs on a real paid plan, and the resolver must say so.
+
+        This used to assert that `Organization.tier` agreed with the
+        subscription, because the two were separate stores and a trial that
+        set one and not the other made detectQuotaDrift fire on every trial
+        in the system. There is one store now (D-18), so agreement is not
+        something to check — it is the shape of the data.
+
+        What is still worth asserting is the half that outlived the column:
+        a trial resolves to the plan being trialled and not to the floor. Get
+        that wrong and a trial silently grants nothing, which is the failure
+        the original assertion was really guarding.
+      */
+      assert.notEqual(subscription.planCode, 'FREE');
+      const trialEntitlements = await runAsPlatform('bleed-trial-resolve', () =>
+        require('../src/modules/billing/entitlements.resolver')
+          .resolveEntitlements(signup.organizationId));
+      assert.equal(trialEntitlements.plan, subscription.planCode);
+      assert.equal(trialEntitlements.source, 'subscription');
       assert.ok(subscription.trialEndsAt, 'a trial must carry a deadline');
       // Nothing was paid, so nothing was activated.
       assert.equal(subscription.activatedAt, null);
@@ -4594,8 +4687,9 @@ async function databaseAudits() {
       const flagOrgId = 'bleed_flag_org';
       const flagChannelId = 'bleed_flag_channel';
       await raw.organization.create({
-        data: { id: flagOrgId, name: 'Flag Org', slug: 'bleed-flag', status: 'ACTIVE', tier: 'STANDARD' },
+        data: { id: flagOrgId, name: 'Flag Org', slug: 'bleed-flag', status: 'ACTIVE' },
       });
+      await grantPlan(raw, flagOrgId, 'STANDARD');
       await raw.organizationChannel.create({
         data: {
           id: flagChannelId, organizationId: flagOrgId, kind: 'OPENWA', status: 'PENDING',
@@ -4646,10 +4740,7 @@ async function databaseAudits() {
       // Put org A on GROWTH with config matching the catalogue exactly, and
       // stamp the config in the past so an edition edit lands after it.
       const growth = await raw.plan.findUnique({ where: { code: 'GROWTH' } });
-      await raw.organization.update({
-        where: { id: orgA.organizationId },
-        data: { tier: 'GROWTH' },
-      });
+      await grantPlan(raw, orgA.organizationId, 'GROWTH');
       await raw.organizationConfig.update({
         where: { organizationId: orgA.organizationId },
         data: {
@@ -4696,20 +4787,21 @@ async function databaseAudits() {
         where: { code: 'GROWTH' },
         data: { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit },
       });
-      await raw.organization.update({ where: { id: orgA.organizationId }, data: { tier: 'FREE' } });
+      await grantPlan(raw, orgA.organizationId, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
-    // resolveEntitlements reads override, then subscription, then tier. Earlier
-    // billing checks leave live subscriptions on these fixtures, so setting tier
-    // alone is silently ignored - correct behaviour, and caught here by a check
-    // that asserted against it. These four checks are about the catalogue, not
-    // about subscription precedence, so they clear the subscription and let tier
-    // govern.
-    const setTierGoverned = async (org, tier) => {
-      await raw.subscription.deleteMany({ where: { organizationId: org.organizationId } });
-      await raw.organization.update({ where: { id: org.organizationId }, data: { tier } });
-    };
+    // resolveEntitlements reads override, then subscription, then the floor.
+    // These four checks are about the catalogue rather than about precedence,
+    // so each states the edition outright.
+    //
+    // This used to clear the subscription and write Organization.tier, so that
+    // the column governed. The column is gone (D-18) and the subscription is
+    // now the only way to say which edition an organization is on — which is
+    // the point of the change: there is one way to express this, so a fixture
+    // cannot set the plan somewhere the product does not read.
+    const setTierGoverned = async (org, planCode) =>
+      grantPlan(raw, org.organizationId, planCode);
 
     await check('billing: Standard resolves end-to-end as messaging only', async () => {
       const { refreshEditions, getEdition, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');

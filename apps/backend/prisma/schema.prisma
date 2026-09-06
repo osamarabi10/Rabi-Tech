@@ -13,7 +13,12 @@ model Organization {
   name                 String
   slug                 String    @unique // for Phase 1.5 subdomain routing
   status               String    @default("ACTIVE") // ACTIVE|SUSPENDED|PROVISIONING
-  tier                 String    @default("FREE") // FREE|STANDARD|GROWTH|BUSINESS|ENTERPRISE
+  /// The plan lives on Subscription, and only there. This model carried a
+  /// `tier` column holding a plan code as well, written alongside every
+  /// activation, trial, downgrade and cancellation — two stores for one fact,
+  /// agreeing only for as long as every call site remembered to keep them
+  /// agreeing. Removed 2026-09-06; see D-18. An organization with no live
+  /// subscription resolves to the floor edition.
   paymentProvider      String    @default("manual")
   paymentCustomerRef   String?
   emailVerifiedAt      DateTime?

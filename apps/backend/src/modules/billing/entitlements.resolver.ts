@@ -35,14 +35,24 @@ import { getEdition } from './editions.service';
  * `assertSeatAvailable`, `getCurrentUsage` and `getBillingSummary`.
  */
 
-export type EntitlementSource = 'override' | 'subscription' | 'tier';
+/**
+ * Where the plan in force came from. `'default'` means neither an override
+ * nor a live subscription applied, so the floor edition does.
+ *
+ * This was `'tier'` until 2026-09-06, naming `Organization.tier` — a second
+ * column that also held a plan code, kept in step with the subscription by
+ * hand on every activation, cancellation and downgrade. Two stores for one
+ * fact is how they drift; the column is gone and this value is named for the
+ * situation rather than for the column that used to represent it (D-18).
+ */
+export type EntitlementSource = 'override' | 'subscription' | 'default';
 
 export type EffectiveEntitlements = {
   /** The plan actually in force, after overrides. */
   plan: PlanCode;
   planName: string;
   /**
-   * The plan ignoring any override — subscription, else tier.
+   * The plan ignoring any override — the subscription, else the floor edition.
    *
    * This is the plan `applyPlanLimits` derived OrganizationConfig from, so it
    * is the only correct thing to compare config against when detecting drift.
@@ -179,7 +189,7 @@ function safePlanCode(value: unknown, context: string): PlanCode | null {
 /**
  * Resolve what an organization is entitled to.
  *
- * Resolution order: **live override → active subscription → `Organization.tier`**.
+ * Resolution order: **live override → active subscription → the floor edition**.
  *
  * `now` is taken once and threaded through every comparison. Calling
  * `new Date()` at three points in one resolution can straddle an expiry
@@ -224,7 +234,6 @@ export async function resolveEntitlements(
   const organization = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: {
-      tier: true,
       planOverride: true,
       macQuotaOverride: true,
       discountPercent: true,
@@ -259,15 +268,29 @@ export async function resolveEntitlements(
   // A CANCELED subscription row still carries a planCode; using it would
   // resurrect a plan the tenant has left. Only live statuses are read.
   const subscriptionPlan = safePlanCode(organization.subscriptions[0]?.planCode, 'subscription.planCode');
-  const tierPlan = safePlanCode(organization.tier, 'organization.tier');
 
-  const planOfRecord = subscriptionPlan ?? tierPlan ?? 'FREE';
+  /*
+    No subscription means the floor edition, and nothing else.
+
+    This used to fall back to `Organization.tier`, which was a second column
+    holding a plan code, written alongside every subscription change by hand.
+    It agreed with the subscription only for as long as every one of those
+    call sites remembered to keep it agreeing — and the one that mattered was
+    cancellation, which reset it to FREE so that leaving a plan did not leave
+    the entitlements behind. That worked, and it worked by discipline rather
+    than by construction.
+
+    FREE is the same answer that fallback gave for an organization with no
+    live subscription, because cancellation reset the column to FREE. The
+    difference is that it is now the only place the answer comes from (D-18).
+  */
+  const planOfRecord = subscriptionPlan ?? 'FREE';
   const plan = overridePlan ?? planOfRecord;
   const source: EntitlementSource = overridePlan
     ? 'override'
     : subscriptionPlan
       ? 'subscription'
-      : 'tier';
+      : 'default';
 
   // MAC only. One integer cannot mean both active_contacts (~2 500) and
   // ai_tokens_in (~millions), so the other five meters follow plan-or-config.

@@ -235,6 +235,10 @@ services:
       # outage takes to become a customer-visible restriction.
       # EDITION_REFRESH_MS was already read by the code and was never listed
       # here, which is exactly the silent-default case this file guards against.
+      # Raised only for the C3 entitlement proof, which creates seven
+      # organizations through the real signup path in one run. The shipped
+      # default is 3/hour and the tenancy harness asserts it.
+      - SIGNUP_RATE_PER_HOUR=${SIGNUP_RATE_PER_HOUR:-}
       - EDITION_REFRESH_MS=${EDITION_REFRESH_MS:-30000}
       - EDITION_STALE_AFTER_MS=${EDITION_STALE_AFTER_MS:-600000}
     healthcheck:

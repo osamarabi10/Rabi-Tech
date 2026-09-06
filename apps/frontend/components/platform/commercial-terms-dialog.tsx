@@ -28,7 +28,6 @@ import { Textarea } from '@/components/ui/textarea';
 type CommercialOrg = {
   id: string;
   name: string;
-  tier: string;
   planOverride: string | null;
   macQuotaOverride: number | null;
   discountPercent: number | null;
@@ -45,7 +44,7 @@ type Effective = {
   plan: string;
   planName: string;
   planOfRecord: string;
-  source: 'override' | 'subscription' | 'tier';
+  source: 'override' | 'subscription' | 'default';
   limits: Record<string, number | null>;
   seatLimit: number | null;
   isOverridden: boolean;

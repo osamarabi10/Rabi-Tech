@@ -1,0 +1,226 @@
+{
+  "free-plain": {
+    "effectivePriceCents": 0,
+    "isOverridden": false,
+    "limits": {
+      "active_contacts": 100,
+      "ai_tokens_in": null,
+      "ai_tokens_out": null,
+      "campaign_sends": 0,
+      "messages_inbound": null,
+      "messages_outbound": 100
+    },
+    "listPriceCents": 0,
+    "maxWorkspaces": 1,
+    "override": {
+      "creditCents": 0,
+      "discountPercent": null,
+      "expired": false,
+      "expiresAt": null,
+      "macQuota": null,
+      "plan": null,
+      "reason": null
+    },
+    "plan": "FREE",
+    "planName": "Free",
+    "planOfRecord": "FREE",
+    "seatLimit": 1,
+    "source": "subscription"
+  },
+  "standard-plain": {
+    "effectivePriceCents": 1900,
+    "isOverridden": false,
+    "limits": {
+      "active_contacts": 500,
+      "ai_tokens_in": null,
+      "ai_tokens_out": null,
+      "campaign_sends": 0,
+      "messages_inbound": null,
+      "messages_outbound": 2000
+    },
+    "listPriceCents": 1900,
+    "maxWorkspaces": 1,
+    "override": {
+      "creditCents": 0,
+      "discountPercent": null,
+      "expired": false,
+      "expiresAt": null,
+      "macQuota": null,
+      "plan": null,
+      "reason": null
+    },
+    "plan": "STANDARD",
+    "planName": "Standard",
+    "planOfRecord": "STANDARD",
+    "seatLimit": 2,
+    "source": "subscription"
+  },
+  "growth-via-override": {
+    "effectivePriceCents": 4900,
+    "isOverridden": true,
+    "limits": {
+      "active_contacts": 2500,
+      "ai_tokens_in": null,
+      "ai_tokens_out": null,
+      "campaign_sends": 5000,
+      "messages_inbound": null,
+      "messages_outbound": 10000
+    },
+    "listPriceCents": 4900,
+    "maxWorkspaces": 1,
+    "override": {
+      "creditCents": 0,
+      "discountPercent": null,
+      "expired": false,
+      "expiresAt": "2999-01-01T00:00:00.000Z",
+      "macQuota": null,
+      "plan": "GROWTH",
+      "reason": "c3 proof: growth-via-override"
+    },
+    "plan": "GROWTH",
+    "planName": "Growth",
+    "planOfRecord": "STANDARD",
+    "seatLimit": 5,
+    "source": "override"
+  },
+  "business-via-override": {
+    "effectivePriceCents": 19900,
+    "isOverridden": true,
+    "limits": {
+      "active_contacts": 10000,
+      "ai_tokens_in": null,
+      "ai_tokens_out": null,
+      "campaign_sends": 25000,
+      "messages_inbound": null,
+      "messages_outbound": 50000
+    },
+    "listPriceCents": 19900,
+    "maxWorkspaces": 5,
+    "override": {
+      "creditCents": 0,
+      "discountPercent": null,
+      "expired": false,
+      "expiresAt": "2999-01-01T00:00:00.000Z",
+      "macQuota": null,
+      "plan": "BUSINESS",
+      "reason": "c3 proof: business-via-override"
+    },
+    "plan": "BUSINESS",
+    "planName": "Business",
+    "planOfRecord": "STANDARD",
+    "seatLimit": 25,
+    "source": "override"
+  },
+  "enterprise-via-override": {
+    "effectivePriceCents": 0,
+    "isOverridden": true,
+    "limits": {
+      "active_contacts": null,
+      "ai_tokens_in": null,
+      "ai_tokens_out": null,
+      "campaign_sends": null,
+      "messages_inbound": null,
+      "messages_outbound": null
+    },
+    "listPriceCents": 0,
+    "maxWorkspaces": null,
+    "override": {
+      "creditCents": 0,
+      "discountPercent": null,
+      "expired": false,
+      "expiresAt": "2999-01-01T00:00:00.000Z",
+      "macQuota": null,
+      "plan": "ENTERPRISE",
+      "reason": "c3 proof: enterprise-via-override"
+    },
+    "plan": "ENTERPRISE",
+    "planName": "Enterprise",
+    "planOfRecord": "FREE",
+    "seatLimit": null,
+    "source": "override"
+  },
+  "mac-quota-override": {
+    "effectivePriceCents": 1900,
+    "isOverridden": true,
+    "limits": {
+      "active_contacts": 4242,
+      "ai_tokens_in": null,
+      "ai_tokens_out": null,
+      "campaign_sends": 0,
+      "messages_inbound": null,
+      "messages_outbound": 2000
+    },
+    "listPriceCents": 1900,
+    "maxWorkspaces": 1,
+    "override": {
+      "creditCents": 0,
+      "discountPercent": null,
+      "expired": false,
+      "expiresAt": null,
+      "macQuota": 4242,
+      "plan": null,
+      "reason": "c3 proof: mac-quota-override"
+    },
+    "plan": "STANDARD",
+    "planName": "Standard",
+    "planOfRecord": "STANDARD",
+    "seatLimit": 2,
+    "source": "subscription"
+  },
+  "expired-override-ignored": {
+    "effectivePriceCents": 0,
+    "isOverridden": false,
+    "limits": {
+      "active_contacts": 100,
+      "ai_tokens_in": null,
+      "ai_tokens_out": null,
+      "campaign_sends": 0,
+      "messages_inbound": null,
+      "messages_outbound": 100
+    },
+    "listPriceCents": 0,
+    "maxWorkspaces": 1,
+    "override": {
+      "creditCents": 0,
+      "discountPercent": null,
+      "expired": true,
+      "expiresAt": "2020-01-01T00:00:00.000Z",
+      "macQuota": null,
+      "plan": "ENTERPRISE",
+      "reason": "c3 proof: expired-override-ignored"
+    },
+    "plan": "FREE",
+    "planName": "Free",
+    "planOfRecord": "FREE",
+    "seatLimit": 1,
+    "source": "subscription"
+  },
+  "no-active-subscription": {
+    "effectivePriceCents": 0,
+    "isOverridden": false,
+    "limits": {
+      "active_contacts": 100,
+      "ai_tokens_in": null,
+      "ai_tokens_out": null,
+      "campaign_sends": 0,
+      "messages_inbound": null,
+      "messages_outbound": 100
+    },
+    "listPriceCents": 0,
+    "maxWorkspaces": 1,
+    "override": {
+      "creditCents": 0,
+      "discountPercent": null,
+      "expired": false,
+      "expiresAt": null,
+      "macQuota": null,
+      "plan": null,
+      "reason": null
+    },
+    "plan": "FREE",
+    "planName": "Free",
+    "planOfRecord": "FREE",
+    "seatLimit": 1,
+    "source": "tier"
+  }
+}

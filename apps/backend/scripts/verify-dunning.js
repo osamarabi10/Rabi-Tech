@@ -42,7 +42,7 @@ async function main() {
 
     try {
       await prisma.organization.create({
-        data: { id: ORG_ID, name: 'Dunning Probe', slug: 'dunning-probe-' + stamp, status: 'ACTIVE', tier: 'GROWTH' },
+        data: { id: ORG_ID, name: 'Dunning Probe', slug: 'dunning-probe-' + stamp, status: 'ACTIVE' },
       });
 
       // ── an invoice that is not yet due changes nothing ────────────────────

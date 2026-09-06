@@ -206,10 +206,8 @@ async function applyPlanLimits(organizationId: string, planCode: PlanCode): Prom
   */
   const aiInLimit = plan.monthlyAiTokensInLimit;
   const aiOutLimit = plan.monthlyAiTokensOutLimit;
-  await prisma.organization.update({
-    where: { id: organizationId },
-    data: { tier: planCode },
-  });
+  // The plan is not mirrored onto the organization any more. It lives on the
+  // subscription, which is the row that actually says what was bought (D-18).
   await prisma.organizationConfig.upsert({
     where: { organizationId },
     create: {
@@ -360,13 +358,12 @@ export async function createSignup(input: {
           // is self-serve now, so the status a new organization is born with is
           // the status it keeps.
           status: 'ACTIVE',
-          // The plan actually in force, which for a trial is the plan the
-          // trial is *of*. Hardcoding FREE here while the subscription said
-          // otherwise would leave tier and subscription disagreeing, and
-          // detectQuotaDrift — which exists because those two drifted once
-          // already — would then fire on every trial in the system. A detector
-          // that always fires is a detector nobody reads.
-          tier: effectivePlanCode,
+          // No tier column to keep in step any more. The subscription created
+          // below carries the plan — including for a trial, where the plan is
+          // the one the trial is *of* — and it is now the only thing that
+          // does. The comment this replaces described keeping two stores
+          // agreeing; deleting one of them is the stronger version of that
+          // (D-18).
           paymentProvider: provider.provider,
         },
       });
@@ -762,7 +759,7 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
       by a banner rather than being silently held back.
     */
     const active = organization.subscriptions[0];
-    const planCode = normalizePlanCode(active?.planCode || organization.tier || 'FREE');
+    const planCode = normalizePlanCode(active?.planCode || 'FREE');
     const edition = getEdition(planCode);
 
     /*
@@ -1120,7 +1117,10 @@ export async function cancelCurrentSubscription(
       where: { id: subscription.id },
       data: { status: 'CANCELED', canceledAt: new Date(), cancelAtPeriodEnd: false },
     });
-    await prisma.organization.update({ where: { id: organizationId }, data: { tier: 'FREE' } });
+    // Only the config to reset now. Resetting the tier column was the other
+    // half of this, and the half that had to be remembered: forget it and a
+    // cancelled organization kept its old entitlements through the fallback
+    // that no longer exists (D-18).
     await applyPlanLimits(organizationId, 'FREE');
   });
 }
@@ -1358,7 +1358,12 @@ export async function getCurrentBilling(organizationId: string) {
         id: organization.id,
         name: organization.name,
         status: organization.status,
-        tier: organization.tier,
+        // Still called tier because it is a published response field and
+        // renaming it would break the client for no gain. The value is
+        // unchanged — Organization.tier only ever held the subscription plan,
+        // or FREE when there was none — but it is now read from the one row
+        // that says so rather than from a copy kept in step by hand (D-18).
+        tier: organization.subscriptions[0]?.planCode ?? 'FREE',
         emailVerifiedAt: organization.emailVerifiedAt,
         downgradeGraceEndsAt: organization.downgradeGraceEndsAt,
         downgradeGraceReason: organization.downgradeGraceReason,

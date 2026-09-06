@@ -923,3 +923,113 @@ wrong configuration keep passing.
 
 ---
 
+---
+
+## D-18 · The plan had two homes; `Organization.tier` is gone
+
+**Status:** fixed 2026-09-06 · **Owner:** UnKnowan
+
+`Organization.tier` held a plan code. So does `Subscription.planCode`. One fact,
+two stores, kept in agreement by hand at every activation, trial start,
+downgrade and cancellation.
+
+They did agree — that is the uncomfortable part. Every call site remembered,
+and the one that mattered most, cancellation, reset the column to FREE so that
+leaving a plan did not leave the entitlements behind. It worked by discipline
+rather than by construction, which is the same thing right up until the first
+time somebody forgets, and then it is a customer on a plan they did not buy.
+
+Three things made it worth removing now rather than later:
+
+1. **The resolver read it as a fallback**, so a wrong value in that column was
+   not a display bug — it granted entitlements.
+2. **The codebase already had a detector for the two drifting.**
+   `detectQuotaDrift` exists because they drifted once. A second store whose
+   existence justifies a drift detector is a second store that should not exist.
+3. **The database is empty** (D-12 aftermath). Six references and no rows: nearly
+   free now, expensive for ever after.
+
+### What resolution looks like now
+
+**live override → live subscription → the floor edition.** For an organization
+with no live subscription that is FREE, which is exactly what the column held in
+that situation, because cancellation reset it.
+
+### The one intentional behaviour change, named rather than hidden
+
+`EffectiveEntitlements.source` told the caller where the plan came from, and its
+third value was `'tier'` — named after the column. It is now `'default'`, and
+the frontend union changed with it.
+
+That is a customer-visible field, so the proof does not exclude it. It declares
+it: `EXPECTED_DIFFS` names the field, the scenario, and the before and after
+values; the gate asserts the change happened *exactly* as declared and then
+requires everything else to be byte-identical. Excluding `source` from the
+comparison would have hidden a real change behind a green.
+
+### The proof
+
+`scripts/c3-entitlement-snapshot.js`, against
+`scripts/fixtures/c3-entitlements.json` captured before the migration.
+
+Eight organizations, **every one created through the real signup path** —
+`POST /api/billing/signup` then `activateManualSubscription` — because rows
+written straight into the tables would prove the resolver agrees with my idea of
+a subscription rather than with the one the product creates.
+
+| scenario | what it covers |
+|---|---|
+| free-plain, standard-plain | the two editions that can actually be bought |
+| growth / business / enterprise-via-override | the other three editions' numbers |
+| mac-quota-override | a single metric moved, the plan unchanged |
+| expired-override-ignored | an override past its date must not grant |
+| no-active-subscription | **the branch being deleted** |
+
+Only FREE and STANDARD are reachable at signup: the rest are refused with
+`PLAN_CHANNEL_UNAVAILABLE` while the Meta credentials are absent (D-9). That
+refusal is correct product behaviour, so the remaining editions are reached the
+way a platform owner reaches them today — a plan override — and every
+organization is still created through the real path.
+
+The eighth scenario exists because the other seven all hold live subscriptions
+and therefore never reach the fallback. A proof that never exercises the branch
+being deleted would have stayed green whatever happened to it.
+
+**Result: 8/8 unchanged**, the eighth byte-identical apart from the declared
+`source` change.
+
+**Differential mutation.** Changing the floor from `FREE` to `STANDARD` — the
+mistake a careless removal actually makes — turned exactly one scenario red, and
+showed the damage in the customer's terms: plan `FREE → STANDARD`, seats
+`1 → 2`, price `0 → 1900`. The other seven stayed green. Restored byte-identical
+(sha256 `614432c0…`).
+
+### The guard
+
+Two checks in the tenancy harness (153/153):
+
+- `Organization` must not declare a `tier` column, and the resolver must not
+  read one or carry a `'tier'` source value. The cheapest way to reintroduce
+  this defect is to add the column back "just for the console", which reads as a
+  harmless denormalisation right up until the two disagree.
+- The shipped signup rate limit is still 3/hour. `SIGNUP_RATE_PER_HOUR` was
+  added so the proof can create eight organizations in one run; an override
+  added for a test is one edit from becoming the default, and this default is a
+  real defence — each signup can provision a container.
+
+### Reversal
+
+`prisma/migrations/20261018090000_drop_organization_tier/down.sql` rebuilds the
+column from the live subscription and refuses in three cases: no audit row, so
+it cannot tell an emptied database from a used one; rows the forward migration
+recorded as disagreeing with their subscription, which cannot be rebuilt from
+it; and organizations created since, whose `tier` never existed and would be
+fabricated. On this database the recorded counts were `organizations: 0,
+disagreeing: 0`.
+
+- **Lands in:** `entitlements.resolver.ts`, `billing.service.ts`,
+  `branding.service.ts`, `branding.routes.ts`, `platform.routes.ts`, the
+  frontend union, the migration, and three gates.
+
+---
+

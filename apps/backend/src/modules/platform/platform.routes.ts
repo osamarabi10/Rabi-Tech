@@ -230,7 +230,6 @@ router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (
         name: true,
         slug: true,
         status: true,
-        tier: true,
         paymentProvider: true,
         paymentCustomerRef: true,
         emailVerifiedAt: true,
@@ -302,7 +301,18 @@ router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (
       },
       orderBy: { createdAt: 'desc' },
     });
-    res.json(subscribers);
+    /*
+      `tier` is still published because the console renders it, but it is now
+      derived rather than stored: Organization.tier was a second column
+      holding a plan code and it is gone (D-18). Only a live subscription
+      counts — a CANCELED row still carries its planCode, and reporting that
+      would show a subscriber as being on a plan they have left, which is
+      exactly what resetting the column on cancellation used to prevent.
+    */
+    res.json(subscribers.map((subscriber) => ({
+      ...subscriber,
+      tier: subscriber.subscriptions.find((s) => s.status === 'ACTIVE' || s.status === 'TRIALING')?.planCode ?? 'FREE',
+    })));
   } catch (err) {
     logger.error('Subscriber list failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to list subscribers' });
@@ -423,7 +433,7 @@ router.post('/subscribers', requirePlatformOwner, async (req, res) => {
         // where an owner creates a subscriber and then separately activates it
         // is the ceremony being removed. Its admin could not log in either --
         // the login gate never cared who created the row.
-        data: { name: name.trim(), slug: normalizedSlug, status: 'ACTIVE', tier: 'FREE', paymentProvider: 'manual' },
+        data: { name: name.trim(), slug: normalizedSlug, status: 'ACTIVE', paymentProvider: 'manual' },
       });
       const identity = await tx.identity.create({
         data: { email: normalizedEmail, passwordHash, platformRole: 'NONE' },
@@ -569,7 +579,6 @@ router.patch('/subscribers/:id/status', requirePlatformPermission('subscriber:su
 const COMMERCIAL_SELECT = {
   id: true,
   name: true,
-  tier: true,
   planOverride: true,
   macQuotaOverride: true,
   discountPercent: true,
@@ -1869,7 +1878,6 @@ router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) =>
     const candidates = await prisma.organization.findMany({
       where: {
         OR: [
-          { tier: code },
           { planOverride: code },
           { subscriptions: { some: { planCode: code, status: { in: ['ACTIVE', 'TRIALING'] } } } },
         ],

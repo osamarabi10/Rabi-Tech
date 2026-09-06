@@ -1823,7 +1823,7 @@ export type BillingSummary = {
    */
   commercial: {
     isOverridden: boolean;
-    source: 'override' | 'subscription' | 'tier';
+    source: 'override' | 'subscription' | 'default';
     expiresAt: string | null;
     discountPercent: number | null;
     listPriceCents: number;

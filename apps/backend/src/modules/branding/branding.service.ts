@@ -3,7 +3,7 @@ import { getEdition } from '../billing/editions.service';
 import { normalizePlanCode, PlanEntitlements } from '../billing/plans';
 import fs from 'fs/promises';
 import path from 'path';
-import { Organization, OrganizationBranding } from '@prisma/client';
+import { OrganizationBranding, Prisma } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { runAsPlatform } from '../../lib/tenant-context';
 import { signingSecret } from '../../lib/signing-secret';
@@ -56,18 +56,39 @@ const HSL_PATTERN = /^\d{1,3}(?:\.\d+)?\s+\d{1,3}(?:\.\d+)?%\s+\d{1,3}(?:\.\d+)?
 const REQUIRED_ATTRIBUTION = 'Powered by RabiTech';
 const ASSET_ROUTE_PREFIX = '/api/branding/assets';
 
-type BrandingWithOrg = OrganizationBranding & { organization?: Pick<Organization, 'tier'> | null };
+/**
+ * How branding learns which edition an organization is on.
+ *
+ * It read `Organization.tier` until 2026-09-06 — a second column holding a
+ * plan code, kept in step with the subscription by hand. The subscription is
+ * the row that actually records what was bought, so branding asks it
+ * directly (D-18). Only live statuses count: a cancelled subscription still
+ * carries a planCode, and honouring it would keep white-label switched on
+ * for an organization that has stopped paying for it.
+ */
+const ORGANIZATION_PLAN_SELECT = {
+  subscriptions: {
+    where: { status: { in: ['ACTIVE', 'TRIALING'] } },
+    select: { planCode: true },
+    orderBy: { createdAt: 'desc' },
+    take: 1,
+  },
+} satisfies Prisma.OrganizationSelect;
+
+type BrandingWithOrg = OrganizationBranding & {
+  organization?: { subscriptions: { planCode: string }[] } | null;
+};
 
 /**
- * The edition for a tier string, falling back to the least privileged one.
+ * The edition for a plan code, falling back to the least privileged one.
  *
  * normalizePlanCode throws on a code it does not recognise, and a branding read
- * must not fail with a 500 because a tier string was unexpected. FREE is the
- * safe answer: an unknown tier grants nothing.
+ * must not fail with a 500 because a stored code was unexpected. FREE is the
+ * safe answer: an unknown code grants nothing.
  */
-function editionFor(tier: string | null | undefined): PlanEntitlements {
+function editionFor(planCode: string | null | undefined): PlanEntitlements {
   try {
-    return getEdition(normalizePlanCode(tier));
+    return getEdition(normalizePlanCode(planCode));
   } catch {
     return getEdition('FREE');
   }
@@ -87,7 +108,7 @@ export function canCustomizeFooter(tier: string | null | undefined): boolean {
 
 export function publicBranding(row?: BrandingWithOrg | null): PublicBranding {
   if (!row) return DEFAULT_BRANDING;
-  const tier = String(row.organization?.tier || 'FREE').toUpperCase();
+  const tier = String(row.organization?.subscriptions?.[0]?.planCode || 'FREE').toUpperCase();
   const footerEditable = canCustomizeFooter(tier);
   return {
     productName: row.productName,
@@ -205,7 +226,7 @@ export async function getPublicBrandingForHost(hostHeader: string | undefined): 
   const row = await runAsPlatform(`branding-public:${host}`, () =>
     prisma.organizationBranding.findUnique({
       where: { customDomain: host },
-      include: { organization: { select: { tier: true } } },
+      include: { organization: { select: ORGANIZATION_PLAN_SELECT } },
     }),
   );
   return publicBranding(row);

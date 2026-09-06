@@ -147,18 +147,18 @@ async function main() {
       entry edition with trialEndsAt set — that is the product's design, and
       this check asserted the wrong thing until it ran. So the fixture makes an
       organization that is genuinely on FREE: the trial subscription is
-      cancelled and the tier says FREE, which is what resolveEntitlements falls
-      through to and what a subscriber looks like after a trial lapses.
+      cancelled, and no live subscription is what resolveEntitlements falls
+      through to — what a subscriber looks like after a trial lapses.
+
+      Cancelling used to be half of it; the other half was writing FREE into
+      Organization.tier. That column is gone (D-18), so the fixture is now
+      exactly one statement, and there is no second store left to forget.
     */
     const free = await signup('FREE', 'free');
     await runAsPlatform('verify-lazy-provisioning:lapse-trial', async () => {
       await prisma.subscription.updateMany({
         where: { organizationId: free.organizationId },
         data: { status: 'CANCELED' },
-      });
-      await prisma.organization.update({
-        where: { id: free.organizationId },
-        data: { tier: 'FREE' },
       });
     });
     const refused = await maybeProvisionGateway(free.organizationId, 'connect-requested');
