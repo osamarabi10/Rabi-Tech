@@ -66,6 +66,31 @@ works, **scope** governs what you are allowed to touch.
   a manual delete to get around it is overriding the decision rather than
   implementing it.
 
+- **A second store whose existence justifies a drift detector is a second
+  store that should not exist.** When the answer to "these two could
+  disagree" is a monitor rather than a merge, the design has accepted the
+  disagreement and taken on the cost of watching for it for ever. Removing
+  the duplicate is usually smaller than the detector, and it is the only
+  option that makes the failure impossible rather than visible.
+
+  `Organization.tier` and `Subscription.planCode` both held the plan. They
+  agreed only because every activation, trial, downgrade and cancellation
+  remembered to make them agree, and the resolver read the column as a
+  fallback — so a stale value there granted entitlements rather than
+  misrendering a badge. Deleting the column was six references and no rows
+  (D-18).
+
+  The converse matters as much, and this codebase supplies it: **do not
+  delete a detector because a nearby duplicate went away.**
+  `detectQuotaDrift` looks like it belonged to that pair and does not — it
+  compares `OrganizationConfig`'s enforced limits against the plan of
+  record, which are still two stores and still diverge for real reasons
+  (an edition edited after a subscriber's config was written, an override
+  leaking into config). Removing it would have deleted live coverage of the
+  one fault the entitlements resolver exists to prevent. Check what a
+  detector actually compares before concluding it is watching for something
+  that can no longer happen.
+
 ---
 
 ## Evidence

@@ -24,7 +24,7 @@ import { getEdition } from './editions.service';
  *    longer have. Read-time expiry cannot fail.
  * 2. **Drift detection would break permanently.** `OrganizationConfig` means
  *    "the numbers this plan grants". Writing overrides into it destroys that
- *    meaning, and `detectQuotaDrift` — which exists because tier and config
+ *    meaning, and `detectQuotaDrift` — which exists because the config and
  *    drifted once already — would fire on every overridden org forever. A
  *    detector that always fires is a detector nobody reads.
  * 3. **The audit trail would stop being the truth.** What is enforced and what

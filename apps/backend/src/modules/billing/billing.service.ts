@@ -1459,7 +1459,8 @@ function detectQuotaDrift(
   // An edition edit is a NEW BASELINE, not drift.
   //
   // applyPlanLimits() copies an edition's numbers into OrganizationConfig when
-  // a tier is set. Once the owner can edit the edition itself, those numbers
+  // a subscription is activated. Once the owner can edit the edition itself,
+  // those numbers
   // legitimately diverge the moment a price or a limit changes - and without
   // this, raising GROWTH's allowance would report every organization on GROWTH
   // as drifted. That is the failure this detector was built to avoid: one that
@@ -1511,9 +1512,9 @@ function detectQuotaDrift(
     // Config diverges from the plan of record. Two different faults look alike
     // here, and only one is the classic P8-b drift:
     //
-    //  - No override live, or an override that config does not equal: something
-    //    changed a tier out of band and the tenant silently kept — or lost —
-    //    quota. That is drift.
+    //  - No override live, or an override that config does not equal: the
+    //    plan changed out of band, or the config did, and the tenant silently
+    //    kept — or lost — quota. That is drift.
     //  - An override IS live and config now equals the enforced number: an
     //    override was written through into config. That is the one thing
     //    entitlements.resolver.ts exists to prevent, so it is named separately
