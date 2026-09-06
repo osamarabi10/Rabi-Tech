@@ -546,8 +546,17 @@ messaging anyone.
 
 ## D-12 · Both seeded organizations point at a lane with nothing in it
 
-**Status:** open, owner decision · **Owner:** UnKnowan · **Trigger:** whenever the two
-demo organizations next matter
+**Status:** RESOLVED 2026-09-06 — both organizations deleted · **Owner:** UnKnowan
+
+> The owner settled this by deleting `ostudio` and `rabitech-demo` outright,
+> explicitly including `ostudio` and its 17 real inbound messages, along with
+> `mark`. The database now holds no organizations at all. A backup was taken
+> and verified by the restore drill first, so the data is recoverable from the
+> off-host copy if that judgement is ever revisited.
+>
+> The analysis below stands as the reason the decision was cheap to make: there
+> was no live pairing on the shared volume to protect, which is what the
+> original D-5 framing had assumed there was.
 
 `ostudio` and `rabitech-demo` both carry an OPENWA channel with
 `managedByProvisioner: false` and `baseUrl: http://openwa:2785` — the shared development
@@ -900,13 +909,15 @@ weeks (D-14).
 A dead lane that still answers is worse than one that is gone. It makes the
 wrong configuration keep passing.
 
-- **Not removed here** because two organizations still reference it and what
-  happens to them is D-12, which is the owner's call with the phones in hand.
-  Removing the service before deciding that would strand those rows pointing at
-  a host that no longer exists — a worse state than the one they are in.
-- **Order:** settle D-12 first (retire, re-pair, or convert to the managed
-  lane), then remove the service, the `backend.local` alias if nothing else
-  needs it, and the extra `SSRF_ALLOWED_HOSTS` entry, together.
+- **Blocker cleared 2026-09-06.** The two organizations that referenced this
+  service were deleted with everything else (D-12). Nothing points at it now,
+  so the reason to keep it is gone and removing it strands nothing. It stays
+  only because removing it is a deliberate compose change the owner has not
+  yet asked for, not because anything depends on it.
+- **Order, when it happens:** remove the service, the `backend.local` alias if
+  nothing else needs it, and the extra `SSRF_ALLOWED_HOSTS` entry, together —
+  the alias exists largely to serve this container, and leaving it behind
+  recreates the half-real name that made D-14 invisible.
 - **Lands in:** `docker-compose.yml`, and `docs/DEPLOYMENT.md` where the shared
   lane is still documented as a thing that exists.
 

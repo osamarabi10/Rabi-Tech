@@ -183,6 +183,27 @@ queues are at zero failed.
 
 ---
 
+## 6a. The database holds no tenants
+
+On 2026-09-06 the owner deleted every remaining organization — `mark`,
+`rabitech-demo` and `ostudio` — in one transaction, after a backup verified by
+the restore drill. 5,357 rows across 38 tables. Organizations, subscriptions,
+channels, sessions, conversations, messages and contacts are all zero; the Plan
+catalogue, the OWNER identity, platform settings and the platform audit log
+remain.
+
+Two consequences worth carrying forward:
+
+- **The first real customer will be the first real customer.** Nothing in this
+  database has been through a signup since. Any assumption resting on "it works
+  for the existing tenants" no longer has existing tenants behind it.
+- **Schema migrations are now nearly free.** There are no legacy rows to
+  grandfather and no backfill to get right — the condition under which C3
+  should be done, and the reason its risk profile is not what its plan
+  originally assumed.
+
+---
+
 ## 7. What is ready
 
 Worth stating, because a readiness document that lists only gaps misleads in the
