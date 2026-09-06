@@ -28,6 +28,9 @@ import {
 } from '../billing/editions.service';
 import { SUBSCRIPTION_PLAN_SELECT, planCodeOf } from '../billing/subscription-plan';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { limitState, type Capability } from '../billing/capabilities';
+import { monthRange } from '../usage/usage.service';
+import { USAGE_METRICS } from '../usage/metrics';
 import { probeOrganization } from '../gateway/health-monitor';
 import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
 import { auditPlatformScope } from '../../lib/audit';
@@ -255,7 +258,10 @@ router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (
         overrideExpiresAt: true,
         createdAt: true,
         updatedAt: true,
-        _count: { select: { users: true, whatsappSessions: true } },
+        // workspaces joins the count for the operating table: branches are a
+        // priced ceiling, so an owner scanning the list needs to see who is
+        // against it without opening anything.
+        _count: { select: { users: true, whatsappSessions: true, workspaces: true } },
         whatsappSessions: {
           select: { id: true, sessionName: true, label: true, phoneNumber: true, isActive: true },
           orderBy: { createdAt: 'asc' },
@@ -312,6 +318,95 @@ router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (
       orderBy: { createdAt: 'desc' },
     });
     /*
+      The derived columns the operating table reads, computed here.
+
+      **Not in the screen.** "Over any limit" is a comparison, and C4 spent a
+      commit removing six hand-rolled copies of that comparison; a seventh
+      written in a page component would disagree with the server the first time
+      an override moved, and disagree silently. `limitState` is the same
+      function the refusals use.
+
+      **Not from the usage rollup either**, which is what the row already shows.
+      `getPlatformMonthlyRollupUsage` reads PlatformDailyMetric — a daily
+      aggregate that is only as fresh as the last rollup — and takes its limits
+      from OrganizationConfig rather than the resolver, so a platform-owner
+      override is invisible to it. Sorting an at-risk list by numbers that
+      ignore the exception the owner personally granted is the specific way
+      this screen could waste somebody’s afternoon.
+
+      So the counts come from the same rows enforcement counts, in bulk: one
+      query per fact rather than one per subscriber. The distinct-contact query
+      mirrors countMonthlyActiveContacts, because MAC is a distinct count and a
+      SUM over the same rows would be a different, larger number.
+
+      `not-included` is deliberately not "over limit". A FREE subscriber has no
+      broadcasts, and listing them as over their broadcast limit would put every
+      free organization on the at-risk list permanently.
+    */
+    const ids = subscribers.map((row) => row.id);
+    const { start, end } = monthRange();
+    const [entitlementRows, seatRows, meterRows, contactRows, inboundRows] = await Promise.all([
+      Promise.all(ids.map(async (id) => [id, await resolveEntitlements(id)] as const)),
+      prisma.user.groupBy({
+        by: ['organizationId'],
+        where: { organizationId: { in: ids }, isActive: true },
+        _count: true,
+      }),
+      prisma.usageEvent.groupBy({
+        by: ['organizationId', 'metric'],
+        where: {
+          organizationId: { in: ids },
+          metric: { not: 'active_contacts' },
+          occurredAt: { gte: start, lt: end },
+        },
+        _sum: { quantity: true },
+      }),
+      prisma.usageEvent.findMany({
+        where: {
+          organizationId: { in: ids },
+          metric: 'active_contacts',
+          occurredAt: { gte: start, lt: end },
+          subjectId: { not: null },
+        },
+        distinct: ['organizationId', 'subjectId'],
+        select: { organizationId: true },
+      }),
+      prisma.message.groupBy({
+        by: ['organizationId'],
+        where: { organizationId: { in: ids }, direction: 'INBOUND' },
+        _max: { timestamp: true },
+      }),
+    ]);
+
+    const entitlementsById = new Map(entitlementRows);
+    const seatsById = new Map(seatRows.map((row) => [row.organizationId, row._count]));
+    const metersById = new Map<string, Record<string, number>>();
+    for (const row of meterRows) {
+      const bucket = metersById.get(row.organizationId) ?? {};
+      bucket[row.metric] = Number(row._sum.quantity ?? 0n);
+      metersById.set(row.organizationId, bucket);
+    }
+    const contactsById = new Map<string, number>();
+    for (const row of contactRows) {
+      contactsById.set(row.organizationId, (contactsById.get(row.organizationId) ?? 0) + 1);
+    }
+    const inboundById = new Map(inboundRows.map((row) => [row.organizationId, row._max.timestamp]));
+
+    /** Every counted allowance this subscriber holds, and how much is used. */
+    function heldCounts(id: string, workspaceCount: number): Array<[Capability, number]> {
+      return [
+        ['seats', seatsById.get(id) ?? 0],
+        ['workspaces', workspaceCount],
+        ...USAGE_METRICS.map((metric) => [
+          metric as Capability,
+          metric === 'active_contacts'
+            ? contactsById.get(id) ?? 0
+            : metersById.get(id)?.[metric] ?? 0,
+        ] as [Capability, number]),
+      ];
+    }
+
+    /*
       `tier` is still published because the console renders it, but it is now
       derived rather than stored: Organization.tier was a second column
       holding a plan code and it is gone (D-18). Only a live subscription
@@ -319,12 +414,27 @@ router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (
       would show a subscriber as being on a plan they have left, which is
       exactly what resetting the column on cancellation used to prevent.
     */
-    res.json(subscribers.map((subscriber) => ({
-      ...subscriber,
-      tier: planCodeOf(
-        subscriber.subscriptions.find((s) => s.status === 'ACTIVE' || s.status === 'TRIALING'),
-      ) ?? 'FREE',
-    })));
+    res.json(subscribers.map((subscriber) => {
+      const entitlements = entitlementsById.get(subscriber.id);
+      const overLimitReasons = entitlements
+        ? heldCounts(subscriber.id, subscriber._count.workspaces)
+          .filter(([capability, used]) => limitState(entitlements, capability, used) === 'full')
+          .map(([capability]) => capability)
+        : [];
+      const lastInboundAt = inboundById.get(subscriber.id) ?? null;
+      return {
+        ...subscriber,
+        tier: planCodeOf(
+          subscriber.subscriptions.find((s) => s.status === 'ACTIVE' || s.status === 'TRIALING'),
+        ) ?? 'FREE',
+        workspaceCount: subscriber._count.workspaces,
+        // Null means "no inbound message ever", which is not the same as "none
+        // lately" and must not render as a stale date or as 0 days ago.
+        lastInboundAt: lastInboundAt ? lastInboundAt.toISOString() : null,
+        overLimit: overLimitReasons.length > 0,
+        overLimitReasons,
+      };
+    }));
   } catch (err) {
     logger.error('Subscriber list failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to list subscribers' });

@@ -23,7 +23,7 @@ ranked risks.
 ## 0 · Current state — 2026-09-06
 
 **Read this section, `docs/DEPLOYMENT-READINESS.md`, and `docs/DECISIONS.md`
-D-10 to D-20. The rest of this file is background from 2026-09-02 and parts of
+D-10 to D-22. The rest of this file is background from 2026-09-02 and parts of
 it are superseded; each such section says so.**
 
 The working tree is clean, and `main` and `editions-ladder` are level and
@@ -44,7 +44,8 @@ cannot carry its own — `git log --oneline -3` is the head.
 | `e9d21cbf` | `PlanVersion` and `Price`; subscriptions pin a version (C3b) |
 | `f9c79ee1` | The `can / limit / usage / assertCan` façade, and a sweep that proves it completed (C3c) |
 | `c04de082` | The unknown key must be loud; §0 says why C4 exists |
-| _head_ | Six enforcement sites onto the façade; one refusal shape for four ceilings (C4) |
+| `52f67983` | Six enforcement sites onto the façade; one refusal shape for four ceilings (C4) |
+| _head_ | The subscriber operating table: filters, a counted header, and one fewer nav entry (6a) |
 
 Four more commits are AGENTS rules earned by the work above, not by principle.
 
@@ -113,18 +114,37 @@ throws is logged and dropped, so the organization is under-billed with the
 evidence in a log line. Owner UnKnowan, before the first invoice from metered
 usage.
 
+### 6a — the subscriber operating table
+
+`/platform/subscribers` gained four risk filters (trial ending within 7 days,
+over a limit, channel disconnected, no inbound for 14 days), a counted header
+reading total / active / in trial / at risk, and two columns the payload did
+not carry: branch count and last inbound message.
+
+**`/platform/organizations` is deleted** — placeholder page and nav entry both.
+It was a second door to a question this screen already answers, and the screen
+with the data and the actions won over the one with the better name.
+
+"Over a limit" is decided on the **server**, by `limitState`, and shipped as a
+field. A page component deriving it would be the seventh copy of a comparison
+C4 reduced to one. It is deliberately **not** taken from the usage rollup the
+same row displays — see **D-22**, a live inconsistency this routed around
+rather than fixed.
+
 ### What is next
 
-C4 through C8 of the editions ladder, in `.claude/plans/prancy-puzzling-anchor.md`:
+C6 through C8 of the editions ladder, in `.claude/plans/prancy-puzzling-anchor.md`.
+**C5 is struck**: the numbers meter does not exist and cannot be reached until
+Meta is operable, so it lands inside the Meta-enablement commit instead
+(**D-21**). `maxWorkspaces` is not it — that caps branches, and numbers live
+inside a branch.
 
-1. **C5** — the numbers meter (`maxNumbers`), the brief's second meter and the
-   only wholly missing one.
-2. **C6** — the plan editor writes a **new version** rather than editing the
+1. **C6** — the plan editor writes a **new version** rather than editing the
    current one in place, and the existing preview is retargeted at versions.
    C3b deliberately left editing in place; this is where that changes.
-3. **C7** — MAC: keep measuring, stop enforcing. A pricing act, so it is visible
+2. **C7** — MAC: keep measuring, stop enforcing. A pricing act, so it is visible
    on its own.
-4. **C8** — billing provider wiring, one-way outward.
+3. **C8** — billing provider wiring, one-way outward.
 
 Also open and not in that ladder:
 

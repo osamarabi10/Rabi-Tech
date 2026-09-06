@@ -1221,3 +1221,100 @@ gap is between the send and the row, not between two copies of the count. A
 materialised counter was considered for C4 and rejected for that reason: it
 would be a second store of a number already derivable, which is the shape the
 AGENTS Design rule forbids.
+
+---
+
+## D-21 · The numbers meter is struck as a step, not as a requirement
+
+**Status:** deferred 2026-09-06 · **Owner:** UnKnowan
+
+C5 of the editions ladder was "a per-organization cap on WhatsApp numbers".
+It is **not built**, and it is **not buildable usefully yet**. Both halves
+matter, because the first invites someone to build it and the second says why
+that would be waste.
+
+### It does not exist
+
+No `maxNumbers`, `sessionsLimit` or `numbersLimit` appears in
+`prisma/schema.prisma`, `src/` or `scripts/`. The only `whatsappSession.count`
+in the tree is an analytics tile.
+
+**`maxWorkspaces` is not it, and the difference is structural.** A workspace
+is a container; numbers live inside one (`WhatsappSession.workspaceId`). The
+constraints are `@@unique([organizationId, sessionName])` and
+`@@unique([organizationId, phoneNumber])` — one row per number per
+*organization*, and **unlimited numbers per workspace**. So `maxWorkspaces`
+caps branches. The two answers diverge on exactly the case the ladder sells:
+a Growth customer running several numbers in one inbox.
+
+### It cannot be reached
+
+One path can grow an organization’s number count:
+`POST /api/channels/meta/connect`, which upserts a session keyed on
+`metaSessionName(phoneNumberId)` — so each distinct WABA number becomes a new
+row. Nothing caps it.
+
+Signup creates exactly one session, `<slug>-primary`. Nothing on the OpenWA
+side creates a second: the POST routes are connect / disconnect / channel
+against an existing `:name`.
+
+And the Meta path is inoperable today (**D-9**): `META_APP_SECRET` and
+`META_WEBHOOK_VERIFY_TOKEN` are absent, which is why the three
+`['WHATSAPP_CLOUD']` editions cannot be sold at all. A meter built now would
+guard a door nobody can open, and would need re-verifying against the flow
+that eventually opens it.
+
+### The decision
+
+Struck as its own step; **folded into the Meta-enablement commit**, where the
+cap and the door it guards land together and are proved together.
+
+- **Owner:** UnKnowan
+- **Trigger:** the Meta keys — the moment `META_APP_SECRET` and
+  `META_WEBHOOK_VERIFY_TOKEN` are configured, this stops being deferred.
+- **Landing place:** a catalogue field on `PlanVersion`, plus
+  `assertWithinLimit(org, ‘numbers’, count)` on the connect path. C4 built the
+  helper; this is one call site and one column.
+
+**Nothing in the UI displays a numbers limit**, so no claim is being made that
+is not enforced. The platform console shows a *count* of sessions with no
+ceiling beside it, which is honest.
+
+---
+
+## D-22 · The platform console reads usage limits from a different store than enforcement
+
+**Status:** recorded 2026-09-06, not fixed · **Owner:** UnKnowan
+
+Found while building the subscriber operating table (6a).
+
+`getPlatformMonthlyRollupUsage` — the per-subscriber usage the owner console
+renders — differs from enforcement in **both** halves of the comparison:
+
+- **Values** come from `PlatformDailyMetric`, a daily aggregate rolled up from
+  `UsageEvent`. It is only as fresh as the last rollup ran, which the payload
+  admits in `asOf`.
+- **Limits** come from `configuredLimit(config, metric)` — `OrganizationConfig`
+  — not from the resolver. **So a platform-owner override is invisible to it.**
+  An organization the owner personally raised to a negotiated MAC quota is
+  shown against its old ceiling, on the owner’s own screen.
+
+This is the C4 defect class in a screen rather than in a guard, and it is why
+6a does **not** compute "over any limit" from the rollup. That column is
+derived in the list endpoint from the same rows enforcement counts, compared
+with `limitState` — the same function the refusals use. The rollup still
+renders the three usage numbers beside it, so the row can show a stale value
+next to a live judgement about it.
+
+**Not fixed here.** The rollup is a reporting aggregate with real value —
+daily history, cheap reads across every tenant — and pointing the console at
+`UsageEvent` instead would change what the finance and analytics screens mean,
+not just this one. The narrow fix is to take the *limits* from the resolver
+while leaving the values alone, which is a change to a shared service and
+belongs with the numbers meter or the billing provider rather than inside a
+screen commit.
+
+**Trigger:** before the console is used to decide a suspension, or before the
+first negotiated override is granted to a paying customer — whichever comes
+first. Until then the two are only inconsistent for organizations that have an
+override, and there are none.

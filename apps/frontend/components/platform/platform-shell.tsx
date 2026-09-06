@@ -52,7 +52,6 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { href: '/platform', label: 'Overview', description: 'Platform health and revenue', icon: LayoutDashboard, ownerOnly: true, built: true },
-  { href: '/platform/organizations', label: 'Organizations', description: 'Subscriber workspaces', icon: Building2, permission: 'subscriber:read' },
   { href: '/platform/subscribers', label: 'Subscribers', description: 'Accounts and gateway status', icon: Users, permission: 'subscriber:read', built: true },
   { href: '/platform/editions', label: 'Editions', description: 'Plan catalog and entitlements', icon: BarChart3, ownerOnly: true, built: true },
   { href: '/platform/finance', label: 'Finance', description: 'Invoices and payments', icon: CreditCard, permission: 'billing:view' },

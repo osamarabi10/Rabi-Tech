@@ -6911,6 +6911,155 @@ async function databaseAudits() {
       assert.equal(body.current, limit);
     });
 
+    await check('platform: the operating table attributes every derived number to its own subscriber', async () => {
+      /*
+        The worst thing this screen can do.
+
+        The subscriber list computes four things in BULK — active seats, branch
+        count, monthly meter totals and last inbound message — one query each
+        across every organization, then joins them back by id. That is the right
+        shape for a console with a hundred tenants and the wrong shape to get
+        subtly wrong: a mis-keyed join does not crash, it shows one customer’s
+        numbers under another customer’s name, on the screen the owner uses to
+        decide who to call and who to suspend.
+
+        So the two fixtures differ in EVERY attributed fact — branches, active
+        users, last inbound, and whether they are over a limit — because a pair
+        that agrees anywhere is a pair where a swap still reads correct. That is
+        the fixture rule in AGENTS/Evidence, applied to a join instead of to a
+        column.
+
+        Driven over HTTP as the platform owner, which is the scope this endpoint
+        actually runs in: runAsPlatform sees every organization by design, so
+        nothing here is protected by tenant scoping and the attribution is the
+        only thing keeping the rows honest.
+      */
+      const tableOwner = await raw.identity.create({
+        data: {
+          email: `owner-table-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const tableToken = mintPlatformToken(tableOwner);
+
+      const left = await seedOrganization(raw, 'tableleft', 1);
+      const right = await seedOrganization(raw, 'tableright', 1);
+      // FREE allows one branch, BUSINESS allows five: the left fixture is over
+      // its ceiling and the right one is not, from the same comparison the
+      // create endpoint refuses with.
+      await grantPlan(raw, left.organizationId, 'FREE');
+      await grantPlan(raw, right.organizationId, 'BUSINESS');
+
+      // Branches: left 3, right 1.
+      for (const suffix of [1, 2]) {
+        await raw.workspace.create({
+          data: {
+            id: `ws_table_left_${suffix}`,
+            organizationId: left.organizationId,
+            name: `Left branch ${suffix}`,
+            isDefault: false,
+          },
+        });
+      }
+
+      // Active users: left 1, right 2.
+      const extraIdentity = await raw.identity.create({
+        data: { email: `table-extra-${Date.now()}@rabitech.test`, passwordHash: 'not-used' },
+      });
+      await fixtureWriter.user.create({
+        data: {
+          organizationId: right.organizationId,
+          identityId: extraIdentity.id,
+          name: 'Right Second',
+          role: 'AGENT',
+        },
+      });
+
+      // Last inbound: left recent, right long ago.
+      const leftInbound = new Date(Date.now() - 2 * 86_400_000);
+      const rightInbound = new Date(Date.now() - 40 * 86_400_000);
+      await raw.message.updateMany({
+        where: { organizationId: left.organizationId },
+        data: { timestamp: leftInbound },
+      });
+      await raw.message.updateMany({
+        where: { organizationId: right.organizationId },
+        data: { timestamp: rightInbound },
+      });
+
+      const rows = await (await fetch(`${baseUrl}/api/platform/subscribers`, {
+        headers: { Authorization: `Bearer ${tableToken}` },
+        signal: AbortSignal.timeout(15000),
+      })).json();
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      const leftRow = byId.get(left.organizationId);
+      const rightRow = byId.get(right.organizationId);
+      assert.ok(leftRow && rightRow, 'both fixtures must appear in the list');
+
+      // Branches
+      assert.equal(leftRow.workspaceCount, 3, 'left branch count');
+      assert.equal(rightRow.workspaceCount, 1, 'right branch count');
+
+      // Active users, through the count the seat ceiling itself uses
+      assert.equal(leftRow._count.users, 1, 'left user count');
+      assert.equal(rightRow._count.users, 2, 'right user count');
+
+      // Last inbound, to the second
+      assert.equal(
+        new Date(leftRow.lastInboundAt).toISOString(), leftInbound.toISOString(),
+        'left last-inbound',
+      );
+      assert.equal(
+        new Date(rightRow.lastInboundAt).toISOString(), rightInbound.toISOString(),
+        'right last-inbound',
+      );
+
+      // Over a limit — decided by limitState on the server, per subscriber
+      assert.equal(leftRow.overLimit, true, 'three branches on FREE is over the ceiling');
+      assert.ok(leftRow.overLimitReasons.includes('workspaces'), JSON.stringify(leftRow.overLimitReasons));
+      assert.equal(rightRow.overLimit, false, 'one branch on BUSINESS is not');
+
+      /*
+        And the fixture rule stated as an assertion rather than trusted: if any
+        of these pairs were equal, a join that returned the wrong row would
+        still have passed every check above.
+      */
+      assert.notEqual(leftRow.workspaceCount, rightRow.workspaceCount);
+      assert.notEqual(leftRow._count.users, rightRow._count.users);
+      assert.notEqual(leftRow.lastInboundAt, rightRow.lastInboundAt);
+      assert.notEqual(leftRow.overLimit, rightRow.overLimit);
+    });
+
+    await check('platform: a subscriber that has never been written to reads as new, not as quiet', async () => {
+      /*
+        Null is not "a long time ago".
+
+        A subscriber who signed up an hour ago has no inbound message, and the
+        obvious implementation — treat the missing timestamp as zero — puts
+        every fresh signup at the top of a "no inbound for 14 days" list on
+        their first morning. The endpoint reports null and the screen falls back
+        to createdAt; this pins the server half, which is the half a second
+        screen would also depend on.
+      */
+      const owner = await raw.identity.create({
+        data: {
+          email: `owner-quiet-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const fresh = await seedOrganization(raw, 'tablefresh', 0);
+      const rows = await (await fetch(`${baseUrl}/api/platform/subscribers`, {
+        headers: { Authorization: `Bearer ${mintPlatformToken(owner)}` },
+        signal: AbortSignal.timeout(15000),
+      })).json();
+      const row = rows.find((candidate) => candidate.id === fresh.organizationId);
+      assert.ok(row, 'the fixture must appear in the list');
+      assert.equal(row.lastInboundAt, null,
+        'never written to must be null, never a date the screen would render');
+    });
+
     await check('workspace: every shipped edition carries a workspace ceiling', async () => {
       /*
         A null ceiling means unlimited, so an edition that simply forgot the

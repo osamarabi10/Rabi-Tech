@@ -408,6 +408,32 @@ export function entitlementErrorResponse(error: CapabilityRefused | LimitReached
 }
 
 /**
+ * Where a counted capability stands, in one word.
+ *
+ *   ok            — granted, and one more would fit
+ *   full          — granted, and the ceiling is reached
+ *   not-included  — the edition does not grant it at all
+ *
+ * `full` and `not-included` are both refusals and must not be merged: the
+ * first also clears by freeing one, the second only by paying. The platform
+ * console needs them apart for the opposite reason — an organization on FREE
+ * is not "over its limit" for a capability it never bought, and counting it as
+ * such would put every free subscriber on an at-risk list forever.
+ */
+export type LimitState = 'ok' | 'full' | 'not-included';
+
+export function limitState(
+  entitlements: EffectiveEntitlements,
+  capability: Capability,
+  current: number,
+): LimitState {
+  const decision = decide(entitlements, capability);
+  if (!decision.granted) return 'not-included';
+  if (decision.limit === null || current < decision.limit) return 'ok';
+  return 'full';
+}
+
+/**
  * Whether one more would fit. Pure, and the same arithmetic the refusal uses.
  *
  * Exported so a screen can grey out a control with the identical comparison the
@@ -418,9 +444,7 @@ export function withinLimit(
   capability: Capability,
   current: number,
 ): boolean {
-  const decision = decide(entitlements, capability);
-  if (!decision.granted) return false;
-  return decision.limit === null || current < decision.limit;
+  return limitState(entitlements, capability, current) === 'ok';
 }
 
 /**
@@ -445,7 +469,10 @@ export function assertWithinLimitFrom(
   organizationId?: string,
 ): Decision {
   const decision = assertCanFrom(entitlements, capability, organizationId);
-  if (decision.limit === null || current < decision.limit) return decision;
+  // limitState, not a second copy of the comparison. The gate asserts these
+  // two never disagree; sharing the arithmetic is what makes that cheap to
+  // keep true rather than something to re-verify.
+  if (limitState(entitlements, capability, current) === 'ok') return decision;
 
   const requiredPlan = cheapestUpgradeGranting(entitlements.plan, (candidate) => {
     const allowed = editionLimitOf(candidate, capability);

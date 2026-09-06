@@ -51,7 +51,29 @@ type Subscriber = {
     trialEndsAt: string | null;
   }>;
   createdAt: string;
-  _count: { users: number; whatsappSessions: number };
+  _count: { users: number; whatsappSessions: number; workspaces: number };
+  /** Branches held. A priced ceiling, so it belongs on the row. */
+  workspaceCount: number;
+  /**
+   * When a customer last wrote in, or null if one never has.
+   *
+   * Null is not "a long time ago" — a subscriber who signed up this morning
+   * has never had an inbound message and is not quiet, they are new. The
+   * quiet filter reads createdAt in that case rather than treating null as
+   * the epoch.
+   */
+  lastInboundAt: string | null;
+  /**
+   * Against at least one allowance they actually hold.
+   *
+   * Decided on the server by `limitState`, the same function every refusal
+   * uses. Deriving it here would be a seventh copy of a comparison C4 spent a
+   * commit reducing to one, and it would disagree the first time an override
+   * moved — silently, because both sides would look right.
+   */
+  overLimit: boolean;
+  /** Which allowances are full, for the tooltip. Empty when overLimit is false. */
+  overLimitReasons: string[];
   channels: Array<{
     status: string;
     provisioningState: ProvisioningState;
@@ -61,6 +83,13 @@ type Subscriber = {
     managedByProvisioner: boolean;
     apiPort: number | null;
     deploymentName: string | null;
+    /**
+     * When a gateway was first built for this subscriber.
+     *
+     * What separates "never finished setup" from "was working and dropped".
+     * Already sent by the list endpoint; the type simply had not claimed it.
+     */
+    provisionedAt: string | null;
   }>;
 };
 
@@ -86,6 +115,93 @@ function trialExpired(subscriber: Subscriber): boolean {
   return deadline !== null && deadline <= Date.now();
 }
 
+const DAY_MS = 86_400_000;
+
+/**
+ * The four questions an owner opens this screen to ask.
+ *
+ * Written as predicates over one subscriber, at module scope, so the filter
+ * chips and the counted header cannot drift: the header counts rows that would
+ * survive each filter, using the filter itself rather than a parallel rule.
+ * A header that disagrees with the list under it is worse than no header —
+ * it is the only number on the page nobody can check by looking.
+ */
+const RISKS = {
+  /**
+   * A trial that runs out inside a week — expired ones included.
+   *
+   * Deliberate: this is a call list, and somebody whose trial ended yesterday
+   * is the most urgent name on it. Excluding them would hide exactly the rows
+   * the filter exists to surface.
+   */
+  trial7: {
+    label: 'Trial ending ≤ 7d',
+    match: (subscriber: Subscriber) => {
+      const deadline = trialDeadline(subscriber);
+      return deadline !== null && deadline <= Date.now() + 7 * DAY_MS;
+    },
+  },
+  /** Against an allowance they hold. Decided by the server, never here. */
+  overLimit: {
+    label: 'Over a limit',
+    match: (subscriber: Subscriber) => subscriber.overLimit,
+  },
+  /**
+   * Had a working gateway and does not now.
+   *
+   * `provisionedAt` is what makes this different from "setup never finished":
+   * a subscriber stuck at AWAITING_QR on day one needs onboarding, one that
+   * was ACTIVE and fell back to AWAITING_QR is an outage somebody is living
+   * through. D-16 is why the second state is reachable at all — before it the
+   * machine only ever promoted, and a dropped gateway read as connected.
+   */
+  disconnected: {
+    label: 'Channel disconnected',
+    match: (subscriber: Subscriber) => {
+      const channel = subscriber.channels[0];
+      return Boolean(channel?.provisionedAt) && channel.provisioningState !== 'ACTIVE';
+    },
+  },
+  /**
+   * Nobody has written in for a fortnight.
+   *
+   * Falls back to createdAt when there has never been an inbound message, so a
+   * subscriber who signed up this morning is new rather than quiet. Treating
+   * null as "never, therefore ancient" would put every fresh signup on the
+   * at-risk list on their first day, which is the day they need it least.
+   */
+  quiet14: {
+    label: 'No inbound ≥ 14d',
+    match: (subscriber: Subscriber) => {
+      const since = subscriber.lastInboundAt ?? subscriber.createdAt;
+      const parsed = new Date(since).getTime();
+      return Number.isFinite(parsed) && Date.now() - parsed >= 14 * DAY_MS;
+    },
+  },
+} as const;
+
+type RiskKey = keyof typeof RISKS;
+const RISK_KEYS = Object.keys(RISKS) as RiskKey[];
+
+/** At risk means any of the four. The header and the chips share this. */
+function atRisk(subscriber: Subscriber): boolean {
+  return RISK_KEYS.some((key) => RISKS[key].match(subscriber));
+}
+
+function inTrial(subscriber: Subscriber): boolean {
+  const deadline = trialDeadline(subscriber);
+  return deadline !== null && deadline > Date.now();
+}
+
+/** Coarse on purpose: an owner scanning wants "3w", not a timestamp. */
+function quietLabel(subscriber: Subscriber): string {
+  if (!subscriber.lastInboundAt) return 'never';
+  const days = Math.floor((Date.now() - new Date(subscriber.lastInboundAt).getTime()) / DAY_MS);
+  if (days <= 0) return 'today';
+  if (days < 14) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+}
+
 /**
  * How long is left, in the console's own words.
  *
@@ -109,6 +225,7 @@ function trialLabel(subscriber: Subscriber): string | null {
 export default function SubscribersPage() {
   const router = useRouter();
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
+  const [active, setActive] = useState<RiskKey[]>([]);
   /*
     The editions an owner may activate somebody onto.
 
@@ -300,6 +417,15 @@ export default function SubscribersPage() {
     return `${Number(item.current).toLocaleString()} / ${limit}`;
   };
 
+  /*
+    Every active chip must match — narrowing, not widening. Computed here
+    rather than in the map below so the "showing N of M" line and the rows are
+    the same array, and cannot report different totals.
+  */
+  const visible = subscribers.filter(
+    (subscriber) => active.every((key) => RISKS[key].match(subscriber)),
+  );
+
   const stateVariant = (state?: ProvisioningState) => {
     if (state === 'ACTIVE') return 'default' as const;
     if (state === 'FAILED') return 'destructive' as const;
@@ -339,9 +465,72 @@ export default function SubscribersPage() {
         </Link>
         <h1 className="mb-4 mt-2 text-lg font-bold">Subscribers</h1>
         <GatewayAlerts health={health} />
+
+        {/*
+          The shape of the business, before any row is read.
+
+          Counted from the same predicates the chips filter by, so the number
+          on a tile is always the number of rows the matching chip would show.
+          Two implementations of "at risk" is how a console starts lying at a
+          glance while every individual row stays correct.
+        */}
+        <dl className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {([
+            ['Total', subscribers.length, ''],
+            ['Active', subscribers.filter((s) => s.status === 'ACTIVE').length, ''],
+            ['In trial', subscribers.filter(inTrial).length, ''],
+            ['At risk', subscribers.filter(atRisk).length, 'text-warning'],
+          ] as Array<[string, number, string]>).map(([label, value, tone]) => (
+            <div key={label} className="rounded-md border border-border bg-muted/30 px-3 py-2">
+              <dt className="text-caption text-muted-foreground">{label}</dt>
+              <dd className={cn('text-lg font-bold tabular-nums', tone)} dir="ltr">{value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        {/*
+          Chips rather than a select: these combine, and an owner chasing
+          renewals wants "ending soon AND quiet" without learning a query
+          language. Narrowing, not widening — every active chip must match.
+        */}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {RISK_KEYS.map((key) => {
+            const on = active.includes(key);
+            return (
+              <Button
+                key={key}
+                size="sm"
+                variant={on ? 'default' : 'outline'}
+                aria-pressed={on}
+                onClick={() => setActive((current) => (
+                  current.includes(key) ? current.filter((k) => k !== key) : [...current, key]
+                ))}
+              >
+                {RISKS[key].label}
+                <span className="ms-1.5 tabular-nums opacity-70" dir="ltr">
+                  {subscribers.filter(RISKS[key].match).length}
+                </span>
+              </Button>
+            );
+          })}
+          {active.length > 0 && (
+            <Button size="sm" variant="ghost" onClick={() => setActive([])}>
+              Clear
+            </Button>
+          )}
+          {/*
+            Say what is hidden. A filtered table that looks like the whole list
+            is how somebody concludes a subscriber has vanished.
+          */}
+          {active.length > 0 && (
+            <span className="text-caption text-muted-foreground" role="status">
+              Showing {visible.length} of {subscribers.length}
+            </span>
+          )}
+        </div>
         <div className="overflow-x-auto rounded-md border border-border">
-          <div className="grid min-w-[1472px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_130px_140px_130px_minmax(190px,1.3fr)_92px_70px] gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold text-muted-foreground">
-            <span>Name</span><span>Slug</span><span>Billing</span><span>Users</span><span>WhatsApp</span><span>Active contacts</span><span>Outbound messages</span><span>Campaign sends</span><span>Gateway</span><span title="Left dot: status poll. Right dot: internal self-send probe.">Health</span><span className="sr-only">Actions</span>
+          <div className="grid min-w-[1696px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_80px_130px_140px_130px_120px_minmax(190px,1.3fr)_92px_70px] gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold text-muted-foreground">
+            <span>Name</span><span>Slug</span><span>Billing</span><span>Users</span><span>WhatsApp</span><span>Branches</span><span>Active contacts</span><span>Outbound messages</span><span>Campaign sends</span><span>Last inbound</span><span>Gateway</span><span title="Left dot: status poll. Right dot: internal self-send probe.">Health</span><span className="sr-only">Actions</span>
           </div>
           {loading && <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading...</p>}
           {!loading && loadError && (
@@ -356,10 +545,22 @@ export default function SubscribersPage() {
           {!loading && !loadError && subscribers.length === 0 && (
             <EmptyState compact title="No subscribers" description="Create a subscriber to see workspaces in this console." />
           )}
-          {!loading && !loadError && subscribers.map((subscriber) => {
+          {/*
+            An empty filter result is not an empty console, and must not read
+            as one — the way out is named, because a filter you cannot see is a
+            filter you cannot undo.
+          */}
+          {!loading && !loadError && subscribers.length > 0 && visible.length === 0 && (
+            <EmptyState
+              compact
+              title="No subscribers match these filters"
+              description={`All ${subscribers.length} are hidden by the filters above. Clear them to see the full list.`}
+            />
+          )}
+          {!loading && !loadError && visible.map((subscriber) => {
             const channel = subscriber.channels[0];
             return (
-              <div key={subscriber.id} className="grid min-w-[1472px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_130px_140px_130px_minmax(190px,1.3fr)_92px_70px] items-center gap-3 border-b border-border px-4 py-3 text-sm last:border-0">
+              <div key={subscriber.id} className="grid min-w-[1696px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_80px_130px_140px_130px_120px_minmax(190px,1.3fr)_92px_70px] items-center gap-3 border-b border-border px-4 py-3 text-sm last:border-0">
                 <span className="truncate font-semibold">{subscriber.name}</span>
                 <span className="truncate font-mono text-xs text-muted-foreground">{subscriber.slug}</span>
                 <div className="min-w-0">
@@ -406,9 +607,37 @@ export default function SubscribersPage() {
                 </div>
                 <span className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5" />{subscriber._count.users}</span>
                 <span className="flex items-center gap-1.5"><MessageCircle className="h-3.5 w-3.5" />{subscriber._count.whatsappSessions}</span>
+                {/*
+                  Marked when full, from the server’s own decision. The dot is
+                  not a second judgement about the number beside it.
+                */}
+                <span
+                  className={cn(
+                    'flex items-center gap-1.5 tabular-nums',
+                    subscriber.overLimitReasons.includes('workspaces') && 'text-warning font-semibold',
+                  )}
+                  dir="ltr"
+                  title={subscriber.overLimitReasons.includes('workspaces') ? 'At the branch ceiling for this plan' : undefined}
+                >
+                  <Building2 className="h-3.5 w-3.5" />{subscriber.workspaceCount}
+                </span>
                 <span className="font-mono text-xs">{usageValue(subscriber.id, 'active_contacts')}</span>
                 <span className="font-mono text-xs">{usageValue(subscriber.id, 'messages_outbound')}</span>
                 <span className="font-mono text-xs">{usageValue(subscriber.id, 'campaign_sends')}</span>
+                {/*
+                  Silence is a churn signal, and it is invisible in every other
+                  column on this row: a subscriber can be paid up, connected and
+                  inside every limit while nobody has messaged them for a month.
+                */}
+                <span
+                  className={cn(
+                    'truncate text-xs',
+                    RISKS.quiet14.match(subscriber) ? 'text-warning' : 'text-muted-foreground',
+                  )}
+                  title={subscriber.lastInboundAt ?? 'No inbound message has ever arrived'}
+                >
+                  {quietLabel(subscriber)}
+                </span>
                 <div className="min-w-0 space-y-1">
                   <div className="flex items-center gap-2">
                     <Badge variant={stateVariant(channel?.provisioningState)}>
