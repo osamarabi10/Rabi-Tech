@@ -353,6 +353,40 @@ Design rules do not catch the failures this repository actually has. These do.
   it. Enqueue and delete are one transaction in the test's mind and two in
   the system, and the second one is the one everybody forgets.
 
+- **Evidence of a state and absence of evidence are different things.** A
+  provider reporting `disconnected` is evidence. A provider that does not
+  answer is not — it says the container is down, which needs a restart, not
+  that the pairing is gone, which needs a human with a phone. Writing the
+  second conclusion from the first flaps every tenant during a brief outage,
+  and a status that flaps is a status everybody learns to ignore.
+
+  So a reader of any external system needs three outcomes, not two: it is so,
+  it is not so, and **I could not tell**. Collapsing the third into either of
+  the first two is the mistake; which one you collapse it into only decides
+  whether you get false alarms or silent failures. The gateway state machine
+  had collapsed it into "no change" and so never recorded a real disconnect
+  (D-16) — and the obvious fix would have collapsed it the other way.
+
+- **Verify a healthcheck inside the container before trusting it.** A check
+  that cannot run, or that dials an address the service does not listen on,
+  marks a healthy service unhealthy — a monitor lying in the direction that
+  looks responsible, which is why nobody questions it. Each of these was found
+  by running the command in the container first, on 2026-09-06:
+
+  - `localhost` resolves to `::1` inside the backend and frontend containers
+    while both servers listen on IPv4, so `wget http://localhost:PORT` is
+    refused. Both would have been permanently unhealthy.
+  - The openwa image has no `wget`, and already declares a working healthcheck
+    of its own — adding one would have replaced something that worked with
+    something that could not run.
+  - A queue consumer has no port to dial at all. Its liveness is the process
+    existing, which is the thing a supervisor can act on.
+
+  The general form is *point the check at the artifact that carries the
+  property*, then make it fail on purpose. An unhealthy container that
+  restarts for ever looks like a crash loop, and sends everybody hunting the
+  service instead of the probe.
+
 ---
 
 ## Scope
