@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import express, { Router } from 'express';
 import { OrganizationBranding, Prisma } from '@prisma/client';
+import { SUBSCRIPTION_PLAN_SELECT, type SubscriptionWithPlan } from '../billing/subscription-plan';
 import { prisma } from '../../prisma';
 import { requireAdmin } from '../../middleware/rbac.middleware';
 import { runAsPlatform } from '../../lib/tenant-context';
@@ -27,14 +28,14 @@ const router = Router();
 const ORGANIZATION_PLAN_SELECT = {
   subscriptions: {
     where: { status: { in: ['ACTIVE', 'TRIALING'] } },
-    select: { planCode: true },
+    select: SUBSCRIPTION_PLAN_SELECT,
     orderBy: { createdAt: 'desc' },
     take: 1,
   },
 } satisfies Prisma.OrganizationSelect;
 
 type EditableBranding = OrganizationBranding & {
-  organization?: { subscriptions: { planCode: string }[] } | null;
+  organization?: { subscriptions: SubscriptionWithPlan[] } | null;
 };
 
 function errorStatus(error: unknown): number {

@@ -247,6 +247,224 @@ export function rowToEdition(row: {
  * edition's identity or its withdrawal are different acts with different
  * consequences, and neither should arrive through a price change's back door.
  */
+/**
+ * Everything the catalogue needs, in one query.
+ *
+ * An edition is three rows now — identity, the current version of what it
+ * grants, and the active price. `flattenEdition` puts them back into the flat
+ * shape `rowToEdition` has always taken, which is the whole reason this split
+ * did not have to touch the ninety-odd call sites downstream of `getEdition`
+ * (D-19).
+ */
+const CATALOGUE_INCLUDE = {
+  versions: {
+    where: { isCurrent: true },
+    take: 1,
+    include: {
+      prices: {
+        where: { isActive: true },
+        orderBy: [{ interval: 'asc' as const }, { currency: 'asc' as const }],
+        take: 1,
+      },
+    },
+  },
+} satisfies Prisma.PlanInclude;
+
+type CatalogueRow = Prisma.PlanGetPayload<{ include: typeof CATALOGUE_INCLUDE }>;
+
+/**
+ * Flatten a plan and its current version into one edition row.
+ *
+ * Throws rather than substituting a default. A plan with no current version,
+ * or a version with no active price, is a half-written catalogue — and the
+ * caller already treats a load failure as loud: at boot the gate refuses the
+ * port, and in a running process the cache is kept and the staleness clock
+ * keeps running. Filling in a zero price here would sell an edition for
+ * nothing and look entirely successful.
+ */
+function flattenEdition(row: CatalogueRow) {
+  const version = row.versions[0];
+  if (!version) {
+    throw new Error(`Edition ${row.code} has no current PlanVersion`);
+  }
+  const price = version.prices[0];
+  if (!price) {
+    throw new Error(`Edition ${row.code} version ${version.version} has no active Price`);
+  }
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    monthlyPriceCents: price.amountCents,
+    pricingModel: price.pricingModel,
+    billingInterval: price.interval,
+    currency: price.currency,
+    monthlyActiveContactsLimit: version.monthlyActiveContactsLimit,
+    monthlyOutboundMessagesLimit: version.monthlyOutboundMessagesLimit,
+    monthlyCampaignSendsLimit: version.monthlyCampaignSendsLimit,
+    customFieldsLimit: version.customFieldsLimit,
+    usersLimit: version.usersLimit,
+    maxWorkspaces: version.maxWorkspaces,
+    workflowsLimit: version.workflowsLimit,
+    monthlyAiTokensInLimit: version.monthlyAiTokensInLimit,
+    monthlyAiTokensOutLimit: version.monthlyAiTokensOutLimit,
+    campaignRateMax: version.campaignRateMax,
+    campaignRateDurationMs: version.campaignRateDurationMs,
+    autoProvisionGateway: version.autoProvisionGateway,
+    customDomain: version.customDomain,
+    whiteLabel: version.whiteLabel,
+    maskContactDetails: version.maskContactDetails,
+    allowedChannels: version.allowedChannels,
+    isActive: row.isActive,
+    sortOrder: row.sortOrder,
+    archivedAt: row.archivedAt,
+    // Scheduling stays on the plan: a schedule is an intention about the
+    // edition, and applying it is what produces the version.
+    scheduledChanges: row.scheduledChanges,
+    scheduledFrom: row.scheduledFrom,
+    // What the drift detector means by "the edition was edited": a change to
+    // what it grants. Plan.updatedAt would also move on a rename or a
+    // reorder, neither of which can make a subscriber config diverge.
+    editedAt: version.updatedAt,
+  };
+}
+
+export const CATALOGUE_QUERY = CATALOGUE_INCLUDE;
+export { flattenEdition };
+
+/**
+ * Where each editable edition field now lives.
+ *
+ * An edition edit arrives as one flat map — that is what the console sends
+ * and what a schedule stores — but it lands in three tables since D-19. This
+ * is the only place that knows which field goes where, so the editor and the
+ * scheduler cannot disagree about it.
+ */
+const PLAN_FIELDS = new Set(['name', 'isActive', 'sortOrder', 'archivedAt']);
+const PRICE_FIELDS: Record<string, string> = {
+  monthlyPriceCents: 'amountCents',
+  pricingModel: 'pricingModel',
+  billingInterval: 'interval',
+  currency: 'currency',
+};
+/**
+ * Listed rather than inferred as "everything else".
+ *
+ * The first version of this router sent every unrecognised key to the
+ * version. That works for an edit map and breaks the moment a *flattened*
+ * edition is fed back in, as it is when a fixture restores a deleted one:
+ * `id`, `code` and `editedAt` are not entitlements, and Prisma rejected them
+ * as columns the table had never heard of.
+ */
+const VERSION_FIELDS = new Set([
+  'monthlyActiveContactsLimit', 'monthlyOutboundMessagesLimit', 'monthlyCampaignSendsLimit',
+  'customFieldsLimit', 'usersLimit', 'maxWorkspaces', 'workflowsLimit',
+  'monthlyAiTokensInLimit', 'monthlyAiTokensOutLimit',
+  'campaignRateMax', 'campaignRateDurationMs',
+  'customDomain', 'whiteLabel', 'maskContactDetails', 'autoProvisionGateway',
+  'allowedChannels',
+]);
+/**
+ * Identity and derived fields a flattened edition carries and no writer wants.
+ *
+ * Ignored explicitly rather than by falling through, so a genuinely unknown
+ * key — a typo in an edit, a column renamed and not followed — is an error
+ * rather than a value quietly written nowhere.
+ */
+const IGNORED_EDITION_FIELDS = new Set([
+  'id', 'code', 'editedAt', 'createdAt', 'updatedAt', 'scheduledChanges', 'scheduledFrom',
+]);
+
+/**
+ * Apply a flat edition edit across plan, current version and active price.
+ *
+ * Edits the current version in place rather than creating a new one. That is
+ * deliberate for this change: C3 moves the columns and must not alter what
+ * anybody observes, and versioning the *edit* is a behaviour change with its
+ * own consequences for existing subscribers. It belongs to the plan-editor
+ * work, where the preview and the migration story are already being built.
+ */
+/** Split a flat edition field map across the three tables it now lands in. */
+function routeEditionFields(data: Record<string, unknown>) {
+  const planData: Record<string, unknown> = {};
+  const versionData: Record<string, unknown> = {};
+  const priceData: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (IGNORED_EDITION_FIELDS.has(key)) continue;
+    if (PLAN_FIELDS.has(key)) planData[key] = value;
+    else if (PRICE_FIELDS[key]) priceData[PRICE_FIELDS[key]] = value;
+    else if (VERSION_FIELDS.has(key)) versionData[key] = value;
+    else throw new Error(`Unknown edition field ${JSON.stringify(key)}; it belongs to no table`);
+  }
+  return { planData, versionData, priceData };
+}
+
+/**
+ * Create an edition: the plan, its first version, and that version's price.
+ *
+ * Both writers of a new edition go through here — the boot seed and the
+ * owner console. An edition created with a plan row and no version is not a
+ * half-finished edition, it is a catalogue that will not load: flattenEdition
+ * throws, the refresh keeps the previous cache, and the new edition silently
+ * never appears. One creator means that cannot happen in one path and not the
+ * other (D-19).
+ */
+export async function createEditionRows(
+  tx: Pick<Prisma.TransactionClient, 'plan' | 'planVersion' | 'price'>,
+  code: string,
+  id: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const { planData, versionData, priceData } = routeEditionFields(fields);
+  const plan = await tx.plan.create({
+    data: { ...planData, id, code, name: String(planData.name ?? code) },
+  });
+  const version = await tx.planVersion.create({
+    data: { ...versionData, planId: plan.id, version: 1, isCurrent: true },
+  });
+  await tx.price.create({
+    data: {
+      ...priceData,
+      planVersionId: version.id,
+      amountCents: Number(priceData.amountCents ?? 0),
+    },
+  });
+}
+
+export async function applyEditionChanges(
+  tx: Pick<Prisma.TransactionClient, 'plan' | 'planVersion' | 'price'>,
+  code: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const { planData, versionData, priceData } = routeEditionFields(data);
+
+
+  if (Object.keys(planData).length) {
+    await tx.plan.update({ where: { code }, data: planData });
+  }
+  if (Object.keys(versionData).length) {
+    await tx.planVersion.updateMany({
+      where: { isCurrent: true, plan: { code } },
+      data: versionData,
+    });
+  }
+  if (Object.keys(priceData).length) {
+    await tx.price.updateMany({
+      where: { isActive: true, planVersion: { isCurrent: true, plan: { code } } },
+      data: priceData,
+    });
+  }
+}
+
+/** The flattened edition for one code, or null. */
+export async function readEdition(
+  tx: Pick<Prisma.TransactionClient, 'plan'>,
+  code: string,
+) {
+  const row = await tx.plan.findUnique({ where: { code }, include: CATALOGUE_INCLUDE });
+  return row ? flattenEdition(row as CatalogueRow) : null;
+}
+
 const SCHEDULABLE_COLUMNS = new Set([
   'name', 'monthlyPriceCents', 'pricingModel', 'billingInterval', 'currency',
   'monthlyActiveContactsLimit', 'monthlyOutboundMessagesLimit', 'monthlyCampaignSendsLimit',
@@ -291,17 +509,23 @@ async function applyDueSchedules(now: Date): Promise<number> {
       if (SCHEDULABLE_COLUMNS.has(key)) data[key] = value;
     }
 
-    const before = await prisma.plan.findUnique({ where: { code: row.code } });
+    const before = await readEdition(prisma, row.code);
 
+    // The guard stays on the plan row and stays first: clearing the schedule
+    // is what makes the race safe, and it must not be possible for two
+    // refreshes to both see the schedule as due and both apply it.
     const result = await prisma.plan.updateMany({
-      // Still guarded on scheduledFrom: this is what makes the race safe.
       where: { code: row.code, scheduledFrom: { not: null, lte: now } },
-      data: { ...data, scheduledChanges: Prisma.DbNull, scheduledFrom: null },
+      data: { scheduledChanges: Prisma.DbNull, scheduledFrom: null },
     });
     if (result.count === 0) continue;
 
+    // Only once this refresh has won the race does it write the values, which
+    // now land across three tables (D-19).
+    await applyEditionChanges(prisma, row.code, data);
+
     applied += 1;
-    const after = await prisma.plan.findUnique({ where: { code: row.code } });
+    const after = await readEdition(prisma, row.code);
     /*
       Through lib/audit.ts rather than touching platformAuditLog directly. The
       tenancy harness enforces that boundary: PlatformAuditLog is in the
@@ -376,7 +600,10 @@ export async function refreshEditions(): Promise<number> {
     // give, so that claim was being decided by row layout. Still every row:
     // ordering is not filtering.
     const rows = await runAsPlatform('refresh-edition-catalogue', () =>
-      prisma.plan.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }));
+      prisma.plan.findMany({
+        orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+        include: CATALOGUE_INCLUDE,
+      }));
     if (rows.length === 0) {
       logger.warn('Edition catalogue is empty; keeping previous values');
       return cache?.size ?? 0;
@@ -402,8 +629,9 @@ export async function refreshEditions(): Promise<number> {
       incomplete. Both outcomes are visible without reading logs.
     */
     for (const row of rows) {
-      next.set(row.code, rowToEdition(row));
-      nextEditedAt.set(row.code, row.updatedAt);
+      const flat = flattenEdition(row);
+      next.set(row.code, rowToEdition(flat));
+      nextEditedAt.set(row.code, flat.editedAt);
       // The published set, and only the published set. The findMany above is
       // deliberately unfiltered — an archived edition that never enters the
       // cache resolves to RESTRICTED_FLOOR, so its subscribers silently lose

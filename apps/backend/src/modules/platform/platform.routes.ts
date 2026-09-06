@@ -16,7 +16,17 @@ import {
   markPaymentFailed,
 } from '../billing/billing.service';
 import { PLAN_CODE_PATTERN, RESERVED_PLAN_CODES, monthlyEquivalentCents, normalizePlanCode } from '../billing/plans';
-import { getEdition, refreshEditions, rowToEdition } from '../billing/editions.service';
+import {
+  getEdition,
+  refreshEditions,
+  rowToEdition,
+  CATALOGUE_QUERY,
+  flattenEdition,
+  readEdition,
+  applyEditionChanges,
+  createEditionRows,
+} from '../billing/editions.service';
+import { SUBSCRIPTION_PLAN_SELECT, planCodeOf } from '../billing/subscription-plan';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { probeOrganization } from '../gateway/health-monitor';
 import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
@@ -274,7 +284,7 @@ router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (
           take: 1,
           select: {
             id: true,
-            planCode: true,
+            ...SUBSCRIPTION_PLAN_SELECT,
             provider: true,
             status: true,
             currentPeriodEnd: true,
@@ -311,7 +321,9 @@ router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (
     */
     res.json(subscribers.map((subscriber) => ({
       ...subscriber,
-      tier: subscriber.subscriptions.find((s) => s.status === 'ACTIVE' || s.status === 'TRIALING')?.planCode ?? 'FREE',
+      tier: planCodeOf(
+        subscriber.subscriptions.find((s) => s.status === 'ACTIVE' || s.status === 'TRIALING'),
+      ) ?? 'FREE',
     })));
   } catch (err) {
     logger.error('Subscriber list failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
@@ -332,10 +344,10 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
      * is a lie.
      */
     const [paid, trialing] = await Promise.all([
-      prisma.subscription.findMany({ where: { status: 'ACTIVE' }, select: { planCode: true } }),
+      prisma.subscription.findMany({ where: { status: 'ACTIVE' }, select: SUBSCRIPTION_PLAN_SELECT }),
       prisma.subscription.findMany({
         where: { status: 'TRIALING' },
-        select: { planCode: true, trialEndsAt: true },
+        select: { ...SUBSCRIPTION_PLAN_SELECT, trialEndsAt: true },
       }),
     ]);
 
@@ -349,7 +361,7 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
       so nothing is wrong yet - flagged, not fixed here.
     */
     const mrrCents = paid.reduce((sum, subscription) => {
-      const code = normalizePlanCode(subscription.planCode);
+      const code = normalizePlanCode(planCodeOf(subscription));
       return sum + monthlyEquivalentCents(getEdition(code));
     }, 0);
 
@@ -365,10 +377,11 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
         // accident.
         potentialCents: trialing
           .filter((t) => t.trialEndsAt && t.trialEndsAt.getTime() > now)
-          .reduce((sum, t) => sum + monthlyEquivalentCents(getEdition(normalizePlanCode(t.planCode))), 0),
+          .reduce((sum, t) => sum + monthlyEquivalentCents(getEdition(normalizePlanCode(planCodeOf(t)))), 0),
       },
       byTier: paid.reduce<Record<string, number>>((acc, subscription) => {
-        acc[subscription.planCode] = (acc[subscription.planCode] || 0) + 1;
+        const code = planCodeOf(subscription) ?? 'FREE';
+        acc[code] = (acc[code] || 0) + 1;
         return acc;
       }, {}),
     });
@@ -1422,7 +1435,10 @@ router.delete('/subscribers/:id', requirePlatformOwner, async (req, res) => {
  * the catalogue out of a TypeScript constant.
  */
 router.get('/editions', requirePlatformOwner, async (_req, res) => {
-  const editions = await prisma.plan.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] });
+  const editions = (await prisma.plan.findMany({
+    orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+    include: CATALOGUE_QUERY,
+  })).map(flattenEdition);
   // Both of the caveats this used to carry are gone: autoProvisionGateway now
   // decides gateway provisioning at activation, and allowedChannels is checked
   // when a channel is connected or activated. Every switch on this screen
@@ -1759,7 +1775,7 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
       return res.status(400).json({ error: 'No editable fields supplied' });
     }
 
-    const before = await prisma.plan.findUnique({ where: { code } });
+    const before = await readEdition(prisma, code);
 
     // Archiving stamps the moment it happened, and only when it actually
     // happens. Re-archiving an already-archived edition must not move the
@@ -1776,7 +1792,8 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
       applyPricingInvariant(data, before);
     }
 
-    const updated = await prisma.plan.update({ where: { code }, data });
+    await applyEditionChanges(prisma, code, data);
+    const updated = await readEdition(prisma, code);
 
     // Make the change live in this process immediately rather than waiting for
     // the next scheduled refresh. Other processes pick it up within their
@@ -1851,7 +1868,7 @@ router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) =>
     const code = normalizePlanCode(req.params.code);
     const body = (req.body || {}) as Record<string, unknown>;
 
-    const current = await prisma.plan.findUnique({ where: { code } });
+    const current = await readEdition(prisma, code);
     if (!current) return res.status(404).json({ error: `Edition ${code} not found` });
 
     // Same validation the real PATCH performs, so a preview cannot describe a
@@ -1879,7 +1896,7 @@ router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) =>
       where: {
         OR: [
           { planOverride: code },
-          { subscriptions: { some: { planCode: code, status: { in: ['ACTIVE', 'TRIALING'] } } } },
+          { subscriptions: { some: { planVersion: { plan: { code } }, status: { in: ['ACTIVE', 'TRIALING'] } } } },
         ],
       },
       select: { id: true, name: true },
@@ -2018,17 +2035,14 @@ router.post('/editions/:code/schedule', requirePlatformOwner, async (req, res) =
     const data: Record<string, unknown> = {};
     applyEditionFields(changes, data);
     if (data.pricingModel !== undefined || data.monthlyPriceCents !== undefined) {
-      const current = await prisma.plan.findUnique({
-        where: { code },
-        select: { pricingModel: true, monthlyPriceCents: true },
-      });
+      const current = await readEdition(prisma, code);
       applyPricingInvariant(data, current);
     }
     if (!Object.keys(data).length) {
       return res.status(400).json({ error: 'No editable fields supplied to schedule' });
     }
 
-    const before = await prisma.plan.findUnique({ where: { code } });
+    const before = await readEdition(prisma, code);
     const updated = await prisma.plan.update({
       where: { code },
       data: { scheduledChanges: data as never, scheduledFrom: effectiveFrom },
@@ -2058,7 +2072,7 @@ router.post('/editions/:code/schedule', requirePlatformOwner, async (req, res) =
 router.delete('/editions/:code/schedule', requirePlatformOwner, async (req, res) => {
   try {
     const code = normalizePlanCode(req.params.code);
-    const before = await prisma.plan.findUnique({ where: { code } });
+    const before = await readEdition(prisma, code);
     if (!before?.scheduledFrom) {
       return res.status(404).json({ error: 'No pending schedule for this edition' });
     }
@@ -2205,18 +2219,18 @@ router.post('/editions', requirePlatformOwner, async (req, res) => {
       data.sortOrder = (highest._max.sortOrder ?? -1) + 1;
     }
 
-    const created = await prisma.plan.create({
-      data: {
-        ...data,
-        // Same id shape as ensurePlans. This is what PLAN_CODE_PATTERN's
-        // charset exists to keep safe: the id has to be usable in a URL and a
-        // filename.
-        id: `plan_${code.toLowerCase()}`,
-        code,
-        name: data.name as string,
-        monthlyPriceCents: data.monthlyPriceCents as number,
-      } as Parameters<typeof prisma.plan.create>[0]['data'],
-    });
+    /*
+      Three rows, through the same helper the boot seed uses (D-19).
+
+      This was one `plan.create` behind an `as Parameters<...>` cast, and the
+      cast is why the compiler said nothing when the columns moved: it would
+      have failed at runtime, on the first edition an owner created, with the
+      catalogue then refusing to load because the new plan had no version.
+    */
+    // Same id shape as ensurePlans. This is what PLAN_CODE_PATTERN's charset
+    // exists to keep safe: the id has to be usable in a URL and a filename.
+    await createEditionRows(prisma, code, `plan_${code.toLowerCase()}`, data);
+    const created = await readEdition(prisma, code);
 
     // Live in this process at once rather than at the next scheduled refresh,
     // the same as an edit. Other processes pick it up within their interval.

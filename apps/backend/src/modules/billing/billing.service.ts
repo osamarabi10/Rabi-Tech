@@ -23,7 +23,12 @@ import { getPaymentProvider, paymentProviderFor } from './provider-registry';
 // as trial.service.ts's TRIAL_PLAN_DEFAULT, which is a real use, so the constant
 // stays; it simply has no activation consumer any more.
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
-import { cheapestUpgradeGranting, getEdition, getEditions, getEditionEditedAt } from './editions.service';
+import { cheapestUpgradeGranting, getEdition, getEditions, getEditionEditedAt, CATALOGUE_QUERY, createEditionRows, flattenEdition } from './editions.service';
+import {
+  SUBSCRIPTION_PLAN_SELECT,
+  currentVersionIdForPlan,
+  planCodeOf,
+} from './subscription-plan';
 import { resolveEntitlements } from './entitlements.resolver';
 import { editionOfferability } from '../channels/channel-viability';
 import { channelGrantRefusal } from '../channels/channel-entitlement';
@@ -85,24 +90,46 @@ async function uniqueSlug(base: string): Promise<string> {
 export async function ensurePlans(): Promise<void> {
   await runAsPlatform('billing-ensure-plans', async () => {
     for (const plan of Object.values(PLAN_ENTITLEMENTS)) {
-      await prisma.plan.upsert({
+      /*
+        An edition is three rows now (D-19): the plan, the version of it that
+        is current, and that version's active price. Seeding creates all
+        three, and — as before — updates none of them: `update: {}` is what
+        lets the console edit an edition without boot reverting it.
+      */
+      const existing = await prisma.plan.findUnique({
         where: { code: plan.code },
-        create: {
-          id: `plan_${plan.code.toLowerCase()}`,
-          code: plan.code,
-          name: plan.name,
-          monthlyPriceCents: plan.monthlyPriceCents,
-          pricingModel: plan.pricingModel,
-          billingInterval: plan.billingInterval,
-          // Declaration order in PLAN_ENTITLEMENTS, which is already cheapest
-          // to dearest. The literal array this replaces was a second copy of
-          // that ordering, and a code absent from it seeded at -1 — sorting
-          // ahead of Free on the pricing page.
-          sortOrder: Object.keys(PLAN_ENTITLEMENTS).indexOf(plan.code),
-        },
-        // Empty on purpose. An existing row is owner-editable state, not a
-        // copy of the constant to be refreshed. See the note above.
-        update: {},
+        select: { id: true },
+      });
+      // An existing edition is owner-editable state, not a copy of the
+      // constant to be refreshed. See the note above.
+      if (existing) continue;
+
+      await createEditionRows(prisma, plan.code, `plan_${plan.code.toLowerCase()}`, {
+        name: plan.name,
+        // Declaration order in PLAN_ENTITLEMENTS, which is already cheapest
+        // to dearest. The literal array this replaces was a second copy of
+        // that ordering, and a code absent from it seeded at -1 — sorting
+        // ahead of Free on the pricing page.
+        sortOrder: Object.keys(PLAN_ENTITLEMENTS).indexOf(plan.code),
+        monthlyPriceCents: plan.monthlyPriceCents,
+        pricingModel: plan.pricingModel,
+        billingInterval: plan.billingInterval,
+        monthlyActiveContactsLimit: plan.monthlyActiveContactsLimit,
+        monthlyOutboundMessagesLimit: plan.monthlyOutboundMessagesLimit,
+        monthlyCampaignSendsLimit: plan.monthlyCampaignSendsLimit,
+        customFieldsLimit: plan.customFieldsLimit,
+        usersLimit: plan.usersLimit,
+        maxWorkspaces: plan.maxWorkspaces,
+        workflowsLimit: plan.workflowsLimit,
+        monthlyAiTokensInLimit: plan.monthlyAiTokensInLimit,
+        monthlyAiTokensOutLimit: plan.monthlyAiTokensOutLimit,
+        campaignRateMax: plan.campaignRateMax,
+        campaignRateDurationMs: plan.campaignRateDurationMs,
+        autoProvisionGateway: plan.autoProvisionGateway,
+        customDomain: plan.customDomain,
+        whiteLabel: plan.whiteLabel,
+        maskContactDetails: plan.maskContactDetails,
+        allowedChannels: plan.allowedChannels,
       });
     }
   });
@@ -135,9 +162,14 @@ export async function listPlans() {
     const plans = await prisma.plan.findMany({
       where: { isActive: true, archivedAt: null },
       orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+      include: CATALOGUE_QUERY,
     });
 
-    return plans.map((plan) => {
+    return plans.map((row) => {
+      // Price and interval come off the flattened edition rather than off the
+      // plan row: they live on Price now, and the flattener is the one place
+      // that knows which price is the current one (D-19).
+      const plan = flattenEdition(row);
       const entitlements = getEdition(normalizePlanCode(plan.code));
       const offer = editionOfferability(entitlements.allowedChannels);
       return {
@@ -482,7 +514,7 @@ export async function createSignup(input: {
       const subscription = await tx.subscription.create({
         data: {
           organizationId: organization.id,
-          planCode: effectivePlanCode,
+          planVersionId: await currentVersionIdForPlan(tx, effectivePlanCode),
           provider: provider.provider,
           // The deadline is stamped once, here, so a later change to the trial
           // length cannot retroactively expire somebody already inside one.
@@ -736,7 +768,12 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
     const organization = await prisma.organization.findUnique({
       where: { id: organizationId },
       include: {
-        subscriptions: { where: { status: { in: ['ACTIVE', 'TRIALING'] } }, orderBy: { createdAt: 'desc' }, take: 1 },
+        subscriptions: {
+          where: { status: { in: ['ACTIVE', 'TRIALING'] } },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: { planVersion: { select: { version: true, plan: { select: { code: true } } } } },
+        },
         channels: { where: { kind: 'OPENWA' }, take: 1 },
       },
     });
@@ -759,7 +796,7 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
       by a banner rather than being silently held back.
     */
     const active = organization.subscriptions[0];
-    const planCode = normalizePlanCode(active?.planCode || 'FREE');
+    const planCode = normalizePlanCode(planCodeOf(active) || 'FREE');
     const edition = getEdition(planCode);
 
     /*
@@ -906,7 +943,7 @@ export async function activateManualSubscription(
     const existing = await prisma.subscription.findFirst({
       where: { organizationId },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, planCode: true, provider: true, subscriptionRef: true, customerRef: true },
+      select: { id: true, ...SUBSCRIPTION_PLAN_SELECT, provider: true, subscriptionRef: true, customerRef: true },
     });
 
     /*
@@ -946,7 +983,7 @@ export async function activateManualSubscription(
       ? await prisma.subscription.update({
           where: { id: existing.id },
           data: {
-            planCode,
+            planVersionId: await currentVersionIdForPlan(prisma, planCode),
             provider: providerName,
             status: 'ACTIVE',
             customerRef,
@@ -960,7 +997,7 @@ export async function activateManualSubscription(
       : await prisma.subscription.create({
           data: {
             organizationId,
-            planCode,
+            planVersionId: await currentVersionIdForPlan(prisma, planCode),
             provider: providerName,
             status: 'ACTIVE',
             customerRef,
@@ -1157,7 +1194,7 @@ async function activateFromPaymentEvent(
   const subscription = await prisma.subscription.findFirst({
     where: { organizationId },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, planCode: true, status: true },
+    select: { id: true, ...SUBSCRIPTION_PLAN_SELECT, status: true },
   });
 
   const park = async (reason: string): Promise<'parked'> => {
@@ -1177,7 +1214,7 @@ async function activateFromPaymentEvent(
         type: 'PAYMENT_EVENT_NEEDS_REVIEW',
         severity: 'ERROR',
         message: reason,
-        metadata: { ...context, namedPlan, subscriptionPlan: subscription?.planCode ?? null } as never,
+        metadata: { ...context, namedPlan, subscriptionPlan: planCodeOf(subscription) } as never,
       },
     });
     return 'parked';
@@ -1200,7 +1237,7 @@ async function activateFromPaymentEvent(
   // Compared against the stored string rather than through normalizePlanCode,
   // which throws on a code the catalogue no longer carries — an edition that has
   // since been renamed or removed must park, not crash the webhook.
-  const ofRecord = String(subscription.planCode || '').trim().toUpperCase();
+  const ofRecord = String(planCodeOf(subscription) || '').trim().toUpperCase();
   if (requested !== ofRecord) {
     return park(
       `Payment event names ${requested} but the subscription of record is ${ofRecord || 'unset'}.`,
@@ -1348,7 +1385,11 @@ export async function getCurrentBilling(organizationId: string) {
     const organization = await prisma.organization.findUniqueOrThrow({
       where: { id: organizationId },
       include: {
-        subscriptions: { orderBy: { createdAt: 'desc' }, take: 1 },
+        subscriptions: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: { planVersion: { select: { version: true, plan: { select: { code: true } } } } },
+        },
         invoices: { orderBy: { createdAt: 'desc' }, take: 20 },
         channels: { where: { kind: 'OPENWA' }, take: 1 },
       },
@@ -1363,7 +1404,7 @@ export async function getCurrentBilling(organizationId: string) {
         // unchanged — Organization.tier only ever held the subscription plan,
         // or FREE when there was none — but it is now read from the one row
         // that says so rather than from a copy kept in step by hand (D-18).
-        tier: organization.subscriptions[0]?.planCode ?? 'FREE',
+        tier: planCodeOf(organization.subscriptions[0]) ?? 'FREE',
         emailVerifiedAt: organization.emailVerifiedAt,
         downgradeGraceEndsAt: organization.downgradeGraceEndsAt,
         downgradeGraceReason: organization.downgradeGraceReason,
@@ -1381,7 +1422,7 @@ export async function reconcileBilling(): Promise<{ checked: number; repaired: n
   return runAsPlatform(`billing-reconcile:${provider.provider}`, async () => {
     const subscriptions = await prisma.subscription.findMany({
       where: { provider: provider.provider, externalRef: { not: null }, status: { in: ['PENDING', 'MANUAL_REVIEW', 'ACTIVE', 'PAST_DUE'] } },
-      select: { id: true, organizationId: true, planCode: true, externalRef: true, status: true },
+      select: { id: true, organizationId: true, ...SUBSCRIPTION_PLAN_SELECT, externalRef: true, status: true },
     });
     let repaired = 0;
     let alerted = 0;
@@ -1393,7 +1434,7 @@ export async function reconcileBilling(): Promise<{ checked: number; repaired: n
           // the status, and this is the path that records them when a webhook
           // was missed — so it passes them on rather than letting the
           // activation fall back to a synthetic reference.
-          await activateManualSubscription(subscription.organizationId, subscription.planCode, {
+          await activateManualSubscription(subscription.organizationId, planCodeOf(subscription)!, {
             subscriptionRef: status.subscriptionRef,
             customerRef: status.customerRef,
             source: 'reconcile',
@@ -1570,9 +1611,13 @@ export async function getBillingSummary(organizationId: string) {
    * archived must still be shown what they are billed in, not null.
    */
   const planRows = await runAsPlatform('billing-summary:plan-currency', () =>
-    prisma.plan.findMany({ where: { isActive: true }, select: { code: true, currency: true } }));
+    prisma.price.findMany({
+      where: { isActive: true, planVersion: { isCurrent: true, plan: { isActive: true } } },
+      select: { currency: true, planVersion: { select: { plan: { select: { code: true } } } } },
+    }));
   const planCurrency =
-    planRows.find((row) => normalizePlanCode(row.code) === effective.plan)?.currency ?? null;
+    planRows.find((row) => normalizePlanCode(row.planVersion.plan.code) === effective.plan)?.currency
+    ?? null;
 
   return {
     plan: {

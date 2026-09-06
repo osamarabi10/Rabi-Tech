@@ -455,6 +455,25 @@ Design rules do not catch the failures this repository actually has. These do.
   catalogue loaded, the migrations applied, the services healthy — and record
   that assertion beside the reference.
 
+- **A fixture must include a case where the fields being distinguished hold
+  different values.** A mis-wire between two fields is invisible everywhere
+  they happen to coincide, so a proof built on the coinciding cases passes
+  while the bug ships.
+
+  Measured, not imagined. Mis-wiring `usersLimit` to read `maxWorkspaces` in
+  the edition flattener turned **four of eight** scenarios red and left four
+  green — FREE and ENTERPRISE share values across both columns, so for those
+  editions the wrong column returns the right answer. BUSINESS is where it
+  showed: seats 25 becoming 5. A proof over a single edition, or over the two
+  cheapest, would have reported success.
+
+  The rule generalises past this case. Any check comparing two things needs a
+  fixture where they differ: a copy that reads the wrong source, a filter on
+  the wrong column, a cache keyed by the wrong field — all of them are correct
+  by accident wherever the two values agree. When choosing fixture data,
+  choose the rows that disagree, and prefer the expensive edition over the
+  free one: it is the one whose numbers are furthest from everything else.
+
 ---
 
 ## Scope

@@ -36,8 +36,14 @@ export class CurrencyPolicyError extends Error {
  * Archiving stops the selling; it does not stop the billing.
  */
 export async function sellableCurrencies(): Promise<string[]> {
-  const rows = await prisma.plan.findMany({
-    where: { isActive: true },
+  // Currency is a property of the price, not of the edition (D-19). Only the
+  // active price of the current version counts: a superseded price is kept so
+  // an old invoice stays explicable, not so it can still be charged in.
+  const rows = await prisma.price.findMany({
+    where: {
+      isActive: true,
+      planVersion: { isCurrent: true, plan: { isActive: true } },
+    },
     select: { currency: true },
     distinct: ['currency'],
   });

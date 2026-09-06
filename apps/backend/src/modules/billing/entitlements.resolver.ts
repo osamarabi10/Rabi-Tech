@@ -4,6 +4,7 @@ import { prisma } from '../../prisma';
 import { METRIC_LIMIT_FIELDS, USAGE_METRICS } from '../usage/metrics';
 import { PlanCode, PlanEntitlements, UNLIMITED_SENTINEL, normalizePlanCode } from './plans';
 import { getEdition } from './editions.service';
+import { SUBSCRIPTION_PLAN_SELECT, planCodeOf } from './subscription-plan';
 
 /**
  * The single place that answers "what is this organization actually entitled to
@@ -245,7 +246,7 @@ export async function resolveEntitlements(
       configuration: true,
       subscriptions: {
         where: { status: { in: LIVE_SUBSCRIPTION_STATUSES } },
-        select: { planCode: true, status: true, activatedAt: true },
+        select: { ...SUBSCRIPTION_PLAN_SELECT, status: true, activatedAt: true },
         orderBy: { createdAt: 'desc' },
         take: 1,
       },
@@ -265,9 +266,12 @@ export async function resolveEntitlements(
   const overrideLive = hasAnyOverride && !expired;
 
   const overridePlan = overrideLive ? safePlanCode(organization.planOverride, 'planOverride') : null;
-  // A CANCELED subscription row still carries a planCode; using it would
+  // A CANCELED subscription row still pins its version; using it would
   // resurrect a plan the tenant has left. Only live statuses are read.
-  const subscriptionPlan = safePlanCode(organization.subscriptions[0]?.planCode, 'subscription.planCode');
+  const subscriptionPlan = safePlanCode(
+    planCodeOf(organization.subscriptions[0]),
+    'subscription.planVersion.plan.code',
+  );
 
   /*
     No subscription means the floor edition, and nothing else.

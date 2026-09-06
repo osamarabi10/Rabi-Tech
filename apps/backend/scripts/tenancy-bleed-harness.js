@@ -916,13 +916,44 @@ async function seedProvisioningOrganization(raw, key) {
  * across checks and would otherwise accumulate live subscriptions, leaving
  * the newest one to win for reasons the check never stated.
  */
+/** The current version id for an edition code, for fixtures that create rows directly. */
+async function currentPlanVersionId(raw, planCode) {
+  const version = await raw.planVersion.findFirstOrThrow({
+    where: { isCurrent: true, plan: { code: planCode } },
+    select: { id: true },
+  });
+  return version.id;
+}
+
+/**
+ * An edition is three rows since D-19. These use the same flattener and the
+ * same edit routing the service does, deliberately: a fixture that wrote the
+ * tables directly could set a limit the product never reads, and the check
+ * built on it would be testing the fixture.
+ */
+/** The shipped edition codes, for fixtures that must touch every one. */
+const EDITION_CODES = Object.keys(require('../src/modules/billing/plans').PLAN_ENTITLEMENTS);
+
+async function editionRow(raw, code) {
+  return require('../src/modules/billing/editions.service').readEdition(raw, code);
+}
+async function editionWrite(raw, code, data) {
+  return require('../src/modules/billing/editions.service').applyEditionChanges(raw, code, data);
+}
+
 async function grantPlan(raw, organizationId, planCode) {
   await raw.subscription.deleteMany({ where: { organizationId } });
   if (planCode === 'FREE') return;
+  // A subscription names a version, not a code (D-19): the edition as it was
+  // defined when it was sold. Fixtures buy the current one.
+  const version = await raw.planVersion.findFirstOrThrow({
+    where: { isCurrent: true, plan: { code: planCode } },
+    select: { id: true },
+  });
   await raw.subscription.create({
     data: {
       organizationId,
-      planCode,
+      planVersionId: version.id,
       status: 'ACTIVE',
       provider: 'manual',
       activatedAt: new Date(),
@@ -3352,6 +3383,7 @@ async function databaseAudits() {
       );
       const subscription = await raw.subscription.findFirstOrThrow({
         where: { organizationId: signup.organizationId },
+        include: { planVersion: { select: { plan: { select: { code: true } } } } },
       });
       assert.equal(subscription.status, 'TRIALING');
       /*
@@ -3368,11 +3400,11 @@ async function databaseAudits() {
         that wrong and a trial silently grants nothing, which is the failure
         the original assertion was really guarding.
       */
-      assert.notEqual(subscription.planCode, 'FREE');
+      assert.notEqual(subscription.planVersion.plan.code, 'FREE');
       const trialEntitlements = await runAsPlatform('bleed-trial-resolve', () =>
         require('../src/modules/billing/entitlements.resolver')
           .resolveEntitlements(signup.organizationId));
-      assert.equal(trialEntitlements.plan, subscription.planCode);
+      assert.equal(trialEntitlements.plan, subscription.planVersion.plan.code);
       assert.equal(trialEntitlements.source, 'subscription');
       assert.ok(subscription.trialEndsAt, 'a trial must carry a deadline');
       // Nothing was paid, so nothing was activated.
@@ -3382,7 +3414,7 @@ async function databaseAudits() {
       // connection. A trial without one is a trial of a product the tenant
       // cannot use.
       const { PLAN_ENTITLEMENTS } = require('../src/modules/billing/plans');
-      assert.equal(PLAN_ENTITLEMENTS[subscription.planCode].autoProvisionGateway, true);
+      assert.equal(PLAN_ENTITLEMENTS[subscription.planVersion.plan.code].autoProvisionGateway, true);
       assert.ok(channel, 'the workspace has a gateway channel row');
     });
     await check('billing: extending a trial moves the deadline forward from now', async () => {
@@ -3411,7 +3443,7 @@ async function databaseAudits() {
       const subscription = await raw.subscription.create({
         data: {
           organizationId: orgA.organizationId,
-          planCode: 'GROWTH',
+          planVersionId: await currentPlanVersionId(raw, 'GROWTH'),
           provider: 'manual',
           status: 'TRIALING',
           // Already over, which is the case that matters: extending by three
@@ -3651,7 +3683,7 @@ async function databaseAudits() {
       const trial = await raw.subscription.create({
         data: {
           organizationId: orgA.organizationId,
-          planCode: 'BUSINESS',
+          planVersionId: await currentPlanVersionId(raw, 'BUSINESS'),
           provider: 'manual',
           status: 'TRIALING',
           trialEndsAt: new Date(Date.now() + 3600_000),
@@ -3795,7 +3827,7 @@ async function databaseAudits() {
       const subscriptionB = await raw.subscription.create({
         data: {
           organizationId: orgB.organizationId,
-          planCode: 'GROWTH',
+          planVersionId: await currentPlanVersionId(raw, 'GROWTH'),
           provider: 'manual',
           status: 'ACTIVE',
           subscriptionRef: `manual-cross-${Date.now()}`,
@@ -4577,7 +4609,9 @@ async function databaseAudits() {
 
       // Plan is platform-owned global config, so it is read through the
       // un-extended client: there is no organization to scope it to.
-      const rows = await raw.plan.findMany();
+      const rows = await Promise.all(
+        Object.keys(PLAN_ENTITLEMENTS).map((code) => editionRow(raw, code)),
+      );
       const byCode = Object.fromEntries(rows.map((row) => [row.code, row]));
 
       // Every field the constant carries. Listed explicitly rather than derived
@@ -4650,10 +4684,7 @@ async function databaseAudits() {
       // Grant both on the edition. If branding still consulted its own tier
       // Sets this would change nothing, which is exactly the defect being
       // retired: a toggle that writes a field no enforcement path reads.
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: { whiteLabel: true, customDomain: true },
-      });
+      await editionWrite(raw, 'GROWTH', { whiteLabel: true, customDomain: true });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
       assert.equal(canCustomizeFooter('GROWTH'), true, 'the catalogue must be what branding reads');
@@ -4661,7 +4692,7 @@ async function databaseAudits() {
       assert.doesNotThrow(() => assertFooterEntitlement('GROWTH', { customDomain: 'x.example' }));
 
       // maskContactDetails resolves from the same catalogue.
-      await raw.plan.update({ where: { code: 'GROWTH' }, data: { maskContactDetails: true } });
+      await editionWrite(raw, 'GROWTH', { maskContactDetails: true });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
       assert.equal(getEdition('GROWTH').maskContactDetails, true);
 
@@ -4696,11 +4727,11 @@ async function databaseAudits() {
           baseUrl: '', apiKeyEnc: '', webhookToken: 'bleed-flag-token',
         },
       });
-      const standardBefore = await raw.plan.findUnique({ where: { code: 'STANDARD' } });
+      const standardBefore = await editionRow(raw, 'STANDARD');
       try {
         // Off: the edition does not include a gateway, so the customer is told
         // to upgrade rather than having one built.
-        await raw.plan.update({ where: { code: 'STANDARD' }, data: { autoProvisionGateway: false } });
+        await editionWrite(raw, 'STANDARD', { autoProvisionGateway: false });
         await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
         const refused = await maybeProvisionGateway(flagOrgId, 'bleed-flag-off');
         assert.equal(refused.queued, false, 'a gateway must not be built for an edition that excludes one');
@@ -4708,15 +4739,12 @@ async function databaseAudits() {
 
         // On: the same organization, the same plan code, the same everything
         // else — only the console switch moved.
-        await raw.plan.update({ where: { code: 'STANDARD' }, data: { autoProvisionGateway: true } });
+        await editionWrite(raw, 'STANDARD', { autoProvisionGateway: true });
         await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
         const allowed = await maybeProvisionGateway(flagOrgId, 'bleed-flag-on');
         assert.equal(allowed.queued, true, 'the flag must be what decides, and it must grant as well as deny');
       } finally {
-        await raw.plan.update({
-          where: { code: 'STANDARD' },
-          data: { autoProvisionGateway: standardBefore.autoProvisionGateway },
-        });
+        await editionWrite(raw, 'STANDARD', { autoProvisionGateway: standardBefore.autoProvisionGateway });
         await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
         const { gatewayProvisioningQueue } = require('../src/workers/gateway-provisioning.queue');
         const job = await gatewayProvisioningQueue.getJob(`${flagOrgId}--gateway--provision`);
@@ -4726,10 +4754,7 @@ async function databaseAudits() {
       }
 
       // Restore the seeded values so later checks see the catalogue as shipped.
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: { whiteLabel: false, customDomain: false, maskContactDetails: false },
-      });
+      await editionWrite(raw, 'GROWTH', { whiteLabel: false, customDomain: false, maskContactDetails: false });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
@@ -4739,7 +4764,7 @@ async function databaseAudits() {
 
       // Put org A on GROWTH with config matching the catalogue exactly, and
       // stamp the config in the past so an edition edit lands after it.
-      const growth = await raw.plan.findUnique({ where: { code: 'GROWTH' } });
+      const growth = await editionRow(raw, 'GROWTH');
       await grantPlan(raw, orgA.organizationId, 'GROWTH');
       await raw.organizationConfig.update({
         where: { organizationId: orgA.organizationId },
@@ -4757,10 +4782,7 @@ async function databaseAudits() {
 
       // The owner raises the allowance. Every organization on GROWTH now has a
       // config that no longer matches the edition - by design, not by tampering.
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit + 500 },
-      });
+      await editionWrite(raw, 'GROWTH', { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit + 500 });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
       const after = await runAsOrganization(orgA.organizationId, () => getBillingSummary(orgA.organizationId));
@@ -4783,10 +4805,7 @@ async function databaseAudits() {
       );
 
       // Restore.
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit },
-      });
+      await editionWrite(raw, 'GROWTH', { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit });
       await grantPlan(raw, orgA.organizationId, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
@@ -4910,7 +4929,7 @@ async function databaseAudits() {
       assert.ok([401, 403].includes(writeAsTenant.status), `tenant write must be refused, got ${writeAsTenant.status}`);
 
       // The price must be untouched by the refused write.
-      const growth = await raw.plan.findUnique({ where: { code: 'GROWTH' } });
+      const growth = await editionRow(raw, 'GROWTH');
       assert.equal(growth.monthlyPriceCents, 4900, 'a refused write must change nothing');
     });
 
@@ -4925,10 +4944,7 @@ async function databaseAudits() {
       const beforeB = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgB.organizationId));
 
       // Move GROWTH substantially. Org B is on BUSINESS and must not notice.
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: { monthlyPriceCents: 9900, monthlyActiveContactsLimit: 99999, whiteLabel: true },
-      });
+      await editionWrite(raw, 'GROWTH', { monthlyPriceCents: 9900, monthlyActiveContactsLimit: 99999, whiteLabel: true });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
       const afterB = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgB.organizationId));
@@ -4941,10 +4957,7 @@ async function databaseAudits() {
       const afterA = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgA.organizationId));
       assert.equal(afterA.listPriceCents, 9900, 'the edited edition must apply to its own tenants');
 
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: { monthlyPriceCents: 4900, monthlyActiveContactsLimit: 2500, whiteLabel: false },
-      });
+      await editionWrite(raw, 'GROWTH', { monthlyPriceCents: 4900, monthlyActiveContactsLimit: 2500, whiteLabel: false });
       await setTierGoverned(orgA, 'FREE');
       await setTierGoverned(orgB, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
@@ -4957,11 +4970,11 @@ async function databaseAudits() {
       await setTierGoverned(orgA, 'GROWTH');
       // A distinguishable value, so a silent fall back to the shipped constant
       // is visible rather than looking like a correct answer.
-      await raw.plan.update({ where: { code: 'GROWTH' }, data: { monthlyActiveContactsLimit: 4242 } });
+      await editionWrite(raw, 'GROWTH', { monthlyActiveContactsLimit: 4242 });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
       assert.equal(getEdition('GROWTH').monthlyActiveContactsLimit, 4242);
 
-      await raw.plan.update({ where: { code: 'GROWTH' }, data: { isActive: false } });
+      await editionWrite(raw, 'GROWTH', { isActive: false });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
       // Retired from the price list...
@@ -4981,10 +4994,7 @@ async function databaseAudits() {
       const stillResolves = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgA.organizationId));
       assert.equal(stillResolves.plan, 'GROWTH');
 
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: { isActive: true, monthlyActiveContactsLimit: 2500 },
-      });
+      await editionWrite(raw, 'GROWTH', { isActive: true, monthlyActiveContactsLimit: 2500 });
       await setTierGoverned(orgA, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
@@ -4997,10 +5007,15 @@ async function databaseAudits() {
       const { assertMetricAvailable } = require('../src/modules/usage/entitlements');
 
       await setTierGoverned(orgA, 'GROWTH');
-      await raw.plan.update({ where: { code: 'GROWTH' }, data: { monthlyActiveContactsLimit: 4242 } });
+      await editionWrite(raw, 'GROWTH', { monthlyActiveContactsLimit: 4242 });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
-      const growth = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
-      const campaignLimits = await raw.plan.findMany({ select: { code: true, monthlyCampaignSendsLimit: true } });
+      const growth = await editionRow(raw, 'GROWTH');
+      const campaignLimits = await Promise.all(
+        EDITION_CODES.map(async (code) => ({
+          code,
+          monthlyCampaignSendsLimit: (await editionRow(raw, code)).monthlyCampaignSendsLimit,
+        })),
+      );
 
       const owner = await raw.identity.create({
         data: {
@@ -5028,7 +5043,7 @@ async function databaseAudits() {
       */
       const archiveResponse = await asOwner('PATCH', '/api/platform/editions/GROWTH', { archived: true });
       assert.equal(archiveResponse.status, 200, 'the owner must be able to archive an edition');
-      const archivedRow = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+      const archivedRow = await editionRow(raw, 'GROWTH');
       assert.ok(archivedRow.archivedAt, 'PATCH archived:true must stamp archivedAt');
       assert.equal(archivedRow.isActive, true, 'archiving must not silently flip isActive');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
@@ -5037,7 +5052,7 @@ async function databaseAudits() {
       // edition was withdrawn, so a repeated PATCH must leave it where it is.
       const restamp = await asOwner('PATCH', '/api/platform/editions/GROWTH', { archived: true });
       assert.equal(restamp.status, 200);
-      const restamped = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+      const restamped = await editionRow(raw, 'GROWTH');
       assert.equal(
         restamped.archivedAt.getTime(),
         archivedRow.archivedAt.getTime(),
@@ -5080,8 +5095,12 @@ async function databaseAudits() {
 
       // The upgrade GROWTH is never offered. Every other edition is stripped of
       // campaign_sends so GROWTH is unambiguously the only one that grants it.
-      await raw.plan.updateMany({ data: { monthlyCampaignSendsLimit: 0 } });
-      await raw.plan.update({ where: { code: 'GROWTH' }, data: { monthlyCampaignSendsLimit: 5000 } });
+      // One at a time: the limit lives on each edition's current version now,
+      // so there is no single table left to sweep (D-19).
+      for (const code of EDITION_CODES) {
+        await editionWrite(raw, code, { monthlyCampaignSendsLimit: 0 });
+      }
+      await editionWrite(raw, 'GROWTH', { monthlyCampaignSendsLimit: 5000 });
       await setTierGoverned(orgA, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
@@ -5117,7 +5136,7 @@ async function databaseAudits() {
       */
       const restore = await asOwner('PATCH', '/api/platform/editions/GROWTH', { archived: false });
       assert.equal(restore.status, 200);
-      const restoredRow = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+      const restoredRow = await editionRow(raw, 'GROWTH');
       assert.equal(restoredRow.archivedAt, null, 'PATCH archived:false must clear archivedAt');
       assert.equal(restoredRow.isActive, true, 'un-archiving must leave isActive as the owner set it');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
@@ -5138,15 +5157,9 @@ async function databaseAudits() {
         data: { monthlyCampaignSendsLimit: configBefore.monthlyCampaignSendsLimit },
       });
       for (const row of campaignLimits) {
-        await raw.plan.update({
-          where: { code: row.code },
-          data: { monthlyCampaignSendsLimit: row.monthlyCampaignSendsLimit },
-        });
+        await editionWrite(raw, row.code, { monthlyCampaignSendsLimit: row.monthlyCampaignSendsLimit });
       }
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: { archivedAt: null, monthlyActiveContactsLimit: 2500 },
-      });
+      await editionWrite(raw, 'GROWTH', { archivedAt: null, monthlyActiveContactsLimit: 2500 });
       await setTierGoverned(orgA, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
@@ -5321,8 +5334,8 @@ async function databaseAudits() {
       // A deliberate tie. sortOrder is not unique and defaults to 0, so this is
       // a state the catalogue can genuinely reach - two editions created
       // without an explicit position, or an owner moving one onto another.
-      await raw.plan.update({ where: { code: 'BUSINESS' }, data: { sortOrder: 2 } });
-      await raw.plan.update({ where: { code: 'GROWTH' }, data: { sortOrder: 2 } });
+      await editionWrite(raw, 'BUSINESS', { sortOrder: 2 });
+      await editionWrite(raw, 'GROWTH', { sortOrder: 2 });
 
       const orders = [];
       for (let i = 0; i < 3; i += 1) {
@@ -5352,7 +5365,7 @@ async function databaseAudits() {
       );
 
       for (const row of before) {
-        await raw.plan.update({ where: { code: row.code }, data: { sortOrder: row.sortOrder } });
+        await editionWrite(raw, row.code, { sortOrder: row.sortOrder });
       }
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
@@ -5443,11 +5456,11 @@ async function databaseAudits() {
         The guard is not weakened: it still runs, after the cleanup, and still
         fails if anything unexpected is subscribed.
       */
-      await raw.subscription.deleteMany({ where: { planCode: 'STANDARD' } });
-      const subscribed = await raw.subscription.count({ where: { planCode: 'STANDARD' } });
+      await raw.subscription.deleteMany({ where: { planVersion: { plan: { code: 'STANDARD' } } } });
+      const subscribed = await raw.subscription.count({ where: { planVersion: { plan: { code: 'STANDARD' } } } });
       assert.equal(subscribed, 0, 'STANDARD must have no subscribers for this check to be safe to run');
 
-      const original = await raw.plan.findUniqueOrThrow({ where: { code: 'STANDARD' } });
+      const original = await editionRow(raw, 'STANDARD');
       await raw.plan.delete({ where: { code: 'STANDARD' } });
 
       const created = await asOwner('POST', '/api/platform/editions', {
@@ -5457,7 +5470,7 @@ async function databaseAudits() {
       });
       assert.equal(created.status, 201, 'a creatable code must actually create');
 
-      const row = await raw.plan.findUniqueOrThrow({ where: { code: 'STANDARD' } });
+      const row = await editionRow(raw, 'STANDARD');
       assert.equal(row.id, 'plan_standard', 'the id shape must match the one ensurePlans derives');
 
       // Appended, not left at the column default. Zero would place a new
@@ -5479,7 +5492,9 @@ async function databaseAudits() {
       assert.ok(audited, 'creating an edition must be written to the platform audit log');
 
       await raw.plan.delete({ where: { code: 'STANDARD' } });
-      await raw.plan.create({ data: original });
+      await require('../src/modules/billing/editions.service').createEditionRows(
+        raw, 'STANDARD', 'plan_standard', original,
+      );
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
@@ -5514,7 +5529,7 @@ async function databaseAudits() {
 
       await setTierGoverned(orgA, 'GROWTH');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
-      const before = await raw.plan.findUniqueOrThrow({ where: { code: 'GROWTH' } });
+      const before = await editionRow(raw, 'GROWTH');
 
       /*
         Two fields chosen deliberately, one of each kind:
@@ -5578,13 +5593,10 @@ async function databaseAudits() {
         'the edition itself must carry the new value even though nobody feels it yet',
       );
 
-      await raw.plan.update({
-        where: { code: 'GROWTH' },
-        data: {
+      await editionWrite(raw, 'GROWTH', {
           usersLimit: before.usersLimit,
           monthlyActiveContactsLimit: before.monthlyActiveContactsLimit,
-        },
-      });
+        });
       await setTierGoverned(orgA, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
@@ -5608,7 +5620,7 @@ async function databaseAudits() {
       assert.ok(loaded >= 5, `unscoped refresh must load the catalogue, loaded ${loaded}`);
 
       // And the loaded values must be the database's, not the constant's.
-      await raw.plan.update({ where: { code: 'BUSINESS' }, data: { monthlyPriceCents: 20900 } });
+      await editionWrite(raw, 'BUSINESS', { monthlyPriceCents: 20900 });
       const reloaded = await refreshEditions();
       assert.ok(reloaded >= 5);
       assert.equal(
@@ -5617,7 +5629,7 @@ async function databaseAudits() {
         'an unscoped refresh must read the database, not fall back to the constant',
       );
 
-      await raw.plan.update({ where: { code: 'BUSINESS' }, data: { monthlyPriceCents: 19900 } });
+      await editionWrite(raw, 'BUSINESS', { monthlyPriceCents: 19900 });
       await refreshEditions();
     });
     await check('analytics: hourly rollup buckets never cross organizations', async () => {
@@ -6779,7 +6791,10 @@ async function databaseAudits() {
         as null rather than skipped: "unset" and "deliberately unlimited" must
         not be the same reading.
       */
-      const plans = await admin.plan.findMany({ select: { code: true, maxWorkspaces: true } });
+      // The ceiling lives on each edition's current version now (D-19).
+      const plans = await Promise.all(
+        EDITION_CODES.map(async (code) => ({ code, maxWorkspaces: (await editionRow(admin, code)).maxWorkspaces })),
+      );
       const byCode = new Map(plans.map((row) => [row.code, row.maxWorkspaces]));
 
       for (const code of ['FREE', 'STANDARD', 'GROWTH']) {

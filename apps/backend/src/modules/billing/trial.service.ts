@@ -1,6 +1,7 @@
 import { SubscriptionStatus } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { isPaidPlan, normalizePlanCode, type PlanCode } from './plans';
+import { SUBSCRIPTION_PLAN_SELECT } from './subscription-plan';
 
 /**
  * The free trial: full access for a fixed window, then a paywall.
@@ -130,8 +131,15 @@ export async function trialDeadlineFrom(start: Date): Promise<Date> {
   return new Date(start.getTime() + hours * 3600_000);
 }
 
+/**
+ * Enough of a subscription to answer "is this a trial, and of what".
+ *
+ * The plan arrives through the pinned version rather than as a column: a
+ * subscription records the edition it was sold under, and the code is
+ * reachable from it (D-19).
+ */
 type SubscriptionShape = {
-  planCode: string;
+  planVersion: { version: number; plan: { code: string } };
   status: string;
   trialEndsAt: Date | null;
 };
@@ -183,7 +191,7 @@ export async function resolveTrial(organizationId: string, now: Date = new Date(
   const subscription = await prisma.subscription.findFirst({
     where: { organizationId, status: { in: TRIAL_SUBSCRIPTION_STATUSES } },
     orderBy: { createdAt: 'desc' },
-    select: { planCode: true, status: true, trialEndsAt: true },
+    select: { ...SUBSCRIPTION_PLAN_SELECT, status: true, trialEndsAt: true },
   });
   return trialStateOf(subscription, now);
 }

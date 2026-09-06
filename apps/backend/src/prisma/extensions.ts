@@ -26,6 +26,14 @@ const PLATFORM_MODELS = new Set([
   'PlatformAuditLog',
   'PlatformAlert',
   'Plan',
+  // Split out of Plan in D-19 and platform-owned for the same reason it is:
+  // the catalogue belongs to the platform, carries no organizationId, and a
+  // tenant-scoped read of it would be scoped by a column that does not exist.
+  // Missing them made refreshEditions load 0 editions under an unscoped call,
+  // which is the fail-closed extension working — the catalogue simply became
+  // invisible to the one query that must always see it.
+  'PlanVersion',
+  'Price',
   'PaymentEvent',
   'SignupThrottleEvent',
 ]);

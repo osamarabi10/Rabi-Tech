@@ -3,6 +3,7 @@ import { prisma } from '../prisma';
 import logger from '../lib/logger';
 import { runAsPlatform } from '../lib/tenant-context';
 import { trialStateOf, TRIAL_SUBSCRIPTION_STATUSES } from '../modules/billing/trial.service';
+import { SUBSCRIPTION_PLAN_SELECT } from '../modules/billing/subscription-plan';
 
 /**
  * Whether this organization may use the product at all right now.
@@ -76,7 +77,7 @@ export async function decideAccess(organizationId: string, now = new Date()): Pr
           where: { status: { in: TRIAL_SUBSCRIPTION_STATUSES } },
           orderBy: { createdAt: 'desc' },
           take: 1,
-          select: { planCode: true, status: true, trialEndsAt: true },
+          select: { ...SUBSCRIPTION_PLAN_SELECT, status: true, trialEndsAt: true },
         },
       },
     }),

@@ -158,21 +158,47 @@ enum PricingModel {
   NEGOTIATED
 }
 
+/// An edition, as a stable identity.
+///
+/// What an edition *grants* changes over time and lives on PlanVersion; what
+/// it *costs* changes independently and lives on Price. This model holds only
+/// what never changes about an edition: its code, its name, and where it sits
+/// in the ladder. Splitting them is what lets a subscription be grandfathered
+/// onto the terms it was sold under (D-19).
 model Plan {
-  id                String          @id @default(cuid())
-  code              String          @unique
-  name              String
-  monthlyPriceCents Int
-  /// Read this before the price. See PricingModel.
-  pricingModel      PricingModel    @default(FIXED)
-  /// How often monthlyPriceCents is charged. That column's name predates
-  /// yearly billing and now means "amount per interval"; the rename is real
-  /// debt, deliberately unpaid — 52 references across 11 files and the API
-  /// boundary, for no behaviour change.
-  billingInterval   BillingInterval @default(MONTHLY)
-  currency          String          @default("USD")
-  isActive          Boolean         @default(true)
-  sortOrder         Int             @default(0)
+  id        String  @id @default(cuid())
+  code      String  @unique
+  name      String
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  archivedAt DateTime?
+
+  /// Owner-scheduled edition changes, applied by applyDueSchedules. Stays on
+  /// the plan rather than the version: a schedule is an intention about the
+  /// edition, and applying it is what produces a version.
+  scheduledChanges Json?
+  scheduledFrom    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions PlanVersion[]
+}
+
+/// What an edition grants, at a point in time.
+///
+/// Exactly one version per plan carries isCurrent. Everything on sale reads
+/// the current one; a Subscription pins the version it was sold under, so
+/// editing an edition cannot silently change what an existing subscriber
+/// already bought.
+model PlanVersion {
+  id        String  @id @default(cuid())
+  planId    String
+  version   Int
+  /// Exactly one true row per plan, enforced by a partial unique index in the
+  /// migration — Prisma cannot express "unique where isCurrent" in the schema.
+  isCurrent Boolean @default(false)
 
   /// Metered allowances. Null means unlimited.
   monthlyActiveContactsLimit   Int?
@@ -180,28 +206,10 @@ model Plan {
   monthlyCampaignSendsLimit    Int?
   customFieldsLimit            Int?
   usersLimit                   Int?
-  /// How many workspaces the edition allows, counting the default one.
-  ///
-  /// Named maxWorkspaces rather than workspacesLimit, breaking the sibling
-  /// convention on purpose: this is one name from the plan catalogue through
-  /// resolveEntitlements to the endpoint that enforces it, and two spellings of
-  /// one quota is how the two drift.
-  ///
-  /// 1 means the organization has its default workspace and no more, which is
-  /// every edition below BUSINESS. Null means unlimited.
   maxWorkspaces                Int?
   workflowsLimit               Int?
 
-  /// AI allowances. Null means unlimited, as with every limit above.
-  ///
-  /// These are the only two metered meters that had no edition column at all:
-  /// they lived solely on OrganizationConfig with no write path, so AI was
-  /// negotiated per deal or not offered, and could not be part of what an
-  /// edition sells. BigInt because token counts run to millions where the
-  /// message meters run to thousands.
-  ///
-  /// Shipped null on every edition, which is exactly what the config already
-  /// held — the lever is added without setting a policy with it.
+  /// AI allowances. BigInt because token counts run to millions.
   monthlyAiTokensInLimit  BigInt?
   monthlyAiTokensOutLimit BigInt?
 
@@ -212,64 +220,52 @@ model Plan {
   /// Feature grants. Each must have exactly one server-side enforcement site
   /// reading the resolved edition — a toggle that grants nothing is worse than
   /// no toggle, because it looks like it worked.
-  customDomain       Boolean @default(false)
-  whiteLabel         Boolean @default(false)
-  maskContactDetails Boolean @default(false)
-
-  /// Enforced at activation: billing.service.ts consults this before queueing a
-  /// gateway provision.
-  ///
-  /// It was previously stored and NOT read, while the actual decision was a
-  /// hidden `isPaidPlan(planCode)` name check sitting beside it. The two
-  /// disagreed on STANDARD — flag false, name check true — so a subscriber
-  /// could have had a gateway provisioned while the console hid the switch
-  /// that supposedly governed it.
+  customDomain         Boolean @default(false)
+  whiteLabel           Boolean @default(false)
+  maskContactDetails   Boolean @default(false)
   autoProvisionGateway Boolean @default(false)
 
-  /// Channel kinds this edition may connect, matching OrganizationChannel.kind.
-  /// A list, not a single value, because an edition may offer a choice.
-  ///
-  /// Enforced in channels.routes.ts, on both connect and activate. It shipped
-  /// identical on every edition, read by nothing, with the PATCH endpoint
-  /// refusing to set it — three separate signals that it granted nothing.
-  ///
-  /// Widened to both kinds when enforcement landed: the Meta kind is
-  /// WHATSAPP_CLOUD and no edition listed it, so checking the shipped {OPENWA}
-  /// would have withdrawn Meta from every subscriber rather than adding a
-  /// capability. Narrowing an edition is now an owner decision.
   allowedChannels String[] @default(["OPENWA"])
-
-  /// Withdrawn from the console entirely. Strictly stronger than `isActive`,
-  /// which only withdraws an edition from sale.
-  ///
-  /// Three states, and all three resolve: active (sold, listed), inactive
-  /// (not sold, still listed so the owner can bring it back), archived (not
-  /// sold, not listed). A subscriber on an archived edition keeps exactly the
-  /// entitlements it grants — archiving is an editorial act on the catalogue,
-  /// never a change to what anyone already bought.
-  ///
-  /// Implemented by filtering the *published* set, never the query that loads
-  /// the cache. `refreshEditions` must keep reading every row: an archived
-  /// edition dropped from the cache resolves to RESTRICTED_FLOOR, which grants
-  /// nothing and returns 200 while doing it.
-  archivedAt DateTime?
-
-  /// A pending edit, in the shape of a PATCH body, applied by refreshEditions
-  /// once scheduledFrom has passed and cleared when it is.
-  ///
-  /// Two columns rather than a revision table because getEdition() is
-  /// synchronous and nineteen call sites depend on that. The refresh resolves
-  /// what is in force; the accessor stays a map lookup. A schedule therefore
-  /// lands up to one refresh interval late, which is the right trade for a
-  /// change dated to a day.
-  scheduledChanges Json?
-  scheduledFrom    DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  plan          Plan           @relation(fields: [planId], references: [id], onDelete: Cascade)
+  prices        Price[]
   subscriptions Subscription[]
+
+  @@unique([planId, version])
+  @@index([planId, isCurrent])
 }
+
+/// What an edition costs.
+///
+/// Separate from PlanVersion because price and entitlements version
+/// independently: repricing without changing what is granted is the common
+/// case, and folding them together would force a spurious entitlement version
+/// for every price change — which would in turn re-pin nothing and mean
+/// nothing, while looking like a change to what customers get.
+model Price {
+  id            String @id @default(cuid())
+  planVersionId String
+
+  amountCents  Int
+  currency     String          @default("USD")
+  interval     BillingInterval @default(MONTHLY)
+  pricingModel PricingModel    @default(FIXED)
+  /// A superseded price is deactivated rather than deleted: an invoice raised
+  /// against it must stay explicable after the price changes.
+  isActive     Boolean         @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  planVersion PlanVersion @relation(fields: [planVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([planVersionId, interval, currency])
+  @@index([planVersionId, isActive])
+}
+
 
 /// Meta WhatsApp Cloud API credentials for one organization's channel.
 ///
@@ -352,7 +348,14 @@ model MetaChannelCredential {
 model Subscription {
   id                 String             @id @default(cuid())
   organizationId     String
-  planCode           String
+  /// The version of the edition this subscription was sold under.
+  ///
+  /// This replaced a `planCode` column. The code is reachable through the
+  /// version (planVersion.plan.code), so holding both would be two stores for
+  /// one fact — the shape D-18 removed from Organization. Pinning the version
+  /// rather than the code is also the whole point: it is what grandfathers a
+  /// subscriber onto the terms they bought (D-19).
+  planVersionId      String
   provider           String             @default("manual")
   subscriptionRef    String?            @unique
   customerRef        String?
@@ -368,7 +371,7 @@ model Subscription {
   updatedAt          DateTime           @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  plan         Plan         @relation(fields: [planCode], references: [code], onDelete: Restrict)
+  planVersion  PlanVersion  @relation(fields: [planVersionId], references: [id], onDelete: Restrict)
   invoices     Invoice[]
 
   @@unique([id, organizationId])

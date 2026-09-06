@@ -1033,3 +1033,106 @@ disagreeing: 0`.
 
 ---
 
+---
+
+## D-19 · An edition is three things, and a subscription pins the one it bought
+
+**Status:** fixed 2026-09-06 · **Owner:** UnKnowan
+
+`Plan` was one row holding three different kinds of fact: what an edition **is**
+(code, name, ladder position), what it **grants** (limits, features, channels),
+and what it **costs**. Those change on different schedules and for different
+reasons — and a `Subscription` could only point at the row *as it is now*, so
+editing an edition silently changed what every existing subscriber had bought.
+
+Now: `Plan` keeps identity and scheduling. `PlanVersion` holds the entitlements,
+exactly one marked current per plan. `Price` holds the money, hanging off the
+version. `Subscription.planVersionId` replaces `planCode`.
+
+**`planCode` was dropped rather than kept alongside the pin.** The code is
+reachable through the version, so holding both would be two stores for one fact —
+the shape D-18 removed from `Organization`, and the rule that came out of it is
+in AGENTS.md under Design. It was seven property reads, not the sixty-seven a
+naive grep suggested.
+
+**Price is separate from PlanVersion** because price and entitlements version
+independently. Repricing without changing what is granted is the common case;
+folding them together would force a spurious entitlement version for every price
+change — a version that re-pins nothing and means nothing, while reading like a
+change to what customers get.
+
+### Why the blast radius stayed small
+
+`editions.service` is the single seam. It loads plan + current version + active
+price and **flattens them into the row shape `rowToEdition` already took**, so
+`getEdition(code)` returns byte-identical output and the ninety-odd call sites
+downstream never moved. Two writers — the boot seed and the owner console — go
+through one `createEditionRows`, and every edit routes through one
+`applyEditionChanges`.
+
+Editing an edition still mutates the **current version in place**. Versioning
+the edit is a behaviour change with its own consequences for existing
+subscribers, and it belongs to the plan-editor work where the preview and the
+migration story are already being built. C3 moves the columns and changes
+nothing anybody can observe.
+
+### The proof
+
+Same fixture as C3a, eight organizations seeded through the real signup path.
+**8/8, and C3b introduced no declared exception at all** — the only entry in
+`EXPECTED_DIFFS` remains C3a's `source` rename.
+
+**Differential mutation.** One `PlanVersion` limit mis-wired in the flattener —
+`usersLimit` reading `maxWorkspaces`, the mistake twenty hand-copied columns
+invite. It compiles, the catalogue loads, every edition still has a number:
+
+| edition | seats before | after |
+|---|---|---|
+| BUSINESS | 25 | **5** |
+| GROWTH | 5 | **1** |
+| STANDARD | 2 | **1** |
+
+4/8 red. FREE and ENTERPRISE stayed green **because their two columns coincide** —
+which is the finding rather than a gap, and is now a rule in AGENTS.md under
+Evidence: a proof over a single edition would have passed while the bug shipped.
+
+### Three things the split broke that nothing typechecked
+
+1. **`PlanVersion` and `Price` were not in `PLATFORM_MODELS`.** Splitting a
+   platform-owned table produced two new platform-owned tables the tenancy
+   extension had never heard of. `refreshEditions` loaded **0 editions** under an
+   unscoped call — the fail-closed extension working exactly as designed, with
+   the catalogue simply invisible to the one query that must always see it.
+2. **The console's edition create was behind an `as Parameters<...>` cast**, so
+   the compiler said nothing when the columns moved. It would have failed at
+   runtime on the first edition an owner created, and the catalogue would then
+   have refused to load because the new plan had no version.
+3. **The field router sent every unrecognised key to the version.** Fine for an
+   edit map; wrong the moment a *flattened* edition is fed back in, as when a
+   fixture restores a deleted one. `id`, `code` and `editedAt` are not
+   entitlements. The router now lists all three destinations explicitly and
+   throws on a key belonging to none, so a typo is an error rather than a value
+   written nowhere.
+
+### Reversibility ends at the first edition edit — by design
+
+`down.sql` refuses when any plan has more than one version.
+
+This is **a property of versioning, not a defect, and nobody should go hunting
+for a fix mid-rollback.** Folding back keeps only the current version, so every
+subscription still pinned to a superseded one would silently move onto today's
+terms — precisely the failure this change exists to prevent. A reversal that
+quietly re-prices existing customers is worse than no reversal.
+
+So the window is real and worth stating plainly: **the migration is reversible
+until an edition is edited, and not afterwards.** Two further guards refuse a
+version carrying more than one active price (Plan held a single price shape, so
+the others would vanish without trace) and a changed plan count.
+
+- **Lands in:** `schema.prisma`, `editions.service.ts` (the seam),
+  `subscription-plan.ts` (new), `billing.service.ts`, `platform.routes.ts`,
+  `currency-policy.ts`, `trial.service.ts`, `access-gate.middleware.ts`, the
+  branding pair, `prisma/extensions.ts`, and the migration.
+
+---
+
