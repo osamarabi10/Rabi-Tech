@@ -128,7 +128,7 @@ async function prepare(page: Page, options: DisplayOptions) {
         ...auth.user,
         scope: 'PLATFORM',
         platformRole: 'OWNER',
-        platformPermissions: ['subscriber:read', 'billing:view'],
+        platformPermissions: ['subscriber:diagnostics', 'billing:view'],
         locale: options.locale,
         theme: options.theme,
       },
@@ -224,3 +224,67 @@ for (const width of WIDTHS) {
     }
   }
 }
+
+test('view-as requires a substantive reason and expires the tab grant', async ({ page }) => {
+  test.skip(!rawSession, 'RABITECH_E2E_SESSION is required for authenticated UI tests.');
+  const auth = session();
+  await prepare(page, { width: 1440, locale: 'en', theme: 'light' });
+
+  // This proof enters the real inbox after the grant is issued. Reuse the
+  // object-shaped contracts from the inbox suite; prepare's [] catch-all is
+  // intentionally unsuitable for endpoints such as billing summary.
+  await page.route('**/api/billing/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/summary')) {
+      return route.fulfill({ json: { plan: { code: 'GROWTH', name: 'Growth' }, status: 'ACTIVE' } });
+    }
+    if (path.endsWith('/service-state')) return route.fulfill({ json: { kind: 'ok' } });
+    return route.fulfill({ json: {} });
+  });
+  await page.route('**/api/notifications**', (route) =>
+    route.fulfill({ json: { notifications: [], unreadCount: 0 } }));
+  await page.route('**/api/system/**', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/auth/me**', (route) =>
+    route.fulfill({ json: { ...auth.user, locale: 'en', theme: 'light', isAway: false } }));
+  await page.route('**/api/contacts/blocked', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/conversations**', (route) => route.fulfill({ json: [] }));
+
+  let requestBody: Record<string, unknown> | null = null;
+  await page.route('**/api/platform/subscribers/org-calm/view-as', async (route) => {
+    requestBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 201,
+      json: {
+        organization: { id: 'org-calm', name: 'Calm Trading' },
+        accessToken: 'signed-platform-view-token',
+        // Short only in this browser proof. Production issuance is pinned to
+        // 15 minutes by the backend harness above.
+        expiresAt: new Date(Date.now() + 8_000).toISOString(),
+        durationSeconds: 15 * 60,
+      },
+    });
+  });
+
+  await page.getByRole('button', { name: 'View' }).first().click();
+  const dialog = page.getByRole('dialog', { name: /View workspace - Calm Trading/ });
+  await expect(dialog).toBeVisible();
+  const open = dialog.getByRole('button', { name: 'Open for 15 minutes' });
+
+  await dialog.getByLabel('Ticket reference').fill('SUP-1042');
+  await dialog.getByLabel('Reason for access').fill('123456789012');
+  await expect(open).toBeDisabled();
+  await dialog.getByLabel('Reason for access').fill('Investigating the delivery failure reported by the customer');
+  await expect(open).toBeEnabled();
+  await open.click();
+
+  await expect.poll(() => requestBody).toEqual({
+    reason: 'Investigating the delivery failure reported by the customer',
+    ticketReference: 'SUP-1042',
+  });
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('rabitech_view_as_org')))
+    .toContain('signed-platform-view-token');
+  await expect(page).toHaveURL(/\/inbox/);
+
+  await expect(page).toHaveURL(/\/platform\/subscribers\?viewAs=expired/, { timeout: 12_000 });
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('rabitech_view_as_org'))).toBeNull();
+});

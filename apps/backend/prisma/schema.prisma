@@ -517,7 +517,7 @@ model Identity {
   email               String    @unique // globally unique for login
   passwordHash        String
   platformRole        String    @default("NONE") // NONE|SUPPORT|OWNER (optional: cross-org role)
-  /// What a SUPPORT advisor may do, beyond reading.
+  /// The exact platform operations a SUPPORT advisor may perform.
   ///
   /// A list rather than more role names: support work is not a ladder. One
   /// advisor may need to extend trials and never touch billing, another the
@@ -848,11 +848,16 @@ model PlatformAuditLog {
   beforeState       Json?
   afterState        Json?
   ipAddress         String?
+  /// Server-derived route covered by a time-bounded platform access grant.
+  route             String?
+  /// Free-standing until SupportTicket lands; D-24 requires validation then.
+  ticketReference   String?
 
   @@index([timestamp])
   @@index([targetOrgId, timestamp])
   @@index([action, timestamp])
   @@index([targetEditionCode, timestamp])
+  @@index([ticketReference, timestamp])
 }
 
 enum GatewayProvisioningState {

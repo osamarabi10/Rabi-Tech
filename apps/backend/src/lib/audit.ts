@@ -40,6 +40,8 @@ export interface PlatformAuditDetail {
   beforeState?: unknown;
   afterState?: unknown;
   ipAddress?: string;
+  route?: string;
+  ticketReference?: string;
 }
 
 /**
@@ -54,8 +56,8 @@ export async function auditPlatformScope(
   reason: string,
   detail: PlatformAuditDetail = {},
   writer: Pick<Prisma.TransactionClient, 'platformAuditLog'> = prisma,
-): Promise<void> {
-  await writer.platformAuditLog.create({
+): Promise<string> {
+  const row = await writer.platformAuditLog.create({
     data: {
       reason,
       action: detail.action,
@@ -67,7 +69,54 @@ export async function auditPlatformScope(
       beforeState: (detail.beforeState ?? undefined) as never,
       afterState: (detail.afterState ?? undefined) as never,
       ipAddress: detail.ipAddress,
+      route: detail.route,
+      ticketReference: detail.ticketReference,
     },
+  });
+  return row.id;
+}
+
+export interface PlatformViewGrantAudit {
+  actorIdentityId: string;
+  actorEmail: string;
+  targetOrgId: string;
+  targetOrgName: string;
+  route: string;
+  reason: string;
+  ticketReference: string;
+  ipAddress?: string;
+}
+
+/** The durable row a signed, time-bounded view-as grant is allowed to name. */
+export function auditPlatformViewGrant(
+  detail: PlatformViewGrantAudit,
+  writer: Pick<Prisma.TransactionClient, 'platformAuditLog'> = prisma,
+): Promise<string> {
+  return auditPlatformScope(detail.reason, {
+    action: 'platform.subscriber.view-as.granted',
+    actorIdentityId: detail.actorIdentityId,
+    actorEmail: detail.actorEmail,
+    targetOrgId: detail.targetOrgId,
+    targetOrgName: detail.targetOrgName,
+    route: detail.route,
+    ticketReference: detail.ticketReference,
+    ipAddress: detail.ipAddress,
+  }, writer);
+}
+
+/** Resolve only the detailed grant a signed view token names. */
+export function readPlatformViewGrant(
+  input: { auditLogId: string; actorIdentityId: string; targetOrgId: string },
+  reader: Pick<Prisma.TransactionClient, 'platformAuditLog'> = prisma,
+) {
+  return reader.platformAuditLog.findFirst({
+    where: {
+      id: input.auditLogId,
+      action: 'platform.subscriber.view-as.granted',
+      actorIdentityId: input.actorIdentityId,
+      targetOrgId: input.targetOrgId,
+    },
+    select: { id: true, reason: true, ticketReference: true, route: true },
   });
 }
 

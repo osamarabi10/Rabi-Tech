@@ -52,13 +52,13 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { href: '/platform', label: 'Overview', description: 'Platform health and revenue', icon: LayoutDashboard, ownerOnly: true, built: true },
-  { href: '/platform/subscribers', label: 'Subscribers', description: 'Accounts and gateway status', icon: Users, permission: 'subscriber:read', built: true },
+  { href: '/platform/subscribers', label: 'Subscribers', description: 'Accounts and gateway status', icon: Users, permission: 'subscriber:diagnostics', built: true },
   { href: '/platform/editions', label: 'Editions', description: 'Plan catalog and entitlements', icon: BarChart3, ownerOnly: true, built: true },
   { href: '/platform/finance', label: 'Finance', description: 'Invoices and payments', icon: CreditCard, permission: 'billing:view' },
-  { href: '/platform/operations', label: 'Operations', description: 'Gateway and service operations', icon: Wrench, permission: 'subscriber:read' },
+  { href: '/platform/operations', label: 'Operations', description: 'Gateway and service operations', icon: Wrench, permission: 'subscriber:diagnostics' },
   { href: '/platform/data', label: 'Data governance', description: 'Retention and data controls', icon: Database, ownerOnly: true },
   { href: '/platform/staff', label: 'Staff', description: 'Platform access and advisors', icon: Shield, ownerOnly: true, built: true },
-  { href: '/platform/support', label: 'Support', description: 'Support queue and escalation', icon: HelpCircle, permission: 'subscriber:read' },
+  { href: '/platform/support', label: 'Support', description: 'Support queue and escalation', icon: HelpCircle, permission: 'subscriber:diagnostics' },
   { href: '/platform/settings', label: 'Settings', description: 'Platform defaults and policy', icon: Settings, ownerOnly: true, built: true },
   { href: '/platform/legal', label: 'Legal', description: 'Terms and privacy', icon: FileText, ownerOnly: true },
 ];

@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
-  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { EmptyState, ErrorState } from '@/components/ui/operational-state';
 import { CommercialTermsDialog } from '@/components/platform/commercial-terms-dialog';
 import { FinanceDocumentTable } from '@/components/platform/finance-document-table';
@@ -96,6 +97,18 @@ type Subscriber = {
 type RollupUsage = {
   asOf: string | null;
   items: Array<{ metric: string; current: string; limit: string | null }>;
+};
+
+type PlatformSession = {
+  platformRole?: 'OWNER' | 'SUPPORT';
+  platformPermissions?: string[];
+};
+
+type PlatformViewGrant = {
+  organization: { id: string; name: string };
+  accessToken: string;
+  expiresAt: string;
+  durationSeconds: number;
 };
 
 const EMPTY_FORM = {
@@ -244,6 +257,11 @@ export default function SubscribersPage() {
   const [actionId, setActionId] = useState<string | null>(null);
   const [destroyTarget, setDestroyTarget] = useState<Subscriber | null>(null);
   const [termsTarget, setTermsTarget] = useState<Subscriber | null>(null);
+  const [viewTarget, setViewTarget] = useState<Subscriber | null>(null);
+  const [viewReason, setViewReason] = useState('');
+  const [viewTicketReference, setViewTicketReference] = useState('');
+  const [viewBusy, setViewBusy] = useState(false);
+  const [platformSession, setPlatformSession] = useState<PlatformSession | null>(null);
   /**
    * The subscriber whose finance ledger is open.
    *
@@ -284,11 +302,12 @@ export default function SubscribersPage() {
 
   useEffect(() => {
     const token = localStorage.getItem('rabitech_token');
-    const user = JSON.parse(localStorage.getItem('rabitech_user') || '{}');
+    const user = JSON.parse(localStorage.getItem('rabitech_user') || '{}') as PlatformSession & { scope?: string };
     if (!token || user.scope !== 'PLATFORM') {
       router.replace('/login');
       return;
     }
+    setPlatformSession(user);
     load();
   }, [load, router]);
 
@@ -315,6 +334,43 @@ export default function SubscribersPage() {
       toast.error(err?.response?.data?.error || 'Failed to create subscriber');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const canOpenSubscriber = platformSession?.platformRole === 'OWNER' || (
+    platformSession?.platformPermissions?.includes('subscriber:view-as')
+    && platformSession.platformPermissions.includes('subscriber:content:read')
+  );
+  const normalizedViewReason = viewReason.trim().replace(/\s+/g, ' ');
+  const validViewReason = Array.from(normalizedViewReason).length >= 12 && /\p{L}/u.test(normalizedViewReason);
+  const validTicketReference = /^[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,99}$/u.test(viewTicketReference.trim());
+
+  const closeViewDialog = () => {
+    setViewTarget(null);
+    setViewReason('');
+    setViewTicketReference('');
+  };
+
+  const openSubscriberWorkspace = async () => {
+    if (!viewTarget || !validViewReason || !validTicketReference) return;
+    setViewBusy(true);
+    try {
+      const { data } = await api.post<PlatformViewGrant>(
+        `/api/platform/subscribers/${viewTarget.id}/view-as`,
+        { reason: normalizedViewReason, ticketReference: viewTicketReference.trim() },
+      );
+      setViewAsOrg({
+        id: data.organization.id,
+        name: data.organization.name,
+        accessToken: data.accessToken,
+        expiresAt: data.expiresAt,
+      });
+      closeViewDialog();
+      router.push('/inbox');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error || 'Could not open subscriber workspace');
+    } finally {
+      setViewBusy(false);
     }
   };
 
@@ -654,17 +710,16 @@ export default function SubscribersPage() {
                   health={health}
                   onRefresh={refreshHealth}
                 />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  title="Open this subscriber's workspace read-only"
-                  onClick={() => {
-                    setViewAsOrg({ id: subscriber.id, name: subscriber.name });
-                    router.push('/inbox');
-                  }}
-                >
-                  <Eye className="h-3.5 w-3.5" /> View
-                </Button>
+                {canOpenSubscriber ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    title="Open this subscriber's workspace read-only"
+                    onClick={() => setViewTarget(subscriber)}
+                  >
+                    <Eye className="h-3.5 w-3.5" /> View
+                  </Button>
+                ) : <span aria-hidden />}
                 {/*
                   A button of its own rather than an item in the menu above:
                   that menu is disabled whenever the gateway is unmanaged, and
@@ -757,6 +812,60 @@ export default function SubscribersPage() {
           })}
         </div>
       </section>
+
+      <Dialog
+        open={Boolean(viewTarget)}
+        onOpenChange={(next) => {
+          if (!next && !viewBusy) {
+            closeViewDialog();
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>View workspace - {viewTarget?.name}</DialogTitle>
+            <DialogDescription className="sr-only">
+              Record the support case and reason for this time-limited customer-content access.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="platform-view-ticket">Ticket reference</Label>
+              <Input
+                id="platform-view-ticket"
+                value={viewTicketReference}
+                onChange={(event) => setViewTicketReference(event.target.value)}
+                placeholder="SUP-1042"
+                autoComplete="off"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="platform-view-reason">Reason for access</Label>
+              <Textarea
+                id="platform-view-reason"
+                value={viewReason}
+                onChange={(event) => setViewReason(event.target.value)}
+                placeholder="Investigating the delivery failure reported by the customer"
+                maxLength={500}
+              />
+              <p className="text-caption text-muted-foreground">
+                Access lasts 15 minutes. A renewal creates another audit entry.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={viewBusy} onClick={closeViewDialog}>
+              Cancel
+            </Button>
+            <Button
+              onClick={openSubscriberWorkspace}
+              disabled={viewBusy || !validViewReason || !validTicketReference}
+            >
+              <Eye className="h-4 w-4" /> {viewBusy ? 'Opening...' : 'Open for 15 minutes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={!!financeTarget}

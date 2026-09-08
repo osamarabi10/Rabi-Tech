@@ -2,6 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../../prisma';
 import { setScopeWorkspaceId, runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
+import logger from '../../lib/logger';
+import { readPlatformViewGrant } from '../../lib/audit';
+import { hasPlatformPermission } from '../platform/platform-permissions';
+import {
+  PLATFORM_VIEW_TOKEN_HEADER,
+  parsePlatformViewRequest,
+  verifyPlatformViewToken,
+} from '../platform/platform-view-access';
 
 export interface JwtPayload {
   scope?: 'ORGANIZATION';
@@ -41,7 +49,7 @@ export interface PlatformJwtPayload {
   email: string;
   platformRole: 'OWNER' | 'SUPPORT';
   /**
-   * What a SUPPORT advisor may do.
+   * The exact platform operations a SUPPORT advisor may perform.
    *
    * Read from the database on every request rather than trusted from the
    * token: revoking a permission has to take effect now, not when a
@@ -57,6 +65,11 @@ declare global {
     interface Request {
       user?: JwtPayload;
       platformUser?: PlatformJwtPayload;
+      platformViewAccess?: {
+        organizationId: string;
+        auditLogId: string;
+        expiresAt: number;
+      };
     }
   }
 }
@@ -64,17 +77,44 @@ declare global {
 /** Header a platform user sets to read one subscriber's data. */
 export const VIEW_AS_ORG_HEADER = 'x-organization-id';
 
+const PLATFORM_IDENTITY_SELECT = {
+  id: true,
+  email: true,
+  platformRole: true,
+  platformPermissions: true,
+  platformDisabledAt: true,
+} as const;
+
+async function readCurrentPlatformIdentity(identityId: string, reason: string) {
+  return runAsPlatform(reason, () =>
+    prisma.identity.findUnique({
+      where: { id: identityId },
+      select: PLATFORM_IDENTITY_SELECT,
+    })
+  );
+}
+
+function platformUserFrom(identity: NonNullable<Awaited<ReturnType<typeof readCurrentPlatformIdentity>>>): PlatformJwtPayload {
+  return {
+    scope: 'PLATFORM',
+    id: identity.id,
+    email: identity.email,
+    platformRole: identity.platformRole as 'OWNER' | 'SUPPORT',
+    platformPermissions: identity.platformPermissions,
+  };
+}
+
 /**
- * Lets the RabiTech platform owner read a subscriber's tenant data.
+ * Lets an explicitly authorised platform identity read subscriber tenant data.
  *
  * Deliberately read-only. The owner is not a member of the tenant, so any write
  * would land in the subscriber's workspace under a synthetic identity — and a
  * mutation on a messaging product can reach that subscriber's own customers over
  * WhatsApp. Viewing is what the console needs; acting stays with the tenant.
  *
- * Access is opt-in per request (the header must be present), so the owner is
- * never silently operating inside someone else's org, and every entry is
- * audited against the subscriber being viewed.
+ * A signed grant proves that a detailed PlatformAuditLog row was durably
+ * written before entry. The grant expires after 15 minutes. Re-entering or
+ * renewing obtains another grant and therefore another audit row.
  */
 async function handlePlatformViewingTenant(
   decoded: PlatformJwtPayload,
@@ -90,10 +130,6 @@ async function handlePlatformViewingTenant(
     });
   }
 
-  if (!['OWNER', 'SUPPORT'].includes(decoded.platformRole)) {
-    return res.status(403).json({ error: 'Platform access required' });
-  }
-
   if (!['GET', 'HEAD'].includes(req.method)) {
     return res.status(403).json({
       error: 'العرض كمشترك للقراءة فقط',
@@ -101,42 +137,105 @@ async function handlePlatformViewingTenant(
     });
   }
 
-  const org = await runAsPlatform(`view-as-tenant:${targetOrgId}`, () =>
-    prisma.organization.findUnique({
-      where: { id: targetOrgId },
-      select: { id: true, name: true, status: true },
-    })
-  );
+  const encodedGrant = String(req.headers[PLATFORM_VIEW_TOKEN_HEADER] || '').trim();
+  if (!encodedGrant) {
+    return res.status(403).json({
+      error: 'Timed platform view access is required',
+      code: 'PLATFORM_VIEW_REQUIRED',
+    });
+  }
+
+  let grant;
+  try {
+    grant = verifyPlatformViewToken(encodedGrant);
+  } catch (error) {
+    const expired = error instanceof jwt.TokenExpiredError;
+    return res.status(403).json({
+      error: expired ? 'Platform view access expired' : 'Invalid platform view access',
+      code: expired ? 'PLATFORM_VIEW_EXPIRED' : 'PLATFORM_VIEW_INVALID',
+    });
+  }
+
+  if (grant.actorIdentityId !== decoded.id || grant.organizationId !== targetOrgId) {
+    return res.status(403).json({ error: 'Platform view access does not match this request', code: 'PLATFORM_VIEW_INVALID' });
+  }
+
+  let state;
+  try {
+    state = await runAsPlatform(`verify-view-as:${decoded.id}:${targetOrgId}`, async () => {
+      const [identity, org, audit] = await Promise.all([
+        prisma.identity.findUnique({ where: { id: decoded.id }, select: PLATFORM_IDENTITY_SELECT }),
+        prisma.organization.findUnique({
+          where: { id: targetOrgId },
+          select: { id: true, name: true, status: true },
+        }),
+        readPlatformViewGrant({
+          auditLogId: grant.auditLogId,
+          actorIdentityId: decoded.id,
+          targetOrgId,
+        }),
+      ]);
+      return { identity, org, audit };
+    });
+  } catch (error) {
+    logger.error('Platform view authorization could not verify its durable audit', {
+      error: String(error),
+      actorIdentityId: decoded.id,
+      targetOrgId,
+    });
+    return res.status(503).json({ error: 'Platform audit is unavailable', code: 'PLATFORM_AUDIT_UNAVAILABLE' });
+  }
+
+  const { identity, org, audit } = state;
+  if (!identity || !['OWNER', 'SUPPORT'].includes(identity.platformRole)) {
+    return res.status(403).json({ error: 'Platform access required' });
+  }
+  if (identity.platformDisabledAt) {
+    return res.status(403).json({ error: 'This staff account is disabled' });
+  }
+  const platformUser = platformUserFrom(identity);
+  for (const permission of ['subscriber:view-as', 'subscriber:content:read'] as const) {
+    if (!hasPlatformPermission(platformUser, permission)) {
+      return res.status(403).json({ error: 'This action is not part of your access', permission });
+    }
+  }
+
   if (!org) return res.status(404).json({ error: 'Subscriber not found' });
   if (org.status === 'SUSPENDED') return res.status(403).json({ error: 'Subscriber is suspended' });
+  try {
+    if (!audit?.route) throw new Error('missing route');
+    parsePlatformViewRequest({ reason: audit.reason, ticketReference: audit.ticketReference });
+  } catch {
+    return res.status(403).json({ error: 'Platform view audit is missing', code: 'PLATFORM_VIEW_AUDIT_MISSING' });
+  }
 
   return runAsOrganization(org.id, async () => {
-    const { auditLog } = await import('../../lib/audit');
-    await auditLog({
-      action: 'PLATFORM_VIEW',
-      resource: 'organization',
-      resourceId: org.id,
-      description: `${decoded.email} (${decoded.platformRole}) viewed ${req.method} ${req.originalUrl}`,
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent'],
-    });
-
     // Synthetic membership: never persisted as a real User row. ADMIN grants the
-    // read permissions a support view needs (reports, settings, sessions); the
-    // GET/HEAD gate above is what actually prevents writes, not this role.
+    // read permissions a support view needs. The signed grant plus the GET/HEAD
+    // gate are what authorise this request; this role alone authorises nothing.
     req.user = {
-      id: decoded.id,
-      email: decoded.email,
-      name: decoded.email,
+      id: identity.id,
+      email: identity.email,
+      name: identity.email,
       role: 'ADMIN',
       organizationId: org.id,
     };
-    req.platformUser = decoded;
+    req.platformUser = platformUser;
+    req.platformViewAccess = {
+      organizationId: org.id,
+      auditLogId: grant.auditLogId,
+      expiresAt: grant.exp! * 1000,
+    };
     next();
   });
 }
 
 export async function verifyToken(req: Request, res: Response, next: NextFunction) {
+  // Tenant routers repeat verifyToken after the global /api boundary. Only a
+  // successful first pass can set this server-side marker, so the second pass
+  // preserves the same scoped request without issuing or checking twice.
+  if (req.platformViewAccess) return next();
+
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'No token provided' });
@@ -325,25 +424,19 @@ export async function verifyPlatformToken(req: Request, res: Response, next: Nex
     return res.status(401).json({ error: 'No token provided' });
   }
 
+  let decoded: PlatformJwtPayload;
   try {
     const token = auth.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as PlatformJwtPayload;
+    decoded = jwt.verify(token, process.env.JWT_SECRET!) as PlatformJwtPayload;
     if (decoded.scope !== 'PLATFORM' || !decoded.id) {
       return res.status(403).json({ error: 'Platform access required' });
     }
+  } catch {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
 
-    const identity = await runAsPlatform('verify-platform-token', () =>
-      prisma.identity.findUnique({
-        where: { id: decoded.id },
-        select: {
-          id: true,
-          email: true,
-          platformRole: true,
-          platformPermissions: true,
-          platformDisabledAt: true,
-        },
-      })
-    );
+  try {
+    const identity = await readCurrentPlatformIdentity(decoded.id, 'verify-platform-token');
     if (!identity || !['OWNER', 'SUPPORT'].includes(identity.platformRole)) {
       return res.status(403).json({ error: 'Platform access required' });
     }
@@ -358,17 +451,12 @@ export async function verifyPlatformToken(req: Request, res: Response, next: Nex
       return res.status(403).json({ error: 'This staff account is disabled' });
     }
 
-    req.platformUser = {
-      scope: 'PLATFORM',
-      id: identity.id,
-      email: identity.email,
-      platformRole: identity.platformRole as 'OWNER' | 'SUPPORT',
-      // From the database, never from the token: a revoked permission must
-      // stop working immediately.
-      platformPermissions: identity.platformPermissions,
-    };
+    // From the database, never from the token: a revoked permission must stop
+    // working immediately on platform routes and tenant view-as alike.
+    req.platformUser = platformUserFrom(identity);
     next();
-  } catch {
-    return res.status(401).json({ error: 'Invalid token' });
+  } catch (error) {
+    logger.error('Platform identity verification failed', { error: String(error), identityId: decoded.id });
+    return res.status(503).json({ error: 'Platform authorization is unavailable' });
   }
 }

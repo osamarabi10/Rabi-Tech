@@ -3507,6 +3507,222 @@ async function databaseAudits() {
         { expiresIn: '10m' },
       );
 
+    await check('platform view-as: permissions, expiry and durable audit all fail closed', async () => {
+      const advisor = await raw.identity.create({
+        data: {
+          email: `guarded-view-as-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'SUPPORT',
+          platformPermissions: [],
+        },
+      });
+      const owner = await raw.identity.create({
+        data: {
+          email: `owner-view-as-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const triggerName = `bleed_reject_platform_view_${process.pid}`;
+      const functionName = `${triggerName}_fn`;
+      const advisorToken = mintPlatformToken(advisor);
+      const ownerToken = mintPlatformToken(owner);
+      const reason = 'Investigating the delivery failure reported by the customer';
+      const ticketReference = `SUP-${Date.now()}`;
+      const organizationName = (await raw.organization.findUniqueOrThrow({
+        where: { id: orgA.organizationId },
+        select: { name: true },
+      })).name;
+      const grant = (token, body = { reason, ticketReference }) =>
+        fetch(`${baseUrl}/api/platform/subscribers/${orgA.organizationId}/view-as`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      const readMessages = (token, accessToken, organizationId = orgA.organizationId) =>
+        fetch(`${baseUrl}/api/conversations/${orgA.records[0].conversation.id}/messages`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'X-Organization-Id': organizationId,
+            'X-Platform-View-Token': accessToken,
+          },
+        });
+
+      try {
+        let response = await grant(advisorToken);
+        assert.equal(response.status, 403);
+        assert.equal((await response.json()).permission, 'subscriber:view-as');
+
+        await raw.identity.update({
+          where: { id: advisor.id },
+          data: { platformPermissions: ['subscriber:view-as'] },
+        });
+        response = await grant(advisorToken);
+        assert.equal(response.status, 403);
+        assert.equal((await response.json()).permission, 'subscriber:content:read');
+
+        await raw.identity.update({
+          where: { id: advisor.id },
+          data: { platformPermissions: ['subscriber:content:read'] },
+        });
+        response = await grant(advisorToken);
+        assert.equal(response.status, 403);
+        assert.equal((await response.json()).permission, 'subscriber:view-as');
+
+        await raw.identity.update({
+          where: { id: advisor.id },
+          data: { platformPermissions: ['subscriber:view-as', 'subscriber:content:read'] },
+        });
+        response = await grant(advisorToken, { reason: 'too short', ticketReference });
+        assert.equal(response.status, 400, 'a short reason must be refused');
+        assert.equal((await response.json()).field, 'reason');
+        response = await grant(advisorToken, { reason: '123456789012', ticketReference });
+        assert.equal(response.status, 400, 'a digits-only reason must be refused even when it is long enough');
+        assert.equal((await response.json()).field, 'reason');
+        response = await grant(advisorToken, { reason, ticketReference: '' });
+        assert.equal(response.status, 400, 'a missing ticket reference must be refused');
+        assert.equal((await response.json()).field, 'ticketReference');
+
+        response = await grant(advisorToken);
+        const firstGrant = await response.json();
+        assert.equal(response.status, 201, JSON.stringify(firstGrant));
+        assert.equal(firstGrant.durationSeconds, 15 * 60);
+        const remainingMs = new Date(firstGrant.expiresAt).getTime() - Date.now();
+        assert.ok(remainingMs > 14 * 60_000 && remainingMs <= 15 * 60_000,
+          `grant expiry was ${remainingMs}ms away`);
+
+        const firstClaims = jwt.decode(firstGrant.accessToken);
+        const firstAudit = await raw.platformAuditLog.findUniqueOrThrow({
+          where: { id: firstClaims.auditLogId },
+        });
+        assert.equal(firstAudit.action, 'platform.subscriber.view-as.granted');
+        assert.equal(firstAudit.actorIdentityId, advisor.id);
+        assert.equal(firstAudit.actorEmail, advisor.email);
+        assert.equal(firstAudit.targetOrgId, orgA.organizationId);
+        assert.equal(firstAudit.targetOrgName, organizationName);
+        assert.equal(firstAudit.reason, reason);
+        assert.equal(firstAudit.ticketReference, ticketReference);
+        assert.equal(
+          firstAudit.route,
+          `POST /api/platform/subscribers/${orgA.organizationId}/view-as`,
+        );
+
+        response = await readMessages(advisorToken, firstGrant.accessToken);
+        const messagePayload = await response.json();
+        assert.equal(response.status, 200, JSON.stringify(messagePayload));
+        assert.ok(
+          messagePayload.messages.some((message) => message.body === 'Message a_0'),
+          'the authorised read did not return its sentinel customer message',
+        );
+        assert.equal(
+          await raw.platformAuditLog.count({
+            where: { action: 'platform.subscriber.view-as.granted', actorIdentityId: advisor.id },
+          }),
+          1,
+          'ordinary reads must stay inside the one audited 15-minute grant',
+        );
+
+        response = await readMessages(advisorToken, firstGrant.accessToken, orgB.organizationId);
+        assert.equal(response.status, 403, 'a grant for one subscriber must not open another');
+
+        response = await grant(advisorToken);
+        const renewedGrant = await response.json();
+        assert.equal(response.status, 201, JSON.stringify(renewedGrant));
+        assert.equal(
+          await raw.platformAuditLog.count({
+            where: { action: 'platform.subscriber.view-as.granted', actorIdentityId: advisor.id },
+          }),
+          2,
+          'renewal must write a new detailed audit row',
+        );
+
+        await raw.identity.update({
+          where: { id: advisor.id },
+          data: { platformPermissions: ['subscriber:view-as'] },
+        });
+        response = await readMessages(advisorToken, renewedGrant.accessToken);
+        assert.equal(response.status, 403, 'revoking content access must invalidate an existing grant');
+        assert.equal((await response.json()).permission, 'subscriber:content:read');
+
+        await raw.identity.update({
+          where: { id: advisor.id },
+          data: {
+            platformPermissions: ['subscriber:view-as', 'subscriber:content:read'],
+            platformDisabledAt: new Date(),
+          },
+        });
+        response = await readMessages(advisorToken, renewedGrant.accessToken);
+        assert.equal(response.status, 403, 'disabling support must invalidate an existing grant');
+        await raw.identity.update({
+          where: { id: advisor.id },
+          data: { platformDisabledAt: null },
+        });
+
+        const expiredAccessToken = jwt.sign(
+          {
+            scope: 'PLATFORM_VIEW',
+            actorIdentityId: advisor.id,
+            organizationId: orgA.organizationId,
+            auditLogId: firstAudit.id,
+          },
+          jwtSecret,
+          {
+            algorithm: 'HS256',
+            audience: 'rabitech-platform-view',
+            issuer: 'rabitech',
+            expiresIn: -1,
+          },
+        );
+        response = await readMessages(advisorToken, expiredAccessToken);
+        assert.equal(response.status, 403, 'an expired grant must be refused by the server');
+        assert.equal((await response.json()).code, 'PLATFORM_VIEW_EXPIRED');
+
+        response = await grant(ownerToken, { reason: 'Owner investigating the reported customer incident', ticketReference });
+        const ownerGrant = await response.json();
+        assert.equal(response.status, 201, JSON.stringify(ownerGrant));
+        const ownerClaims = jwt.decode(ownerGrant.accessToken);
+        const ownerAudit = await raw.platformAuditLog.findUniqueOrThrow({ where: { id: ownerClaims.auditLogId } });
+        assert.equal(ownerAudit.actorIdentityId, owner.id, 'the owner has no audit bypass');
+
+        const missingAuditClaims = jwt.decode(renewedGrant.accessToken);
+        await raw.platformAuditLog.delete({ where: { id: missingAuditClaims.auditLogId } });
+        response = await readMessages(advisorToken, renewedGrant.accessToken);
+        const missingAuditPayload = await response.json();
+        assert.equal(response.status, 403, JSON.stringify(missingAuditPayload));
+        assert.equal(missingAuditPayload.code, 'PLATFORM_VIEW_AUDIT_MISSING');
+        assert.ok(!JSON.stringify(missingAuditPayload).includes('Message a_0'),
+          'customer content escaped after its durable audit row was removed');
+
+        await raw.$executeRawUnsafe(`
+          CREATE FUNCTION "${functionName}"() RETURNS trigger AS $$
+          BEGIN
+            IF NEW."action" = 'platform.subscriber.view-as.granted' THEN
+              RAISE EXCEPTION 'forced platform view grant audit failure';
+            END IF;
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql
+        `);
+        await raw.$executeRawUnsafe(`
+          CREATE TRIGGER "${triggerName}"
+          BEFORE INSERT ON "PlatformAuditLog"
+          FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+        `);
+        response = await grant(advisorToken);
+        const failedAuditPayload = await response.json();
+        assert.equal(response.status, 503, JSON.stringify(failedAuditPayload));
+        assert.equal(failedAuditPayload.code, 'PLATFORM_AUDIT_UNAVAILABLE');
+      } finally {
+        await raw.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "PlatformAuditLog"`);
+        await raw.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`);
+        await raw.platformAuditLog.deleteMany({
+          where: { actorIdentityId: { in: [advisor.id, owner.id] } },
+        });
+        await raw.identity.delete({ where: { id: advisor.id } });
+        await raw.identity.delete({ where: { id: owner.id } });
+      }
+    });
+
     await check('staff: the owner can hire, scope and disable an advisor', async () => {
       // Before this existed, hiring a support advisor meant an UPDATE against
       // the production database.
@@ -3531,7 +3747,7 @@ async function databaseAudits() {
 
       const email = `advisor-gate-${Date.now()}@platform.test`;
       const short = await asOwner('POST', '/api/platform/staff', {
-        email, password: 'tooshort', permissions: ['subscriber:read'],
+        email, password: 'tooshort', permissions: ['subscriber:diagnostics'],
       });
       assert.equal(short.status, 400, 'a short staff password is refused');
 
@@ -3539,13 +3755,13 @@ async function databaseAudits() {
         email,
         password: 'a-long-enough-staff-password',
         // One that does not exist, beside two that do.
-        permissions: ['subscriber:read', 'trial:extend', 'not:a:permission'],
+        permissions: ['subscriber:diagnostics', 'trial:extend', 'not:a:permission'],
       });
       assert.equal(created.status, 201);
       const advisor = await created.json();
       assert.deepEqual(
         [...advisor.platformPermissions].sort(),
-        ['subscriber:read', 'trial:extend'],
+        ['subscriber:diagnostics', 'trial:extend'],
         'unknown permissions are dropped rather than stored',
       );
 
@@ -3578,7 +3794,7 @@ async function databaseAudits() {
           email: `advisor-${Date.now()}@platform.test`,
           passwordHash: 'not-used-by-token-verification',
           platformRole: 'SUPPORT',
-          platformPermissions: ['subscriber:read', 'trial:extend'],
+          platformPermissions: ['subscriber:diagnostics', 'trial:extend'],
         },
       });
       const token = mintPlatformToken(advisor);
@@ -3619,7 +3835,7 @@ async function databaseAudits() {
       // permissions could grant themselves permissions.
       await raw.identity.update({
         where: { id: advisor.id },
-        data: { platformPermissions: ['subscriber:read', 'trial:extend', 'staff:manage'] },
+        data: { platformPermissions: ['subscriber:diagnostics', 'trial:extend', 'staff:manage'] },
       });
       assert.equal((await as('GET', '/api/platform/staff')).status, 403,
         'staff management must stay owner-only even if somebody stores the string');
@@ -3635,7 +3851,7 @@ async function databaseAudits() {
           email: `disabled-${Date.now()}@platform.test`,
           passwordHash: 'not-used-by-token-verification',
           platformRole: 'SUPPORT',
-          platformPermissions: ['subscriber:read'],
+          platformPermissions: ['subscriber:diagnostics'],
         },
       });
       const token = mintPlatformToken(advisor);
@@ -3657,7 +3873,7 @@ async function databaseAudits() {
           email: `revoked-${Date.now()}@platform.test`,
           passwordHash: 'not-used-by-token-verification',
           platformRole: 'SUPPORT',
-          platformPermissions: ['subscriber:read'],
+          platformPermissions: ['subscriber:diagnostics'],
         },
       });
       const token = mintPlatformToken(advisor);

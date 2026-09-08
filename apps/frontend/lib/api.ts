@@ -18,21 +18,42 @@ if (typeof window !== 'undefined') {
  * stale value can never widen a tenant's own access.
  */
 export const VIEW_AS_KEY = 'rabitech_view_as_org';
+export const VIEW_AS_CHANGED_EVENT = 'rabitech:view-as-changed';
 
-export function getViewAsOrg(): { id: string; name: string } | null {
+export type ViewAsOrg = {
+  id: string;
+  name: string;
+  accessToken: string;
+  expiresAt: string;
+};
+
+export function getViewAsOrg(): ViewAsOrg | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(VIEW_AS_KEY);
-    return raw ? JSON.parse(raw) : null;
+    // Retire the old unbounded, cross-tab selection. A platform access grant is
+    // scoped to this tab and expires on the server after 15 minutes.
+    localStorage.removeItem(VIEW_AS_KEY);
+    const raw = sessionStorage.getItem(VIEW_AS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ViewAsOrg>;
+    const expiresAt = new Date(String(parsed.expiresAt || '')).getTime();
+    if (!parsed.id || !parsed.name || !parsed.accessToken || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      sessionStorage.removeItem(VIEW_AS_KEY);
+      return null;
+    }
+    return parsed as ViewAsOrg;
   } catch {
+    try { sessionStorage.removeItem(VIEW_AS_KEY); } catch { /* storage is unavailable */ }
     return null;
   }
 }
 
-export function setViewAsOrg(org: { id: string; name: string } | null) {
+export function setViewAsOrg(org: ViewAsOrg | null) {
   if (typeof window === 'undefined') return;
-  if (org) localStorage.setItem(VIEW_AS_KEY, JSON.stringify(org));
-  else localStorage.removeItem(VIEW_AS_KEY);
+  localStorage.removeItem(VIEW_AS_KEY);
+  if (org) sessionStorage.setItem(VIEW_AS_KEY, JSON.stringify(org));
+  else sessionStorage.removeItem(VIEW_AS_KEY);
+  window.dispatchEvent(new Event(VIEW_AS_CHANGED_EVENT));
 }
 
 api.interceptors.request.use((config) => {
@@ -40,7 +61,11 @@ api.interceptors.request.use((config) => {
     const token = localStorage.getItem('rabitech_token');
     if (token) config.headers.Authorization = `Bearer ${token}`;
     const viewAs = getViewAsOrg();
-    if (viewAs?.id) config.headers['X-Organization-Id'] = viewAs.id;
+    const platformEndpoint = String(config.url || '').startsWith('/api/platform');
+    if (viewAs && !platformEndpoint) {
+      config.headers['X-Organization-Id'] = viewAs.id;
+      config.headers['X-Platform-View-Token'] = viewAs.accessToken;
+    }
   }
   return config;
 });
@@ -60,6 +85,17 @@ const GATE_DESTINATIONS: Record<string, string> = {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    const platformViewCode = err.response?.status === 403 ? err.response?.data?.code : undefined;
+    if (
+      typeof window !== 'undefined'
+      && ['PLATFORM_VIEW_EXPIRED', 'PLATFORM_VIEW_INVALID', 'PLATFORM_VIEW_AUDIT_MISSING'].includes(platformViewCode)
+    ) {
+      setViewAsOrg(null);
+      if (!window.location.pathname.startsWith('/platform')) {
+        window.location.href = '/platform/subscribers?viewAs=expired';
+      }
+      return Promise.reject(err);
+    }
     const gateCode = err.response?.status === 403 ? err.response?.data?.code : undefined;
     const destination = gateCode ? GATE_DESTINATIONS[gateCode] : undefined;
     if (destination && typeof window !== 'undefined') {

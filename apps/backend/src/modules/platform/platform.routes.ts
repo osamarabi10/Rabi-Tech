@@ -40,7 +40,7 @@ import { monthRange } from '../usage/usage.service';
 import { USAGE_METRICS } from '../usage/metrics';
 import { probeOrganization } from '../gateway/health-monitor';
 import { isCommercialTermsError, parseCommercialPatch } from '../billing/commercial-terms';
-import { auditPlatformScope } from '../../lib/audit';
+import { auditPlatformScope, auditPlatformViewGrant } from '../../lib/audit';
 import {
   PaymentError,
   createInvoice,
@@ -66,6 +66,12 @@ import {
   isPlatformPermission,
   type PlatformPermission,
 } from './platform-permissions';
+import {
+  PLATFORM_VIEW_DURATION_SECONDS,
+  PlatformViewInputError,
+  issuePlatformViewToken,
+  parsePlatformViewRequest,
+} from './platform-view-access';
 
 const router = Router();
 
@@ -242,7 +248,77 @@ router.patch('/staff/:id', requirePlatformOwner, async (req, res) => {
   }
 });
 
-router.get('/subscribers', requirePlatformPermission('subscriber:read'), async (req, res) => {
+router.post(
+  '/subscribers/:id/view-as',
+  requirePlatformPermission('subscriber:view-as'),
+  requirePlatformPermission('subscriber:content:read'),
+  async (req, res) => {
+    let accessRequest;
+    try {
+      accessRequest = parsePlatformViewRequest(req.body);
+    } catch (error) {
+      if (error instanceof PlatformViewInputError) {
+        return res.status(400).json({ error: error.message, field: error.field });
+      }
+      throw error;
+    }
+
+    try {
+      const organization = await prisma.organization.findUnique({
+        where: { id: req.params.id },
+        select: { id: true, name: true, status: true },
+      });
+      if (!organization) return res.status(404).json({ error: 'Subscriber not found' });
+      if (organization.status === 'SUSPENDED') {
+        return res.status(403).json({ error: 'Subscriber is suspended' });
+      }
+
+      let auditLogId: string;
+      try {
+        auditLogId = await auditPlatformViewGrant({
+          actorIdentityId: req.platformUser!.id,
+          actorEmail: req.platformUser!.email,
+          targetOrgId: organization.id,
+          targetOrgName: organization.name,
+          route: `${req.method} ${req.originalUrl.split('?')[0]}`,
+          reason: accessRequest.reason,
+          ticketReference: accessRequest.ticketReference,
+          ipAddress: req.ip,
+        });
+      } catch (error) {
+        logger.error('Platform view grant audit failed', {
+          error: String(error),
+          actorIdentityId: req.platformUser!.id,
+          targetOrgId: organization.id,
+        });
+        return res.status(503).json({
+          error: 'Platform audit is unavailable',
+          code: 'PLATFORM_AUDIT_UNAVAILABLE',
+        });
+      }
+
+      const grant = issuePlatformViewToken({
+        actorIdentityId: req.platformUser!.id,
+        organizationId: organization.id,
+        auditLogId,
+      });
+      return res.status(201).json({
+        organization: { id: organization.id, name: organization.name },
+        ...grant,
+        durationSeconds: PLATFORM_VIEW_DURATION_SECONDS,
+      });
+    } catch (error) {
+      logger.error('Platform view grant failed', {
+        error: String(error),
+        actorIdentityId: req.platformUser!.id,
+        targetOrgId: req.params.id,
+      });
+      return res.status(500).json({ error: 'Failed to grant platform view access' });
+    }
+  },
+);
+
+router.get('/subscribers', requirePlatformPermission('subscriber:diagnostics'), async (req, res) => {
   try {
     const subscribers = await prisma.organization.findMany({
       select: {
@@ -507,7 +583,7 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
   }
 });
 
-router.get('/subscribers/:id/usage', requirePlatformPermission('subscriber:read'), async (req, res) => {
+router.get('/subscribers/:id/usage', requirePlatformPermission('subscriber:diagnostics'), async (req, res) => {
   try {
     const organization = await prisma.organization.findUnique({
       where: { id: req.params.id },

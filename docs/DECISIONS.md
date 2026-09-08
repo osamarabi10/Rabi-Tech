@@ -1408,41 +1408,75 @@ semantics are intentional or carry the pinned version through instead.
 
 ## D-24 · Platform view-as can expose customer content without enforceable permission or durable audit
 
-**Status:** recorded 2026-09-08, not fixed · **Owner:** UnKnowan
+**Status:** fixed 2026-09-08 · **Owner:** UnKnowan
 
-Today a platform token reaches `handlePlatformViewingTenant` before the
-database-backed platform authorization path. That handler accepts either an
-OWNER or SUPPORT role from the token, does not enforce the declared
-`subscriber:view-as` permission, and permits every tenant GET or HEAD route.
-It then installs a synthetic tenant ADMIN identity, which can read conversation
+Before this boundary landed, a platform token reached
+`handlePlatformViewingTenant` before the database-backed platform authorization
+path. That handler accepted either an OWNER or SUPPORT role from the token, did
+not enforce the declared `subscriber:view-as` permission, and permitted every
+tenant GET or HEAD route.
+It then installed a synthetic tenant ADMIN identity, which could read conversation
 messages and their signed media URLs.
 
-The entry is written to the tenant `AuditLog` through `auditLog()`. That helper
-deliberately catches a failed write, logs the failure and continues. The
-customer-content read is therefore logged when the audit store works and
-allowed when it does not. The `PlatformAuditLog` already has actor and target
-fields and a fail-closed writer, but view-as does not use it; it also has no
-route or ticket-reference fields.
+The entry was written to the tenant `AuditLog` through `auditLog()`. That helper
+deliberately caught a failed write, logged the failure and continued. The
+customer-content read was therefore logged when the audit store worked and
+allowed when it did not. The `PlatformAuditLog` already had actor and target
+fields and a fail-closed writer, but view-as did not use it; it also had no route
+or ticket-reference fields.
 
-The current role model cannot express the intended boundary. It names
-`subscriber:read` and `subscriber:view-as`, but has no separate permissions for
+The role model could not express the intended boundary. It named
+`subscriber:read` and `subscriber:view-as`, but had no separate permissions for
 metadata-only diagnostics and customer message content. Revoking the declared
-view-as permission also does not affect this path because the handler neither
-checks it nor refreshes platform permissions from the database.
+view-as permission also did not affect this path because the handler neither
+checked it nor refreshed platform permissions from the database.
 
-Before support work begins, one authorization-boundary commit must:
+The landed authorization boundary now:
 
-- enforce database-current `subscriber:view-as` before entering a tenant;
-- separate metadata diagnostics from customer-content reads;
-- require an explicit reason and ticket reference for content access; and
-- write a fail-closed `PlatformAuditLog` containing actor, organization, route,
+- enforces database-current `subscriber:view-as` before entering a tenant;
+- separates metadata diagnostics from customer-content reads;
+- requires an explicit reason and ticket reference for content access; and
+- writes a fail-closed `PlatformAuditLog` containing actor, organization, route,
   reason and ticket reference before any content is returned.
 
 If that write fails, the read is refused. Logging and allowing is not an
 acceptable degraded mode for customer content.
 
-This is a customer-trust and data-protection exposure, not a convenience gap.
-No SUPPORT identity is to be created for anyone until the boundary lands.
+The reason must be substantive: at least 12 characters after whitespace
+normalisation, and it must contain a letter. `123` is a reference wearing the
+name of a reason, and the same non-answer on a customer-content read is worse
+than it was on an override. The ticket reference has its own field.
+
+View-as is a **15-minute grant**, enforced by a signed server token and a client
+timer. A tab left open overnight must not preserve an access window whose only
+audit row was written the night before. Expiry closes the view; renewal repeats
+authorization and writes a fresh audit row before issuing another grant.
+
+### Sub-trigger: ticket existence
+
+Until the support queue exists, the boundary can require and record a bounded
+ticket reference but cannot prove that the ticket exists or belongs to the
+organization being viewed. That is accepted only as an ordering constraint.
+When the ticket schema and queue land, grant issuance must resolve the supplied
+reference server-side and refuse a missing, closed-ineligible or cross-tenant
+ticket. It must never continue treating arbitrary text as a verified ticket.
+
+- **Owner:** UnKnowan
+- **Trigger:** the support ticket queue and schema.
+
+### Recorded, not built: customers must see platform entry
+
+An audit row visible only to RabiTech asks the customer to trust that the trail
+exists. The customer's own audit surface must show that platform staff entered
+their workspace and when. It may identify the platform role or an appropriate
+staff label without exposing an internal reason written for support, but it
+must not hide the fact or timestamp of access.
+
+- **Owner:** UnKnowan
+- **Trigger:** the customer audit surface work.
+
+This was a customer-trust and data-protection exposure, not a convenience gap.
+The boundary was required before any SUPPORT identity could be created.
 
 - **Owner:** UnKnowan
 - **Trigger:** before any person other than the owner is given platform access.

@@ -27,7 +27,13 @@ import { cn } from '@/lib/utils';
 import { useT, LOCALES } from '@/lib/i18n';
 import { useBranding } from '@/lib/branding-context';
 import { setAgentAway } from '@/lib/data';
-import { getViewAsOrg, setViewAsOrg } from '@/lib/api';
+import {
+  VIEW_AS_CHANGED_EVENT,
+  VIEW_AS_KEY,
+  getViewAsOrg,
+  setViewAsOrg,
+  type ViewAsOrg,
+} from '@/lib/api';
 import {
   Tooltip,
   TooltipContent,
@@ -109,7 +115,7 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
   })();
 
   const isPlatformOwner = user.platformRole === 'OWNER' || user.scope === 'PLATFORM';
-  const [viewAs, setViewAs] = useState<{ id: string; name: string } | null>(null);
+  const [viewAs, setViewAs] = useState<ViewAsOrg | null>(null);
 
   /**
    * What this user is allowed to do, as the server computes it.
@@ -122,8 +128,37 @@ export function AppSidebar({ open = false, onClose }: { open?: boolean; onClose?
    */
   const [permissions, setPermissions] = useState<string[] | null>(null);
   useEffect(() => {
-    setViewAs(getViewAsOrg());
-  }, [pathname]);
+    const sync = () => {
+      const hadStoredGrant = sessionStorage.getItem(VIEW_AS_KEY) !== null;
+      const current = getViewAsOrg();
+      setViewAs(current);
+      if (hadStoredGrant && !current) {
+        router.replace('/platform/subscribers?viewAs=expired');
+      }
+    };
+    sync();
+    window.addEventListener(VIEW_AS_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(VIEW_AS_CHANGED_EVENT, sync);
+  }, [pathname, router]);
+
+  useEffect(() => {
+    if (!viewAs) return;
+    const expiresAt = new Date(viewAs.expiresAt).getTime();
+    const expireIfNeeded = () => {
+      if (Date.now() < expiresAt) return;
+      setViewAsOrg(null);
+      setViewAs(null);
+      router.replace('/platform/subscribers?viewAs=expired');
+    };
+    const timer = window.setTimeout(expireIfNeeded, Math.max(0, expiresAt - Date.now()) + 25);
+    window.addEventListener('focus', expireIfNeeded);
+    document.addEventListener('visibilitychange', expireIfNeeded);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', expireIfNeeded);
+      document.removeEventListener('visibilitychange', expireIfNeeded);
+    };
+  }, [router, viewAs]);
 
   const exitViewAs = () => {
     setViewAsOrg(null);

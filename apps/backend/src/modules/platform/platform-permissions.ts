@@ -26,14 +26,19 @@
  */
 
 export const PLATFORM_PERMISSIONS = {
-  'subscriber:read': {
-    label: 'View subscribers',
-    detail: 'The subscriber list, usage and gateway health. Read-only.',
+  'subscriber:diagnostics': {
+    label: 'View subscriber diagnostics',
+    detail: 'Account, plan, usage and channel health without customer message content.',
   },
   'subscriber:view-as': {
     label: 'Open a subscriber workspace',
     detail:
-      'Sign into a workspace to see what the customer sees. Every use is written to the audit log with the advisor’s name.',
+      'Enter a subscriber workspace for 15 minutes. Also requires customer-content access.',
+  },
+  'subscriber:content:read': {
+    label: 'Read customer content',
+    detail:
+      'Read messages and media while viewing a subscriber. Every 15-minute access grant is audited.',
   },
   'trial:extend': {
     label: 'Extend a trial',
@@ -81,8 +86,7 @@ export const ALL_PLATFORM_PERMISSIONS = Object.keys(PLATFORM_PERMISSIONS) as Pla
  * a default that is silently correct teaches nobody what they granted.
  */
 export const SUGGESTED_ADVISOR_PERMISSIONS: PlatformPermission[] = [
-  'subscriber:read',
-  'subscriber:view-as',
+  'subscriber:diagnostics',
   'trial:extend',
   'gateway:operate',
   'billing:view',
