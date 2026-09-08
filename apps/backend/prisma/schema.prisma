@@ -161,10 +161,10 @@ enum PricingModel {
 /// An edition, as a stable identity.
 ///
 /// What an edition *grants* changes over time and lives on PlanVersion; what
-/// it *costs* changes independently and lives on Price. This model holds only
-/// what never changes about an edition: its code, its name, and where it sits
-/// in the ladder. Splitting them is what lets a subscription be grandfathered
-/// onto the terms it was sold under (D-19).
+/// it *costs* has its own identity and lives on Price. This model holds stable
+/// edition identity and owner-facing catalogue state. Publication snapshots a
+/// new PlanVersion and Price together, which lets a subscription remain on the
+/// complete terms it was sold under (D-19).
 model Plan {
   id        String  @id @default(cuid())
   code      String  @unique
@@ -240,11 +240,10 @@ model PlanVersion {
 
 /// What an edition costs.
 ///
-/// Separate from PlanVersion because price and entitlements version
-/// independently: repricing without changing what is granted is the common
-/// case, and folding them together would force a spurious entitlement version
-/// for every price change — which would in turn re-pin nothing and mean
-/// nothing, while looking like a change to what customers get.
+/// Separate from PlanVersion because a price is a commercial record with its
+/// own identity. Every edition publication creates a fresh PlanVersion and a
+/// fresh Price, even when only one side changed, so the exact pair referenced
+/// by an existing subscription remains explainable and untouched.
 model Price {
   id            String @id @default(cuid())
   planVersionId String
@@ -253,8 +252,9 @@ model Price {
   currency     String          @default("USD")
   interval     BillingInterval @default(MONTHLY)
   pricingModel PricingModel    @default(FIXED)
-  /// A superseded price is deactivated rather than deleted: an invoice raised
-  /// against it must stay explicable after the price changes.
+  /// Prices on historical versions remain active for resolution; current
+  /// offer selection is constrained by PlanVersion.isCurrent. An invoice and
+  /// subscription raised against an older Price must stay explicable.
   isActive     Boolean         @default(true)
 
   createdAt DateTime @default(now())

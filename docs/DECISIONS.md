@@ -1037,7 +1037,7 @@ disagreeing: 0`.
 
 ## D-19 · An edition is three things, and a subscription pins the one it bought
 
-**Status:** fixed 2026-09-06 · **Owner:** UnKnowan
+**Status:** fixed 2026-09-06; immutable publication completed 2026-09-08 · **Owner:** UnKnowan
 
 `Plan` was one row holding three different kinds of fact: what an edition **is**
 (code, name, ladder position), what it **grants** (limits, features, channels),
@@ -1055,11 +1055,12 @@ the shape D-18 removed from `Organization`, and the rule that came out of it is
 in AGENTS.md under Design. It was seven property reads, not the sixty-seven a
 naive grep suggested.
 
-**Price is separate from PlanVersion** because price and entitlements version
-independently. Repricing without changing what is granted is the common case;
-folding them together would force a spurious entitlement version for every price
-change — a version that re-pins nothing and means nothing, while reading like a
-change to what customers get.
+**Price is separate from PlanVersion** because money is a commercial record
+with its own identity. Publication advances them together: every edit creates
+PlanVersion N+1 and a fresh Price, even when the edit changes only one side.
+That copied Price is intentional rather than spurious. It makes the complete
+offer at N+1 explicit while the exact Price referenced by an older subscription
+stays untouched and explainable.
 
 ### Why the blast radius stayed small
 
@@ -1070,11 +1071,17 @@ downstream never moved. Two writers — the boot seed and the owner console — 
 through one `createEditionRows`, and every edit routes through one
 `applyEditionChanges`.
 
-Editing an edition still mutates the **current version in place**. Versioning
-the edit is a behaviour change with its own consequences for existing
-subscribers, and it belongs to the plan-editor work where the preview and the
-migration story are already being built. C3 moves the columns and changes
-nothing anybody can observe.
+C3b initially moved the columns without changing editor behaviour: edits still
+mutated the current rows in place. C6 completed the design. The immediate editor
+and the due-schedule worker now lock the stable Plan row and use one transactional
+publication path: copy current terms, overlay the change, mark N historical,
+create N+1 and its Price, and write the audit event. Existing subscriptions keep
+their PlanVersion and Price pins. Plan overrides continue to resolve current.
+
+The preview and history expose that distinction directly: current and proposed
+version, the subscribers that remain pinned, and the live overrides that move.
+History lists every version with its Price and pinned-subscriber count rather
+than asking an audit diff to impersonate a version ledger.
 
 ### The proof
 
@@ -1096,6 +1103,13 @@ invite. It compiles, the catalogue loads, every edition still has a number:
 which is the finding rather than a gap, and is now a rule in AGENTS.md under
 Evidence: a proof over a single edition would have passed while the bug shipped.
 
+**C6 differential mutation.** Replacing publication with the old in-place
+PlanVersion and Price updates kept the endpoint successful and took the tenancy
+harness from **157/157 to 156/157**. The sole red named the customer damage:
+an existing subscriber moved from **5 seats / 4,900 cents monthly** to
+**12 seats / 17,245 cents monthly** without a migration. Restoring the
+byte-identical writer returned the harness to 157/157.
+
 ### Three things the split broke that nothing typechecked
 
 1. **`PlanVersion` and `Price` were not in `PLATFORM_MODELS`.** Splitting a
@@ -1114,7 +1128,7 @@ Evidence: a proof over a single edition would have passed while the bug shipped.
    throws on a key belonging to none, so a typo is an error rather than a value
    written nowhere.
 
-### Reversibility ends at the first edition edit — by design
+### Reversibility ends at the first immutable publication — by design
 
 `down.sql` refuses when any plan has more than one version.
 
@@ -1125,14 +1139,15 @@ terms — precisely the failure this change exists to prevent. A reversal that
 quietly re-prices existing customers is worse than no reversal.
 
 So the window is real and worth stating plainly: **the migration is reversible
-until an edition is edited, and not afterwards.** Two further guards refuse a
-version carrying more than one active price (Plan held a single price shape, so
-the others would vanish without trace) and a changed plan count.
+until an edit publishes a second version, and not afterwards.** Two further
+guards refuse a version carrying more than one active price (Plan held a single
+price shape, so the others would vanish without trace) and a changed plan count.
 
 - **Lands in:** `schema.prisma`, `editions.service.ts` (the seam),
   `subscription-plan.ts` (new), `billing.service.ts`, `platform.routes.ts`,
   `currency-policy.ts`, `trial.service.ts`, `access-gate.middleware.ts`, the
-  branding pair, `prisma/extensions.ts`, and the migration.
+  branding pair, `prisma/extensions.ts`, the owner edition console, and the
+  migration.
 
 ---
 

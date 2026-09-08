@@ -25,11 +25,16 @@ import {
   readEdition,
   applyEditionChanges,
   createEditionRows,
+  editionPublicationAuditState,
+  readEditionPublicationImpact,
+  PLAN_VERSION_EDITION_INCLUDE,
   SUBSCRIPTION_EDITION_SELECT,
   subscriptionEditionOf,
+  versionedEditionOf,
+  applyEditionPricingInvariant,
 } from '../billing/editions.service';
 import { SUBSCRIPTION_PLAN_SELECT, planCodeOf } from '../billing/subscription-plan';
-import { resolveEntitlements } from '../billing/entitlements.resolver';
+import { resolveEntitlements, type EffectiveEntitlements } from '../billing/entitlements.resolver';
 import { limitState, type Capability } from '../billing/capabilities';
 import { monthRange } from '../usage/usage.service';
 import { USAGE_METRICS } from '../usage/metrics';
@@ -1622,13 +1627,32 @@ router.get('/editions/history', requirePlatformOwner, async (req, res) => {
       : null;
     const limit = Math.min(Number(req.query.limit) || 50, 200);
 
-    const entries = await prisma.platformAuditLog.findMany({
-      where: code
-        ? { targetEditionCode: code }
-        : { action: { in: ['platform.edition.updated', 'platform.edition.created'] } },
-      orderBy: { timestamp: 'desc' },
-      take: limit,
-    });
+    const [entries, versionRows, liveImpact] = await Promise.all([
+      prisma.platformAuditLog.findMany({
+        where: code
+          ? { targetEditionCode: code }
+          : { action: { in: ['platform.edition.updated', 'platform.edition.created'] } },
+        orderBy: { timestamp: 'desc' },
+        take: limit,
+      }),
+      code
+        ? prisma.planVersion.findMany({
+            where: { plan: { code } },
+            orderBy: { version: 'desc' },
+            include: {
+              ...PLAN_VERSION_EDITION_INCLUDE,
+              _count: {
+                select: {
+                  subscriptions: { where: { status: { in: ['ACTIVE', 'TRIALING'] } } },
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      code
+        ? readEditionPublicationImpact(prisma, code)
+        : Promise.resolve({ pinnedSubscriberCount: 0, overrideImpactCount: 0 }),
+    ]);
 
     /*
       The diff is computed here rather than in the console, so every reader of
@@ -1646,13 +1670,19 @@ router.get('/editions/history', requirePlatformOwner, async (req, res) => {
       const keys = new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})]);
       const diff: Array<{ field: string; before: unknown; after: unknown }> = [];
       for (const key of keys) {
-        // updatedAt moves on every write by definition; reporting it as a
-        // change would put a row in every diff that means nothing.
-        if (key === 'updatedAt') continue;
+        // Publication identity is rendered explicitly beside the event. It is
+        // not a customer term and would bury the actual edit in generated IDs.
+        if (['updatedAt', 'editedAt', 'planVersionId', 'priceId', 'version', 'publication', 'schedule'].includes(key)) continue;
         const from = before ? before[key] : undefined;
         const to = after ? after[key] : undefined;
         if (JSON.stringify(from) !== JSON.stringify(to)) diff.push({ field: key, before: from, after: to });
       }
+      const publication = after?.publication && typeof after.publication === 'object'
+        ? after.publication as Record<string, unknown>
+        : null;
+      const schedule = after?.schedule && typeof after.schedule === 'object'
+        ? after.schedule as Record<string, unknown>
+        : null;
       return {
         id: entry.id,
         action: entry.action,
@@ -1661,10 +1691,49 @@ router.get('/editions/history', requirePlatformOwner, async (req, res) => {
         actorEmail: entry.actorEmail,
         reason: entry.reason,
         changes: diff,
+        publication: publication
+          ? {
+              fromVersion: Number(publication.fromVersion),
+              toVersion: Number(publication.toVersion),
+              pinnedSubscriberCount: Number(publication.pinnedSubscriberCount),
+              overrideImpactCount: Number(publication.overrideImpactCount),
+            }
+          : null,
+        schedule: schedule
+          ? {
+              currentVersion: Number(schedule.currentVersion),
+              proposedVersion: Number(schedule.proposedVersion),
+              effectiveFrom: String(schedule.effectiveFrom),
+            }
+          : null,
       };
     });
 
-    res.json({ entries: changes });
+    const versions = versionRows.map((row) => {
+      const resolved = versionedEditionOf(row);
+      return {
+        version: resolved.version,
+        planVersionId: resolved.planVersionId,
+        priceId: resolved.priceId,
+        isCurrent: row.isCurrent,
+        publishedAt: row.createdAt.toISOString(),
+        pinnedSubscriberCount: row._count.subscriptions,
+        name: resolved.edition.name,
+        monthlyPriceCents: resolved.edition.monthlyPriceCents,
+        currency: resolved.edition.currency,
+        billingInterval: resolved.edition.billingInterval,
+        pricingModel: resolved.edition.pricingModel,
+        usersLimit: resolved.edition.usersLimit,
+      };
+    });
+
+    res.json({
+      entries: changes,
+      currentVersion: versions.find((version) => version.isCurrent)?.version ?? null,
+      versions,
+      pinnedSubscriberCount: liveImpact.pinnedSubscriberCount,
+      overrideImpactCount: liveImpact.overrideImpactCount,
+    });
   } catch (error) {
     logger.error('Edition history read failed', { error: String(error) });
     res.status(500).json({ error: 'Failed to read edition history' });
@@ -1695,50 +1764,6 @@ const PRICING_MODELS = ['FREE', 'FIXED', 'NEGOTIATED'] as const;
 
 /** Mirrors the BillingInterval enum in schema.prisma. */
 const BILLING_INTERVALS = ['MONTHLY', 'YEARLY'] as const;
-
-/**
- * The price/pricingModel invariants, enforced against the row **as it will be
- * after this write** rather than against the patch in isolation.
- *
- * That distinction is the whole reason this is a separate step. A PATCH can
- * carry either field alone: setting GROWTH to FREE while its price stays at
- * 4900, or setting a FIXED edition's price to 0, each produce an inconsistent
- * row while looking locally reasonable. Checking the merged result catches both;
- * checking the patch catches neither.
- *
- * These were established when pricingModel landed and were enforced only at
- * seed time, which meant the console could write states the constant could not.
- *
- *   FIXED       price > 0    an edition sold at a list price
- *   FREE        price = 0    not sold
- *   NEGOTIATED  price = 0    sold, but the number lives in the contract
- *
- * NEGOTIATED coerces rather than refuses, because a price is not a fact about a
- * negotiated edition — ENTERPRISE stores 0 and always has. Refusing a supplied
- * price would make the caller delete a field to satisfy a rule that intends to
- * ignore it.
- */
-function applyPricingInvariant(
-  data: Record<string, unknown>,
-  current: { pricingModel: string; monthlyPriceCents: number } | null,
-): void {
-  const bad = (message: string) => Object.assign(new Error(message), { status: 400 });
-  // FIXED is the column default, so a create naming no model is a FIXED one and
-  // has to satisfy FIXED's rule rather than slipping past unchecked.
-  const model = String(data.pricingModel ?? current?.pricingModel ?? 'FIXED');
-  const price = Number(data.monthlyPriceCents ?? current?.monthlyPriceCents ?? 0);
-
-  if (model === 'NEGOTIATED') {
-    data.monthlyPriceCents = 0;
-    return;
-  }
-  if (model === 'FREE' && price !== 0) {
-    throw bad('A FREE edition must be priced at 0. Use FIXED for an edition with a list price.');
-  }
-  if (model === 'FIXED' && price <= 0) {
-    throw bad('A FIXED edition must be priced above 0. Use FREE for an unsold edition, or NEGOTIATED for one priced by agreement.');
-  }
-}
 
 /**
  * Parse the editable edition fields out of a request body into a Prisma `data`
@@ -1900,36 +1925,50 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
     // limit — must not be refused because of a row that was already
     // inconsistent before anyone touched it.
     if (data.pricingModel !== undefined || data.monthlyPriceCents !== undefined) {
-      applyPricingInvariant(data, before);
+      applyEditionPricingInvariant(data, before);
     }
 
-    await applyEditionChanges(prisma, code, data);
-    const updated = await readEdition(prisma, code);
+    // Re-archiving is idempotent. Once its timestamp field is removed above,
+    // there is no publication left to make and no empty version to record.
+    if (!Object.keys(data).length) {
+      return res.json({ edition: before, publication: null });
+    }
+
+    const now = new Date();
+    const { publication, impact } = await prisma.$transaction(async (tx) => {
+      const publication = await applyEditionChanges(tx, code, data);
+      const impact = await readEditionPublicationImpact(tx, code, now);
+
+      // History and terms commit together. An edition version with no durable
+      // record of who published it is not an acceptable partial success.
+      await tx.platformAuditLog.create({
+        data: {
+          reason: `edition ${code} updated`,
+          action: 'platform.edition.updated',
+          targetEditionCode: code,
+          actorIdentityId: req.platformUser!.id,
+          actorEmail: req.platformUser!.email,
+          beforeState: publication.before as never,
+          afterState: editionPublicationAuditState(publication, impact) as never,
+          ipAddress: req.ip,
+        },
+      });
+      return { publication, impact };
+    });
 
     // Make the change live in this process immediately rather than waiting for
     // the next scheduled refresh. Other processes pick it up within their
     // refresh interval; nobody has to restart anything.
     await refreshEditions();
 
-    // Platform audit, not tenant audit: this changes the offer, not one
-    // organization. targetOrg stays null for the same reason - no subscriber was
-    // acted on, and pretending otherwise would make the per-org trail lie.
-    await prisma.platformAuditLog.create({
-      data: {
-        reason: `edition ${code} updated`,
-        action: 'platform.edition.updated',
-        // The handle this row is read back by. targetOrgId stays null on
-        // purpose - no subscriber was acted on.
-        targetEditionCode: code,
-        actorIdentityId: req.platformUser!.id,
-        actorEmail: req.platformUser!.email,
-        beforeState: before as never,
-        afterState: updated as never,
-        ipAddress: req.ip,
+    res.json({
+      edition: publication.after,
+      publication: {
+        fromVersion: publication.fromVersion,
+        toVersion: publication.toVersion,
+        ...impact,
       },
     });
-
-    res.json({ edition: updated });
   } catch (error) {
     const status = (error as { status?: number }).status || 400;
     res.status(status).json({ error: (error as Error).message || 'Failed to update edition' });
@@ -1955,25 +1994,61 @@ router.patch('/editions/:code', requirePlatformOwner, async (req, res) => {
  *
  * ## What it cannot deliver, said plainly rather than omitted
  *
- * Two lists come back, and the split is the honest part. `changesNow` is what
- * reaches existing subscribers at the next cache refresh. `changesAtNextActivation`
- * is the five metered usage limits, which do **not** reach them at all until
- * something reactivates their subscription — `applyPlanLimits` copied the old
- * values into OrganizationConfig and enforcement reads that copy (D-14).
- *
- * This is the same divergence `detectQuotaDrift` sees and is required to stay
- * silent about, because as a monitor it would fire on every organization on the
- * edition and a detector that always fires is one nobody reads. Here it is a
- * scoped answer to one question at one moment, so it can say what the detector
- * must not.
+ * Two groups come back, and the split is the honest part. `pinnedSubscribers`
+ * names the subscriptions that keep their exact PlanVersion and Price, with
+ * the customer terms each retains. `overrideImpact` names organizations whose
+ * live plan override follows current and therefore changes at publication.
+ * The latter is resolved through the real entitlement resolver with only its
+ * current-edition lookup replaced by the proposed version.
  *
  * ## Resolution, not offer
  *
- * Affected organizations are found across every edition state — inactive and
- * archived included. An archived edition still resolves for the subscribers on
+ * Subscribers are found across every edition state — inactive and archived
+ * included. An archived edition still resolves for the subscribers pinned to
  * it, so filtering them out here would under-report exactly the people a
  * consequence preview exists to protect.
  */
+function editionPreviewSnapshot(entitlements: EffectiveEntitlements): Record<string, unknown> {
+  const safe = (value: unknown) => typeof value === 'bigint' ? value.toString() : value;
+  return {
+    planName: entitlements.planName,
+    listPriceCents: entitlements.listPriceCents,
+    effectivePriceCents: entitlements.effectivePriceCents,
+    currency: entitlements.edition.currency,
+    billingInterval: entitlements.edition.billingInterval,
+    pricingModel: entitlements.edition.pricingModel,
+    seatLimit: entitlements.seatLimit,
+    maxWorkspaces: entitlements.maxWorkspaces,
+    customFieldsLimit: entitlements.edition.customFieldsLimit,
+    workflowsLimit: entitlements.edition.workflowsLimit,
+    monthlyAiTokensInLimit: safe(entitlements.edition.monthlyAiTokensInLimit),
+    monthlyAiTokensOutLimit: safe(entitlements.edition.monthlyAiTokensOutLimit),
+    campaignRateMax: entitlements.edition.campaignRateMax,
+    campaignRateDurationMs: entitlements.edition.campaignRateDurationMs,
+    autoProvisionGateway: entitlements.edition.autoProvisionGateway,
+    customDomain: entitlements.edition.customDomain,
+    whiteLabel: entitlements.edition.whiteLabel,
+    maskContactDetails: entitlements.edition.maskContactDetails,
+    allowedChannels: entitlements.edition.allowedChannels,
+    'limits.active_contacts': entitlements.limits.active_contacts,
+    'limits.messages_outbound': entitlements.limits.messages_outbound,
+    'limits.campaign_sends': entitlements.limits.campaign_sends,
+    'limits.ai_tokens_in': entitlements.limits.ai_tokens_in,
+    'limits.ai_tokens_out': entitlements.limits.ai_tokens_out,
+  };
+}
+
+function editionPreviewChanges(
+  before: EffectiveEntitlements,
+  after: EffectiveEntitlements,
+): Array<{ field: string; before: unknown; after: unknown }> {
+  const from = editionPreviewSnapshot(before);
+  const to = editionPreviewSnapshot(after);
+  return Object.keys(from)
+    .filter((field) => JSON.stringify(from[field]) !== JSON.stringify(to[field]))
+    .map((field) => ({ field, before: from[field], after: to[field] }));
+}
+
 router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) => {
   try {
     const code = normalizePlanCode(req.params.code);
@@ -1987,7 +2062,7 @@ router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) =>
     const data: Record<string, unknown> = {};
     applyEditionFields(body, data);
     if (data.pricingModel !== undefined || data.monthlyPriceCents !== undefined) {
-      applyPricingInvariant(data, current);
+      applyEditionPricingInvariant(data, current);
     }
     if (!Object.keys(data).length) {
       return res.status(400).json({ error: 'No editable fields supplied to preview' });
@@ -1996,70 +2071,80 @@ router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) =>
     // The hypothetical edition, built by the mapper the cache itself uses.
     const proposedRow = { ...current, ...data } as typeof current;
     const proposedEdition = rowToEdition(proposedRow);
-
-    /*
-      Every organization the change could reach, by any of the three routes a
-      plan is decided: a live override, a live subscription, or the tier column.
-      resolveEntitlements settles which actually applies - this only has to
-      avoid missing anyone.
-    */
-    const candidates = await prisma.organization.findMany({
-      where: {
-        OR: [
-          { planOverride: code },
-          { subscriptions: { some: { planVersion: { plan: { code } }, status: { in: ['ACTIVE', 'TRIALING'] } } } },
-        ],
-      },
-      select: { id: true, name: true },
-    });
-
-    const METERED = [
-      'monthlyActiveContactsLimit',
-      'monthlyOutboundMessagesLimit',
-      'monthlyCampaignSendsLimit',
-      'monthlyAiTokensInLimit',
-      'monthlyAiTokensOutLimit',
-    ] as const;
-
     const now = new Date();
-    const organizations = [];
-    for (const organization of candidates) {
-      const before = await resolveEntitlements(organization.id, now);
-      // Only an organization the edition actually governs. A candidate whose
-      // override points elsewhere is not affected by this change.
-      if (before.plan !== code) continue;
-      const after = await resolveEntitlements(organization.id, now, { editionOverride: proposedEdition });
+    const [latestVersion, pinnedOrganizations, overriddenOrganizations] = await Promise.all([
+      prisma.planVersion.findFirstOrThrow({
+        where: { plan: { code } },
+        orderBy: { version: 'desc' },
+        select: { version: true },
+      }),
+      prisma.organization.findMany({
+        where: {
+          subscriptions: {
+            some: {
+              status: { in: ['ACTIVE', 'TRIALING'] },
+              planVersion: { plan: { code } },
+            },
+          },
+        },
+        select: {
+          id: true,
+          name: true,
+          subscriptions: {
+            where: {
+              status: { in: ['ACTIVE', 'TRIALING'] },
+              planVersion: { plan: { code } },
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { id: true, ...SUBSCRIPTION_EDITION_SELECT },
+          },
+        },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.organization.findMany({
+        where: {
+          planOverride: code,
+          OR: [{ overrideExpiresAt: null }, { overrideExpiresAt: { gt: now } }],
+        },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+    ]);
 
-      const changesNow: Array<{ field: string; before: unknown; after: unknown }> = [];
-      if (before.planName !== after.planName) changesNow.push({ field: 'planName', before: before.planName, after: after.planName });
-      if (before.listPriceCents !== after.listPriceCents) changesNow.push({ field: 'listPriceCents', before: before.listPriceCents, after: after.listPriceCents });
-      if (before.seatLimit !== after.seatLimit) changesNow.push({ field: 'seatLimit', before: before.seatLimit, after: after.seatLimit });
-      for (const metric of Object.keys(before.limits)) {
-        const from = before.limits[metric as keyof typeof before.limits];
-        const to = after.limits[metric as keyof typeof after.limits];
-        if (from !== to) changesNow.push({ field: `limits.${metric}`, before: from, after: to });
-      }
-
-      /*
-        The metered limits the edition changed that the subscriber will not
-        feel. Computed against the EDITION values, not the resolved ones -
-        resolveEntitlements correctly reports no change for these, and reporting
-        only that would be true and useless.
-      */
-      const changesAtNextActivation = METERED
-        .filter((field) => String((current as Record<string, unknown>)[field]) !== String((proposedRow as Record<string, unknown>)[field]))
-        .map((field) => ({
-          field,
-          before: (current as Record<string, unknown>)[field],
-          after: (proposedRow as Record<string, unknown>)[field],
-        }));
-
-      organizations.push({
+    const pinnedSubscribers = [];
+    for (const organization of pinnedOrganizations) {
+      const subscription = organization.subscriptions[0];
+      const terms = subscriptionEditionOf(subscription);
+      if (!subscription || !terms) continue;
+      const effective = await resolveEntitlements(organization.id, now);
+      pinnedSubscribers.push({
         organizationId: organization.id,
         name: organization.name,
-        source: before.source,
-        changesNow,
-        changesAtNextActivation,
+        subscriptionId: subscription.id,
+        planVersionId: terms.planVersionId,
+        version: terms.version,
+        priceId: terms.priceId,
+        isCurrentVersion: terms.version === current.version,
+        effectiveSource: effective.source,
+        customerTerms: {
+          planName: terms.edition.name,
+          seats: terms.edition.usersLimit,
+          priceCents: terms.edition.monthlyPriceCents,
+          currency: terms.edition.currency,
+          billingInterval: terms.edition.billingInterval,
+        },
+      });
+    }
+
+    const overrideOrganizations = [];
+    for (const organization of overriddenOrganizations) {
+      const before = await resolveEntitlements(organization.id, now);
+      const after = await resolveEntitlements(organization.id, now, { editionOverride: proposedEdition });
+      overrideOrganizations.push({
+        organizationId: organization.id,
+        name: organization.name,
+        changes: editionPreviewChanges(before, after),
       });
     }
 
@@ -2077,7 +2162,7 @@ router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) =>
       const removed = current.allowedChannels.filter((kind) => !(data.allowedChannels as string[]).includes(kind));
       if (removed.length) {
         const affected = await prisma.organizationChannel.findMany({
-          where: { kind: { in: removed }, organizationId: { in: organizations.map((o) => o.organizationId) } },
+          where: { kind: { in: removed }, organizationId: { in: overrideOrganizations.map((o) => o.organizationId) } },
           select: { organizationId: true, kind: true, status: true },
         });
         channelImpact = {
@@ -2093,13 +2178,35 @@ router.post('/editions/:code/preview', requirePlatformOwner, async (req, res) =>
     res.json({
       code,
       changes: data,
-      affectedCount: organizations.length,
-      organizations,
+      currentVersion: {
+        version: current.version,
+        planVersionId: current.planVersionId,
+        priceId: current.priceId,
+      },
+      proposedVersion: {
+        version: latestVersion.version + 1,
+        customerTerms: {
+          planName: proposedEdition.name,
+          seats: proposedEdition.usersLimit,
+          priceCents: proposedEdition.monthlyPriceCents,
+          currency: proposedEdition.currency,
+          billingInterval: proposedEdition.billingInterval,
+        },
+      },
+      pinnedSubscribers: {
+        count: pinnedSubscribers.length,
+        organizations: pinnedSubscribers,
+      },
+      overrideImpact: {
+        count: overrideOrganizations.length,
+        organizations: overrideOrganizations,
+      },
+      // Retained for clients that used the old top-level count. It now means
+      // organizations whose effective terms move, not subscribers who stay pinned.
+      affectedCount: overrideOrganizations.length,
       channelImpact,
-      note: 'changesNow reach existing subscribers at the next catalogue refresh. '
-        + 'changesAtNextActivation do not reach them until their subscription is activated again, '
-        + 'because applyPlanLimits copied the previous values into OrganizationConfig and enforcement '
-        + 'reads that copy.',
+      note: `Publishing creates version ${latestVersion.version + 1}. Existing subscriptions stay on `
+        + 'the PlanVersion and Price they bought. Live plan overrides follow the new current version.',
     });
   } catch (error) {
     const status = (error as { status?: number }).status || 400;
@@ -2143,17 +2250,23 @@ router.post('/editions/:code/schedule', requirePlatformOwner, async (req, res) =
     }
 
     const changes = (body.changes || {}) as Record<string, unknown>;
+    const before = await readEdition(prisma, code);
+    if (!before) return res.status(404).json({ error: `Edition ${code} not found` });
     const data: Record<string, unknown> = {};
     applyEditionFields(changes, data);
     if (data.pricingModel !== undefined || data.monthlyPriceCents !== undefined) {
-      const current = await readEdition(prisma, code);
-      applyPricingInvariant(data, current);
+      applyEditionPricingInvariant(data, before);
     }
     if (!Object.keys(data).length) {
       return res.status(400).json({ error: 'No editable fields supplied to schedule' });
     }
 
-    const before = await readEdition(prisma, code);
+    const latestVersion = await prisma.planVersion.findFirstOrThrow({
+      where: { plan: { code } },
+      orderBy: { version: 'desc' },
+      select: { version: true },
+    });
+    const proposedVersion = latestVersion.version + 1;
     const updated = await prisma.plan.update({
       where: { code },
       data: { scheduledChanges: data as never, scheduledFrom: effectiveFrom },
@@ -2167,12 +2280,27 @@ router.post('/editions/:code/schedule', requirePlatformOwner, async (req, res) =
         actorIdentityId: req.platformUser!.id,
         actorEmail: req.platformUser!.email,
         beforeState: before as never,
-        afterState: updated as never,
+        afterState: {
+          ...before,
+          scheduledChanges: data,
+          scheduledFrom: updated.scheduledFrom,
+          schedule: {
+            currentVersion: before.version,
+            proposedVersion,
+            effectiveFrom: effectiveFrom.toISOString(),
+          },
+        } as never,
         ipAddress: req.ip,
       },
     });
 
-    res.status(202).json({ code, effectiveFrom: effectiveFrom.toISOString(), changes: data });
+    res.status(202).json({
+      code,
+      effectiveFrom: effectiveFrom.toISOString(),
+      changes: data,
+      currentVersion: before.version,
+      proposedVersion,
+    });
   } catch (error) {
     const status = (error as { status?: number }).status || 400;
     res.status(status).json({ error: (error as Error).message || 'Failed to schedule edition change' });
@@ -2317,7 +2445,7 @@ router.post('/editions', requirePlatformOwner, async (req, res) => {
 
     // No existing row to merge against: a create is judged entirely on what it
     // supplies, defaulting to the column's own FIXED.
-    applyPricingInvariant(data, null);
+    applyEditionPricingInvariant(data, null);
 
     if (data.sortOrder === undefined) {
       // Appended past the current end of the ladder, explicitly. The column

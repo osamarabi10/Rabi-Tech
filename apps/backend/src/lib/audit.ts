@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import logger from './logger';
 import { getTenantId } from './tenant-context';
@@ -52,8 +53,9 @@ export interface PlatformAuditDetail {
 export async function auditPlatformScope(
   reason: string,
   detail: PlatformAuditDetail = {},
+  writer: Pick<Prisma.TransactionClient, 'platformAuditLog'> = prisma,
 ): Promise<void> {
-  await prisma.platformAuditLog.create({
+  await writer.platformAuditLog.create({
     data: {
       reason,
       action: detail.action,

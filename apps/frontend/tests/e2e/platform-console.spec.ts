@@ -23,8 +23,9 @@ test.describe('platform console real-stack gate', () => {
     );
 
     await page.goto('/platform', { waitUntil: 'networkidle' });
-    await expect(page.getByRole('navigation', { name: 'Platform navigation' })).toBeVisible();
-    await expect(page.getByRole('link', { name: /Editions/ })).toBeVisible();
+    const navigation = page.getByRole('navigation', { name: 'Platform navigation' });
+    await expect(navigation).toBeVisible();
+    await expect(navigation.getByRole('link', { name: /Editions/ })).toBeVisible();
   });
 });
 

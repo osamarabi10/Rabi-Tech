@@ -938,7 +938,8 @@ async function editionRow(raw, code) {
   return require('../src/modules/billing/editions.service').readEdition(raw, code);
 }
 async function editionWrite(raw, code, data) {
-  return require('../src/modules/billing/editions.service').applyEditionChanges(raw, code, data);
+  const { applyEditionChanges } = require('../src/modules/billing/editions.service');
+  return raw.$transaction((tx) => applyEditionChanges(tx, code, data));
 }
 
 async function grantPlan(raw, organizationId, planCode) {
@@ -4755,9 +4756,17 @@ async function databaseAudits() {
       const flagOrgId = 'bleed_flag_org';
       const flagChannelId = 'bleed_flag_channel';
       await raw.organization.create({
-        data: { id: flagOrgId, name: 'Flag Org', slug: 'bleed-flag', status: 'ACTIVE' },
+        data: {
+          id: flagOrgId,
+          name: 'Flag Org',
+          slug: 'bleed-flag',
+          status: 'ACTIVE',
+          // Overrides intentionally follow the current edition. A subscription
+          // would pin the version bought before the switches below moved.
+          planOverride: 'STANDARD',
+          overrideReason: 'catalogue feature control',
+        },
       });
-      await grantPlan(raw, flagOrgId, 'STANDARD');
       await raw.organizationChannel.create({
         data: {
           id: flagChannelId, organizationId: flagOrgId, kind: 'OPENWA', status: 'PENDING',
@@ -4774,8 +4783,8 @@ async function databaseAudits() {
         assert.equal(refused.queued, false, 'a gateway must not be built for an edition that excludes one');
         assert.equal(refused.code, 'PLAN_UPGRADE_REQUIRED', JSON.stringify(refused));
 
-        // On: the same organization, the same plan code, the same everything
-        // else — only the console switch moved.
+        // On: the same organization, the same live override, the same
+        // everything else — only the newly published switch moved.
         await editionWrite(raw, 'STANDARD', { autoProvisionGateway: true });
         await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
         const allowed = await maybeProvisionGateway(flagOrgId, 'bleed-flag-on');
@@ -4795,12 +4804,13 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
-    await check('billing: editing an edition is a new baseline, not drift', async () => {
+    await check('billing: a publication does not manufacture drift for a pinned subscriber', async () => {
       const { refreshEditions, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
       const { getBillingSummary } = require('../src/modules/billing/billing.service');
 
       // Put org A on GROWTH with config matching the catalogue exactly, and
-      // stamp the config in the past so an edition edit lands after it.
+      // stamp the config in the past so a later publication cannot hide a
+      // genuine mismatch by timestamp.
       const growth = await editionRow(raw, 'GROWTH');
       await grantPlan(raw, orgA.organizationId, 'GROWTH');
       await raw.organizationConfig.update({
@@ -4817,23 +4827,24 @@ async function databaseAudits() {
       const before = await runAsOrganization(orgA.organizationId, () => getBillingSummary(orgA.organizationId));
       assert.deepEqual(before.quotaDrift, [], 'config matching the catalogue is never drift');
 
-      // The owner raises the allowance. Every organization on GROWTH now has a
-      // config that no longer matches the edition - by design, not by tampering.
-      await editionWrite(raw, 'GROWTH', { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit + 500 });
+      // Publish catalogue metadata that changes no purchased allowance. Org A
+      // still resolves the exact version its config came from, so both stores
+      // remain equal.
+      await editionWrite(raw, 'GROWTH', { sortOrder: growth.sortOrder + 20 });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
       const after = await runAsOrganization(orgA.organizationId, () => getBillingSummary(orgA.organizationId));
       assert.deepEqual(
         after.quotaDrift,
         [],
-        'an edition edit is a new baseline; a detector that fires on every org is one nobody reads',
+        'publishing a new current version must not manufacture drift for a pinned subscriber',
       );
 
-      // The detector must still work. Tamper with config *after* the edit, and
-      // the divergence is no longer explained by the edition.
+      // The detector must still work. A newer publication is not an excuse for
+      // tampering with config, even when the tampered row claims to predate it.
       await raw.organizationConfig.update({
         where: { organizationId: orgA.organizationId },
-        data: { monthlyActiveContactsLimit: 7, updatedAt: new Date() },
+        data: { monthlyActiveContactsLimit: 7, updatedAt: new Date('2026-01-02T00:00:00.000Z') },
       });
       const tampered = await runAsOrganization(orgA.organizationId, () => getBillingSummary(orgA.organizationId));
       assert.ok(
@@ -4842,7 +4853,7 @@ async function databaseAudits() {
       );
 
       // Restore.
-      await editionWrite(raw, 'GROWTH', { monthlyActiveContactsLimit: growth.monthlyActiveContactsLimit });
+      await editionWrite(raw, 'GROWTH', { sortOrder: growth.sortOrder });
       await grantPlan(raw, orgA.organizationId, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
@@ -4970,7 +4981,7 @@ async function databaseAudits() {
       assert.equal(growth.monthlyPriceCents, 4900, 'a refused write must change nothing');
     });
 
-    await check('billing: editing one edition does not move another tenant', async () => {
+    await check('billing: publishing one edition does not move another edition', async () => {
       const { refreshEditions, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
       const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
 
@@ -4980,7 +4991,8 @@ async function databaseAudits() {
 
       const beforeB = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgB.organizationId));
 
-      // Move GROWTH substantially. Org B is on BUSINESS and must not notice.
+      // Publish GROWTH substantially differently. Org B is pinned to BUSINESS
+      // and must not notice any field from the other edition.
       await editionWrite(raw, 'GROWTH', { monthlyPriceCents: 9900, monthlyActiveContactsLimit: 99999, whiteLabel: true });
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
@@ -4990,9 +5002,14 @@ async function databaseAudits() {
       assert.equal(afterB.seatLimit, beforeB.seatLimit);
       assert.deepEqual(afterB.limits, beforeB.limits, 'another edition limits must not leak');
 
-      // And org A, which is on GROWTH, does see it.
-      const afterA = await runAsPlatform('bleed-resolve-entitlements', () => resolveEntitlements(orgA.organizationId));
-      assert.equal(afterA.listPriceCents, 9900, 'the edited edition must apply to its own tenants');
+      // The catalogue itself does move. Whether a GROWTH subscriber moves is
+      // the immutable-publication property proved in the dedicated check
+      // below, where the stored versions and Prices are inspected as well.
+      assert.equal(
+        require('../src/modules/billing/editions.service').getEdition('GROWTH').monthlyPriceCents,
+        9900,
+        'the newly published GROWTH offer must become current',
+      );
 
       await editionWrite(raw, 'GROWTH', { monthlyPriceCents: 4900, monthlyActiveContactsLimit: 2500, whiteLabel: false });
       await setTierGoverned(orgA, 'FREE');
@@ -5743,23 +5760,30 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
-    await check('billing: the consequence preview matches what the change actually does', async () => {
+    await check('billing: publication creates immutable versions and preserves purchased terms', async () => {
       /*
-        The preview is only worth having if it is true, and the only way to know
-        it is true is to APPLY the change and compare. Two computations agreeing
-        proves the formula is consistent with itself; it says nothing about
-        whether either one describes reality.
+        The preview is proved against the write, not against a second preview
+        formula. Org A buys the current GROWTH version. Org B has a live plan
+        override to GROWTH, which deliberately follows whichever version is
+        current. Publishing different seats and price must split those two
+        customers without changing Org A's subscription pointer.
 
-        So this previews, then really patches, then re-resolves, and asserts the
-        preview predicted what happened - including the part it predicted would
-        NOT happen.
+        The first post-write assertion is the customer damage this check exists
+        to catch. A mutation that edits the current rows in place reports the
+        old and new seats/price before any implementation-detail assertion can
+        obscure the failure.
       */
-      const { refreshEditions, getEdition } = require('../src/modules/billing/editions.service');
+      const {
+        refreshEditions,
+        getEdition,
+        PLAN_VERSION_EDITION_INCLUDE,
+        versionedEditionOf,
+      } = require('../src/modules/billing/editions.service');
       const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
 
       const owner = await raw.identity.create({
         data: {
-          email: `owner-preview-${Date.now()}@platform.test`,
+          email: `owner-publication-${Date.now()}@platform.test`,
           passwordHash: 'not-used-by-token-verification',
           platformRole: 'OWNER',
         },
@@ -5772,78 +5796,267 @@ async function databaseAudits() {
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         });
 
+      await raw.organization.update({
+        where: { id: orgA.organizationId },
+        data: { planOverride: null, overrideReason: null, overrideExpiresAt: null },
+      });
       await setTierGoverned(orgA, 'GROWTH');
-      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
-      const before = await editionRow(raw, 'GROWTH');
+      await setTierGoverned(orgB, 'FREE');
+      await raw.organization.update({
+        where: { id: orgB.organizationId },
+        data: {
+          planOverride: 'GROWTH',
+          overrideReason: 'publication impact control',
+          overrideExpiresAt: new Date('2999-01-01T00:00:00.000Z'),
+        },
+      });
+      await runAsPlatform('bleed-publication:refresh-before', () => refreshEditions());
 
-      /*
-        Two fields chosen deliberately, one of each kind:
+      const beforeEdition = await editionRow(raw, 'GROWTH');
+      const boughtVersion = await raw.planVersion.findFirstOrThrow({
+        where: { isCurrent: true, plan: { code: 'GROWTH' } },
+        include: PLAN_VERSION_EDITION_INCLUDE,
+      });
+      const boughtTerms = versionedEditionOf(boughtVersion);
+      const boughtPrice = boughtVersion.prices[0];
+      assert.ok(boughtPrice, 'fixture precondition: the bought version has an active Price');
+      const subscription = await raw.subscription.findFirstOrThrow({
+        where: { organizationId: orgA.organizationId, status: 'ACTIVE' },
+        orderBy: { createdAt: 'desc' },
+      });
+      assert.equal(subscription.planVersionId, boughtVersion.id);
 
-          usersLimit                 - reaches existing subscribers immediately,
-                                       because seatLimit is read from the edition.
-          monthlyActiveContactsLimit - does NOT reach them until reactivation,
-                                       because applyPlanLimits copied the old
-                                       value into OrganizationConfig and
-                                       enforcement reads that copy. This is D-14,
-                                       and it is the half a preview is most
-                                       tempted to lie about.
-      */
-      const patch = { usersLimit: 11, monthlyActiveContactsLimit: 3333 };
-
-      const previewResponse = await asOwner('POST', '/api/platform/editions/GROWTH/preview', patch);
-      assert.equal(previewResponse.status, 200, 'the preview must be available to an owner');
-      const preview = await previewResponse.json();
-
-      const previewed = preview.organizations.find((row) => row.organizationId === orgA.organizationId);
-      assert.ok(previewed, 'the preview must name the organization the edition governs');
-
-      const seatPrediction = previewed.changesNow.find((c) => c.field === 'seatLimit');
-      assert.ok(seatPrediction, 'the preview must say the seat limit changes now');
-      assert.equal(seatPrediction.after, 11);
-
-      const macPrediction = previewed.changesAtNextActivation.find(
-        (c) => c.field === 'monthlyActiveContactsLimit',
-      );
-      assert.ok(macPrediction, 'the preview must say the metered limit does NOT reach them yet');
-      assert.ok(
-        !previewed.changesNow.some((c) => c.field === 'limits.active_contacts'),
-        'the metered limit must not also be claimed as an immediate change',
-      );
-
-      const resolvedBefore = await runAsPlatform('bleed-preview-before', () =>
+      const pinnedBefore = await runAsPlatform('bleed-publication:pinned-before', () =>
         resolveEntitlements(orgA.organizationId));
+      const overrideBefore = await runAsPlatform('bleed-publication:override-before', () =>
+        resolveEntitlements(orgB.organizationId));
+      const targetSeats = (boughtTerms.edition.usersLimit ?? 0) + 7;
+      const targetPriceCents = boughtPrice.amountCents + 12_345;
+      const immediatePatch = {
+        usersLimit: targetSeats,
+        monthlyPriceCents: targetPriceCents,
+        monthlyActiveContactsLimit: (boughtTerms.edition.monthlyActiveContactsLimit ?? 0) + 333,
+      };
 
-      // ── apply it for real ────────────────────────────────────────────────
-      const applied = await asOwner('PATCH', '/api/platform/editions/GROWTH', patch);
-      assert.equal(applied.status, 200, 'the same patch must be accepted by the real endpoint');
-      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+      try {
+        const previewResponse = await asOwner(
+          'POST',
+          '/api/platform/editions/GROWTH/preview',
+          immediatePatch,
+        );
+        assert.equal(previewResponse.status, 200, 'the publication preview must answer');
+        const preview = await previewResponse.json();
+        assert.equal(preview.currentVersion.version, boughtVersion.version);
+        assert.equal(preview.proposedVersion.version, boughtVersion.version + 1);
+        assert.equal(preview.proposedVersion.customerTerms.seats, targetSeats);
+        assert.equal(preview.proposedVersion.customerTerms.priceCents, targetPriceCents);
 
-      const resolvedAfter = await runAsPlatform('bleed-preview-after', () =>
-        resolveEntitlements(orgA.organizationId));
+        const pinnedPreview = preview.pinnedSubscribers.organizations.find(
+          (row) => row.organizationId === orgA.organizationId,
+        );
+        assert.ok(pinnedPreview, 'preview must name the subscriber that stays pinned');
+        assert.equal(pinnedPreview.version, boughtVersion.version);
+        assert.equal(pinnedPreview.planVersionId, boughtVersion.id);
+        assert.equal(pinnedPreview.priceId, boughtPrice.id);
+        assert.equal(pinnedPreview.customerTerms.seats, pinnedBefore.seatLimit);
+        assert.equal(pinnedPreview.customerTerms.priceCents, pinnedBefore.listPriceCents);
 
-      // The preview said the seat limit would change now. It did.
-      assert.equal(
-        resolvedAfter.seatLimit, 11,
-        'the change the preview promised immediately must have happened',
-      );
-      assert.equal(getEdition('GROWTH').usersLimit, 11);
+        const overridePreview = preview.overrideImpact.organizations.find(
+          (row) => row.organizationId === orgB.organizationId,
+        );
+        assert.ok(overridePreview, 'preview must name the override that follows current');
+        assert.deepEqual(
+          overridePreview.changes.find((change) => change.field === 'seatLimit'),
+          { field: 'seatLimit', before: overrideBefore.seatLimit, after: targetSeats },
+        );
+        assert.deepEqual(
+          overridePreview.changes.find((change) => change.field === 'listPriceCents'),
+          { field: 'listPriceCents', before: overrideBefore.listPriceCents, after: targetPriceCents },
+        );
 
-      // And the preview said the metered limit would NOT reach them. It did not.
-      assert.equal(
-        resolvedAfter.limits.active_contacts, resolvedBefore.limits.active_contacts,
-        'a metered limit the preview placed at next activation must not have moved now',
-      );
-      assert.equal(
-        getEdition('GROWTH').monthlyActiveContactsLimit, 3333,
-        'the edition itself must carry the new value even though nobody feels it yet',
-      );
+        const applied = await asOwner('PATCH', '/api/platform/editions/GROWTH', immediatePatch);
+        const appliedText = await applied.text();
+        assert.equal(applied.status, 200, `publication failed: ${appliedText}`);
+        const appliedBody = JSON.parse(appliedText);
+        await runAsPlatform('bleed-publication:refresh-after', () => refreshEditions());
 
-      await editionWrite(raw, 'GROWTH', {
-          usersLimit: before.usersLimit,
-          monthlyActiveContactsLimit: before.monthlyActiveContactsLimit,
+        const pinnedAfter = await runAsPlatform('bleed-publication:pinned-after', () =>
+          resolveEntitlements(orgA.organizationId));
+        const beforeCustomerTerms = `${pinnedBefore.seatLimit} seats / ${pinnedBefore.listPriceCents} cents monthly`;
+        const afterCustomerTerms = `${pinnedAfter.seatLimit} seats / ${pinnedAfter.listPriceCents} cents monthly`;
+        assert.equal(
+          afterCustomerTerms,
+          beforeCustomerTerms,
+          `publication moved an existing subscriber from ${beforeCustomerTerms} to ${afterCustomerTerms} without a migration`,
+        );
+
+        // Only after customer safety is proved do we inspect how it was kept.
+        assert.equal(appliedBody.publication.fromVersion, boughtVersion.version);
+        assert.equal(appliedBody.publication.toVersion, boughtVersion.version + 1);
+        assert.equal(appliedBody.publication.pinnedSubscriberCount, preview.pinnedSubscribers.count);
+        assert.equal(appliedBody.publication.overrideImpactCount, preview.overrideImpact.count);
+
+        const subscriptionAfter = await raw.subscription.findUniqueOrThrow({
+          where: { id: subscription.id },
         });
-      await setTierGoverned(orgA, 'FREE');
-      await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+        assert.equal(
+          subscriptionAfter.planVersionId,
+          boughtVersion.id,
+          'publication must not repin the subscription',
+        );
+        assert.deepEqual(pinnedAfter.edition, pinnedBefore.edition);
+
+        const historicalVersion = await raw.planVersion.findUniqueOrThrow({
+          where: { id: boughtVersion.id },
+          include: PLAN_VERSION_EDITION_INCLUDE,
+        });
+        const historicalTerms = versionedEditionOf(historicalVersion);
+        assert.equal(historicalVersion.isCurrent, false);
+        assert.equal(historicalTerms.priceId, boughtPrice.id);
+        assert.deepEqual(
+          historicalTerms.edition,
+          boughtTerms.edition,
+          'the historical PlanVersion customer terms must not mutate',
+        );
+        assert.deepEqual(
+          historicalVersion.prices[0],
+          boughtPrice,
+          'the Price bought by the subscriber must remain byte-for-byte unchanged',
+        );
+
+        const publishedVersion = await raw.planVersion.findFirstOrThrow({
+          where: { isCurrent: true, plan: { code: 'GROWTH' } },
+          include: PLAN_VERSION_EDITION_INCLUDE,
+        });
+        const publishedTerms = versionedEditionOf(publishedVersion);
+        assert.equal(publishedVersion.version, boughtVersion.version + 1);
+        assert.notEqual(publishedVersion.id, boughtVersion.id);
+        assert.notEqual(publishedTerms.priceId, boughtPrice.id);
+        assert.equal(publishedTerms.edition.usersLimit, targetSeats);
+        assert.equal(publishedTerms.edition.monthlyPriceCents, targetPriceCents);
+        assert.equal(getEdition('GROWTH').usersLimit, targetSeats);
+
+        const overrideAfter = await runAsPlatform('bleed-publication:override-after', () =>
+          resolveEntitlements(orgB.organizationId));
+        assert.equal(overrideAfter.source, 'override');
+        assert.equal(overrideAfter.seatLimit, targetSeats);
+        assert.equal(overrideAfter.listPriceCents, targetPriceCents);
+
+        const historyResponse = await asOwner('GET', '/api/platform/editions/history?code=GROWTH');
+        assert.equal(historyResponse.status, 200);
+        const history = await historyResponse.json();
+        assert.equal(history.currentVersion, publishedVersion.version);
+        const oldHistory = history.versions.find((version) => version.planVersionId === boughtVersion.id);
+        const newHistory = history.versions.find((version) => version.planVersionId === publishedVersion.id);
+        assert.ok(oldHistory, 'history must show the purchased version');
+        assert.ok(newHistory, 'history must show the proposed version after publication');
+        assert.ok(oldHistory.pinnedSubscriberCount >= 1, 'history must count the pinned subscriber');
+        assert.equal(newHistory.isCurrent, true);
+        const immediateHistory = history.entries.find(
+          (entry) => entry.action === 'platform.edition.updated'
+            && entry.publication?.toVersion === publishedVersion.version,
+        );
+        assert.ok(immediateHistory, 'history must identify the immediate publication');
+        assert.equal(immediateHistory.publication.fromVersion, boughtVersion.version);
+        assert.equal(immediateHistory.publication.pinnedSubscriberCount, preview.pinnedSubscribers.count);
+        assert.equal(immediateHistory.publication.overrideImpactCount, preview.overrideImpact.count);
+
+        // A dated change is only deferred publication. Force its stored date
+        // due, then race two refreshers: one and only one N+1 may be created.
+        const scheduledSeats = targetSeats + 2;
+        const scheduledPriceCents = targetPriceCents + 2_222;
+        const effectiveFrom = new Date(Date.now() + 3_600_000).toISOString();
+        const scheduled = await asOwner('POST', '/api/platform/editions/GROWTH/schedule', {
+          effectiveFrom,
+          changes: { usersLimit: scheduledSeats, monthlyPriceCents: scheduledPriceCents },
+        });
+        const scheduledText = await scheduled.text();
+        assert.equal(scheduled.status, 202, `schedule failed: ${scheduledText}`);
+        const scheduledBody = JSON.parse(scheduledText);
+        assert.equal(scheduledBody.currentVersion, publishedVersion.version);
+        assert.equal(scheduledBody.proposedVersion, publishedVersion.version + 1);
+
+        await raw.plan.update({
+          where: { code: 'GROWTH' },
+          data: { scheduledFrom: new Date(Date.now() - 1_000) },
+        });
+        const countBeforeSchedule = await raw.planVersion.count({ where: { plan: { code: 'GROWTH' } } });
+        await Promise.all([refreshEditions(), refreshEditions()]);
+        const countAfterSchedule = await raw.planVersion.count({ where: { plan: { code: 'GROWTH' } } });
+        assert.equal(
+          countAfterSchedule,
+          countBeforeSchedule + 1,
+          'competing refreshers must publish one scheduled version, not two',
+        );
+
+        const scheduledVersion = await raw.planVersion.findFirstOrThrow({
+          where: { isCurrent: true, plan: { code: 'GROWTH' } },
+          include: PLAN_VERSION_EDITION_INCLUDE,
+        });
+        const scheduledTerms = versionedEditionOf(scheduledVersion);
+        assert.equal(scheduledVersion.version, publishedVersion.version + 1);
+        assert.notEqual(scheduledVersion.id, publishedVersion.id);
+        assert.notEqual(scheduledTerms.priceId, publishedTerms.priceId);
+        assert.equal(scheduledTerms.edition.usersLimit, scheduledSeats);
+        assert.equal(scheduledTerms.edition.monthlyPriceCents, scheduledPriceCents);
+
+        const firstPublicationAfterSchedule = await raw.planVersion.findUniqueOrThrow({
+          where: { id: publishedVersion.id },
+          include: PLAN_VERSION_EDITION_INCLUDE,
+        });
+        assert.deepEqual(
+          versionedEditionOf(firstPublicationAfterSchedule).edition,
+          publishedTerms.edition,
+          'scheduled publication must preserve the version it supersedes',
+        );
+        assert.deepEqual(firstPublicationAfterSchedule.prices[0], publishedVersion.prices[0]);
+
+        const scheduleCleared = await raw.plan.findUniqueOrThrow({
+          where: { code: 'GROWTH' },
+          select: { scheduledChanges: true, scheduledFrom: true },
+        });
+        assert.equal(scheduleCleared.scheduledFrom, null);
+        assert.equal(scheduleCleared.scheduledChanges, null);
+
+        const scheduledAudit = await raw.platformAuditLog.findMany({
+          where: { action: 'platform.edition.scheduled_applied', targetEditionCode: 'GROWTH' },
+          orderBy: { timestamp: 'desc' },
+          take: 2,
+        });
+        const matchingScheduledAudit = scheduledAudit.filter(
+          (entry) => entry.afterState?.publication?.toVersion === scheduledVersion.version,
+        );
+        assert.equal(matchingScheduledAudit.length, 1, 'a scheduled publication must have one durable audit row');
+
+        const pinnedAfterSchedule = await runAsPlatform('bleed-publication:pinned-after-schedule', () =>
+          resolveEntitlements(orgA.organizationId));
+        assert.equal(
+          `${pinnedAfterSchedule.seatLimit} seats / ${pinnedAfterSchedule.listPriceCents} cents monthly`,
+          beforeCustomerTerms,
+          'a scheduled publication must not migrate the existing subscriber either',
+        );
+        const overrideAfterSchedule = await runAsPlatform('bleed-publication:override-after-schedule', () =>
+          resolveEntitlements(orgB.organizationId));
+        assert.equal(overrideAfterSchedule.seatLimit, scheduledSeats);
+        assert.equal(overrideAfterSchedule.listPriceCents, scheduledPriceCents);
+      } finally {
+        // This makes the check independent of every later check, including
+        // when its differential mutation fails at the first customer assertion.
+        await asOwner('DELETE', '/api/platform/editions/GROWTH/schedule').catch(() => undefined);
+        await raw.organization.update({
+          where: { id: orgB.organizationId },
+          data: { planOverride: null, overrideReason: null, overrideExpiresAt: null },
+        });
+        await raw.organization.update({
+          where: { id: orgA.organizationId },
+          data: { planOverride: null, overrideReason: null, overrideExpiresAt: null },
+        });
+        await editionWrite(raw, 'GROWTH', beforeEdition);
+        await setTierGoverned(orgA, 'FREE');
+        await setTierGoverned(orgB, 'FREE');
+        await raw.identity.delete({ where: { id: owner.id } });
+        await runAsPlatform('bleed-publication:restore', () => refreshEditions());
+      }
     });
 
     await check('billing: the edition catalogue loads on a timer, with no ambient scope', async () => {

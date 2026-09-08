@@ -133,18 +133,20 @@ rather than fixed.
 
 ### What is next
 
-C6 through C8 of the editions ladder, in `.claude/plans/prancy-puzzling-anchor.md`.
+C7 and C8 of the editions ladder, in `.claude/plans/prancy-puzzling-anchor.md`.
 **C5 is struck**: the numbers meter does not exist and cannot be reached until
 Meta is operable, so it lands inside the Meta-enablement commit instead
 (**D-21**). `maxWorkspaces` is not it — that caps branches, and numbers live
 inside a branch.
 
-1. **C6** — the plan editor writes a **new version** rather than editing the
-   current one in place, and the existing preview is retargeted at versions.
-   C3b deliberately left editing in place; this is where that changes.
-2. **C7** — MAC: keep measuring, stop enforcing. A pricing act, so it is visible
-   on its own.
-3. **C8** — billing provider wiring, one-way outward.
+**C6 is complete:** immediate and scheduled edits publish PlanVersion N+1 and a
+new Price. Existing subscriptions keep the exact pair they bought; live plan
+overrides follow current. Preview and history show both sides and their counts.
+
+1. **C7** — remove MAC from ladder pricing, not from enforcement. Keep the
+   meter and guard; correct customer copy that claims a block where there is
+   none. Whether MAC should be enforced at all remains an owner decision.
+2. **C8** — billing provider wiring, one-way outward.
 
 Also open and not in that ladder:
 

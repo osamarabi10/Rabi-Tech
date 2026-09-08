@@ -212,7 +212,11 @@ function safePlanCode(value: unknown, context: string): PlanCode | null {
  * How an edition is looked up. Always getEdition in production.
  *
  * The one exception is the consequence preview, which needs to ask this exact
- * function what a subscriber WOULD get if one edition held different values.
+ * function what a live plan override WOULD get if the current edition held
+ * different values. Subscriptions never consume this hypothetical: even a
+ * subscription pinned to today's current version keeps that exact row when a
+ * publication makes it historical.
+ *
  * Injecting the lookup is what lets the preview share this code rather than
  * reimplement it — and a preview computed by a second implementation drifts
  * from the real change, which makes it worse than no preview at all.
@@ -314,22 +318,16 @@ export async function resolveEntitlements(
 
   /*
     A subscription resolves the row it bought, not today's row for that code.
-    The preview override remains a deliberate hypothetical only when the
-    subscription's pinned row is itself current: while edition edits still
-    update that row in place, the preview must show what the pending write would
-    do. A subscriber pinned to an older row must not move in the preview either.
-    In ordinary resolution this option is absent.
+    The preview override is deliberately ignored here, including when this row
+    is current at preview time: publication will make a new row and leave this
+    one intact. Letting the hypothetical through would preview the exact silent
+    migration versioning exists to prevent.
 
     Platform plan overrides are different commercial acts. They name a plan,
     not a historical version, so they continue to resolve against that plan's
     current edition through edition().
   */
-  const editionOfRecord = pinnedEdition
-    ? subscription?.planVersion.isCurrent
-      && options.editionOverride?.code === subscriptionPlan
-      ? options.editionOverride
-      : pinnedEdition
-    : edition('FREE');
+  const editionOfRecord = pinnedEdition ?? edition('FREE');
   const effectiveEdition = overridePlan ? edition(overridePlan) : editionOfRecord;
 
   // MAC only. One integer cannot mean both active_contacts (~2 500) and

@@ -23,7 +23,7 @@ import { getPaymentProvider, paymentProviderFor } from './provider-registry';
 // as trial.service.ts's TRIAL_PLAN_DEFAULT, which is a real use, so the constant
 // stays; it simply has no activation consumer any more.
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
-import { cheapestUpgradeGranting, getEdition, getEditions, getEditionEditedAt, CATALOGUE_QUERY, createEditionRows, flattenEdition } from './editions.service';
+import { cheapestUpgradeGranting, getEdition, getEditions, CATALOGUE_QUERY, createEditionRows, flattenEdition } from './editions.service';
 import { grantsCapability, limitOf, withinLimit, type Capability } from './capabilities';
 import {
   SUBSCRIPTION_PLAN_SELECT,
@@ -1493,29 +1493,12 @@ function detectQuotaDrift(
   config: OrganizationConfig | null,
   effective: Record<string, number | null>,
   isOverridden: boolean,
-  editionEditedAt: Date | null,
 ) {
-  // An edition edit is a NEW BASELINE, not drift.
-  //
-  // applyPlanLimits() copies an edition's numbers into OrganizationConfig when
-  // a subscription is activated. Once the owner can edit the edition itself,
-  // those numbers
-  // legitimately diverge the moment a price or a limit changes - and without
-  // this, raising GROWTH's allowance would report every organization on GROWTH
-  // as drifted. That is the failure this detector was built to avoid: one that
-  // always fires is one nobody reads.
-  //
-  // Re-applying limits on edit was rejected as the fix, because it would stomp
-  // per-subscriber overrides. Instead the config is read as pre-baseline when it
-  // predates the edition's last edit, and its divergence is explained.
-  //
-  // A null editionEditedAt means the catalogue has not loaded, not that the
-  // edition has never been edited. Suppressing on unknown would hide real drift
-  // during the boot window, so unknown suppresses nothing.
-  const configUpdatedAt = config?.updatedAt ?? null;
-  const predatesEdition = Boolean(
-    editionEditedAt && configUpdatedAt && configUpdatedAt < editionEditedAt,
-  );
+  // Publication no longer edits the version under a subscriber. The plan of
+  // record below is the exact immutable version that applyPlanLimits copied,
+  // so a mismatch is never explained by a later catalogue publication. The
+  // old timestamp suppression would now hide real tampering merely because a
+  // different current version was published afterwards.
   // Compared against the plan of RECORD, not the effective plan. When an
   // override is live the two differ by design, and comparing config against the
   // override would report every overridden organization as drifted — which is
@@ -1559,11 +1542,6 @@ function detectQuotaDrift(
     //    entitlements.resolver.ts exists to prevent, so it is named separately
     //    rather than buried among ordinary drift.
     const writtenThrough = isOverridden && stored === enforced;
-
-    // Suppress ordinary drift the edition edit already explains. Write-through
-    // is never suppressed: it is a different fault - the one the resolver exists
-    // to prevent - and an edition edit says nothing about whether it happened.
-    if (!writtenThrough && predatesEdition) continue;
 
     drift.push({
       metric,
@@ -1719,7 +1697,6 @@ export async function getBillingSummary(organizationId: string) {
       config,
       effective.limits,
       effective.isOverridden,
-      getEditionEditedAt(effective.planOfRecord),
     ),
   };
 }

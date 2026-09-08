@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, History, Info, Loader2, Lock } from 'lucide-react';
@@ -26,6 +26,9 @@ type Edition = {
   id: string;
   code: string;
   name: string;
+  planVersionId: string;
+  version: number;
+  priceId: string;
   monthlyPriceCents: number;
   currency: string;
   isActive: boolean;
@@ -57,6 +60,8 @@ type Edition = {
   maskContactDetails: boolean;
   autoProvisionGateway: boolean;
   allowedChannels: string[];
+  scheduledChanges?: Record<string, unknown> | null;
+  scheduledFrom?: string | null;
 };
 
 /**
@@ -75,29 +80,85 @@ type HistoryEntry = {
   actorEmail: string | null;
   reason: string;
   changes: Array<{ field: string; before: unknown; after: unknown }>;
+  publication: {
+    fromVersion: number;
+    toVersion: number;
+    pinnedSubscriberCount: number;
+    overrideImpactCount: number;
+  } | null;
+  schedule: {
+    currentVersion: number;
+    proposedVersion: number;
+    effectiveFrom: string;
+  } | null;
+};
+
+type EditionVersion = {
+  version: number;
+  planVersionId: string;
+  priceId: string;
+  isCurrent: boolean;
+  publishedAt: string;
+  pinnedSubscriberCount: number;
+  name: string;
+  monthlyPriceCents: number;
+  currency: string;
+  billingInterval: 'MONTHLY' | 'YEARLY';
+  pricingModel: 'FREE' | 'FIXED' | 'NEGOTIATED';
+  usersLimit: number | null;
 };
 
 /**
  * What a pending change would do, as the server computes it.
  *
- * The two lists are deliberately separate all the way from the endpoint to the
- * screen. `changesNow` reaches existing subscribers at the next catalogue
- * refresh; `changesAtNextActivation` does not reach them at all until their
- * subscription is activated again, because the enforced limits were copied into
- * OrganizationConfig when they were last activated and enforcement reads that
- * copy. Merging the two into one "what changes" list would be the single most
- * misleading thing this screen could do.
+ * The two groups are deliberately separate all the way from the endpoint to
+ * the screen. Pinned subscriptions retain the exact version and Price they
+ * bought. Live plan overrides name an edition rather than a version, so they
+ * follow the proposed current version. Merging those into one "affected"
+ * number would hide the most important distinction on the screen.
  */
 type Preview = {
   code: string;
+  currentVersion: { version: number; planVersionId: string; priceId: string };
+  proposedVersion: {
+    version: number;
+    customerTerms: {
+      planName: string;
+      seats: number | null;
+      priceCents: number;
+      currency: string;
+      billingInterval: 'MONTHLY' | 'YEARLY';
+    };
+  };
+  pinnedSubscribers: {
+    count: number;
+    organizations: Array<{
+      organizationId: string;
+      name: string;
+      subscriptionId: string;
+      planVersionId: string;
+      version: number;
+      priceId: string;
+      isCurrentVersion: boolean;
+      effectiveSource: string;
+      customerTerms: {
+        planName: string;
+        seats: number | null;
+        priceCents: number;
+        currency: string;
+        billingInterval: 'MONTHLY' | 'YEARLY';
+      };
+    }>;
+  };
+  overrideImpact: {
+    count: number;
+    organizations: Array<{
+      organizationId: string;
+      name: string;
+      changes: Array<{ field: string; before: unknown; after: unknown }>;
+    }>;
+  };
   affectedCount: number;
-  organizations: Array<{
-    organizationId: string;
-    name: string;
-    source: string;
-    changesNow: Array<{ field: string; before: unknown; after: unknown }>;
-    changesAtNextActivation: Array<{ field: string; before: unknown; after: unknown }>;
-  }>;
   channelImpact: { removed: string[]; holders: Array<{ organizationId: string; kind: string; status: string }>; effect: string } | null;
   note: string;
 };
@@ -108,6 +169,14 @@ function renderValue(value: unknown): string {
   if (value === undefined) return '—';
   if (typeof value === 'string') return value;
   return JSON.stringify(value);
+}
+
+function renderMoney(cents: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(cents / 100);
+  } catch {
+    return `${currency} ${(cents / 100).toFixed(2)}`;
+  }
 }
 
 const LIMIT_FIELDS = [
@@ -139,7 +208,12 @@ export default function PlatformEditions() {
   const [previewFor, setPreviewFor] = useState<string | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [historyVersions, setHistoryVersions] = useState<EditionVersion[]>([]);
+  const [historyPinnedCount, setHistoryPinnedCount] = useState(0);
+  const [historyOverrideCount, setHistoryOverrideCount] = useState(0);
   const [historyState, setHistoryState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const previewRequest = useRef(0);
+  const historyRequest = useRef(0);
 
   /**
    * What this edition used to be.
@@ -149,14 +223,24 @@ export default function PlatformEditions() {
    * log; this is the first thing that reads them back.
    */
   const loadHistory = async (code: string) => {
-    if (historyFor === code) { setHistoryFor(null); return; }
+    if (historyFor === code) {
+      historyRequest.current += 1;
+      setHistoryFor(null);
+      return;
+    }
+    const request = ++historyRequest.current;
     setHistoryFor(code);
     setHistoryState('loading');
     try {
       const { data } = await api.get(`/api/platform/editions/history?code=${encodeURIComponent(code)}`);
+      if (historyRequest.current !== request) return;
       setHistory(data.entries ?? []);
+      setHistoryVersions(data.versions ?? []);
+      setHistoryPinnedCount(Number(data.pinnedSubscriberCount ?? 0));
+      setHistoryOverrideCount(Number(data.overrideImpactCount ?? 0));
       setHistoryState('idle');
     } catch {
+      if (historyRequest.current !== request) return;
       setHistoryState('error');
     }
   };
@@ -172,17 +256,20 @@ export default function PlatformEditions() {
   const loadPreview = async (code: string) => {
     const payload = draft[code];
     if (!payload || !Object.keys(payload).length) return;
+    const request = ++previewRequest.current;
     setPreviewing(code);
     setPreviewFor(code);
     try {
       const { data } = await api.post(`/api/platform/editions/${code}/preview`, payload);
+      if (previewRequest.current !== request) return;
       setPreview(data);
     } catch (error: any) {
+      if (previewRequest.current !== request) return;
       toast.error(error?.response?.data?.error || 'Could not preview this change');
       setPreview(null);
       setPreviewFor(null);
     } finally {
-      setPreviewing(null);
+      if (previewRequest.current === request) setPreviewing(null);
     }
   };
 
@@ -211,8 +298,17 @@ export default function PlatformEditions() {
   };
 
   const load = useCallback(async () => {
+    previewRequest.current += 1;
+    historyRequest.current += 1;
     setLoading(true);
     setLoadError(false);
+    setPreview(null);
+    setPreviewFor(null);
+    setPreviewing(null);
+    setHistoryFor(null);
+    setHistory([]);
+    setHistoryVersions([]);
+    setHistoryState('idle');
     try {
       const { data } = await api.get('/api/platform/editions');
       setEditions(Array.isArray(data.editions) ? data.editions : []);
@@ -232,16 +328,26 @@ export default function PlatformEditions() {
     load();
   }, [load]);
 
-  const edit = (code: string, field: string, value: unknown) =>
+  const edit = (code: string, field: string, value: unknown) => {
     setDraft((prev) => ({ ...prev, [code]: { ...prev[code], [field]: value } }));
+    if (previewFor === code) {
+      previewRequest.current += 1;
+      setPreview(null);
+      setPreviewFor(null);
+      setPreviewing(null);
+    }
+  };
 
   const save = async (code: string) => {
     const payload = draft[code];
     if (!payload || !Object.keys(payload).length) return;
     setSaving(code);
     try {
-      await api.patch(`/api/platform/editions/${code}`, payload);
-      toast.success(`${code} updated. Live now — no deploy, no restart.`);
+      const { data } = await api.patch(`/api/platform/editions/${code}`, payload);
+      const publication = data.publication;
+      toast.success(publication
+        ? `${code} version ${publication.toVersion} published.`
+        : `${code} already matched that state.`);
       await load();
     } catch (error: any) {
       toast.error(error?.response?.data?.error || `Could not update ${code}`);
@@ -275,9 +381,9 @@ export default function PlatformEditions() {
 
       <h1 className="text-2xl font-semibold">Editions</h1>
       <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-        The catalogue every subscriber is sold from. Changes take effect without a
-        deploy and survive a restart. To grant one workspace an exception instead,
-        use the commercial overrides on that subscriber.
+        The catalogue every subscriber is sold from. Publishing creates a new
+        version for future sales; existing subscriptions keep the version they
+        bought, while live commercial overrides follow the current version.
       </p>
 
       <div className="mt-4 flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
@@ -334,8 +440,16 @@ export default function PlatformEditions() {
                 <div>
                   <h2 className="text-lg font-semibold">
                     {edition.name}{' '}
-                    <span className="font-mono text-sm text-muted-foreground">{edition.code}</span>
+                    <span className="font-mono text-sm text-muted-foreground">
+                      {edition.code} · v{edition.version}
+                    </span>
                   </h2>
+                  {edition.scheduledFrom ? (
+                    <span className="block text-sm text-muted-foreground">
+                      Version {edition.version + 1} is scheduled for{' '}
+                      <span dir="ltr">{new Date(edition.scheduledFrom).toLocaleString()}</span>.
+                    </span>
+                  ) : null}
                   {!edition.isActive && (
                     <span className="text-sm text-muted-foreground">
                       Inactive — hidden from pricing. Subscribers already on it keep working.
@@ -518,61 +632,83 @@ export default function PlatformEditions() {
                 </div>
 
                 {previewFor === edition.code && preview ? (
-                  <div className="rounded-md border border-border bg-muted/30 p-4 text-sm">
-                    <p className="font-medium">
-                      {preview.affectedCount === 0
-                        ? 'No current subscriber is on this edition.'
-                        : `${preview.affectedCount} subscriber${preview.affectedCount === 1 ? '' : 's'} on this edition.`}
-                    </p>
-
-                    {preview.organizations.map((org) => (
-                      <div key={org.organizationId} className="mt-3 border-t border-border pt-3">
-                        <p className="font-medium">{org.name}</p>
-
-                        {org.changesNow.length > 0 ? (
-                          <div className="mt-2">
-                            <p className="text-xs font-semibold uppercase tracking-wide">Takes effect immediately</p>
-                            <ul className="mt-1 space-y-0.5">
-                              {org.changesNow.map((c) => (
-                                <li key={c.field} className="flex flex-wrap gap-x-2">
-                                  <code dir="ltr">{c.field}</code>
-                                  <span dir="ltr">{renderValue(c.before)} → {renderValue(c.after)}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-
-                        {/*
-                          Visually separated, not merged. These are the metered
-                          limits: the edition changes, and this subscriber does
-                          not feel it until something activates their
-                          subscription again. Presenting them alongside the
-                          immediate set would tell an owner that a quota rise
-                          they just granted is already in force, which is the
-                          one thing this panel exists to prevent.
-                        */}
-                        {org.changesAtNextActivation.length > 0 ? (
-                          <div className="mt-3 rounded border border-dashed border-border p-2">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                              Not until their next activation
-                            </p>
-                            <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                              {org.changesAtNextActivation.map((c) => (
-                                <li key={c.field} className="flex flex-wrap gap-x-2">
-                                  <code dir="ltr">{c.field}</code>
-                                  <span dir="ltr">{renderValue(c.before)} → {renderValue(c.after)}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-
-                        {org.changesNow.length === 0 && org.changesAtNextActivation.length === 0 ? (
-                          <p className="mt-1 text-muted-foreground">Nothing changes for this subscriber.</p>
-                        ) : null}
+                  <div className="border-t border-border bg-muted/20 pt-4 text-sm">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">Current publication</p>
+                        <p className="mt-1 font-medium">Version {preview.currentVersion.version}</p>
                       </div>
-                    ))}
+                      <div>
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">Proposed publication</p>
+                        <p className="mt-1 font-medium">Version {preview.proposedVersion.version}</p>
+                        <p className="text-muted-foreground">
+                          {renderMoney(
+                            preview.proposedVersion.customerTerms.priceCents,
+                            preview.proposedVersion.customerTerms.currency,
+                          )}
+                          {' · '}
+                          {preview.proposedVersion.customerTerms.seats === null
+                            ? 'Unlimited seats'
+                            : `${preview.proposedVersion.customerTerms.seats} seats`}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 border-t border-border pt-3">
+                      <p className="font-medium">
+                        {preview.pinnedSubscribers.count} subscription
+                        {preview.pinnedSubscribers.count === 1 ? ' stays pinned' : 's stay pinned'}
+                      </p>
+                      {preview.pinnedSubscribers.count === 0 ? (
+                        <p className="mt-1 text-muted-foreground">No live subscription currently pins this edition.</p>
+                      ) : (
+                        <ul className="mt-2 space-y-2">
+                          {preview.pinnedSubscribers.organizations.map((org) => (
+                            <li key={org.subscriptionId} className="flex flex-wrap justify-between gap-x-4">
+                              <span>
+                                {org.name} · version {org.version}
+                                {org.effectiveSource === 'override' ? ' · currently overridden' : ''}
+                              </span>
+                              <span className="text-muted-foreground" dir="ltr">
+                                {renderMoney(org.customerTerms.priceCents, org.customerTerms.currency)}
+                                {' · '}
+                                {org.customerTerms.seats === null ? 'Unlimited seats' : `${org.customerTerms.seats} seats`}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    <div className="mt-4 border-t border-border pt-3">
+                      <p className="font-medium">
+                        {preview.overrideImpact.count} live plan override
+                        {preview.overrideImpact.count === 1 ? ' follows' : 's follow'} version {preview.proposedVersion.version}
+                      </p>
+                      {preview.overrideImpact.count === 0 ? (
+                        <p className="mt-1 text-muted-foreground">No organization currently follows this edition by override.</p>
+                      ) : (
+                        preview.overrideImpact.organizations.map((org) => (
+                          <div key={org.organizationId} className="mt-3">
+                            <p className="font-medium">{org.name}</p>
+                            {org.changes.length === 0 ? (
+                              <p className="text-muted-foreground">Its effective terms do not change for this patch.</p>
+                            ) : (
+                              <ul className="mt-1 space-y-0.5">
+                                {org.changes.map((change) => (
+                                  <li key={change.field} className="flex flex-wrap gap-x-2">
+                                    <code dir="ltr">{change.field}</code>
+                                    <span dir="ltr">
+                                      {renderValue(change.before)} → {renderValue(change.after)}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
 
                     {preview.channelImpact ? (
                       <div className="mt-3 border-t border-border pt-3">
@@ -607,41 +743,85 @@ export default function PlatformEditions() {
                         <p className="text-muted-foreground">Loading…</p>
                       ) : historyState === 'error' ? (
                         <p className="text-danger">Could not load this edition&apos;s history.</p>
-                      ) : history.length === 0 ? (
-                        <p className="text-muted-foreground">
-                          No recorded changes. History begins when an edition is first
-                          edited — it is not reconstructed from the current values.
-                        </p>
                       ) : (
-                        <ul className="space-y-3">
-                          {history.map((entry) => (
-                            <li key={entry.id} className="rounded-md border border-border p-3">
-                              <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-                                <span dir="ltr">{new Date(entry.at).toLocaleString()}</span>
-                                <span>·</span>
-                                <span>{entry.actorEmail ?? 'unknown'}</span>
-                                <span>·</span>
-                                <span>{entry.action.replace('platform.edition.', '')}</span>
-                              </div>
-                              {entry.changes.length === 0 ? (
-                                <p className="mt-2 text-muted-foreground">
-                                  No field values differed.
-                                </p>
-                              ) : (
-                                <ul className="mt-2 space-y-1">
-                                  {entry.changes.map((change) => (
-                                    <li key={change.field} className="flex flex-wrap gap-x-2">
-                                      <code dir="ltr">{change.field}</code>
-                                      <span className="text-muted-foreground" dir="ltr">
-                                        {renderValue(change.before)} → {renderValue(change.after)}
-                                      </span>
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
+                        <div className="space-y-4">
+                          <div>
+                            <p className="font-medium">
+                              Current version {historyVersions.find((version) => version.isCurrent)?.version ?? 'unknown'}
+                            </p>
+                            <p className="mt-1 text-muted-foreground">
+                              {historyPinnedCount} live subscription{historyPinnedCount === 1 ? '' : 's'} pinned across
+                              {' '}{historyVersions.length} version{historyVersions.length === 1 ? '' : 's'}.
+                              {' '}{historyOverrideCount} live override
+                              {historyOverrideCount === 1 ? ' follows' : 's follow'} the current version.
+                            </p>
+                            <ul className="mt-2 divide-y divide-border border-y border-border">
+                              {historyVersions.map((version) => (
+                                <li key={version.planVersionId} className="flex flex-wrap items-center justify-between gap-x-4 py-2">
+                                  <span className="font-medium">
+                                    Version {version.version}{version.isCurrent ? ' · current' : ''}
+                                  </span>
+                                  <span className="text-muted-foreground" dir="ltr">
+                                    {renderMoney(version.monthlyPriceCents, version.currency)}
+                                    {' · '}
+                                    {version.usersLimit === null ? 'Unlimited seats' : `${version.usersLimit} seats`}
+                                    {' · '}
+                                    {version.pinnedSubscriberCount} pinned
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+
+                          {history.length === 0 ? (
+                            <p className="text-muted-foreground">
+                              No recorded changes. History begins when an edition is first edited.
+                            </p>
+                          ) : (
+                            <ul className="divide-y divide-border border-y border-border">
+                              {history.map((entry) => (
+                                <li key={entry.id} className="py-3">
+                                  <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+                                    <span dir="ltr">{new Date(entry.at).toLocaleString()}</span>
+                                    <span>·</span>
+                                    <span>{entry.actorEmail ?? 'system'}</span>
+                                    <span>·</span>
+                                    <span>{entry.action.replace('platform.edition.', '')}</span>
+                                  </div>
+                                  {entry.publication ? (
+                                    <p className="mt-2 font-medium">
+                                      Published version {entry.publication.fromVersion} → {entry.publication.toVersion}.
+                                      {' '}{entry.publication.pinnedSubscriberCount} subscription
+                                      {entry.publication.pinnedSubscriberCount === 1 ? '' : 's'} stayed pinned;
+                                      {' '}{entry.publication.overrideImpactCount} override
+                                      {entry.publication.overrideImpactCount === 1 ? '' : 's'} followed the new current version.
+                                    </p>
+                                  ) : null}
+                                  {entry.schedule ? (
+                                    <p className="mt-2 font-medium">
+                                      Scheduled version {entry.schedule.currentVersion} → {entry.schedule.proposedVersion} for{' '}
+                                      <span dir="ltr">{new Date(entry.schedule.effectiveFrom).toLocaleString()}</span>.
+                                    </p>
+                                  ) : null}
+                                  {entry.changes.length === 0 ? (
+                                    <p className="mt-2 text-muted-foreground">No customer terms differed.</p>
+                                  ) : (
+                                    <ul className="mt-2 space-y-1">
+                                      {entry.changes.map((change) => (
+                                        <li key={change.field} className="flex flex-wrap gap-x-2">
+                                          <code dir="ltr">{change.field}</code>
+                                          <span className="text-muted-foreground" dir="ltr">
+                                            {renderValue(change.before)} → {renderValue(change.after)}
+                                          </span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                       )}
                     </div>
                   ) : null}

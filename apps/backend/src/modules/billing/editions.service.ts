@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, SubscriptionStatus } from '@prisma/client';
 import { prisma } from '../../prisma';
 import { runAsPlatform } from '../../lib/tenant-context';
 import logger from '../../lib/logger';
@@ -150,14 +150,6 @@ let lastLoadedAt: number | null = null;
 /** Throttles the stale-cache alarm so a sustained outage logs once a minute. */
 let lastStaleWarnAt = 0;
 /**
- * When each edition was last edited.
- *
- * Kept beside the catalogue because drift detection needs it: an
- * OrganizationConfig written before its edition was last edited diverges for a
- * reason that is not drift. See detectQuotaDrift in billing.service.ts.
- */
-let editedAt: Map<string, Date> | null = null;
-/**
  * Which editions are still offered.
  *
  * Separate from the cache because deactivating an edition must stop it being
@@ -265,6 +257,11 @@ const ACTIVE_PRICE_QUERY = {
   take: 1,
 };
 
+export const PLAN_VERSION_EDITION_INCLUDE = {
+  plan: { select: { code: true, name: true } },
+  prices: ACTIVE_PRICE_QUERY,
+} satisfies Prisma.PlanVersionInclude;
+
 const CATALOGUE_INCLUDE = {
   versions: {
     where: { isCurrent: true },
@@ -288,10 +285,7 @@ type CatalogueRow = Prisma.PlanGetPayload<{ include: typeof CATALOGUE_INCLUDE }>
  */
 export const SUBSCRIPTION_EDITION_SELECT = {
   planVersion: {
-    include: {
-      plan: { select: { code: true, name: true } },
-      prices: ACTIVE_PRICE_QUERY,
-    },
+    include: PLAN_VERSION_EDITION_INCLUDE,
   },
 } satisfies Prisma.SubscriptionSelect;
 
@@ -369,13 +363,16 @@ function flattenEdition(row: CatalogueRow) {
   if (!version) {
     throw new Error(`Edition ${row.code} has no current PlanVersion`);
   }
-  const { edition } = versionedEditionOf({
+  const versioned = versionedEditionOf({
     ...version,
     plan: { code: row.code, name: row.name },
   });
   return {
     id: row.id,
-    ...edition,
+    ...versioned.edition,
+    planVersionId: versioned.planVersionId,
+    version: versioned.version,
+    priceId: versioned.priceId,
     isActive: row.isActive,
     sortOrder: row.sortOrder,
     archivedAt: row.archivedAt,
@@ -383,9 +380,8 @@ function flattenEdition(row: CatalogueRow) {
     // edition, and applying it is what produces the version.
     scheduledChanges: row.scheduledChanges,
     scheduledFrom: row.scheduledFrom,
-    // What the drift detector means by "the edition was edited": a change to
-    // what it grants. Plan.updatedAt would also move on a rename or a
-    // reorder, neither of which can make a subscriber config diverge.
+    // Version timestamp retained in the flat owner-facing shape. Subscriber
+    // drift no longer consults it: the subscriber resolves this exact row.
     editedAt: version.updatedAt,
   };
 }
@@ -433,18 +429,39 @@ const VERSION_FIELDS = new Set([
  * rather than a value quietly written nowhere.
  */
 const IGNORED_EDITION_FIELDS = new Set([
-  'id', 'code', 'editedAt', 'createdAt', 'updatedAt', 'scheduledChanges', 'scheduledFrom',
+  'id', 'code', 'planVersionId', 'version', 'priceId',
+  'editedAt', 'createdAt', 'updatedAt', 'scheduledChanges', 'scheduledFrom',
 ]);
 
 /**
- * Apply a flat edition edit across plan, current version and active price.
+ * Keep the pricing model and Price internally consistent.
  *
- * Edits the current version in place rather than creating a new one. That is
- * deliberate for this change: C3 moves the columns and must not alter what
- * anybody observes, and versioning the *edit* is a behaviour change with its
- * own consequences for existing subscribers. It belongs to the plan-editor
- * work, where the preview and the migration story are already being built.
+ * Request paths call this for an early 400. The publication writer calls it
+ * again after locking and reading the version it will actually supersede, so
+ * a schedule or competing owner edit cannot make that earlier validation
+ * stale. NEGOTIATED normalizes to zero because its amount lives in the
+ * subscriber's contract rather than in the catalogue.
  */
+export function applyEditionPricingInvariant(
+  data: Record<string, unknown>,
+  current: { pricingModel: string; monthlyPriceCents: number } | null,
+): void {
+  const bad = (message: string) => Object.assign(new Error(message), { status: 400 });
+  const model = String(data.pricingModel ?? current?.pricingModel ?? 'FIXED');
+  const price = Number(data.monthlyPriceCents ?? current?.monthlyPriceCents ?? 0);
+
+  if (model === 'NEGOTIATED') {
+    data.monthlyPriceCents = 0;
+    return;
+  }
+  if (model === 'FREE' && price !== 0) {
+    throw bad('A FREE edition must be priced at 0. Use FIXED for an edition with a list price.');
+  }
+  if (model === 'FIXED' && price <= 0) {
+    throw bad('A FIXED edition must be priced above 0. Use FREE for an unsold edition, or NEGOTIATED for one priced by agreement.');
+  }
+}
+
 /** Split a flat edition field map across the three tables it now lands in. */
 function routeEditionFields(data: Record<string, unknown>) {
   const planData: Record<string, unknown> = {};
@@ -476,6 +493,7 @@ export async function createEditionRows(
   id: string,
   fields: Record<string, unknown>,
 ): Promise<void> {
+  applyEditionPricingInvariant(fields, null);
   const { planData, versionData, priceData } = routeEditionFields(fields);
   const plan = await tx.plan.create({
     data: { ...planData, id, code, name: String(planData.name ?? code) },
@@ -492,29 +510,189 @@ export async function createEditionRows(
   });
 }
 
-export async function applyEditionChanges(
-  tx: Pick<Prisma.TransactionClient, 'plan' | 'planVersion' | 'price'>,
+type EditionPublicationTransaction = Pick<
+  Prisma.TransactionClient,
+  '$queryRaw' | 'plan' | 'planVersion' | 'price'
+>;
+
+export type EditionPublication = {
+  before: ReturnType<typeof flattenEdition>;
+  after: ReturnType<typeof flattenEdition>;
+  fromVersion: number;
+  toVersion: number;
+};
+
+export type EditionPublicationImpact = {
+  pinnedSubscriberCount: number;
+  overrideImpactCount: number;
+};
+
+/**
+ * Serialize publications for one plan.
+ *
+ * The partial unique index guarantees at most one current version, but it
+ * cannot allocate the next version number. Locking the stable Plan row makes
+ * "read max + create N+1" one ordered operation when two owners publish at
+ * the same time. The lock lives inside the caller's transaction.
+ */
+async function lockEditionPlan(
+  tx: EditionPublicationTransaction,
+  code: string,
+): Promise<void> {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id" FROM "Plan" WHERE "code" = ${code} FOR UPDATE
+  `);
+  if (rows.length === 0) {
+    throw Object.assign(new Error(`Edition ${code} not found`), { status: 404 });
+  }
+}
+
+async function publishEditionChangesLocked(
+  tx: EditionPublicationTransaction,
   code: string,
   data: Record<string, unknown>,
-): Promise<void> {
-  const { planData, versionData, priceData } = routeEditionFields(data);
+): Promise<EditionPublication> {
+  const plan = await tx.plan.findUnique({ where: { code } });
+  if (!plan) {
+    throw Object.assign(new Error(`Edition ${code} not found`), { status: 404 });
+  }
 
+  const [currentVersion, latestVersion] = await Promise.all([
+    tx.planVersion.findFirst({
+      where: { planId: plan.id, isCurrent: true },
+      include: { prices: ACTIVE_PRICE_QUERY },
+    }),
+    tx.planVersion.findFirst({
+      where: { planId: plan.id },
+      orderBy: { version: 'desc' },
+      select: { version: true },
+    }),
+  ]);
+  if (!currentVersion || !latestVersion) {
+    throw new Error(`Edition ${code} has no current PlanVersion`);
+  }
+  const currentPrice = currentVersion.prices[0];
+  if (!currentPrice) {
+    throw new Error(`Edition ${code} version ${currentVersion.version} has no active Price`);
+  }
+
+  const before = flattenEdition({ ...plan, versions: [currentVersion] } as CatalogueRow);
+  if (data.pricingModel !== undefined || data.monthlyPriceCents !== undefined) {
+    applyEditionPricingInvariant(data, before);
+  }
+  const { planData, versionData, priceData } = routeEditionFields(data);
+  const toVersion = latestVersion.version + 1;
 
   if (Object.keys(planData).length) {
-    await tx.plan.update({ where: { code }, data: planData });
+    await tx.plan.update({ where: { id: plan.id }, data: planData });
   }
-  if (Object.keys(versionData).length) {
-    await tx.planVersion.updateMany({
-      where: { isCurrent: true, plan: { code } },
-      data: versionData,
-    });
-  }
-  if (Object.keys(priceData).length) {
-    await tx.price.updateMany({
-      where: { isActive: true, planVersion: { isCurrent: true, plan: { code } } },
-      data: priceData,
-    });
-  }
+
+  // The old row keeps every purchased term. Only its pointer status changes.
+  await tx.planVersion.update({
+    where: { id: currentVersion.id },
+    data: { isCurrent: false },
+  });
+
+  const nextVersion = await tx.planVersion.create({
+    data: {
+      monthlyActiveContactsLimit: currentVersion.monthlyActiveContactsLimit,
+      monthlyOutboundMessagesLimit: currentVersion.monthlyOutboundMessagesLimit,
+      monthlyCampaignSendsLimit: currentVersion.monthlyCampaignSendsLimit,
+      customFieldsLimit: currentVersion.customFieldsLimit,
+      usersLimit: currentVersion.usersLimit,
+      maxWorkspaces: currentVersion.maxWorkspaces,
+      workflowsLimit: currentVersion.workflowsLimit,
+      monthlyAiTokensInLimit: currentVersion.monthlyAiTokensInLimit,
+      monthlyAiTokensOutLimit: currentVersion.monthlyAiTokensOutLimit,
+      campaignRateMax: currentVersion.campaignRateMax,
+      campaignRateDurationMs: currentVersion.campaignRateDurationMs,
+      customDomain: currentVersion.customDomain,
+      whiteLabel: currentVersion.whiteLabel,
+      maskContactDetails: currentVersion.maskContactDetails,
+      autoProvisionGateway: currentVersion.autoProvisionGateway,
+      allowedChannels: currentVersion.allowedChannels,
+      ...versionData,
+      planId: plan.id,
+      version: toVersion,
+      isCurrent: true,
+    } as Prisma.PlanVersionUncheckedCreateInput,
+  });
+
+  await tx.price.create({
+    data: {
+      amountCents: currentPrice.amountCents,
+      currency: currentPrice.currency,
+      interval: currentPrice.interval,
+      pricingModel: currentPrice.pricingModel,
+      ...priceData,
+      planVersionId: nextVersion.id,
+      isActive: true,
+    } as Prisma.PriceUncheckedCreateInput,
+  });
+
+  const after = await readEdition(tx, code);
+  if (!after) throw new Error(`Edition ${code} disappeared during publication`);
+  return { before, after, fromVersion: currentVersion.version, toVersion };
+}
+
+/**
+ * Publish a flat edition edit as PlanVersion N+1 with its own Price.
+ *
+ * The caller supplies a transaction because publication is often one half of
+ * a larger atomic act: an immediate owner edit also writes history, while a
+ * due schedule also clears its claim. Both call this exact function after
+ * acquiring the same Plan-row lock.
+ */
+export async function applyEditionChanges(
+  tx: EditionPublicationTransaction,
+  code: string,
+  data: Record<string, unknown>,
+): Promise<EditionPublication> {
+  await lockEditionPlan(tx, code);
+  return publishEditionChangesLocked(tx, code, data);
+}
+
+/** Counts the live subscribers that stay pinned and overrides that move. */
+export async function readEditionPublicationImpact(
+  tx: Pick<Prisma.TransactionClient, 'organization'>,
+  code: string,
+  now = new Date(),
+): Promise<EditionPublicationImpact> {
+  const liveStatuses: SubscriptionStatus[] = ['ACTIVE', 'TRIALING'];
+  const [pinnedSubscriberCount, overrideImpactCount] = await Promise.all([
+    tx.organization.count({
+      where: {
+        subscriptions: {
+          some: {
+            status: { in: liveStatuses },
+            planVersion: { plan: { code } },
+          },
+        },
+      },
+    }),
+    tx.organization.count({
+      where: {
+        planOverride: code,
+        OR: [{ overrideExpiresAt: null }, { overrideExpiresAt: { gt: now } }],
+      },
+    }),
+  ]);
+  return { pinnedSubscriberCount, overrideImpactCount };
+}
+
+/** Snapshot stored with a publication so history keeps the impact at that time. */
+export function editionPublicationAuditState(
+  publication: EditionPublication,
+  impact: EditionPublicationImpact,
+) {
+  return {
+    ...publication.after,
+    publication: {
+      fromVersion: publication.fromVersion,
+      toVersion: publication.toVersion,
+      ...impact,
+    },
+  };
 }
 
 /** The flattened edition for one code, or null. */
@@ -538,18 +716,18 @@ const SCHEDULABLE_COLUMNS = new Set([
 ]);
 
 /**
- * Apply any schedule whose time has passed, writing the values into the row.
+ * Apply any schedule whose time has passed by publishing a new version.
  *
  * Runs at the top of every refresh rather than on a scheduler of its own: this
  * is already the thing that runs on a timer and already owns the catalogue, and
  * a second timer would be a second thing to notice had stopped.
  *
  * **Concurrency matters here.** Every process refreshes on its own interval, so
- * several can reach a due schedule at the same moment. The write is a
- * conditional updateMany still guarded on `scheduledFrom` being set: whichever
- * process gets there first clears it, and every other one matches zero rows and
- * does nothing. Only the winner writes the audit entry, so a dated change
- * leaves exactly one record however many processes are running.
+ * several can reach a due schedule at the same moment. Each locks the stable
+ * Plan row, then re-reads the schedule inside the same transaction. The first
+ * clears it and publishes; every waiter sees no due schedule and does nothing.
+ * Only the publisher writes the audit entry, so a dated change leaves exactly
+ * one version and one record however many processes are running.
  *
  * A dated change produces the same durable record as an immediate one - the
  * point of E6 is that the catalogue's history is readable, and a change that
@@ -558,55 +736,69 @@ const SCHEDULABLE_COLUMNS = new Set([
 async function applyDueSchedules(now: Date): Promise<number> {
   const due = await prisma.plan.findMany({
     where: { scheduledFrom: { not: null, lte: now } },
-    select: { code: true, scheduledChanges: true, scheduledFrom: true },
+    select: { code: true },
   });
   if (due.length === 0) return 0;
 
   let applied = 0;
   for (const row of due) {
-    const raw = (row.scheduledChanges ?? {}) as Record<string, unknown>;
-    const data: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(raw)) {
-      if (SCHEDULABLE_COLUMNS.has(key)) data[key] = value;
-    }
+    const published = await prisma.$transaction(async (tx) => {
+      /*
+        Lock, re-read and clear inside the publication transaction. The outer
+        query is only a candidate list: another process may apply, replace or
+        cancel the schedule before this one reaches the row.
+      */
+      await lockEditionPlan(tx, row.code);
+      const scheduled = await tx.plan.findUnique({
+        where: { code: row.code },
+        select: { scheduledChanges: true, scheduledFrom: true },
+      });
+      if (!scheduled?.scheduledFrom || scheduled.scheduledFrom > now) return null;
 
-    const before = await readEdition(prisma, row.code);
+      const raw = (scheduled.scheduledChanges ?? {}) as Record<string, unknown>;
+      const data: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(raw)) {
+        if (SCHEDULABLE_COLUMNS.has(key)) data[key] = value;
+      }
 
-    // The guard stays on the plan row and stays first: clearing the schedule
-    // is what makes the race safe, and it must not be possible for two
-    // refreshes to both see the schedule as due and both apply it.
-    const result = await prisma.plan.updateMany({
-      where: { code: row.code, scheduledFrom: { not: null, lte: now } },
-      data: { scheduledChanges: Prisma.DbNull, scheduledFrom: null },
+      await tx.plan.update({
+        where: { code: row.code },
+        data: { scheduledChanges: Prisma.DbNull, scheduledFrom: null },
+      });
+      const publication = await publishEditionChangesLocked(tx, row.code, data);
+      const impact = await readEditionPublicationImpact(tx, row.code, now);
+
+      /*
+        Through lib/audit.ts rather than touching platformAuditLog directly.
+        The writer is this transaction, so a failed audit rolls the publication
+        and schedule claim back together instead of leaving unrecorded terms.
+
+        No actor: nobody was present. The person who scheduled it is on the
+        platform.edition.scheduled row; naming them here would put a name
+        against an action they did not take.
+      */
+      await auditPlatformScope(`edition ${row.code} scheduled change applied`, {
+        action: 'platform.edition.scheduled_applied',
+        targetEditionCode: row.code,
+        beforeState: publication.before,
+        afterState: editionPublicationAuditState(publication, impact),
+      }, tx);
+
+      return {
+        publication,
+        scheduledFrom: scheduled.scheduledFrom,
+        fields: Object.keys(data),
+      };
     });
-    if (result.count === 0) continue;
-
-    // Only once this refresh has won the race does it write the values, which
-    // now land across three tables (D-19).
-    await applyEditionChanges(prisma, row.code, data);
+    if (!published) continue;
 
     applied += 1;
-    const after = await readEdition(prisma, row.code);
-    /*
-      Through lib/audit.ts rather than touching platformAuditLog directly. The
-      tenancy harness enforces that boundary: PlatformAuditLog is in the
-      extension's PLATFORM_MODELS, so under ORGANIZATION scope nothing is
-      injected and a tenant-scoped read would return every subscriber's
-      commercial history. billing/ is not platform code, and the check is right
-      to say so.
-
-      No actor: nobody was present. The person who *scheduled* it is on the
-      platform.edition.scheduled row; naming them here would put a name against
-      an action they did not take.
-    */
-    await auditPlatformScope(`edition ${row.code} scheduled change applied`, {
-      action: 'platform.edition.scheduled_applied',
-      targetEditionCode: row.code,
-      beforeState: before,
-      afterState: after,
-    });
     logger.info('Applied a scheduled edition change', {
-      code: row.code, scheduledFrom: row.scheduledFrom?.toISOString(), fields: Object.keys(data),
+      code: row.code,
+      scheduledFrom: published.scheduledFrom.toISOString(),
+      fromVersion: published.publication.fromVersion,
+      toVersion: published.publication.toVersion,
+      fields: published.fields,
     });
   }
   return applied;
@@ -670,7 +862,6 @@ export async function refreshEditions(): Promise<number> {
       return cache?.size ?? 0;
     }
     const next = new Map<string, PlanEntitlements>();
-    const nextEditedAt = new Map<string, Date>();
     const nextActive = new Set<string>();
     /*
       A row that cannot be loaded fails the whole refresh. It used to be
@@ -692,7 +883,6 @@ export async function refreshEditions(): Promise<number> {
     for (const row of rows) {
       const flat = flattenEdition(row);
       next.set(row.code, rowToEdition(flat));
-      nextEditedAt.set(row.code, flat.editedAt);
       // The published set, and only the published set. The findMany above is
       // deliberately unfiltered — an archived edition that never enters the
       // cache resolves to RESTRICTED_FLOOR, so its subscribers silently lose
@@ -700,7 +890,6 @@ export async function refreshEditions(): Promise<number> {
       if (row.isActive && !row.archivedAt) nextActive.add(row.code);
     }
     cache = next;
-    editedAt = nextEditedAt;
     activeCodes = nextActive;
     // Only a load that produced rows counts as fresh. The empty-catalogue
     // branch above deliberately does not reach here: a Plan table that has
@@ -874,20 +1063,9 @@ export function cheapestUpgradeGranting(
   return null;
 }
 
-/**
- * When this edition was last edited, or null if the catalogue has not loaded.
- *
- * Null is not "never edited" - it is "unknown" - and callers must treat it as
- * such rather than as a timestamp at the epoch, which would suppress nothing.
- */
-export function getEditionEditedAt(code: PlanCode): Date | null {
-  return editedAt?.get(code) ?? null;
-}
-
 /** Test seam: forget everything, so reads fall to the restricted floor. */
 export function resetEditionCacheForTests(): void {
   cache = null;
-  editedAt = null;
   activeCodes = null;
   lastLoadedAt = null;
   lastStaleWarnAt = 0;
