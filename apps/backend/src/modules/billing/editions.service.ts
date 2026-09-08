@@ -110,6 +110,7 @@ const RESTRICTED_FLOOR: PlanEntitlements = {
   code: 'FREE' as PlanCode,
   name: 'Unavailable',
   monthlyPriceCents: 0,
+  currency: 'USD',
   // Consistent with the rest of the floor: grants nothing. isPaidPlan reads the
   // published map by code rather than this object, so the value here decides
   // nothing — it is set only because the shape requires it.
@@ -180,6 +181,7 @@ export function rowToEdition(row: {
   code: string;
   name: string;
   monthlyPriceCents: number;
+  currency: string;
   pricingModel: PlanEntitlements['pricingModel'];
   billingInterval: PlanEntitlements['billingInterval'];
   monthlyActiveContactsLimit: number | null;
@@ -207,6 +209,7 @@ export function rowToEdition(row: {
     code,
     name: row.name,
     monthlyPriceCents: row.monthlyPriceCents,
+    currency: row.currency,
     pricingModel: row.pricingModel,
     billingInterval: row.billingInterval,
     monthlyActiveContactsLimit: row.monthlyActiveContactsLimit,
@@ -256,21 +259,100 @@ export function rowToEdition(row: {
  * did not have to touch the ninety-odd call sites downstream of `getEdition`
  * (D-19).
  */
+const ACTIVE_PRICE_QUERY = {
+  where: { isActive: true },
+  orderBy: [{ interval: 'asc' as const }, { currency: 'asc' as const }],
+  take: 1,
+};
+
 const CATALOGUE_INCLUDE = {
   versions: {
     where: { isCurrent: true },
     take: 1,
     include: {
-      prices: {
-        where: { isActive: true },
-        orderBy: [{ interval: 'asc' as const }, { currency: 'asc' as const }],
-        take: 1,
-      },
+      prices: ACTIVE_PRICE_QUERY,
     },
   },
 } satisfies Prisma.PlanInclude;
 
 type CatalogueRow = Prisma.PlanGetPayload<{ include: typeof CATALOGUE_INCLUDE }>;
+
+/**
+ * The complete commercial terms pinned by a subscription.
+ *
+ * This is deliberately separate from SUBSCRIPTION_PLAN_SELECT. Most callers
+ * need only the stable plan identity; entitlement resolution and historical
+ * commercial readers must carry the exact version and its price. Expanding
+ * the common select would put every version field into unrelated API payloads
+ * and make a correctness fix look like a public response change.
+ */
+export const SUBSCRIPTION_EDITION_SELECT = {
+  planVersion: {
+    include: {
+      plan: { select: { code: true, name: true } },
+      prices: ACTIVE_PRICE_QUERY,
+    },
+  },
+} satisfies Prisma.SubscriptionSelect;
+
+export type SubscriptionWithEdition = Prisma.SubscriptionGetPayload<{
+  select: typeof SUBSCRIPTION_EDITION_SELECT;
+}>;
+
+export type VersionedEdition = {
+  edition: PlanEntitlements;
+  planVersionId: string;
+  version: number;
+  priceId: string;
+};
+
+/** Shape one exact PlanVersion and its active Price into resolved terms. */
+export function versionedEditionOf(
+  version: SubscriptionWithEdition['planVersion'],
+): VersionedEdition {
+  const price = version.prices[0];
+  if (!price) {
+    throw new Error(
+      `Edition ${version.plan.code} version ${version.version} has no active Price`,
+    );
+  }
+  return {
+    edition: rowToEdition({
+      code: version.plan.code,
+      name: version.plan.name,
+      monthlyPriceCents: price.amountCents,
+      currency: price.currency,
+      pricingModel: price.pricingModel,
+      billingInterval: price.interval,
+      monthlyActiveContactsLimit: version.monthlyActiveContactsLimit,
+      monthlyOutboundMessagesLimit: version.monthlyOutboundMessagesLimit,
+      monthlyCampaignSendsLimit: version.monthlyCampaignSendsLimit,
+      customFieldsLimit: version.customFieldsLimit,
+      usersLimit: version.usersLimit,
+      maxWorkspaces: version.maxWorkspaces,
+      workflowsLimit: version.workflowsLimit,
+      monthlyAiTokensInLimit: version.monthlyAiTokensInLimit,
+      monthlyAiTokensOutLimit: version.monthlyAiTokensOutLimit,
+      campaignRateMax: version.campaignRateMax,
+      campaignRateDurationMs: version.campaignRateDurationMs,
+      autoProvisionGateway: version.autoProvisionGateway,
+      customDomain: version.customDomain,
+      whiteLabel: version.whiteLabel,
+      maskContactDetails: version.maskContactDetails,
+      allowedChannels: version.allowedChannels,
+    }),
+    planVersionId: version.id,
+    version: version.version,
+    priceId: price.id,
+  };
+}
+
+/** The exact edition terms referenced by a subscription row. */
+export function subscriptionEditionOf(
+  subscription: SubscriptionWithEdition | null | undefined,
+): VersionedEdition | null {
+  return subscription ? versionedEditionOf(subscription.planVersion) : null;
+}
 
 /**
  * Flatten a plan and its current version into one edition row.
@@ -287,34 +369,13 @@ function flattenEdition(row: CatalogueRow) {
   if (!version) {
     throw new Error(`Edition ${row.code} has no current PlanVersion`);
   }
-  const price = version.prices[0];
-  if (!price) {
-    throw new Error(`Edition ${row.code} version ${version.version} has no active Price`);
-  }
+  const { edition } = versionedEditionOf({
+    ...version,
+    plan: { code: row.code, name: row.name },
+  });
   return {
     id: row.id,
-    code: row.code,
-    name: row.name,
-    monthlyPriceCents: price.amountCents,
-    pricingModel: price.pricingModel,
-    billingInterval: price.interval,
-    currency: price.currency,
-    monthlyActiveContactsLimit: version.monthlyActiveContactsLimit,
-    monthlyOutboundMessagesLimit: version.monthlyOutboundMessagesLimit,
-    monthlyCampaignSendsLimit: version.monthlyCampaignSendsLimit,
-    customFieldsLimit: version.customFieldsLimit,
-    usersLimit: version.usersLimit,
-    maxWorkspaces: version.maxWorkspaces,
-    workflowsLimit: version.workflowsLimit,
-    monthlyAiTokensInLimit: version.monthlyAiTokensInLimit,
-    monthlyAiTokensOutLimit: version.monthlyAiTokensOutLimit,
-    campaignRateMax: version.campaignRateMax,
-    campaignRateDurationMs: version.campaignRateDurationMs,
-    autoProvisionGateway: version.autoProvisionGateway,
-    customDomain: version.customDomain,
-    whiteLabel: version.whiteLabel,
-    maskContactDetails: version.maskContactDetails,
-    allowedChannels: version.allowedChannels,
+    ...edition,
     isActive: row.isActive,
     sortOrder: row.sortOrder,
     archivedAt: row.archivedAt,

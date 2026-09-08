@@ -76,7 +76,9 @@ function snapshot(code, overrides = {}) {
   return {
     plan: code,
     planName: edition.name,
+    edition: overrides.edition || edition,
     planOfRecord: code,
+    editionOfRecord: overrides.editionOfRecord || edition,
     source: 'subscription',
     limits: {
       messages_inbound: null,
@@ -189,27 +191,27 @@ async function main() {
     for (const code of Object.keys(PLAN_ENTITLEMENTS)) {
       const real = snapshot(code);
       // The shadow: identical entitlements, different code and name.
-      const shadow = { ...snapshot(code), plan: `SHADOW_${code}`, planName: `Shadow ${code}` };
-      // getEdition must answer for the shadow too, or the comparison would be
-      // testing the lookup rather than the decision.
-      const originalGetEdition = editions.getEdition;
-      editions.getEdition = (asked) =>
-        String(asked).startsWith('SHADOW_')
-          ? originalGetEdition(String(asked).slice('SHADOW_'.length))
-          : originalGetEdition(asked);
-      try {
-        for (const capability of ALL_CAPABILITIES) {
-          const a = decide(real, capability);
-          const b = decide(shadow, capability);
-          if (a.granted !== b.granted || String(a.limit) !== String(b.limit)) {
-            divergences.push(
-              `${code}/${capability}: real granted=${a.granted} limit=${a.limit}, `
-              + `shadow granted=${b.granted} limit=${b.limit}`,
-            );
-          }
+      const shadowEdition = {
+        ...real.edition,
+        code: `SHADOW_${code}`,
+        name: `Shadow ${code}`,
+      };
+      const shadow = {
+        ...real,
+        plan: shadowEdition.code,
+        planName: shadowEdition.name,
+        edition: shadowEdition,
+        editionOfRecord: shadowEdition,
+      };
+      for (const capability of ALL_CAPABILITIES) {
+        const a = decide(real, capability);
+        const b = decide(shadow, capability);
+        if (a.granted !== b.granted || String(a.limit) !== String(b.limit)) {
+          divergences.push(
+            `${code}/${capability}: real granted=${a.granted} limit=${a.limit}, `
+            + `shadow granted=${b.granted} limit=${b.limit}`,
+          );
         }
-      } finally {
-        editions.getEdition = originalGetEdition;
       }
     }
     assert.deepEqual(divergences, [],

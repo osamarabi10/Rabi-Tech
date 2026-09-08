@@ -8,7 +8,6 @@ import logger from '../lib/logger';
 import { quietWindow, resolveContactTimezone } from '../utils/contact-timezone';
 import { isCapabilityNotIncludedError, isQuotaExceededError } from '../modules/usage/entitlements';
 import { resolveEntitlements } from '../modules/billing/entitlements.resolver';
-import { getEdition } from '../modules/billing/editions.service';
 import {
   coordinationKey,
   waitForRedisRateLimit,
@@ -130,7 +129,7 @@ export async function processCampaignJob(data: any) {
       }
 
       const effective = await resolveEntitlements(organizationId);
-      const planRate = getEdition(effective.plan);
+      const planRate = effective.edition;
       const hardMax = positiveInteger(process.env.CAMPAIGN_RATE_HARD_MAX);
       const minimumDuration = positiveInteger(process.env.CAMPAIGN_RATE_MIN_DURATION_MS);
       await waitForRedisRateLimit(

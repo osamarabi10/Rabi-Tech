@@ -113,6 +113,7 @@ export async function ensurePlans(): Promise<void> {
         // ahead of Free on the pricing page.
         sortOrder: Object.keys(PLAN_ENTITLEMENTS).indexOf(plan.code),
         monthlyPriceCents: plan.monthlyPriceCents,
+        currency: plan.currency,
         pricingModel: plan.pricingModel,
         billingInterval: plan.billingInterval,
         monthlyActiveContactsLimit: plan.monthlyActiveContactsLimit,
@@ -769,12 +770,6 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
     const organization = await prisma.organization.findUnique({
       where: { id: organizationId },
       include: {
-        subscriptions: {
-          where: { status: { in: ['ACTIVE', 'TRIALING'] } },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-          include: { planVersion: { select: { version: true, plan: { select: { code: true } } } } },
-        },
         channels: { where: { kind: 'OPENWA' }, take: 1 },
       },
     });
@@ -796,14 +791,15 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
       emailVerifiedAt all still work, and an unverified organization is told so
       by a banner rather than being silently held back.
     */
-    const active = organization.subscriptions[0];
-    const planCode = normalizePlanCode(planCodeOf(active) || 'FREE');
-    const edition = getEdition(planCode);
+    const effective = await resolveEntitlements(organizationId);
+    const planCode = effective.plan;
+    const edition = effective.edition;
 
     /*
       Two questions, not one, and they are genuinely different.
 
-      `isPaidPlan` is the pricing rule: FREE provisions nothing (D-7).
+      The resolved Price's `pricingModel` is the pricing rule: FREE provisions
+      nothing (D-7).
       `autoProvisionGateway` is the edition's own switch, editable from the
       console — an owner may sell a paid edition that includes no gateway.
 
@@ -813,12 +809,13 @@ export async function maybeProvisionGateway(organizationId: string, reason: stri
       reader entirely would have left a console switch that granted nothing,
       which is the defect this repository keeps finding.
     */
-    if (!isPaidPlan(planCode) && !explicitAdminRequest) {
+    if (edition.pricingModel === 'FREE' && !explicitAdminRequest) {
       return {
         queued: false,
         code: 'PLAN_UPGRADE_REQUIRED',
         planName: edition.name,
-        requiredPlan: cheapestUpgradeGranting(planCode, (candidate: PlanEntitlements) => isPaidPlan(candidate.code) && candidate.autoProvisionGateway),
+        requiredPlan: cheapestUpgradeGranting(planCode, (candidate: PlanEntitlements) =>
+          candidate.pricingModel !== 'FREE' && candidate.autoProvisionGateway),
       };
     }
     if (!edition.autoProvisionGateway && !explicitAdminRequest) {
@@ -1591,34 +1588,11 @@ export async function getBillingSummary(organizationId: string) {
   // The effective entitlement, after any platform-owner override. The tenant is
   // shown what is actually enforced, not what their nominal tier would grant.
   const effective = await resolveEntitlements(organizationId);
-  const plan = getEdition(effective.plan);
+  const plan = effective.edition;
   const config = await runAsPlatform('billing-summary:config', () =>
     prisma.organizationConfig.findUnique({ where: { organizationId } }));
 
   const seatLimit = effective.seatLimit;
-
-  /**
-   * The currency of the plan in force.
-   *
-   * Read from the Plan rows rather than the entitlements, because entitlements
-   * describe allowances and carry no price. Matched through normalizePlanCode
-   * for the same reason listPlans() does: the stored code and the normalized
-   * one are not guaranteed to be written identically, and matching on the raw
-   * string would silently find nothing.
-   *
-   * Deliberately not filtered by archivedAt, for the same reason
-   * sellableCurrencies() is not: this reports the currency of the plan already
-   * in force, so it is a resolution question. A subscriber whose edition was
-   * archived must still be shown what they are billed in, not null.
-   */
-  const planRows = await runAsPlatform('billing-summary:plan-currency', () =>
-    prisma.price.findMany({
-      where: { isActive: true, planVersion: { isCurrent: true, plan: { isActive: true } } },
-      select: { currency: true, planVersion: { select: { plan: { select: { code: true } } } } },
-    }));
-  const planCurrency =
-    planRows.find((row) => normalizePlanCode(row.planVersion.plan.code) === effective.plan)?.currency
-    ?? null;
 
   return {
     plan: {
@@ -1737,11 +1711,11 @@ export async function getBillingSummary(organizationId: string) {
        * wrong by the exchange rate and looks entirely correct. The server
        * knows the answer; it just was not saying it.
        */
-      currency: planCurrency,
+      currency: plan.currency,
     },
     /** Non-empty means enforced quotas no longer match the named plan. */
     quotaDrift: detectQuotaDrift(
-      getEdition(effective.planOfRecord),
+      effective.editionOfRecord,
       config,
       effective.limits,
       effective.isOverridden,

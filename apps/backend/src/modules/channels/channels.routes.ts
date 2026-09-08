@@ -15,7 +15,7 @@ import {
 } from './meta.service';
 import { maybeProvisionGateway } from '../billing/billing.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
-import { cheapestUpgradeGranting, getEdition } from '../billing/editions.service';
+import { cheapestUpgradeGranting } from '../billing/editions.service';
 
 /**
  * Whether this organization's edition may connect a channel kind.
@@ -29,22 +29,20 @@ import { cheapestUpgradeGranting, getEdition } from '../billing/editions.service
  * name what to buy rather than only what is forbidden. Read from the catalogue
  * by ladder position, never hardcoded.
  *
- * The two catalogue reads below are deliberately different, and archiving is
- * what makes the difference matter. getEdition() resolves what this organization
- * already has and must see archived editions, or a subscriber on a withdrawn
- * plan loses a channel they are still paying for. getEditions() names what they
- * could buy and must not, so no archivedAt test belongs here - the published
- * set already excludes them. If every granting edition has been archived,
- * requiredPlan falls to null and the refusal names no upgrade at all, which is
- * right: better to say only what is forbidden than to advertise something
- * nobody can purchase.
+ * The two edition reads below are deliberately different, and archiving is
+ * what makes the difference matter. The resolved snapshot says what this
+ * organization already bought and keeps archived versions valid.
+ * cheapestUpgradeGranting names what they could buy and sees only the published
+ * ladder. If every granting edition has been archived, requiredPlan falls to
+ * null and the refusal names no upgrade at all, which is right: better to say
+ * only what is forbidden than to advertise something nobody can purchase.
  */
 async function channelRefusal(
   organizationId: string,
   kind: ChannelKind,
 ): Promise<{ planName: string; requiredPlan: string | null } | null> {
   const effective = await resolveEntitlements(organizationId);
-  if (getEdition(effective.plan).allowedChannels.includes(kind)) return null;
+  if (effective.edition.allowedChannels.includes(kind)) return null;
   /*
     Only an edition that is actually an upgrade. Channels are granted downward
     since the narrowing - OPENWA is allowed by FREE and STANDARD only - so

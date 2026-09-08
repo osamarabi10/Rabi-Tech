@@ -1,12 +1,16 @@
 import crypto from 'crypto';
-import { getEdition } from '../billing/editions.service';
+import {
+  getEdition,
+  SUBSCRIPTION_EDITION_SELECT,
+  subscriptionEditionOf,
+  type SubscriptionWithEdition,
+} from '../billing/editions.service';
 import { assertCanFrom } from '../billing/capabilities';
 import type { EffectiveEntitlements } from '../billing/entitlements.resolver';
 import { normalizePlanCode, PlanEntitlements } from '../billing/plans';
 import fs from 'fs/promises';
 import path from 'path';
 import { OrganizationBranding, Prisma } from '@prisma/client';
-import { SUBSCRIPTION_PLAN_SELECT, planCodeOf, type SubscriptionWithPlan } from '../billing/subscription-plan';
 import { prisma } from '../../prisma';
 import { runAsPlatform } from '../../lib/tenant-context';
 import { signingSecret } from '../../lib/signing-secret';
@@ -72,14 +76,14 @@ const ASSET_ROUTE_PREFIX = '/api/branding/assets';
 const ORGANIZATION_PLAN_SELECT = {
   subscriptions: {
     where: { status: { in: ['ACTIVE', 'TRIALING'] } },
-    select: SUBSCRIPTION_PLAN_SELECT,
+    select: SUBSCRIPTION_EDITION_SELECT,
     orderBy: { createdAt: 'desc' },
     take: 1,
   },
 } satisfies Prisma.OrganizationSelect;
 
 type BrandingWithOrg = OrganizationBranding & {
-  organization?: { subscriptions: SubscriptionWithPlan[] } | null;
+  organization?: { subscriptions: SubscriptionWithEdition[] } | null;
 };
 
 /**
@@ -111,8 +115,10 @@ export function canCustomizeFooter(tier: string | null | undefined): boolean {
 
 export function publicBranding(row?: BrandingWithOrg | null): PublicBranding {
   if (!row) return DEFAULT_BRANDING;
-  const tier = String(planCodeOf(row.organization?.subscriptions?.[0]) || 'FREE').toUpperCase();
-  const footerEditable = canCustomizeFooter(tier);
+  const edition = subscriptionEditionOf(row.organization?.subscriptions?.[0])?.edition
+    ?? editionFor('FREE');
+  const tier = edition.code;
+  const footerEditable = edition.whiteLabel;
   return {
     productName: row.productName,
     logoUrl: row.logoUrl,

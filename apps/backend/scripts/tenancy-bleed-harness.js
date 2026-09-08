@@ -4646,6 +4646,7 @@ async function databaseAudits() {
         'monthlyAiTokensOutLimit',
         'campaignRateMax',
         'campaignRateDurationMs',
+        'currency',
         'autoProvisionGateway',
         'customDomain',
         'whiteLabel',
@@ -4693,12 +4694,15 @@ async function databaseAudits() {
         the compiler could not see it; the refusal came back as
         "باقة undefined" and the check went red, which is how the gap was found.
 
-        Only feature capabilities are asked here, and those are decided from a
-        column on the edition named by `plan`, so this two-field fixture is the
-        whole snapshot the decision reads. capabilities.ts now refuses loudly if
-        it is ever handed less than this.
+        Only feature capabilities are asked here, and those are decided from
+        the edition captured by the resolver. This fixture therefore carries
+        identity plus that edition snapshot; capabilities.ts refuses loudly if
+        it is ever handed only a plan code.
       */
-      const resolvedFor = (code) => ({ plan: code, planName: getEdition(code).name });
+      const resolvedFor = (code) => {
+        const edition = getEdition(code);
+        return { plan: code, planName: edition.name, edition };
+      };
 
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
 
@@ -4994,6 +4998,214 @@ async function databaseAudits() {
       await setTierGoverned(orgA, 'FREE');
       await setTierGoverned(orgB, 'FREE');
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
+    });
+
+    await check('billing: subscriptions stay on their exact version while plan overrides use current', async () => {
+      const {
+        refreshEditions,
+        getEdition,
+        SUBSCRIPTION_EDITION_SELECT,
+        subscriptionEditionOf,
+      } = require('../src/modules/billing/editions.service');
+      const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
+      const { decide, limitOf } = require('../src/modules/billing/capabilities');
+
+      await setTierGoverned(orgA, 'STANDARD');
+      await runAsPlatform('bleed-version-pin:refresh-before', () => refreshEditions());
+
+      const subscription = await raw.subscription.findFirstOrThrow({
+        where: { organizationId: orgA.organizationId, status: 'ACTIVE' },
+        include: {
+          planVersion: {
+            include: {
+              plan: true,
+              prices: { where: { isActive: true }, take: 1 },
+            },
+          },
+        },
+      });
+      const original = subscription.planVersion;
+      const originalPrice = original.prices[0];
+      assert.ok(originalPrice, 'fixture precondition: the bought version has an active price');
+
+      const before = await runAsPlatform('bleed-version-pin:resolve-before', () =>
+        resolveEntitlements(orgA.organizationId));
+      const targetSeats = (original.usersLimit ?? 0) + 15;
+      const targetPriceCents = originalPrice.amountCents + 10_445;
+      const latestVersion = await raw.planVersion.findFirstOrThrow({
+        where: { planId: original.planId },
+        orderBy: { version: 'desc' },
+        select: { version: true },
+      });
+      const nextVersionNumber = latestVersion.version + 1;
+      let nextVersionId = null;
+      const ownerIdentity = await raw.identity.create({
+        data: {
+          email: `owner-version-pin-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const ownerToken = mintPlatformToken(ownerIdentity);
+      const readMrr = async () => {
+        const response = await fetch(`${baseUrl}/api/platform/billing/summary`, {
+          headers: { Authorization: `Bearer ${ownerToken}` },
+        });
+        assert.equal(response.status, 200, 'the platform billing summary must answer');
+        return (await response.json()).mrrCents;
+      };
+      const mrrBefore = await readMrr();
+
+      try {
+        nextVersionId = await raw.$transaction(async (tx) => {
+          await tx.planVersion.update({
+            where: { id: original.id },
+            data: { isCurrent: false },
+          });
+          const next = await tx.planVersion.create({
+            data: {
+              planId: original.planId,
+              version: nextVersionNumber,
+              isCurrent: true,
+              monthlyActiveContactsLimit: (original.monthlyActiveContactsLimit ?? 0) + 111,
+              monthlyOutboundMessagesLimit: (original.monthlyOutboundMessagesLimit ?? 0) + 222,
+              monthlyCampaignSendsLimit: (original.monthlyCampaignSendsLimit ?? 0) + 333,
+              customFieldsLimit: (original.customFieldsLimit ?? 0) + 37,
+              usersLimit: targetSeats,
+              maxWorkspaces: (original.maxWorkspaces ?? 0) + 4,
+              workflowsLimit: (original.workflowsLimit ?? 0) + 23,
+              monthlyAiTokensInLimit: BigInt(444),
+              monthlyAiTokensOutLimit: BigInt(555),
+              campaignRateMax: (original.campaignRateMax ?? 1) + 6,
+              campaignRateDurationMs: (original.campaignRateDurationMs ?? 1_500) + 700,
+              customDomain: !original.customDomain,
+              whiteLabel: !original.whiteLabel,
+              maskContactDetails: !original.maskContactDetails,
+              autoProvisionGateway: !original.autoProvisionGateway,
+              allowedChannels: ['WHATSAPP_CLOUD'],
+              prices: {
+                create: {
+                  amountCents: targetPriceCents,
+                  currency: originalPrice.currency,
+                  interval: originalPrice.interval,
+                  pricingModel: originalPrice.pricingModel,
+                  isActive: true,
+                },
+              },
+            },
+          });
+          return next.id;
+        });
+
+        await runAsPlatform('bleed-version-pin:refresh-after', () => refreshEditions());
+        assert.equal(
+          await readMrr(),
+          mrrBefore,
+          'publishing v2 must not reprice the existing subscriber in MRR',
+        );
+
+        const selectedSubscription = await raw.subscription.findUniqueOrThrow({
+          where: { id: subscription.id },
+          select: SUBSCRIPTION_EDITION_SELECT,
+        });
+        const selectedTerms = subscriptionEditionOf(selectedSubscription);
+        assert.equal(
+          selectedTerms.planVersionId,
+          original.id,
+          'the subscription pointer itself must remain on the version that was bought',
+        );
+        assert.equal(
+          selectedTerms.priceId,
+          originalPrice.id,
+          'the resolved Price must belong to the exact PlanVersion that was bought',
+        );
+
+        const pinned = await runAsPlatform('bleed-version-pin:resolve-pinned', () =>
+          resolveEntitlements(orgA.organizationId));
+        const beforeCustomerTerms = `${before.seatLimit} seats / ${before.listPriceCents} cents monthly`;
+        const pinnedCustomerTerms = `${pinned.seatLimit} seats / ${pinned.listPriceCents} cents monthly`;
+        assert.equal(
+          pinnedCustomerTerms,
+          beforeCustomerTerms,
+          `existing subscriber moved from ${beforeCustomerTerms} to ${pinnedCustomerTerms} after v2 was published`,
+        );
+        assert.deepEqual(
+          pinned.edition,
+          before.edition,
+          'every resolved grant and price must come from the pinned version, not only seats',
+        );
+        assert.equal(
+          decide(pinned, 'whiteLabel').granted,
+          before.edition.whiteLabel,
+          'feature decisions must use the pinned version snapshot',
+        );
+        assert.equal(
+          limitOf(pinned, 'customFields'),
+          before.edition.customFieldsLimit,
+          'counted decisions must use the pinned version snapshot',
+        );
+
+        const preview = await runAsPlatform('bleed-version-pin:resolve-preview', () =>
+          resolveEntitlements(orgA.organizationId, new Date(), {
+            editionOverride: getEdition('STANDARD'),
+          }));
+        assert.deepEqual(
+          preview.edition,
+          before.edition,
+          'an edit preview must not move a subscriber whose pinned version is older',
+        );
+
+        await raw.organization.update({
+          where: { id: orgA.organizationId },
+          data: {
+            planOverride: 'STANDARD',
+            overrideReason: 'version-pin control',
+            overrideExpiresAt: new Date('2999-01-01T00:00:00.000Z'),
+          },
+        });
+        const overridden = await runAsPlatform('bleed-version-pin:resolve-override', () =>
+          resolveEntitlements(orgA.organizationId));
+        assert.equal(overridden.source, 'override');
+        assert.equal(overridden.seatLimit, targetSeats, 'a plan override must use current-version seats');
+        assert.equal(
+          overridden.listPriceCents,
+          targetPriceCents,
+          'a plan override must use the current-version price',
+        );
+        assert.deepEqual(
+          overridden.edition,
+          getEdition('STANDARD'),
+          'a plan override must resolve the complete current edition',
+        );
+      } finally {
+        await raw.organization.update({
+          where: { id: orgA.organizationId },
+          data: {
+            planOverride: null,
+            overrideReason: null,
+            overrideExpiresAt: null,
+          },
+        });
+        await raw.$transaction(async (tx) => {
+          if (nextVersionId) {
+            const next = await tx.planVersion.findUnique({ where: { id: nextVersionId } });
+            if (next) {
+              await tx.planVersion.update({
+                where: { id: nextVersionId },
+                data: { isCurrent: false },
+              });
+              await tx.planVersion.delete({ where: { id: nextVersionId } });
+            }
+          }
+          await tx.planVersion.update({
+            where: { id: original.id },
+            data: { isCurrent: true },
+          });
+        });
+        await setTierGoverned(orgA, 'FREE');
+        await raw.identity.delete({ where: { id: ownerIdentity.id } });
+        await runAsPlatform('bleed-version-pin:restore', () => refreshEditions());
+      }
     });
 
     await check('billing: deactivating an edition retires it without orphaning its subscribers', async () => {

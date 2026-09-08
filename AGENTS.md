@@ -474,6 +474,17 @@ Design rules do not catch the failures this repository actually has. These do.
   choose the rows that disagree, and prefer the expensive edition over the
   free one: it is the one whose numbers are furthest from everything else.
 
+- **A version pin proof needs two versions whose customer terms differ.** The
+  C3 entitlement snapshot was byte-identical across the PlanVersion migration,
+  but every plan had only one version. A resolver that ignored the subscription
+  pointer and looked up the current version therefore returned the same seats,
+  price and grants as a correct resolver. The snapshot was green because the
+  wrong source and the right source were the same row.
+
+  Publish a second version with distinguishable terms while an existing
+  subscription remains pinned to the first, then resolve it again. A proof over
+  a single version cannot see whether version identity is honoured.
+
 - **A gate sweep must be able to prove it completed.** Each gate writes its
   summary to a named file; a manifest check then asserts every expected file
   exists, is newer than the run started, and is not empty. Missing fails,

@@ -69,6 +69,7 @@ export type PlanEntitlements = {
   code: PlanCode;
   name: string;
   monthlyPriceCents: number;
+  currency: string;
   /** Read this before the price; see the PricingModel enum in schema.prisma. */
   pricingModel: PricingModel;
   /**
@@ -132,6 +133,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'FREE',
     name: 'Free',
     monthlyPriceCents: 0,
+    currency: 'USD',
     pricingModel: 'FREE',
     billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: 100,
@@ -178,6 +180,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'STANDARD',
     name: 'Standard',
     monthlyPriceCents: 1900,
+    currency: 'USD',
     pricingModel: 'FIXED',
     billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: 500,
@@ -208,6 +211,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'GROWTH',
     name: 'Growth',
     monthlyPriceCents: 4900,
+    currency: 'USD',
     pricingModel: 'FIXED',
     billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: 2500,
@@ -231,6 +235,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'BUSINESS',
     name: 'Business',
     monthlyPriceCents: 19900,
+    currency: 'USD',
     pricingModel: 'FIXED',
     billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: 10000,
@@ -254,6 +259,7 @@ export const PLAN_ENTITLEMENTS: Record<PlanCode, PlanEntitlements> = {
     code: 'ENTERPRISE',
     name: 'Enterprise',
     monthlyPriceCents: 0,
+    currency: 'USD',
     pricingModel: 'NEGOTIATED',
     billingInterval: 'MONTHLY',
     monthlyActiveContactsLimit: null,

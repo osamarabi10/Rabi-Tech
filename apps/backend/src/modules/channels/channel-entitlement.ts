@@ -1,5 +1,5 @@
 import { prisma } from '../../prisma';
-import { cheapestUpgradeGranting, getEdition } from '../billing/editions.service';
+import { cheapestUpgradeGranting } from '../billing/editions.service';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
 import { ChannelKind } from './channel.types';
 
@@ -65,7 +65,7 @@ export async function channelGrantRefusal(
   if (await alreadyEstablished(organizationId, kind)) return null;
 
   const effective = await resolveEntitlements(organizationId);
-  if (getEdition(effective.plan).allowedChannels.includes(kind)) return null;
+  if (effective.edition.allowedChannels.includes(kind)) return null;
 
   return {
     planName: effective.planName,

@@ -25,6 +25,8 @@ import {
   readEdition,
   applyEditionChanges,
   createEditionRows,
+  SUBSCRIPTION_EDITION_SELECT,
+  subscriptionEditionOf,
 } from '../billing/editions.service';
 import { SUBSCRIPTION_PLAN_SELECT, planCodeOf } from '../billing/subscription-plan';
 import { resolveEntitlements } from '../billing/entitlements.resolver';
@@ -454,10 +456,10 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
      * is a lie.
      */
     const [paid, trialing] = await Promise.all([
-      prisma.subscription.findMany({ where: { status: 'ACTIVE' }, select: SUBSCRIPTION_PLAN_SELECT }),
+      prisma.subscription.findMany({ where: { status: 'ACTIVE' }, select: SUBSCRIPTION_EDITION_SELECT }),
       prisma.subscription.findMany({
         where: { status: 'TRIALING' },
-        select: { ...SUBSCRIPTION_PLAN_SELECT, trialEndsAt: true },
+        select: { ...SUBSCRIPTION_EDITION_SELECT, trialEndsAt: true },
       }),
     ]);
 
@@ -471,8 +473,7 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
       so nothing is wrong yet - flagged, not fixed here.
     */
     const mrrCents = paid.reduce((sum, subscription) => {
-      const code = normalizePlanCode(planCodeOf(subscription));
-      return sum + monthlyEquivalentCents(getEdition(code));
+      return sum + monthlyEquivalentCents(subscriptionEditionOf(subscription)!.edition);
     }, 0);
 
     const now = Date.now();
@@ -487,7 +488,7 @@ router.get('/billing/summary', requirePlatformPermission('billing:view'), async 
         // accident.
         potentialCents: trialing
           .filter((t) => t.trialEndsAt && t.trialEndsAt.getTime() > now)
-          .reduce((sum, t) => sum + monthlyEquivalentCents(getEdition(normalizePlanCode(planCodeOf(t)))), 0),
+          .reduce((sum, t) => sum + monthlyEquivalentCents(subscriptionEditionOf(t)!.edition), 0),
       },
       byTier: paid.reduce<Record<string, number>>((acc, subscription) => {
         const code = planCodeOf(subscription) ?? 'FREE';

@@ -1,6 +1,6 @@
 import { UsageMetric } from '@prisma/client';
 import logger from '../../lib/logger';
-import { getEdition, cheapestUpgradeGranting } from './editions.service';
+import { cheapestUpgradeGranting } from './editions.service';
 import { PlanEntitlements } from './plans';
 import type { EffectiveEntitlements } from './entitlements.resolver';
 
@@ -131,8 +131,8 @@ export function limitOf(
     switch (capability) {
       case 'seats': return entitlements.seatLimit;
       case 'workspaces': return entitlements.maxWorkspaces;
-      case 'customFields': return getEdition(entitlements.plan).customFieldsLimit;
-      case 'workflows': return getEdition(entitlements.plan).workflowsLimit;
+      case 'customFields': return entitlements.edition.customFieldsLimit;
+      case 'workflows': return entitlements.edition.workflowsLimit;
     }
   }
   // A usage meter. These come off the resolved limits, which have already had
@@ -156,8 +156,8 @@ export function limitOf(
  * gates are not callers it can see. The tenancy harness handed
  * assertFooterEntitlement a plan CODE after C4 changed the signature to take
  * the resolved entitlements, and the result was a refusal reading
- * "باقة undefined لا تشمل هذه الميزة" — safe, because getEdition(undefined)
- * falls to the deny-everything floor, and useless, because nothing said why.
+ * "باقة undefined لا تشمل هذه الميزة" — safe, and useless, because nothing
+ * said why.
  *
  * Failing closed is the easy half. Saying so is the half that gets it fixed:
  * this is the same rule as the unknown capability below, one level out.
@@ -165,7 +165,8 @@ export function limitOf(
 function isResolvedSnapshot(entitlements: EffectiveEntitlements): boolean {
   return Boolean(entitlements)
     && typeof entitlements.plan === 'string'
-    && typeof entitlements.planName === 'string';
+    && typeof entitlements.planName === 'string'
+    && Boolean(entitlements.edition);
 }
 
 export function decide(
@@ -202,7 +203,7 @@ export function decide(
       limit: 0,
     };
   }
-  const edition = getEdition(entitlements.plan);
+  const edition = entitlements.edition;
   const limit = limitOf(entitlements, capability);
   const granted = isFeature(capability)
     ? Boolean(edition[capability])

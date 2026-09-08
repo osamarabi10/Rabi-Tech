@@ -120,8 +120,22 @@ function post(pathname, body) {
   });
 }
 
-/** Stable serialisation: sorted keys, identity and timing removed. */
-const VOLATILE = new Set(['id', 'organizationId', 'planVersionId', 'createdAt', 'updatedAt', 'setAt', 'overrideSetAt', 'setBy', 'overrideSetBy']);
+/**
+ * Stable serialisation: identity, timing and C6's internal edition snapshots
+ * removed.
+ *
+ * `edition` and `editionOfRecord` are internal carriers added so downstream
+ * decisions do not look the plan up again. They are outside this historical
+ * snapshot's top-level contract. More importantly, this proof has one version
+ * per plan and therefore cannot certify which version supplied either object.
+ * The capability gate covers their grants; the two-version database check in
+ * tenancy-bleed-harness owns their identity.
+ */
+const OMITTED = new Set([
+  'id', 'organizationId', 'planVersionId', 'createdAt', 'updatedAt',
+  'setAt', 'overrideSetAt', 'setBy', 'overrideSetBy',
+  'edition', 'editionOfRecord',
+]);
 function stable(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === 'bigint') return value.toString();
@@ -130,7 +144,7 @@ function stable(value) {
   if (typeof value === 'object') {
     const out = {};
     for (const k of Object.keys(value).sort()) {
-      if (VOLATILE.has(k)) continue;
+      if (OMITTED.has(k)) continue;
       out[k] = stable(value[k]);
     }
     return out;

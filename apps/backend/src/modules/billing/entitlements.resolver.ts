@@ -3,8 +3,12 @@ import logger from '../../lib/logger';
 import { prisma } from '../../prisma';
 import { METRIC_LIMIT_FIELDS, USAGE_METRICS } from '../usage/metrics';
 import { PlanCode, PlanEntitlements, UNLIMITED_SENTINEL, normalizePlanCode } from './plans';
-import { getEdition } from './editions.service';
-import { SUBSCRIPTION_PLAN_SELECT, planCodeOf } from './subscription-plan';
+import {
+  getEdition,
+  SUBSCRIPTION_EDITION_SELECT,
+  subscriptionEditionOf,
+} from './editions.service';
+import { planCodeOf } from './subscription-plan';
 
 /**
  * The single place that answers "what is this organization actually entitled to
@@ -52,6 +56,8 @@ export type EffectiveEntitlements = {
   /** The plan actually in force, after overrides. */
   plan: PlanCode;
   planName: string;
+  /** Every grant and price from the exact edition version in force. */
+  edition: PlanEntitlements;
   /**
    * The plan ignoring any override — the subscription, else the floor edition.
    *
@@ -59,6 +65,8 @@ export type EffectiveEntitlements = {
    * is the only correct thing to compare config against when detecting drift.
    */
   planOfRecord: PlanCode;
+  /** The subscription's pinned edition, or the current floor edition. */
+  editionOfRecord: PlanEntitlements;
   /** Where `plan` came from. Drives the "عرض خاص" badge and the console. */
   source: EntitlementSource;
   limits: Record<UsageMetric, number | null>;
@@ -246,7 +254,7 @@ export async function resolveEntitlements(
       configuration: true,
       subscriptions: {
         where: { status: { in: LIVE_SUBSCRIPTION_STATUSES } },
-        select: { ...SUBSCRIPTION_PLAN_SELECT, status: true, activatedAt: true },
+        select: { ...SUBSCRIPTION_EDITION_SELECT, status: true, activatedAt: true },
         orderBy: { createdAt: 'desc' },
         take: 1,
       },
@@ -268,10 +276,18 @@ export async function resolveEntitlements(
   const overridePlan = overrideLive ? safePlanCode(organization.planOverride, 'planOverride') : null;
   // A CANCELED subscription row still pins its version; using it would
   // resurrect a plan the tenant has left. Only live statuses are read.
+  const subscription = organization.subscriptions[0];
   const subscriptionPlan = safePlanCode(
-    planCodeOf(organization.subscriptions[0]),
+    planCodeOf(subscription),
     'subscription.planVersion.plan.code',
   );
+  // Shape the version only after its plan code has passed the normal resolver
+  // validation. A missing active price is not a fallback case: it means the
+  // commercial record is incomplete, and substituting today's price would be
+  // exactly the version drift this resolver exists to prevent.
+  const pinnedEdition = subscriptionPlan
+    ? subscriptionEditionOf(subscription)?.edition ?? null
+    : null;
 
   /*
     No subscription means the floor edition, and nothing else.
@@ -296,6 +312,26 @@ export async function resolveEntitlements(
       ? 'subscription'
       : 'default';
 
+  /*
+    A subscription resolves the row it bought, not today's row for that code.
+    The preview override remains a deliberate hypothetical only when the
+    subscription's pinned row is itself current: while edition edits still
+    update that row in place, the preview must show what the pending write would
+    do. A subscriber pinned to an older row must not move in the preview either.
+    In ordinary resolution this option is absent.
+
+    Platform plan overrides are different commercial acts. They name a plan,
+    not a historical version, so they continue to resolve against that plan's
+    current edition through edition().
+  */
+  const editionOfRecord = pinnedEdition
+    ? subscription?.planVersion.isCurrent
+      && options.editionOverride?.code === subscriptionPlan
+      ? options.editionOverride
+      : pinnedEdition
+    : edition('FREE');
+  const effectiveEdition = overridePlan ? edition(overridePlan) : editionOfRecord;
+
   // MAC only. One integer cannot mean both active_contacts (~2 500) and
   // ai_tokens_in (~millions), so the other five meters follow plan-or-config.
   // If per-metric overrides are ever needed, add a JSON map consulted before
@@ -304,19 +340,21 @@ export async function resolveEntitlements(
   const limits = effectiveLimits(organization.configuration, overridePlan, macQuota, edition);
 
   const discountPercent = overrideLive ? organization.discountPercent : null;
-  const listPriceCents = edition(plan).monthlyPriceCents;
+  const listPriceCents = effectiveEdition.monthlyPriceCents;
   const effectivePriceCents = discountPercent
     ? Math.round(listPriceCents * (100 - discountPercent) / 100)
     : listPriceCents;
 
   return {
     plan,
-    planName: edition(plan).name,
+    planName: effectiveEdition.name,
+    edition: effectiveEdition,
     planOfRecord,
+    editionOfRecord,
     source,
     limits,
-    seatLimit: edition(plan).usersLimit,
-    maxWorkspaces: edition(plan).maxWorkspaces,
+    seatLimit: effectiveEdition.usersLimit,
+    maxWorkspaces: effectiveEdition.maxWorkspaces,
     isOverridden: overrideLive,
     override: {
       plan: safePlanCode(organization.planOverride, 'planOverride'),
