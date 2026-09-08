@@ -462,11 +462,28 @@ Cloud-API-only edition from sale. GROWTH, BUSINESS and ENTERPRISE are
 unsellable today for that reason alone. The missing connect screen is the
 defect that outlives fixing the environment.
 
+### Ruling 2026-09-08: presence is not readiness
+
+That withdrawal is correct; its inverse is not. Today, merely setting the
+encryption key, app secret and verify token makes `editionOfferability` call
+Cloud API operational. Pasted credentials prove only that three strings exist.
+They do not prove that Meta accepted the app, that the callback is reachable,
+or that a customer message can travel in either direction.
+
+Cloud readiness must therefore be **derived from a persisted canary result**.
+The canary has to connect a number, register it, subscribe the messaging
+account, receive a real inbound message and deliver a real outbound message.
+`editionOfferability` consumes that result, never environment presence and
+never a manually asserted override flag. A changed app or callback
+configuration invalidates the result and withdraws the Cloud-only editions
+until the canary passes again.
+
 - **Owner:** UnKnowan
-- **Trigger:** the Meta keys and business verification — the point at which a
-  Cloud API number can be connected at all.
-- **Lands in:** the channels screen, beside the QR flow, so the two lanes are
-  one surface rather than a self-serve path and a form.
+- **Trigger:** Meta keys and business verification begin the work; a successful
+  canary is the only trigger that may make Cloud-only editions sellable.
+- **Lands in:** the channels screen beside the QR flow, the persisted canary
+  result, and `channel-viability.ts`, so the two lanes are one surface and the
+  catalogue reads evidence rather than configuration.
 
 ---
 
@@ -1279,14 +1296,32 @@ And the Meta path is inoperable today (**D-9**): `META_APP_SECRET` and
 guard a door nobody can open, and would need re-verifying against the flow
 that eventually opens it.
 
+### Ruling 2026-09-08: the collection is a safety prerequisite
+
+The current Meta model can store only one credential for an organization's
+Cloud channel. Connecting a second phone overwrites that credential while the
+first phone's `WhatsappSession` survives. A reply selected from the first
+session can then leave through the second sender, and inbound routing for the
+first phone loses the credential it needs. This is the same customer harm C1
+fixed for OpenWA, one layer higher: the product says which number is speaking
+and the transport uses another one.
+
+The multi-number collection is therefore **not part of the D-21 meter** and is
+not optional catalogue work. It is a safety prerequisite for representing a
+second Cloud number. Until the collection gives every session an exact,
+durable phone credential binding, the connect path must refuse a second Meta
+number rather than overwrite the first.
+
 ### The decision
 
-Struck as its own step; **folded into the Meta-enablement commit**, where the
-cap and the door it guards land together and are proved together.
+Struck as its own step; **folded into Meta enablement after the collection
+prerequisite**, where the cap and the door it guards land together and are
+proved together. The collection may land first because it prevents wrong-sender
+delivery even before editions price or cap additional numbers.
 
 - **Owner:** UnKnowan
-- **Trigger:** the Meta keys — the moment `META_APP_SECRET` and
-  `META_WEBHOOK_VERIFY_TOKEN` are configured, this stops being deferred.
+- **Trigger:** a persisted Cloud canary passes and the collection can represent
+  more than one number without replacing an existing sender.
 - **Landing place:** a catalogue field on `PlanVersion`, plus
   `assertWithinLimit(org, ‘numbers’, count)` on the connect path. C4 built the
   helper; this is one call site and one column.
@@ -1368,3 +1403,49 @@ semantics are intentional or carry the pinned version through instead.
 - **Owner:** UnKnowan
 - **Trigger:** Part 6, explicit subscriber migration.
 - **Landing place:** `apps/backend/src/modules/billing/billing.service.ts`.
+
+---
+
+## D-24 · Platform view-as can expose customer content without enforceable permission or durable audit
+
+**Status:** recorded 2026-09-08, not fixed · **Owner:** UnKnowan
+
+Today a platform token reaches `handlePlatformViewingTenant` before the
+database-backed platform authorization path. That handler accepts either an
+OWNER or SUPPORT role from the token, does not enforce the declared
+`subscriber:view-as` permission, and permits every tenant GET or HEAD route.
+It then installs a synthetic tenant ADMIN identity, which can read conversation
+messages and their signed media URLs.
+
+The entry is written to the tenant `AuditLog` through `auditLog()`. That helper
+deliberately catches a failed write, logs the failure and continues. The
+customer-content read is therefore logged when the audit store works and
+allowed when it does not. The `PlatformAuditLog` already has actor and target
+fields and a fail-closed writer, but view-as does not use it; it also has no
+route or ticket-reference fields.
+
+The current role model cannot express the intended boundary. It names
+`subscriber:read` and `subscriber:view-as`, but has no separate permissions for
+metadata-only diagnostics and customer message content. Revoking the declared
+view-as permission also does not affect this path because the handler neither
+checks it nor refreshes platform permissions from the database.
+
+Before support work begins, one authorization-boundary commit must:
+
+- enforce database-current `subscriber:view-as` before entering a tenant;
+- separate metadata diagnostics from customer-content reads;
+- require an explicit reason and ticket reference for content access; and
+- write a fail-closed `PlatformAuditLog` containing actor, organization, route,
+  reason and ticket reference before any content is returned.
+
+If that write fails, the read is refused. Logging and allowing is not an
+acceptable degraded mode for customer content.
+
+This is a customer-trust and data-protection exposure, not a convenience gap.
+No SUPPORT identity is to be created for anyone until the boundary lands.
+
+- **Owner:** UnKnowan
+- **Trigger:** before any person other than the owner is given platform access.
+- **Landing place:** platform permission definitions, platform-token/view-as
+  middleware, `PlatformAuditLog`, the platform request client, and boundary
+  proofs covering both permission denial and audit failure.
