@@ -1318,3 +1318,38 @@ screen commit.
 first negotiated override is granted to a paying customer — whichever comes
 first. Until then the two are only inconsistent for organizations that have an
 override, and there are none.
+
+---
+
+## D-23 · Activation can discard a subscription's version pin
+
+**Status:** recorded 2026-09-08, not fixed · **Owner:** UnKnowan
+
+Part 1 fixed the read path only: entitlement resolution now reads the exact
+`PlanVersion` and active `Price` reached through `Subscription.planVersionId`.
+It did not change the activation writer. `activateManualSubscription` still
+takes a plan code and, for an existing subscription, replaces
+`planVersionId` with `currentVersionIdForPlan(...)` before reapplying that
+current edition's limits.
+
+Both a provider payment webhook and provider reconciliation can reach that
+writer after deriving a plan code from the existing subscription. If version
+N+1 has been published since the customer bought version N, either path can
+move the customer onto N+1's price, seats and grants without anyone choosing
+to migrate them. This is the same customer harm Part 1 removed from resolution,
+reintroduced from the write path instead.
+
+Until Part 6 lands, an activation, payment webhook or provider reconciliation
+can still change a subscriber's purchased terms. Part 6 must make migration an
+explicit subscriber operation and ensure ordinary activation preserves the
+existing version pin.
+
+The reason this class keeps recurring is structural: **the pin is data**. Any
+path that takes a subscription and produces only a plan code has thrown away
+the version identity and can silently substitute today's terms. Treat every
+new subscription-to-plan-code path as suspect; it must prove that current-version
+semantics are intentional or carry the pinned version through instead.
+
+- **Owner:** UnKnowan
+- **Trigger:** Part 6, explicit subscriber migration.
+- **Landing place:** `apps/backend/src/modules/billing/billing.service.ts`.
