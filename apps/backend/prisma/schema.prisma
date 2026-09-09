@@ -113,6 +113,9 @@ model Organization {
 
   emailOutbox EmailOutbox[]
 
+  supportTickets        SupportTicket[]
+  supportTicketMessages SupportTicketMessage[]
+
   growthWidgets GrowthWidget[]
 
   workspaces       Workspace[]
@@ -265,7 +268,6 @@ model Price {
   @@unique([planVersionId, interval, currency])
   @@index([planVersionId, isActive])
 }
-
 
 /// Meta WhatsApp Cloud API credentials for one organization's channel.
 ///
@@ -536,10 +538,12 @@ model Identity {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  users               User[]
-  passwordResetTokens PasswordResetToken[]
-  twoFactorChallenges TwoFactorChallenge[]
-  recoveryCodes       IdentityRecoveryCode[]
+  users                  User[]
+  passwordResetTokens    PasswordResetToken[]
+  twoFactorChallenges    TwoFactorChallenge[]
+  recoveryCodes          IdentityRecoveryCode[]
+  assignedSupportTickets SupportTicket[]        @relation("SupportTicketAssignee")
+  supportTicketMessages  SupportTicketMessage[] @relation("SupportTicketPlatformAuthor")
 
   @@index([platformRole])
 }
@@ -601,10 +605,112 @@ model EmailOutbox {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization         Organization?         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supportTicketMessage SupportTicketMessage?
 
   @@index([status, sendAfter])
   @@index([organizationId, createdAt])
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_ON_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum SupportTicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum SupportTicketMessageVisibility {
+  PUBLIC
+  INTERNAL
+}
+
+enum SupportTicketAuthorType {
+  CUSTOMER
+  PLATFORM
+}
+
+/// A customer support case and the account facts captured when it was raised.
+///
+/// The diagnostic snapshot is deliberately stored on the ticket rather than
+/// reconstructed later: a support answer must be explainable from what was true
+/// when the customer asked, even after their plan, usage or channel changes.
+/// A database trigger makes both the snapshot and its schema version immutable.
+model SupportTicket {
+  id             String                @id @default(cuid())
+  reference      String                @unique
+  organizationId String
+  subject        String
+  status         SupportTicketStatus   @default(OPEN)
+  priority       SupportTicketPriority @default(NORMAL)
+
+  /// User.id at submission time. No FK: the ticket and requester snapshot must
+  /// outlive a user who is later removed from the organization.
+  requesterUserId String?
+  requesterName   String
+  requesterEmail  String
+
+  assigneeIdentityId String?
+
+  diagnosticSnapshotVersion Int  @default(1)
+  diagnosticSnapshot        Json
+
+  /// A close or resolve increments this in the database. View-as grants carry
+  /// the value they were issued against, so reopening cannot revive an older
+  /// content-read token that still has time left on it.
+  contentAccessVersion Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignee     Identity?              @relation("SupportTicketAssignee", fields: [assigneeIdentityId], references: [id], onDelete: SetNull)
+  messages     SupportTicketMessage[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, status, updatedAt])
+  @@index([assigneeIdentityId, status, updatedAt])
+  @@index([priority, status, updatedAt])
+}
+
+/// An append-only entry in a support case.
+///
+/// PUBLIC customer messages are visible to the organization. PUBLIC platform
+/// replies point at the EmailOutbox row created in the same transaction.
+/// INTERNAL notes never do. There are intentionally no edit or delete APIs.
+model SupportTicketMessage {
+  id             String                         @id @default(cuid())
+  ticketId       String
+  organizationId String
+  visibility     SupportTicketMessageVisibility
+  authorType     SupportTicketAuthorType
+
+  /// User.id for customer authors. Kept as a snapshot id rather than a foreign
+  /// key so removing a user does not erase who opened or replied to the case.
+  authorUserId     String?
+  authorIdentityId String?
+  authorName       String
+  authorEmail      String?
+  body             String
+  emailOutboxId    String?  @unique
+  createdAt        DateTime @default(now())
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ticket         SupportTicket @relation(fields: [ticketId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  authorIdentity Identity?     @relation("SupportTicketPlatformAuthor", fields: [authorIdentityId], references: [id], onDelete: SetNull)
+  emailOutbox    EmailOutbox?  @relation(fields: [emailOutboxId], references: [id], onDelete: SetNull)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, ticketId, createdAt])
+  @@index([ticketId, visibility, createdAt])
+  @@index([authorIdentityId, createdAt])
 }
 
 /// A live password reset. Only the hash is stored, for the same reason a
@@ -829,35 +935,40 @@ model PlatformAuditLog {
 
   /// Everything below is nullable: auditPlatformScope() writes reason-only rows
   /// and predates these columns.
-  action            String?
+  action              String?
   /// Identity.id — the platform actor. A platform owner has no User row in the
   /// target org, which is why the org-scoped AuditLog cannot carry these.
-  actorIdentityId   String?
-  actorEmail        String?
+  actorIdentityId     String?
+  actorEmail          String?
   /// The organization acted on. Plain strings, no relation: an audit trail must
   /// outlive the subscriber it describes, and targetOrgName keeps it readable
   /// after the org is deleted.
-  targetOrgId       String?
-  targetOrgName     String?
+  targetOrgId         String?
+  targetOrgName       String?
   /// Which edition a catalogue change was about, or null for everything else.
   ///
   /// Deliberately not targetOrgId: an edition change acts on the offer rather
   /// than on a subscriber, and borrowing the per-org column would make that
   /// trail claim a workspace was touched when none was.
-  targetEditionCode String?
-  beforeState       Json?
-  afterState        Json?
-  ipAddress         String?
+  targetEditionCode   String?
+  beforeState         Json?
+  afterState          Json?
+  ipAddress           String?
   /// Server-derived route covered by a time-bounded platform access grant.
-  route             String?
-  /// Free-standing until SupportTicket lands; D-24 requires validation then.
-  ticketReference   String?
+  route               String?
+  /// Canonical reference validated against an active same-organization ticket.
+  ticketReference     String?
+  /// Canonical ticket identity and the access revision the grant was issued
+  /// against. Plain values, not a relation: the audit must outlive its ticket.
+  supportTicketId     String?
+  ticketAccessVersion Int?
 
   @@index([timestamp])
   @@index([targetOrgId, timestamp])
   @@index([action, timestamp])
   @@index([targetEditionCode, timestamp])
   @@index([ticketReference, timestamp])
+  @@index([supportTicketId, timestamp])
 }
 
 enum GatewayProvisioningState {

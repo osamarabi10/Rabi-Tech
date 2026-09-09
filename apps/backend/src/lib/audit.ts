@@ -42,6 +42,8 @@ export interface PlatformAuditDetail {
   ipAddress?: string;
   route?: string;
   ticketReference?: string;
+  supportTicketId?: string;
+  ticketAccessVersion?: number;
 }
 
 /**
@@ -71,6 +73,8 @@ export async function auditPlatformScope(
       ipAddress: detail.ipAddress,
       route: detail.route,
       ticketReference: detail.ticketReference,
+      supportTicketId: detail.supportTicketId,
+      ticketAccessVersion: detail.ticketAccessVersion,
     },
   });
   return row.id;
@@ -84,6 +88,8 @@ export interface PlatformViewGrantAudit {
   route: string;
   reason: string;
   ticketReference: string;
+  supportTicketId: string;
+  ticketAccessVersion: number;
   ipAddress?: string;
 }
 
@@ -100,13 +106,20 @@ export function auditPlatformViewGrant(
     targetOrgName: detail.targetOrgName,
     route: detail.route,
     ticketReference: detail.ticketReference,
+    supportTicketId: detail.supportTicketId,
+    ticketAccessVersion: detail.ticketAccessVersion,
     ipAddress: detail.ipAddress,
   }, writer);
 }
 
 /** Resolve only the detailed grant a signed view token names. */
 export function readPlatformViewGrant(
-  input: { auditLogId: string; actorIdentityId: string; targetOrgId: string },
+  input: {
+    auditLogId: string;
+    actorIdentityId: string;
+    targetOrgId: string;
+    supportTicketId: string;
+  },
   reader: Pick<Prisma.TransactionClient, 'platformAuditLog'> = prisma,
 ) {
   return reader.platformAuditLog.findFirst({
@@ -115,8 +128,16 @@ export function readPlatformViewGrant(
       action: 'platform.subscriber.view-as.granted',
       actorIdentityId: input.actorIdentityId,
       targetOrgId: input.targetOrgId,
+      supportTicketId: input.supportTicketId,
     },
-    select: { id: true, reason: true, ticketReference: true, route: true },
+    select: {
+      id: true,
+      reason: true,
+      ticketReference: true,
+      supportTicketId: true,
+      ticketAccessVersion: true,
+      route: true,
+    },
   });
 }
 

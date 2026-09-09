@@ -407,7 +407,7 @@ function staticAudits() {
     bare model name. A word like "message" or "contact" occurs everywhere in
     this codebase, so matching it would report every table as reached and the
     check would pass by being blind. It was worth confirming rather than
-    assuming: 58 of the 60 tenant-scoped models match on delegate access, and
+    assuming: 60 of the 62 tenant-scoped models match on delegate access, and
     the two that do not are the two added by the workspaces migration.
   */
   const tenantScopedModels = [...schema.matchAll(/\nmodel\s+(\w+)\s*\{([\s\S]*?)\n\}/g)]
@@ -3550,6 +3550,335 @@ async function databaseAudits() {
         { expiresIn: '10m' },
       );
 
+    await check('support tickets: submission is tenant-bound and its diagnostic snapshot cannot move', async () => {
+      let ticketId;
+      try {
+        const createResponse = await fetch(`${baseUrl}/api/support/tickets`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subject: 'Outbound messages are failing',
+            message: 'Please help us understand why today\'s WhatsApp replies failed.',
+            priority: 'HIGH',
+          }),
+        });
+        const created = await createResponse.json();
+        assert.equal(createResponse.status, 201, JSON.stringify(created));
+        ticketId = created.id;
+        assert.equal(created.reference, 'SUP-000001', 'the first durable reference starts at SUP-000001');
+        assert.equal(created.priority, 'HIGH');
+        assert.equal(created.messages.length, 1);
+        assert.equal(created.messages[0].visibility, 'PUBLIC');
+        assert.equal(Object.hasOwn(created, 'diagnosticSnapshot'), false,
+          'the customer response must not expose the platform diagnostic snapshot');
+
+        const storedBefore = await raw.supportTicket.findUniqueOrThrow({ where: { id: ticketId } });
+        assert.equal(storedBefore.organizationId, orgA.organizationId);
+        assert.equal(storedBefore.diagnosticSnapshotVersion, 1);
+        assert.ok(storedBefore.diagnosticSnapshot.plan?.planVersionId,
+          'submission captures the exact plan version support will answer from');
+        assert.ok(!JSON.stringify(storedBefore.diagnosticSnapshot).includes('Message a_0'),
+          'the diagnostic snapshot must never capture a private WhatsApp message body');
+        const immutableBefore = stable({
+          version: storedBefore.diagnosticSnapshotVersion,
+          snapshot: storedBefore.diagnosticSnapshot,
+        });
+
+        await assert.rejects(
+          () => raw.supportTicket.update({
+            where: { id: ticketId },
+            data: {
+              diagnosticSnapshotVersion: 2,
+              diagnosticSnapshot: { tampered: true },
+            },
+          }),
+          /diagnostic snapshot is immutable/,
+          'support must not rewrite what was true when the customer submitted the ticket',
+        );
+        const storedAfter = await raw.supportTicket.findUniqueOrThrow({ where: { id: ticketId } });
+        assert.equal(
+          stable({ version: storedAfter.diagnosticSnapshotVersion, snapshot: storedAfter.diagnosticSnapshot }),
+          immutableBefore,
+          'the failed rewrite left the customer diagnostic snapshot byte-identical',
+        );
+
+        let response = await fetch(`${baseUrl}/api/support/tickets/${created.reference}`, {
+          headers: { Authorization: `Bearer ${tokenB}` },
+        });
+        assert.equal(response.status, 404, 'another organization cannot read the ticket by its global reference');
+        response = await fetch(`${baseUrl}/api/support/tickets/${created.reference}/replies`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${tokenB}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Cross-organization reply attempt' }),
+        });
+        assert.equal(response.status, 404, 'another organization cannot append to the ticket');
+
+        response = await fetch(`${baseUrl}/api/support/tickets/${created.reference}/replies`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'The failure is still happening.' }),
+        });
+        const replied = await response.json();
+        assert.equal(response.status, 201, JSON.stringify(replied));
+        assert.equal(replied.messages.length, 2);
+        assert.equal(
+          await raw.emailOutbox.count({
+            where: { organizationId: orgA.organizationId, kind: 'support.ticket.public-reply' },
+          }),
+          0,
+          'a customer reply must not queue an email back to the same customer',
+        );
+
+        response = await fetch(`${baseUrl}/api/support/tickets/${created.reference}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subject: 'Rewritten subject' }),
+        });
+        assert.equal(response.status, 404, 'tickets have no generic customer update endpoint');
+        response = await fetch(`${baseUrl}/api/support/tickets/${created.reference}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        assert.equal(response.status, 404, 'tickets have no customer deletion endpoint');
+      } finally {
+        if (ticketId) await raw.supportTicket.deleteMany({ where: { id: ticketId } });
+      }
+    });
+
+    await check('support tickets: permissions, public mail queue and internal notes fail closed', async () => {
+      let ticketId;
+      let reference;
+      let reader;
+      let responder;
+      let refused;
+      const triggerName = `bleed_reject_ticket_reply_audit_${process.pid}`;
+      const functionName = `${triggerName}_fn`;
+      const publicBody = 'We found the channel problem and queued the next recovery step.';
+      const internalBody = 'Internal note: confirm provider state before promising a recovery time.';
+
+      try {
+        const createResponse = await fetch(`${baseUrl}/api/support/tickets`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subject: 'Channel recovery request',
+            message: 'Our team needs help reconnecting the business number.',
+          }),
+        });
+        const created = await createResponse.json();
+        assert.equal(createResponse.status, 201, JSON.stringify(created));
+        ticketId = created.id;
+        reference = created.reference;
+        assert.match(reference, /^SUP-[0-9]{6,}$/);
+
+        [reader, responder, refused] = await Promise.all([
+          raw.identity.create({
+            data: {
+              email: `ticket-reader-${Date.now()}@platform.test`,
+              passwordHash: 'not-used-by-token-verification',
+              platformRole: 'SUPPORT',
+              platformPermissions: ['ticket:read'],
+            },
+          }),
+          raw.identity.create({
+            data: {
+              email: `ticket-responder-${Date.now()}@platform.test`,
+              passwordHash: 'not-used-by-token-verification',
+              platformRole: 'SUPPORT',
+              platformPermissions: ['ticket:read', 'ticket:reply', 'ticket:manage'],
+            },
+          }),
+          raw.identity.create({
+            data: {
+              email: `ticket-refused-${Date.now()}@platform.test`,
+              passwordHash: 'not-used-by-token-verification',
+              platformRole: 'SUPPORT',
+              platformPermissions: ['subscriber:diagnostics'],
+            },
+          }),
+        ]);
+        const readerToken = mintPlatformToken(reader);
+        const responderToken = mintPlatformToken(responder);
+        const refusedToken = mintPlatformToken(refused);
+        const platformRequest = (platformToken, method, path, body) =>
+          fetch(`${baseUrl}/api/platform/support/tickets${path}`, {
+            method,
+            headers: { Authorization: `Bearer ${platformToken}`, 'Content-Type': 'application/json' },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          });
+
+        let response = await platformRequest(refusedToken, 'GET', '');
+        assert.equal(response.status, 403, 'subscriber diagnostics alone cannot read support tickets');
+        assert.equal((await response.json()).permission, 'ticket:read');
+
+        response = await platformRequest(readerToken, 'GET', `/${reference}`);
+        const readable = await response.json();
+        assert.equal(response.status, 200, JSON.stringify(readable));
+        assert.equal(readable.diagnosticSnapshotVersion, 1);
+        assert.ok(readable.diagnosticSnapshot.plan?.planVersionId,
+          'ticket readers receive the exact diagnostic snapshot captured at submission');
+        response = await platformRequest(readerToken, 'POST', `/${reference}/replies`, {
+          message: publicBody,
+        });
+        assert.equal(response.status, 403, 'read permission alone cannot answer a customer');
+        assert.equal((await response.json()).permission, 'ticket:reply');
+
+        response = await platformRequest(responderToken, 'POST', `/${reference}/replies`, {
+          message: publicBody,
+        });
+        const publicReply = await response.json();
+        assert.equal(response.status, 201, JSON.stringify(publicReply));
+        assert.equal(publicReply.message.mailState, 'queued');
+        assert.equal(Object.hasOwn(publicReply.message, 'emailOutboxId'), false,
+          'the support API does not expose its internal outbox key');
+        assert.ok(!JSON.stringify(publicReply).includes('delivered'),
+          'SMTP is uncertified, so the API may say queued and never delivered');
+
+        const publicMessage = await raw.supportTicketMessage.findFirstOrThrow({
+          where: { ticketId, body: publicBody },
+        });
+        assert.ok(publicMessage.emailOutboxId, 'a public platform reply has a linked outbox row');
+        const queuedMail = await raw.emailOutbox.findUniqueOrThrow({
+          where: { id: publicMessage.emailOutboxId },
+        });
+        assert.equal(queuedMail.status, 'PENDING');
+        assert.equal(queuedMail.sentAt, null);
+        assert.equal(queuedMail.toEmail, (await raw.supportTicket.findUniqueOrThrow({ where: { id: ticketId } })).requesterEmail);
+        assert.equal(
+          await raw.platformAuditLog.count({
+            where: {
+              action: 'platform.support-ticket.public-reply.queued',
+              actorIdentityId: responder.id,
+              supportTicketId: ticketId,
+              ticketReference: reference,
+            },
+          }),
+          1,
+          'the queued public reply and its platform audit commit together',
+        );
+
+        await raw.$executeRawUnsafe(`
+          CREATE FUNCTION "${functionName}"() RETURNS trigger AS $$
+          BEGIN
+            IF NEW."action" = 'platform.support-ticket.public-reply.queued' THEN
+              RAISE EXCEPTION 'forced support ticket reply audit failure';
+            END IF;
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql
+        `);
+        await raw.$executeRawUnsafe(`
+          CREATE TRIGGER "${triggerName}"
+          BEFORE INSERT ON "PlatformAuditLog"
+          FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+        `);
+        const messagesBeforeFailedAudit = await raw.supportTicketMessage.count({ where: { ticketId } });
+        const outboxBeforeFailedAudit = await raw.emailOutbox.count({
+          where: { organizationId: orgA.organizationId, kind: 'support.ticket.public-reply' },
+        });
+        response = await platformRequest(responderToken, 'POST', `/${reference}/replies`, {
+          message: 'This reply must roll back with its failed audit row.',
+        });
+        assert.equal(response.status, 500, 'an unaudited public reply is refused');
+        assert.equal(
+          await raw.supportTicketMessage.count({ where: { ticketId } }),
+          messagesBeforeFailedAudit,
+          'audit failure does not leave an unaudited customer-facing reply',
+        );
+        assert.equal(
+          await raw.emailOutbox.count({
+            where: { organizationId: orgA.organizationId, kind: 'support.ticket.public-reply' },
+          }),
+          outboxBeforeFailedAudit,
+          'audit failure does not leave an email queued outside the rolled-back transaction',
+        );
+        await raw.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "PlatformAuditLog"`);
+        await raw.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`);
+
+        const outboxBeforeNote = await raw.emailOutbox.count({
+          where: { organizationId: orgA.organizationId, kind: 'support.ticket.public-reply' },
+        });
+        response = await platformRequest(responderToken, 'POST', `/${reference}/notes`, {
+          message: internalBody,
+        });
+        const internalNote = await response.json();
+        assert.equal(response.status, 201, JSON.stringify(internalNote));
+        assert.equal(internalNote.message.visibility, 'INTERNAL');
+        assert.equal(internalNote.message.mailState, null);
+        assert.equal(
+          await raw.emailOutbox.count({
+            where: { organizationId: orgA.organizationId, kind: 'support.ticket.public-reply' },
+          }),
+          outboxBeforeNote,
+          'an internal support note is never mailed to the customer',
+        );
+
+        response = await fetch(`${baseUrl}/api/support/tickets/${reference}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const customerDetail = await response.json();
+        assert.equal(response.status, 200, JSON.stringify(customerDetail));
+        assert.ok(customerDetail.messages.some((message) => message.body === publicBody));
+        assert.ok(!customerDetail.messages.some((message) => message.body === internalBody),
+          'internal staff notes never cross into the customer ticket view');
+        assert.equal(Object.hasOwn(customerDetail, 'diagnosticSnapshot'), false);
+
+        response = await platformRequest(readerToken, 'GET', `/${reference}`);
+        const platformDetail = await response.json();
+        assert.equal(response.status, 200, JSON.stringify(platformDetail));
+        assert.ok(platformDetail.messages.some((message) => message.visibility === 'INTERNAL'));
+        assert.ok(platformDetail.messages.some((message) => message.mailState === 'queued'));
+
+        for (const priority of ['LOW', 'NORMAL', 'HIGH', 'URGENT']) {
+          response = await platformRequest(responderToken, 'POST', `/${reference}/priority`, { priority });
+          const changed = await response.json();
+          assert.equal(response.status, 200, JSON.stringify(changed));
+          assert.equal(changed.priority, priority);
+        }
+        response = await platformRequest(responderToken, 'POST', `/${reference}/assignment`, {
+          assigneeIdentityId: responder.id,
+        });
+        assert.equal((await response.json()).assignee.id, responder.id);
+        response = await platformRequest(responderToken, 'POST', `/${reference}/assignment`, {
+          assigneeIdentityId: null,
+        });
+        assert.equal((await response.json()).assignee, null, 'assignment is optional');
+
+        for (const status of ['IN_PROGRESS', 'WAITING_ON_CUSTOMER', 'RESOLVED', 'OPEN', 'CLOSED']) {
+          response = await platformRequest(responderToken, 'POST', `/${reference}/status`, { status });
+          const changed = await response.json();
+          assert.equal(response.status, 200, JSON.stringify(changed));
+          assert.equal(changed.status, status);
+        }
+        const closedRow = await raw.supportTicket.findUniqueOrThrow({ where: { id: ticketId } });
+        assert.equal(closedRow.contentAccessVersion, 3,
+          'each closure advances the content-access revision exactly once');
+        response = await fetch(`${baseUrl}/api/support/tickets/${reference}/replies`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'This closed ticket should refuse new text.' }),
+        });
+        assert.equal(response.status, 409, 'closed tickets cannot receive customer replies');
+
+        response = await platformRequest(responderToken, 'PATCH', `/${reference}`, { status: 'OPEN' });
+        assert.equal(response.status, 404, 'tickets have no generic platform update endpoint');
+        response = await platformRequest(responderToken, 'DELETE', `/${reference}`);
+        assert.equal(response.status, 404, 'tickets have no platform deletion endpoint');
+      } finally {
+        await raw.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "PlatformAuditLog"`).catch(() => {});
+        await raw.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`).catch(() => {});
+        if (ticketId) {
+          await raw.platformAuditLog.deleteMany({ where: { supportTicketId: ticketId } });
+          await raw.supportTicket.deleteMany({ where: { id: ticketId } });
+        }
+        await raw.emailOutbox.deleteMany({
+          where: { organizationId: orgA.organizationId, kind: 'support.ticket.public-reply' },
+        });
+        const identityIds = [reader?.id, responder?.id, refused?.id].filter(Boolean);
+        if (identityIds.length) await raw.identity.deleteMany({ where: { id: { in: identityIds } } });
+      }
+    });
+
     await check('platform view-as: permissions, expiry and durable audit all fail closed', async () => {
       const advisor = await raw.identity.create({
         data: {
@@ -3568,10 +3897,12 @@ async function databaseAudits() {
       });
       const triggerName = `bleed_reject_platform_view_${process.pid}`;
       const functionName = `${triggerName}_fn`;
+      let ticketA;
+      let ticketB;
       const advisorToken = mintPlatformToken(advisor);
       const ownerToken = mintPlatformToken(owner);
       const reason = 'Investigating the delivery failure reported by the customer';
-      const ticketReference = `SUP-${Date.now()}`;
+      let ticketReference;
       const organizationName = (await raw.organization.findUniqueOrThrow({
         where: { id: orgA.organizationId },
         select: { name: true },
@@ -3592,6 +3923,34 @@ async function databaseAudits() {
         });
 
       try {
+        [ticketA, ticketB] = await Promise.all([
+          raw.supportTicket.create({
+            data: {
+              reference: 'SUP-900001',
+              organizationId: orgA.organizationId,
+              subject: 'Customer message investigation',
+              requesterUserId: orgA.userId,
+              requesterName: 'Admin A',
+              requesterEmail: 'bleed-a@rabitech.test',
+              diagnosticSnapshotVersion: 1,
+              diagnosticSnapshot: { fixture: 'view-as-org-a' },
+            },
+          }),
+          raw.supportTicket.create({
+            data: {
+              reference: 'SUP-900002',
+              organizationId: orgB.organizationId,
+              subject: 'Another customer investigation',
+              requesterUserId: orgB.userId,
+              requesterName: 'Admin B',
+              requesterEmail: 'bleed-b@rabitech.test',
+              diagnosticSnapshotVersion: 1,
+              diagnosticSnapshot: { fixture: 'view-as-org-b' },
+            },
+          }),
+        ]);
+        ticketReference = ticketA.reference;
+
         let response = await grant(advisorToken);
         assert.equal(response.status, 403);
         assert.equal((await response.json()).permission, 'subscriber:view-as');
@@ -3626,6 +3985,22 @@ async function databaseAudits() {
         assert.equal(response.status, 400, 'a missing ticket reference must be refused');
         assert.equal((await response.json()).field, 'ticketReference');
 
+        response = await grant(advisorToken, { reason, ticketReference: ticketB.reference });
+        const crossTicketPayload = await response.json();
+        assert.equal(response.status, 403, JSON.stringify(crossTicketPayload));
+        assert.equal(crossTicketPayload.code, 'ACTIVE_TICKET_REQUIRED');
+        assert.equal(
+          await raw.platformAuditLog.count({
+            where: {
+              action: 'platform.subscriber.view-as.granted',
+              targetOrgId: orgA.organizationId,
+              ticketReference: ticketB.reference,
+            },
+          }),
+          0,
+          'staff cannot enter one customer workspace under another customer ticket',
+        );
+
         response = await grant(advisorToken);
         const firstGrant = await response.json();
         assert.equal(response.status, 201, JSON.stringify(firstGrant));
@@ -3645,6 +4020,10 @@ async function databaseAudits() {
         assert.equal(firstAudit.targetOrgName, organizationName);
         assert.equal(firstAudit.reason, reason);
         assert.equal(firstAudit.ticketReference, ticketReference);
+        assert.equal(firstAudit.supportTicketId, ticketA.id);
+        assert.equal(firstAudit.ticketAccessVersion, ticketA.contentAccessVersion);
+        assert.equal(firstClaims.supportTicketId, ticketA.id);
+        assert.equal(firstClaims.ticketAccessVersion, ticketA.contentAccessVersion);
         assert.equal(
           firstAudit.route,
           `POST /api/platform/subscribers/${orgA.organizationId}/view-as`,
@@ -3667,6 +4046,32 @@ async function databaseAudits() {
 
         response = await readMessages(advisorToken, firstGrant.accessToken, orgB.organizationId);
         assert.equal(response.status, 403, 'a grant for one subscriber must not open another');
+
+        response = await fetch(`${baseUrl}/api/platform/support/tickets/${ticketReference}/status`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${ownerToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'CLOSED' }),
+        });
+        assert.equal(response.status, 200, await response.text());
+        response = await readMessages(advisorToken, firstGrant.accessToken);
+        const closedRead = await response.json();
+        assert.equal(response.status, 403, JSON.stringify(closedRead));
+        assert.equal(closedRead.code, 'PLATFORM_VIEW_TICKET_INACTIVE');
+        assert.ok(!JSON.stringify(closedRead).includes('Message a_0'),
+          'closing the ticket immediately ends the staff read window');
+
+        response = await fetch(`${baseUrl}/api/platform/support/tickets/${ticketReference}/status`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${ownerToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'OPEN' }),
+        });
+        assert.equal(response.status, 200, await response.text());
+        response = await readMessages(advisorToken, firstGrant.accessToken);
+        const reopenedOldGrant = await response.json();
+        assert.equal(response.status, 403, JSON.stringify(reopenedOldGrant));
+        assert.equal(reopenedOldGrant.code, 'PLATFORM_VIEW_TICKET_INACTIVE');
+        assert.ok(!JSON.stringify(reopenedOldGrant).includes('Message a_0'),
+          'reopening a ticket must not revive a content token issued before closure');
 
         response = await grant(advisorToken);
         const renewedGrant = await response.json();
@@ -3707,6 +4112,8 @@ async function databaseAudits() {
             actorIdentityId: advisor.id,
             organizationId: orgA.organizationId,
             auditLogId: firstAudit.id,
+            supportTicketId: ticketA.id,
+            ticketAccessVersion: ticketA.contentAccessVersion,
           },
           jwtSecret,
           {
@@ -3761,6 +4168,8 @@ async function databaseAudits() {
         await raw.platformAuditLog.deleteMany({
           where: { actorIdentityId: { in: [advisor.id, owner.id] } },
         });
+        const ticketIds = [ticketA?.id, ticketB?.id].filter(Boolean);
+        if (ticketIds.length) await raw.supportTicket.deleteMany({ where: { id: { in: ticketIds } } });
         await raw.identity.delete({ where: { id: advisor.id } });
         await raw.identity.delete({ where: { id: owner.id } });
       }

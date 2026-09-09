@@ -10,6 +10,7 @@ import {
   parsePlatformViewRequest,
   verifyPlatformViewToken,
 } from '../platform/platform-view-access';
+import { ACTIVE_SUPPORT_TICKET_STATUSES } from '../support-tickets/support-tickets.service';
 
 export interface JwtPayload {
   scope?: 'ORGANIZATION';
@@ -68,6 +69,8 @@ declare global {
       platformViewAccess?: {
         organizationId: string;
         auditLogId: string;
+        supportTicketId: string;
+        ticketReference: string;
         expiresAt: number;
       };
     }
@@ -163,7 +166,7 @@ async function handlePlatformViewingTenant(
   let state;
   try {
     state = await runAsPlatform(`verify-view-as:${decoded.id}:${targetOrgId}`, async () => {
-      const [identity, org, audit] = await Promise.all([
+      const [identity, org, audit, ticket] = await Promise.all([
         prisma.identity.findUnique({ where: { id: decoded.id }, select: PLATFORM_IDENTITY_SELECT }),
         prisma.organization.findUnique({
           where: { id: targetOrgId },
@@ -173,9 +176,23 @@ async function handlePlatformViewingTenant(
           auditLogId: grant.auditLogId,
           actorIdentityId: decoded.id,
           targetOrgId,
+          supportTicketId: grant.supportTicketId,
+        }),
+        prisma.supportTicket.findFirst({
+          where: {
+            id: grant.supportTicketId,
+            organizationId: targetOrgId,
+            status: { in: ACTIVE_SUPPORT_TICKET_STATUSES },
+            contentAccessVersion: grant.ticketAccessVersion,
+          },
+          select: {
+            id: true,
+            reference: true,
+            contentAccessVersion: true,
+          },
         }),
       ]);
-      return { identity, org, audit };
+      return { identity, org, audit, ticket };
     });
   } catch (error) {
     logger.error('Platform view authorization could not verify its durable audit', {
@@ -186,7 +203,7 @@ async function handlePlatformViewingTenant(
     return res.status(503).json({ error: 'Platform audit is unavailable', code: 'PLATFORM_AUDIT_UNAVAILABLE' });
   }
 
-  const { identity, org, audit } = state;
+  const { identity, org, audit, ticket } = state;
   if (!identity || !['OWNER', 'SUPPORT'].includes(identity.platformRole)) {
     return res.status(403).json({ error: 'Platform access required' });
   }
@@ -205,6 +222,18 @@ async function handlePlatformViewingTenant(
   try {
     if (!audit?.route) throw new Error('missing route');
     parsePlatformViewRequest({ reason: audit.reason, ticketReference: audit.ticketReference });
+    if (
+      !ticket
+      || audit.supportTicketId !== ticket.id
+      || audit.ticketReference !== ticket.reference
+      || audit.ticketAccessVersion !== ticket.contentAccessVersion
+      || grant.ticketAccessVersion !== ticket.contentAccessVersion
+    ) {
+      return res.status(403).json({
+        error: 'The support ticket for this access grant is no longer active',
+        code: 'PLATFORM_VIEW_TICKET_INACTIVE',
+      });
+    }
   } catch {
     return res.status(403).json({ error: 'Platform view audit is missing', code: 'PLATFORM_VIEW_AUDIT_MISSING' });
   }
@@ -224,6 +253,8 @@ async function handlePlatformViewingTenant(
     req.platformViewAccess = {
       organizationId: org.id,
       auditLogId: grant.auditLogId,
+      supportTicketId: ticket.id,
+      ticketReference: ticket.reference,
       expiresAt: grant.exp! * 1000,
     };
     next();

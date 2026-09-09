@@ -77,6 +77,11 @@ import {
   searchSubscribers,
   SubscriberSearchInputError,
 } from './subscriber-diagnostics.service';
+import { createPlatformSupportTicketRouter } from '../support-tickets/platform-support-tickets.routes';
+import {
+  requireActiveSupportTicket,
+  SupportTicketError,
+} from '../support-tickets/support-tickets.service';
 
 const router = Router();
 
@@ -136,6 +141,8 @@ function requirePlatformPermission(permission: PlatformPermission) {
     });
   };
 }
+
+router.use('/support/tickets', createPlatformSupportTicketRouter(requirePlatformPermission));
 
 /**
  * Platform staff.
@@ -278,19 +285,35 @@ router.post(
         return res.status(403).json({ error: 'Subscriber is suspended' });
       }
 
-      let auditLogId: string;
+      let grantRecord: {
+        ticket: Awaited<ReturnType<typeof requireActiveSupportTicket>>;
+        auditLogId: string;
+      };
       try {
-        auditLogId = await auditPlatformViewGrant({
-          actorIdentityId: req.platformUser!.id,
-          actorEmail: req.platformUser!.email,
-          targetOrgId: organization.id,
-          targetOrgName: organization.name,
-          route: `${req.method} ${req.originalUrl.split('?')[0]}`,
-          reason: accessRequest.reason,
-          ticketReference: accessRequest.ticketReference,
-          ipAddress: req.ip,
+        grantRecord = await prisma.$transaction(async (tx) => {
+          const activeTicket = await requireActiveSupportTicket(
+            accessRequest.ticketReference,
+            organization.id,
+            tx,
+          );
+          const durableAuditId = await auditPlatformViewGrant({
+            actorIdentityId: req.platformUser!.id,
+            actorEmail: req.platformUser!.email,
+            targetOrgId: organization.id,
+            targetOrgName: organization.name,
+            route: `${req.method} ${req.originalUrl.split('?')[0]}`,
+            reason: accessRequest.reason,
+            ticketReference: activeTicket.reference,
+            supportTicketId: activeTicket.id,
+            ticketAccessVersion: activeTicket.contentAccessVersion,
+            ipAddress: req.ip,
+          }, tx);
+          return { ticket: activeTicket, auditLogId: durableAuditId };
         });
       } catch (error) {
+        if (error instanceof SupportTicketError) {
+          return res.status(error.status).json({ error: error.message, code: error.code });
+        }
         logger.error('Platform view grant audit failed', {
           error: String(error),
           actorIdentityId: req.platformUser!.id,
@@ -305,7 +328,9 @@ router.post(
       const grant = issuePlatformViewToken({
         actorIdentityId: req.platformUser!.id,
         organizationId: organization.id,
-        auditLogId,
+        auditLogId: grantRecord.auditLogId,
+        supportTicketId: grantRecord.ticket.id,
+        ticketAccessVersion: grantRecord.ticket.contentAccessVersion,
       });
       return res.status(201).json({
         organization: { id: organization.id, name: organization.name },

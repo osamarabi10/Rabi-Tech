@@ -1452,17 +1452,22 @@ timer. A tab left open overnight must not preserve an access window whose only
 audit row was written the night before. Expiry closes the view; renewal repeats
 authorization and writes a fresh audit row before issuing another grant.
 
-### Sub-trigger: ticket existence
+### Sub-trigger closed 2026-09-09: ticket existence
 
-Until the support queue exists, the boundary can require and record a bounded
-ticket reference but cannot prove that the ticket exists or belongs to the
-organization being viewed. That is accepted only as an ordering constraint.
-When the ticket schema and queue land, grant issuance must resolve the supplied
-reference server-side and refuse a missing, closed-ineligible or cross-tenant
-ticket. It must never continue treating arbitrary text as a verified ticket.
+The support-ticket foundation closes this ordering gap. Grant issuance accepts
+only a canonical `SUP-000001`-style reference, resolves it server-side, and
+requires an active ticket belonging to the exact organization being viewed.
+A missing, resolved, closed or cross-organization ticket is refused before the
+grant audit or token exists.
+
+The audit now records the ticket id and canonical reference together with the
+ticket's content-access revision. Resolving or closing a ticket advances that
+revision in the database, so every existing content token stops on its next
+request. Reopening the ticket does not revive those old tokens; staff must give
+a new substantive reason and create a new audited 15-minute grant.
 
 - **Owner:** UnKnowan
-- **Trigger:** the support ticket queue and schema.
+- **Trigger closed by:** the support ticket schema and API foundation.
 
 ### Recorded, not built: customers must see platform entry
 
@@ -1530,3 +1535,26 @@ the visible page rather than fetched once per organization.
 - **Trigger:** the first month with more than fifty subscribers.
 - **Landing place:** `apps/backend/src/modules/platform/platform.routes.ts` and
   `apps/frontend/app/platform/subscribers/page.tsx`.
+
+---
+
+## D-27 · The public-API gate depends on incidental live subscriber state
+
+**Status:** recorded 2026-09-09, not fixed · **Owner:** UnKnowan
+
+`verify-public-api.js` selects the first organizations returned by the live
+database and treats them as fixtures. The selected rows are not controlled by
+the gate, so their plans, lifecycle state and existing data decide whether the
+gate can reach the behavior it claims to test. On 2026-09-09 the first selected
+organization had an expired trial; access stopped there and the gate could not
+run against the current database.
+
+A gate whose outcome depends on unselected fixture state is reporting on the
+row it happened to receive, not on the code. The script should seed and remove
+its own complete fixtures or run in a disposable migrated schema, as the
+tenancy harness does. This entry records the defect only; this commit does not
+change the public-API gate.
+
+- **Owner:** UnKnowan
+- **Trigger:** the next time this gate blocks a run.
+- **Landing place:** `apps/backend/scripts/verify-public-api.js`.

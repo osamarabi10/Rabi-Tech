@@ -42,7 +42,7 @@ const PLATFORM_MODELS = new Set([
  * The models scoped by workspace as well as by organization.
  *
  * Exactly four, and the number is the point. Organization scope applies to all
- * 60 tenant tables; workspace scope applies to the four that hold a division's
+ * 62 tenant tables; workspace scope applies to the four that hold a division's
  * own work — its channel, its people, its threads, its messages. The other 54
  * are organization-wide by design: one billing account, one set of teams, one
  * keyword list, one seat count. Adding a model here is a product decision about
@@ -210,4 +210,3 @@ export const tenancyExtension = Prisma.defineExtension((client) => {
     },
   });
 });
-

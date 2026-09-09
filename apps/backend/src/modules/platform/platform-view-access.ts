@@ -1,10 +1,11 @@
 import jwt, { type JwtPayload } from 'jsonwebtoken';
+import { canonicalSupportTicketReference } from '../support-tickets/support-tickets.service';
 
 export const PLATFORM_VIEW_DURATION_SECONDS = 15 * 60;
 export const PLATFORM_VIEW_TOKEN_HEADER = 'x-platform-view-token';
 export const MIN_PLATFORM_VIEW_REASON_LENGTH = 12;
 export const MAX_PLATFORM_VIEW_REASON_LENGTH = 500;
-export const MAX_PLATFORM_TICKET_REFERENCE_LENGTH = 100;
+export const MAX_PLATFORM_TICKET_REFERENCE_LENGTH = 32;
 
 const PLATFORM_VIEW_AUDIENCE = 'rabitech-platform-view';
 const PLATFORM_VIEW_ISSUER = 'rabitech';
@@ -29,6 +30,8 @@ export type PlatformViewGrantClaims = JwtPayload & {
   actorIdentityId: string;
   organizationId: string;
   auditLogId: string;
+  supportTicketId: string;
+  ticketAccessVersion: number;
 };
 
 function normalized(value: unknown): string {
@@ -43,7 +46,7 @@ function length(value: string): number {
 export function parsePlatformViewRequest(input: unknown): PlatformViewRequest {
   const body = input && typeof input === 'object' ? input as Record<string, unknown> : {};
   const reason = normalized(body.reason);
-  const ticketReference = normalized(body.ticketReference);
+  let ticketReference = normalized(body.ticketReference);
 
   if (length(reason) < MIN_PLATFORM_VIEW_REASON_LENGTH) {
     throw new PlatformViewInputError(
@@ -69,10 +72,12 @@ export function parsePlatformViewRequest(input: unknown): PlatformViewRequest {
       `Ticket reference must be between 3 and ${MAX_PLATFORM_TICKET_REFERENCE_LENGTH} characters`,
     );
   }
-  if (!/^[\p{L}\p{N}][\p{L}\p{N}._:/#-]*$/u.test(ticketReference)) {
+  try {
+    ticketReference = canonicalSupportTicketReference(ticketReference);
+  } catch {
     throw new PlatformViewInputError(
       'ticketReference',
-      'Ticket reference may contain letters, numbers, dots, slashes, colons, hashes, underscores and dashes',
+      'Ticket reference must use the SUP-000001 format',
     );
   }
 
@@ -89,6 +94,8 @@ export function issuePlatformViewToken(input: {
   actorIdentityId: string;
   organizationId: string;
   auditLogId: string;
+  supportTicketId: string;
+  ticketAccessVersion: number;
 }): { accessToken: string; expiresAt: string } {
   const accessToken = jwt.sign(
     {
@@ -96,6 +103,8 @@ export function issuePlatformViewToken(input: {
       actorIdentityId: input.actorIdentityId,
       organizationId: input.organizationId,
       auditLogId: input.auditLogId,
+      supportTicketId: input.supportTicketId,
+      ticketAccessVersion: input.ticketAccessVersion,
     },
     signingSecret(),
     {
@@ -122,6 +131,9 @@ export function verifyPlatformViewToken(token: string): PlatformViewGrantClaims 
     || !decoded.actorIdentityId
     || !decoded.organizationId
     || !decoded.auditLogId
+    || !decoded.supportTicketId
+    || !Number.isInteger(decoded.ticketAccessVersion)
+    || decoded.ticketAccessVersion < 1
     || !decoded.exp
   ) {
     throw new Error('Invalid platform view token');

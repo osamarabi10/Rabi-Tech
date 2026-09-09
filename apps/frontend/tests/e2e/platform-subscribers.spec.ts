@@ -278,7 +278,7 @@ test('view-as requires a substantive reason and expires the tab grant', async ({
   await expect(dialog).toBeVisible();
   const open = dialog.getByRole('button', { name: 'Open for 15 minutes' });
 
-  await dialog.getByLabel('Ticket reference').fill('SUP-1042');
+  await dialog.getByLabel('Ticket reference').fill('SUP-001042');
   await dialog.getByLabel('Reason for access').fill('123456789012');
   await expect(open).toBeDisabled();
   await dialog.getByLabel('Reason for access').fill('Investigating the delivery failure reported by the customer');
@@ -287,7 +287,7 @@ test('view-as requires a substantive reason and expires the tab grant', async ({
 
   await expect.poll(() => requestBody).toEqual({
     reason: 'Investigating the delivery failure reported by the customer',
-    ticketReference: 'SUP-1042',
+    ticketReference: 'SUP-001042',
   });
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('rabitech_view_as_org')))
     .toContain('signed-platform-view-token');

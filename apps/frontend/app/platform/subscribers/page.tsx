@@ -343,7 +343,9 @@ export default function SubscribersPage() {
   );
   const normalizedViewReason = viewReason.trim().replace(/\s+/g, ' ');
   const validViewReason = Array.from(normalizedViewReason).length >= 12 && /\p{L}/u.test(normalizedViewReason);
-  const validTicketReference = /^[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,99}$/u.test(viewTicketReference.trim());
+  const normalizedTicketReference = viewTicketReference.trim().toUpperCase();
+  const validTicketReference = /^SUP-[0-9]{6,}$/.test(normalizedTicketReference)
+    && normalizedTicketReference.length <= 32;
 
   const closeViewDialog = () => {
     setViewTarget(null);
@@ -357,7 +359,7 @@ export default function SubscribersPage() {
     try {
       const { data } = await api.post<PlatformViewGrant>(
         `/api/platform/subscribers/${viewTarget.id}/view-as`,
-        { reason: normalizedViewReason, ticketReference: viewTicketReference.trim() },
+        { reason: normalizedViewReason, ticketReference: normalizedTicketReference },
       );
       setViewAsOrg({
         id: data.organization.id,
@@ -835,7 +837,8 @@ export default function SubscribersPage() {
                 id="platform-view-ticket"
                 value={viewTicketReference}
                 onChange={(event) => setViewTicketReference(event.target.value)}
-                placeholder="SUP-1042"
+                placeholder="SUP-001042"
+                maxLength={32}
                 autoComplete="off"
               />
             </div>

@@ -40,6 +40,18 @@ export const PLATFORM_PERMISSIONS = {
     detail:
       'Read messages and media while viewing a subscriber. Every 15-minute access grant is audited.',
   },
+  'ticket:read': {
+    label: 'Read support tickets',
+    detail: 'Read customer support requests, diagnostic snapshots and public or internal replies.',
+  },
+  'ticket:reply': {
+    label: 'Reply to support tickets',
+    detail: 'Queue public customer replies and add internal support notes. Also requires ticket read access.',
+  },
+  'ticket:manage': {
+    label: 'Manage the support queue',
+    detail: 'Change ticket status, priority and assignment. Also requires ticket read access.',
+  },
   'trial:extend': {
     label: 'Extend a trial',
     detail: 'Give a workspace more trial time. Cannot activate a paid plan.',
@@ -87,6 +99,9 @@ export const ALL_PLATFORM_PERMISSIONS = Object.keys(PLATFORM_PERMISSIONS) as Pla
  */
 export const SUGGESTED_ADVISOR_PERMISSIONS: PlatformPermission[] = [
   'subscriber:diagnostics',
+  'ticket:read',
+  'ticket:reply',
+  'ticket:manage',
   'trial:extend',
   'gateway:operate',
   'billing:view',

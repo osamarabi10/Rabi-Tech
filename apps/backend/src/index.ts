@@ -41,6 +41,7 @@ import { metaWebhookHandler, metaWebhookVerifyHandler } from './webhooks/meta.we
 import { corsOriginCallback } from './utils/cors';
 import { verifyPlatformToken, verifyToken } from './modules/auth/auth.middleware';
 import platformRoutes     from './modules/platform/platform.routes';
+import supportTicketRoutes from './modules/support-tickets/support-tickets.routes';
 import usageRoutes        from './modules/usage/usage.routes';
 import brandingRoutes     from './modules/branding/branding.routes';
 import billingRoutes      from './modules/billing/billing.routes';
@@ -658,6 +659,7 @@ app.use('/api/templates',      templateRoutes);
 app.use('/api/snippets',       snippetRoutes);
 app.use('/api/analytics',      analyticsRoutes);
 app.use('/api/notifications',  notificationRoutes);
+app.use('/api/support/tickets', supportTicketRoutes);
 app.use('/api/platform',       platformRoutes);
 app.use('/api/usage',          usageRoutes);
 app.use('/api/branding',       brandingRoutes);
