@@ -58,7 +58,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/platform/operations', label: 'Operations', description: 'Gateway and service operations', icon: Wrench, permission: 'subscriber:diagnostics' },
   { href: '/platform/data', label: 'Data governance', description: 'Retention and data controls', icon: Database, ownerOnly: true },
   { href: '/platform/staff', label: 'Staff', description: 'Platform access and advisors', icon: Shield, ownerOnly: true, built: true },
-  { href: '/platform/support', label: 'Support', description: 'Support queue and escalation', icon: HelpCircle, permission: 'subscriber:diagnostics' },
+  { href: '/platform/support', label: 'Support', description: 'Customer diagnostics', icon: HelpCircle, permission: 'subscriber:diagnostics', built: true },
   { href: '/platform/settings', label: 'Settings', description: 'Platform defaults and policy', icon: Settings, ownerOnly: true, built: true },
   { href: '/platform/legal', label: 'Legal', description: 'Terms and privacy', icon: FileText, ownerOnly: true },
 ];

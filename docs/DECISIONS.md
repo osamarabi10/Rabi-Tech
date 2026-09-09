@@ -1483,3 +1483,50 @@ The boundary was required before any SUPPORT identity could be created.
 - **Landing place:** platform permission definitions, platform-token/view-as
   middleware, `PlatformAuditLog`, the platform request client, and boundary
   proofs covering both permission denial and audit failure.
+
+---
+
+## D-25 · Support-ticket retention and deletion are not yet governed
+
+**Status:** unresolved 2026-09-09 · **Owner:** UnKnowan
+
+A support ticket will hold customer-written text and an immutable diagnostic
+snapshot of their account. Those are customer data even when they live in the
+platform console rather than the customer's workspace. Keeping them forever by
+accident is not a retention policy; deleting them ad hoc is not one either, and
+the immutable snapshot makes both choices consequential.
+
+The ticket foundation must therefore ship without a deletion endpoint and
+without claiming a retention period. Before the first customer ticket is
+accepted, the owner must choose how long closed tickets, messages and diagnostic
+snapshots remain; which legal or operational holds pause deletion; what the
+customer is told; and whether deletion removes or redacts each record.
+
+- **Owner:** UnKnowan
+- **Trigger:** before the first customer ticket is submitted.
+- **Landing place:** the support-ticket retention policy and the customer
+  privacy document.
+
+---
+
+## D-26 · The subscribers screen performs an unbounded N+1 usage load
+
+**Status:** recorded 2026-09-09, not fixed · **Owner:** UnKnowan
+
+The platform subscribers screen first requests every organization from
+`GET /api/platform/subscribers`, then issues one
+`GET /api/platform/subscribers/:id/usage` request for every returned row. It is
+quiet at three organizations and becomes hundreds of browser requests at three
+hundred. The list endpoint itself is also unpaginated, so client-side filtering
+cannot bound either half.
+
+This commit does not change that screen. Customer Lookup is a separate bounded
+query and must not become an incidental rewrite of the existing operating table.
+When the platform reaches the trigger, the subscribers endpoint needs
+server-side pagination/filtering and usage must be joined or batch-loaded for
+the visible page rather than fetched once per organization.
+
+- **Owner:** UnKnowan
+- **Trigger:** the first month with more than fifty subscribers.
+- **Landing place:** `apps/backend/src/modules/platform/platform.routes.ts` and
+  `apps/frontend/app/platform/subscribers/page.tsx`.

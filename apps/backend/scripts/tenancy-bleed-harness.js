@@ -3886,6 +3886,274 @@ async function databaseAudits() {
 
       await raw.identity.delete({ where: { id: advisor.id } });
     });
+    await check('support diagnostics: local phone candidates, exact terms and private content stay separated', async () => {
+      const owner = await raw.identity.create({
+        data: {
+          email: `owner-support-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'OWNER',
+        },
+      });
+      const advisor = await raw.identity.create({
+        data: {
+          email: `advisor-support-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'SUPPORT',
+          platformPermissions: ['subscriber:diagnostics'],
+        },
+      });
+      const refusedAdvisor = await raw.identity.create({
+        data: {
+          email: `advisor-support-refused-${Date.now()}@platform.test`,
+          passwordHash: 'not-used-by-token-verification',
+          platformRole: 'SUPPORT',
+          platformPermissions: [],
+        },
+      });
+      const ownerToken = mintPlatformToken(owner);
+      const advisorToken = mintPlatformToken(advisor);
+      const refusedToken = mintPlatformToken(refusedAdvisor);
+      const jordan = await seedOrganization(raw, 'supportjo', 1);
+      const palestine = await seedOrganization(raw, 'supportps', 1);
+      const israel = await seedOrganization(raw, 'supportil', 1);
+      const privateSentinel = 'Private WhatsApp sentinel: the customer changed their bank account';
+      let editionChanged = false;
+      const originalGrowth = await editionRow(raw, 'GROWTH');
+
+      const get = (token, route) => fetch(`${baseUrl}${route}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      const patchEdition = (body) => fetch(`${baseUrl}/api/platform/editions/GROWTH`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      try {
+        await Promise.all([
+          raw.organization.update({
+            where: { id: jordan.organizationId },
+            data: { name: 'Jordan Support Customer' },
+          }),
+          raw.organization.update({
+            where: { id: palestine.organizationId },
+            data: { name: 'Palestine Support Customer' },
+          }),
+          raw.organization.update({
+            where: { id: israel.organizationId },
+            data: { name: 'Israel Support Customer', status: 'SUSPENDED' },
+          }),
+          raw.whatsappSession.update({
+            where: { id: jordan.sessionId },
+            data: { phoneNumber: '+962 790 123 456' },
+          }),
+          raw.whatsappSession.update({
+            where: { id: palestine.sessionId },
+            data: { phoneNumber: '+970 790 123 456' },
+          }),
+          raw.whatsappSession.update({
+            where: { id: israel.sessionId },
+            data: { phoneNumber: '+972 790 123 456' },
+          }),
+          raw.organizationChannel.updateMany({
+            where: { organizationId: jordan.organizationId },
+            data: { status: 'ACTIVE', provisioningState: 'ACTIVE', connectedAt: new Date() },
+          }),
+        ]);
+
+        await grantPlan(raw, jordan.organizationId, 'GROWTH');
+        const pinnedVersion = await raw.subscription.findFirstOrThrow({
+          where: { organizationId: jordan.organizationId, status: 'ACTIVE' },
+          select: { planVersionId: true },
+        });
+        assert.equal(pinnedVersion.planVersionId, originalGrowth.planVersionId);
+
+        await fixtureWriter.message.create({
+          data: {
+            id: 'bleed_support_private_failure',
+            organizationId: jordan.organizationId,
+            workspaceId: jordan.workspaceId,
+            conversationId: jordan.records[0].conversation.id,
+            waMessageId: 'bleed-support-private-failure',
+            direction: 'OUTBOUND',
+            status: 'FAILED',
+            failureReason: 'SESSION_NOT_BOUND',
+            body: privateSentinel,
+            timestamp: new Date(),
+          },
+        });
+
+        const refusedSearch = await get(refusedToken, '/api/platform/subscribers/search?q=0790123456');
+        assert.equal(refusedSearch.status, 403, 'search requires subscriber:diagnostics');
+        const refusedDiagnostics = await get(
+          refusedToken,
+          `/api/platform/subscribers/${jordan.organizationId}/diagnostics`,
+        );
+        assert.equal(refusedDiagnostics.status, 403, 'diagnostics requires subscriber:diagnostics');
+
+        const tooShort = await get(advisorToken, '/api/platform/subscribers/search?q=1');
+        assert.equal(tooShort.status, 400, 'the search lower bound is enforced');
+        const tooLong = await get(advisorToken, `/api/platform/subscribers/search?q=${'a'.repeat(81)}`);
+        assert.equal(tooLong.status, 400, 'the search upper bound is enforced');
+
+        const localResponse = await get(advisorToken, '/api/platform/subscribers/search?q=0790123456');
+        const local = await localResponse.json();
+        assert.equal(localResponse.status, 200, JSON.stringify(local));
+        assert.deepEqual(
+          local.results.map((row) => row.id).sort(),
+          [israel.organizationId, jordan.organizationId, palestine.organizationId].sort(),
+          'a spoken local number returns every served-country candidate for a person to choose',
+        );
+        assert.deepEqual(
+          local.results.flatMap((row) => row.numbers.map((number) => number.phoneNumber)).sort(),
+          ['+962790123456', '+970790123456', '+972790123456'].sort(),
+          'every candidate displays the complete international number',
+        );
+
+        const internationalResponse = await get(
+          advisorToken,
+          '/api/platform/subscribers/search?q=%2B962%20790%20123%20456',
+        );
+        const international = await internationalResponse.json();
+        assert.equal(internationalResponse.status, 200, JSON.stringify(international));
+        assert.deepEqual(international.results.map((row) => row.id), [jordan.organizationId]);
+
+        const nameResponse = await get(advisorToken, '/api/platform/subscribers/search?q=jordan%20support');
+        const byName = await nameResponse.json();
+        assert.equal(nameResponse.status, 200, JSON.stringify(byName));
+        assert.deepEqual(byName.results.map((row) => row.id), [jordan.organizationId]);
+
+        const pinnedResponse = await get(
+          advisorToken,
+          `/api/platform/subscribers/${jordan.organizationId}/diagnostics`,
+        );
+        const pinned = await pinnedResponse.json();
+        assert.equal(pinnedResponse.status, 200, JSON.stringify(pinned));
+        assert.equal(pinned.plan.source, 'subscription');
+        assert.equal(pinned.plan.planVersionId, originalGrowth.planVersionId);
+        assert.equal(pinned.plan.version, originalGrowth.version);
+        assert.equal(pinned.plan.priceId, originalGrowth.priceId);
+        assert.equal(pinned.plan.listPriceCents, originalGrowth.monthlyPriceCents);
+        assert.equal(
+          pinned.limits.find((item) => item.capability === 'seats').limit,
+          String(originalGrowth.usersLimit),
+        );
+        assert.equal(pinned.lastInboundAt !== null, true, 'last inbound is returned as a timestamp');
+        assert.equal(pinned.recentFailures[0].reason, 'WhatsApp could not send the outbound message.');
+        assert.ok(!pinned.recentFailures[0].reason.includes('SESSION_NOT_BOUND'),
+          'support receives a reason rather than a machine code');
+        assert.equal(pinned.verdict, 'Recent WhatsApp failures need investigation.');
+
+        const nextPrice = originalGrowth.monthlyPriceCents + 137;
+        const nextSeats = originalGrowth.usersLimit + 3;
+        const publicationResponse = await patchEdition({
+          monthlyPriceCents: nextPrice,
+          usersLimit: nextSeats,
+        });
+        const publication = await publicationResponse.json();
+        assert.equal(publicationResponse.status, 200, JSON.stringify(publication));
+        editionChanged = true;
+
+        const stillPinnedResponse = await get(
+          advisorToken,
+          `/api/platform/subscribers/${jordan.organizationId}/diagnostics`,
+        );
+        const stillPinned = await stillPinnedResponse.json();
+        assert.equal(stillPinned.plan.planVersionId, originalGrowth.planVersionId,
+          'publication does not move the subscriber diagnostics onto current terms');
+        assert.equal(stillPinned.plan.listPriceCents, originalGrowth.monthlyPriceCents);
+
+        await raw.organization.update({
+          where: { id: jordan.organizationId },
+          data: {
+            planOverride: 'GROWTH',
+            overrideReason: 'Support diagnostics exact-version proof',
+            overrideSetBy: owner.id,
+            overrideSetAt: new Date(),
+          },
+        });
+        const overrideResponse = await get(
+          advisorToken,
+          `/api/platform/subscribers/${jordan.organizationId}/diagnostics`,
+        );
+        const overridden = await overrideResponse.json();
+        assert.equal(overrideResponse.status, 200, JSON.stringify(overridden));
+        assert.equal(overridden.plan.source, 'override');
+        assert.equal(overridden.plan.version, publication.edition.version);
+        assert.equal(overridden.plan.planVersionId, publication.edition.planVersionId);
+        assert.equal(overridden.plan.priceId, publication.edition.priceId);
+        assert.equal(overridden.plan.listPriceCents, nextPrice);
+        assert.equal(
+          overridden.limits.find((item) => item.capability === 'seats').limit,
+          String(nextSeats),
+          'an override deliberately follows the current edition',
+        );
+
+        const serialized = JSON.stringify(pinned);
+        assert.ok(!serialized.includes(privateSentinel),
+          'staff read a private WhatsApp message without audited view-as');
+        assert.ok(!serialized.includes('Message supportjo_0'),
+          'last-inbound diagnostics must not include the inbound message body');
+      } finally {
+        await raw.organization.update({
+          where: { id: jordan.organizationId },
+          data: {
+            planOverride: null,
+            overrideReason: null,
+            overrideSetBy: null,
+            overrideSetAt: null,
+          },
+        }).catch(() => {});
+        if (editionChanged) {
+          const restored = await patchEdition({
+            monthlyPriceCents: originalGrowth.monthlyPriceCents,
+            usersLimit: originalGrowth.usersLimit,
+          });
+          assert.equal(restored.status, 200, 'the edition fixture must restore through publication');
+        }
+      }
+    });
+    await check('support diagnostics: verdict precedence is deterministic', async () => {
+      const { diagnosticVerdict } = require('../src/modules/platform/subscriber-diagnostics.service');
+      const now = new Date('2026-09-09T12:00:00.000Z');
+      const healthy = {
+        suspended: false,
+        billingCutoff: false,
+        trialExpired: false,
+        paymentPastDue: false,
+        usableChannel: true,
+        activeBoundNumber: true,
+        recentFailure: false,
+        atLimit: false,
+        lastInboundAt: new Date('2026-09-09T11:00:00.000Z'),
+        createdAt: new Date('2026-08-01T00:00:00.000Z'),
+        now,
+      };
+      assert.equal(diagnosticVerdict({ ...healthy, suspended: true, recentFailure: true }),
+        'The customer account is suspended.');
+      assert.equal(diagnosticVerdict({ ...healthy, billingCutoff: true, recentFailure: true }),
+        'Payment grace has ended and the account needs billing follow-up.');
+      assert.equal(diagnosticVerdict({ ...healthy, trialExpired: true, atLimit: true }),
+        'The trial has expired and the account needs billing follow-up.');
+      assert.equal(diagnosticVerdict({ ...healthy, paymentPastDue: true, usableChannel: false }),
+        'Payment is overdue, but service remains available during the grace period.');
+      assert.equal(diagnosticVerdict({ ...healthy, usableChannel: false }),
+        'No WhatsApp channel is currently ready to carry messages.');
+      assert.equal(diagnosticVerdict({ ...healthy, activeBoundNumber: false }),
+        'No active business number is bound to a ready WhatsApp channel.');
+      assert.equal(diagnosticVerdict({ ...healthy, recentFailure: true, atLimit: true }),
+        'Recent WhatsApp failures need investigation.');
+      assert.equal(diagnosticVerdict({ ...healthy, atLimit: true }),
+        'The account has reached at least one enforced limit.');
+      assert.equal(diagnosticVerdict({ ...healthy, lastInboundAt: null }),
+        'No customer has sent an inbound message to this account yet.');
+      assert.equal(diagnosticVerdict({ ...healthy, lastInboundAt: new Date('2026-08-20T00:00:00.000Z') }),
+        'No inbound customer message has arrived in the last 14 days.');
+      assert.equal(diagnosticVerdict(healthy),
+        'Account, billing, channel, and current limits look healthy.');
+    });
     await check('billing: MRR counts money paid, not money hoped for', async () => {
       // The bug this exists to prevent: MRR used to include TRIALING. That
       // cost nothing while trials ran on the free plan at zero, and became a

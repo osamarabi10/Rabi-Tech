@@ -72,6 +72,11 @@ import {
   issuePlatformViewToken,
   parsePlatformViewRequest,
 } from './platform-view-access';
+import {
+  getSubscriberDiagnostics,
+  searchSubscribers,
+  SubscriberSearchInputError,
+} from './subscriber-diagnostics.service';
 
 const router = Router();
 
@@ -521,6 +526,36 @@ router.get('/subscribers', requirePlatformPermission('subscriber:diagnostics'), 
   } catch (err) {
     logger.error('Subscriber list failed', { error: err instanceof Error ? err.stack : String(err), requestId: (req as any).id });
     res.status(500).json({ error: 'Failed to list subscribers' });
+  }
+});
+
+router.get('/subscribers/search', requirePlatformPermission('subscriber:diagnostics'), async (req, res) => {
+  try {
+    res.json({ results: await searchSubscribers(req.query.q) });
+  } catch (error) {
+    if (error instanceof SubscriberSearchInputError) {
+      return res.status(400).json({ error: error.message });
+    }
+    logger.error('Subscriber search failed', {
+      error: error instanceof Error ? error.stack : String(error),
+      requestId: (req as any).id,
+    });
+    return res.status(500).json({ error: 'Failed to search subscribers' });
+  }
+});
+
+router.get('/subscribers/:id/diagnostics', requirePlatformPermission('subscriber:diagnostics'), async (req, res) => {
+  try {
+    const diagnostics = await getSubscriberDiagnostics(req.params.id);
+    if (!diagnostics) return res.status(404).json({ error: 'Subscriber not found' });
+    return res.json(diagnostics);
+  } catch (error) {
+    logger.error('Subscriber diagnostics failed', {
+      error: error instanceof Error ? error.stack : String(error),
+      organizationId: req.params.id,
+      requestId: (req as any).id,
+    });
+    return res.status(500).json({ error: 'Failed to load subscriber diagnostics' });
   }
 });
 
