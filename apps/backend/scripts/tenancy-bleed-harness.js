@@ -3929,6 +3929,13 @@ async function databaseAudits() {
 
       await raw.identity.delete({ where: { id: advisor.id } });
     });
+    /*
+      Mutation-certified 2026-09-09. Selecting a failed Message.body and
+      returning it as messageBody made this unchanged check report:
+      "staff read a private WhatsApp message without audited view-as".
+      No other check failed. subscriber-diagnostics.service.ts was restored
+      byte-identically at SHA-256 6A3C95CD9B929C4A1828DCD9ACC3951F2B4164DCE8E8B004AAE84F969FC51EC1.
+    */
     await check('support diagnostics: local phone candidates, exact terms and private content stay separated', async () => {
       const owner = await raw.identity.create({
         data: {
@@ -4158,6 +4165,14 @@ async function databaseAudits() {
         }
       }
     });
+    /*
+      Mutation-certified 2026-09-09. Moving atLimit ahead of recentFailure
+      returned "The account has reached at least one enforced limit." where
+      this check expected "Recent WhatsApp failures need investigation." The
+      integrated diagnostics check independently reported the same mismatch.
+      subscriber-diagnostics.service.ts was restored byte-identically at
+      SHA-256 6A3C95CD9B929C4A1828DCD9ACC3951F2B4164DCE8E8B004AAE84F969FC51EC1.
+    */
     await check('support diagnostics: verdict precedence is deterministic', async () => {
       const { diagnosticVerdict } = require('../src/modules/platform/subscriber-diagnostics.service');
       const now = new Date('2026-09-09T12:00:00.000Z');
@@ -5331,6 +5346,13 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
+    /*
+      Mutation-certified 2026-09-09. Reintroducing current-publication
+      timestamp suppression in detectQuotaDrift made this unchanged check
+      report "out-of-band config changes must still be reported". No other
+      check failed. billing.service.ts was restored byte-identically at
+      SHA-256 828AF37BBC73F12027674AA153F30895C242C886042FF2D6BD829EF10CFE079B.
+    */
     await check('billing: a publication does not manufacture drift for a pinned subscriber', async () => {
       const { refreshEditions, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
       const { getBillingSummary } = require('../src/modules/billing/billing.service');
@@ -5508,6 +5530,17 @@ async function databaseAudits() {
       assert.equal(growth.monthlyPriceCents, 4900, 'a refused write must change nothing');
     });
 
+    /*
+      Mutation-certified 2026-09-09. Omitting the plan predicate from an
+      active-Price write made this unchanged check report "another edition
+      price must not leak" with 9900 !== 4900. The diagnostics exact-price,
+      seeded-catalogue, and immutable-publication checks also failed on the
+      same cross-edition write. The seeded-catalogue observer compares the
+      database with PLAN_ENTITLEMENTS: it was right here, but must never stand
+      alone as evidence for a billing claim. editions.service.ts was restored
+      byte-identically at SHA-256
+      24CD3BFF3F722AE474D6DEFE64918E585E4D8FD519DAB3FD9308C31F7740D524.
+    */
     await check('billing: publishing one edition does not move another edition', async () => {
       const { refreshEditions, resetEditionCacheForTests } = require('../src/modules/billing/editions.service');
       const { resolveEntitlements } = require('../src/modules/billing/entitlements.resolver');
@@ -5544,6 +5577,15 @@ async function databaseAudits() {
       await runAsPlatform('bleed-editions-refresh', () => refreshEditions());
     });
 
+    /*
+      Mutation-certified 2026-09-09. Resolving a subscription through the
+      current catalogue while leaving every pin-related name intact moved the
+      customer from 2 seats / 1900 cents monthly to 17 seats / 12345 cents
+      monthly after v2 was published. The immutable-publication check also
+      reported a subscriber moving from 5 / 4900 to 12 / 17245. The resolver
+      was restored byte-identically at SHA-256
+      26DDE7474B5DFE2339CEEEBCF646EAD0EFBAE0EB9604B54AE828750F71CB8B70.
+    */
     await check('billing: subscriptions stay on their exact version while plan overrides use current', async () => {
       const {
         refreshEditions,
