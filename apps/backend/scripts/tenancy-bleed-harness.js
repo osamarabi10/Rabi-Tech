@@ -13,10 +13,24 @@ const ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(ROOT, '..', '..');
 const results = [];
 
+/**
+ * Known order couplings, recorded before they are repaired:
+ *
+ * - database checks share orgA, orgB and one mutable database;
+ * - queue checks share one mutable disposable Redis instance;
+ * - checks mutate subscriptions, configuration, messages and edition versions;
+ * - several checks restore values specifically for later checks;
+ * - HTTP snapshots must be primed before their byte comparison;
+ * - the edition catalogue is process-local mutable cache state;
+ * - databaseAudits, workerAudits and closeLoadedQueues have a required order.
+ *
+ * A stable N/N denominator does not prove these checks are order-independent.
+ */
+
 // Repo root, not apps/backend. There is one .env for this project and it lives
 // at the top; a second copy under apps/backend drifted from it and pointed this
 // gate at `localhost:5432` — a different Postgres entirely, where the harness
-// would have created its disposable schema and proved nothing about isolation.
+// would have created its disposable database and proved nothing about isolation.
 // Two files meant two truths, and the wrong one was silently winning.
 require('dotenv').config({ path: path.join(REPO_ROOT, '.env') });
 require('ts-node/register/transpile-only');
@@ -52,8 +66,8 @@ function tailLines(text, lines = 20) {
  * the whole isolation gate with nothing on stdout to say why. That is not
  * hypothetical: on 2026-08-29 a degraded Docker host port proxy left
  * `prisma migrate deploy` waiting on a half-open socket, and the gate sat
- * silent for 33 minutes until it was killed by hand. Orphaned
- * `rabitech_bleed_*` schemas show it had happened before, unnoticed. A release
+ * silent for 33 minutes until it was killed by hand. Orphaned disposable
+ * schemas showed it had happened before, unnoticed. A release
  * blocker that can hang indefinitely without output is not a safety net — it
  * is a coin flip nobody is watching.
  *
@@ -136,6 +150,7 @@ function staticAudits() {
     if (
       allowedPrismaClients.has(rel) ||
       rel === 'scripts/tenancy-bleed-harness.js' ||
+      rel === 'scripts/run-tenancy-harness.js' ||
       rel === 'scripts/lint-prisma-client.js'
     ) continue;
     const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
@@ -501,12 +516,6 @@ function staticAudits() {
   );
 }
 
-function makeTestUrl(baseUrl, schema) {
-  const url = new URL(baseUrl);
-  url.searchParams.set('schema', schema);
-  return url.toString();
-}
-
 function stable(value) {
   return JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item));
 }
@@ -555,7 +564,9 @@ async function waitForBackend(baseUrl, token, child) {
     if (child.exitCode !== null) {
       throw new Error(
         `backend exited with code ${child.exitCode} after ${Date.now() - startedAt}ms — `
-        + 'it started and stopped, so this is a failure to boot rather than a slow one',
+        + 'it started and stopped, so this is a failure to boot rather than a slow one\n'
+        + `stdout:\n${child.__harnessStdout || '<empty>'}\n`
+        + `stderr:\n${child.__harnessStderr || '<empty>'}`,
       );
     }
     attempts += 1;
@@ -571,12 +582,18 @@ async function waitForBackend(baseUrl, token, child) {
 
   const elapsed = Date.now() - startedAt;
   if (child.exitCode !== null) {
-    throw new Error(`backend exited with code ${child.exitCode} after ${elapsed}ms`);
+    throw new Error(
+      `backend exited with code ${child.exitCode} after ${elapsed}ms\n`
+      + `stdout:\n${child.__harnessStdout || '<empty>'}\n`
+      + `stderr:\n${child.__harnessStderr || '<empty>'}`,
+    );
   }
   throw new Error(
     `backend did not answer within ${elapsed}ms across ${attempts} attempts, and is STILL RUNNING `
     + '— this is a timeout, not a crash. A cold ts-node transpile on a fresh clone is the usual '
-    + `cause; raise HARNESS_BACKEND_READY_MS above ${BACKEND_READY_TIMEOUT_MS} if the machine is slow.`,
+    + `cause; raise HARNESS_BACKEND_READY_MS above ${BACKEND_READY_TIMEOUT_MS} if the machine is slow.\n`
+    + `stdout:\n${child.__harnessStdout || '<empty>'}\n`
+    + `stderr:\n${child.__harnessStderr || '<empty>'}`,
   );
 }
 
@@ -617,7 +634,8 @@ async function httpSnapshot(baseUrl, token, fixture) {
 }
 
 function startTestBackend(testUrl, tokenSecret) {
-  const port = 4200 + (process.pid % 500);
+  const port = Number(process.env.HARNESS_BACKEND_PORT);
+  if (!Number.isInteger(port)) throw new Error('Harness wrapper did not provide a backend port');
   const child = spawn(process.execPath, ['-r', 'ts-node/register/transpile-only', 'src/index.ts'], {
     cwd: ROOT,
     env: {
@@ -637,11 +655,12 @@ function startTestBackend(testUrl, tokenSecret) {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  // The child is intentionally quiet, but a pipe still has a finite buffer.
-  // Drain both streams or a verbose provisioning pass eventually blocks the
-  // backend inside write(), and the next HTTP assertion waits forever.
-  child.stdout.resume();
-  child.stderr.resume();
+  // Drain both streams and retain them. A child that exits before binding must
+  // report its cause, not leave the gate to repeat an exit code as a rumour.
+  child.__harnessStdout = '';
+  child.__harnessStderr = '';
+  child.stdout.on('data', (chunk) => { child.__harnessStdout += chunk.toString(); });
+  child.stderr.on('data', (chunk) => { child.__harnessStderr += chunk.toString(); });
   return { child, baseUrl: `http://127.0.0.1:${port}` };
 }
 
@@ -1030,30 +1049,54 @@ async function tenantSnapshot(prisma) {
 }
 
 async function databaseAudits() {
-  const baseUrl = process.env.DATABASE_URL;
-  if (!baseUrl) {
-    record('database: disposable schema', false, 'DATABASE_URL is not configured');
+  const testUrl = process.env.DATABASE_URL;
+  const databaseName = process.env.RABITECH_TENANCY_DATABASE_NAME;
+  const redisUrl = process.env.REDIS_URL;
+  const redisContainerName = process.env.RABITECH_TENANCY_REDIS_CONTAINER;
+  const wrapperPid = process.env.RABITECH_TENANCY_WRAPPER_PID;
+  if (
+    !testUrl
+    || !databaseName
+    || !redisUrl
+    || !redisContainerName
+    || !wrapperPid
+    || !databaseName.startsWith('rabitech_tenancy_')
+    || !redisContainerName.startsWith('rabitech-tenancy-redis-')
+  ) {
+    record(
+      'database: disposable database preflight',
+      false,
+      'run through npm run test:tenancy; direct execution has no isolated database',
+    );
     return;
   }
 
-  const schemaName = `rabitech_bleed_${process.pid}_${Date.now()}`.toLowerCase();
+  const urlDatabase = decodeURIComponent(new URL(testUrl).pathname.replace(/^\//, ''));
+  if (urlDatabase !== databaseName || new URL(testUrl).searchParams.has('schema')) {
+    record('database: disposable database preflight', false, 'DATABASE_URL does not name the wrapper database');
+    return;
+  }
+  const parsedRedisUrl = new URL(redisUrl);
+  if (parsedRedisUrl.protocol !== 'redis:' || parsedRedisUrl.hostname !== '127.0.0.1' || !parsedRedisUrl.port) {
+    record('database: disposable database preflight', false, 'REDIS_URL does not name the wrapper Redis');
+    return;
+  }
+
   const snippetHarnessRoot = path.resolve(REPO_ROOT, '.tools', 'snippet-harness');
-  const snippetUploadDir = path.resolve(snippetHarnessRoot, schemaName);
+  const snippetUploadDir = path.resolve(snippetHarnessRoot, databaseName);
   if (!snippetUploadDir.startsWith(`${snippetHarnessRoot}${path.sep}`)) {
     throw new Error('Snippet harness upload path escaped its scratch directory');
   }
   const previousSnippetUploadDir = process.env.SNIPPET_UPLOAD_DIR;
   process.env.SNIPPET_UPLOAD_DIR = snippetUploadDir;
-  const testUrl = makeTestUrl(baseUrl, schemaName);
   const prismaCli = path.join(ROOT, 'node_modules', 'prisma', 'build', 'index.js');
-  const migrated = command('database: apply migrations to disposable schema', process.execPath, [prismaCli, 'migrate', 'deploy'], {
+  const migrated = command('database: apply migrations to disposable database', process.execPath, [prismaCli, 'migrate', 'deploy'], {
     env: { DATABASE_URL: testUrl },
   });
   if (!migrated) return;
 
   process.env.DATABASE_URL = testUrl;
   const raw = new PrismaClient({ datasources: { db: { url: testUrl } } });
-  const admin = new PrismaClient({ datasources: { db: { url: baseUrl } } });
   const fixtureWriter = withWorkspaceDefaults(raw);
   let backendChild;
   const sockets = [];
@@ -4658,7 +4701,7 @@ async function databaseAudits() {
     // ----------------------------------------------------------------
     // Conversation Operations (migration 64).
     //
-    // These run against the disposable schema, which has all 64
+    // These run against the disposable database, which has all 64
     // migrations applied. That makes this the last cheap place to find
     // a defect in migration 64 - before it reaches live data.
     // ----------------------------------------------------------------
@@ -7981,7 +8024,7 @@ async function databaseAudits() {
       */
       // The ceiling lives on each edition's current version now (D-19).
       const plans = await Promise.all(
-        EDITION_CODES.map(async (code) => ({ code, maxWorkspaces: (await editionRow(admin, code)).maxWorkspaces })),
+        EDITION_CODES.map(async (code) => ({ code, maxWorkspaces: (await editionRow(raw, code)).maxWorkspaces })),
       );
       const byCode = new Map(plans.map((row) => [row.code, row.maxWorkspaces]));
 
@@ -8176,10 +8219,6 @@ async function databaseAudits() {
     const appPrismaModule = require.cache[require.resolve('../src/prisma')];
     if (appPrismaModule) await require('../src/prisma').prisma.$disconnect().catch(() => {});
     await raw.$disconnect().catch(() => {});
-    await admin.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`).catch((error) => {
-      record('database: drop disposable schema', false, String(error));
-    });
-    await admin.$disconnect().catch(() => {});
     fs.rmSync(snippetUploadDir, { recursive: true, force: true });
     if (previousSnippetUploadDir === undefined) delete process.env.SNIPPET_UPLOAD_DIR;
     else process.env.SNIPPET_UPLOAD_DIR = previousSnippetUploadDir;

@@ -29,9 +29,14 @@ const path = require('path');
 const { runAsPlatform, runAsOrganization } = require('../dist/lib/tenant-context');
 const { prisma } = require('../dist/prisma');
 const { issueApiToken } = require('../dist/modules/api-tokens/api-token.service');
+const { defaultWorkspaceData } = require('../dist/lib/workspace-provisioning');
 
 const PORT = Number(process.env.VERIFY_API_PORT || 4199);
 const BASE = `http://127.0.0.1:${PORT}`;
+const GATE_ORGANIZATIONS = [
+  { id: 'public_api_gate_org_a', name: 'Public API Gate A', slug: 'public-api-gate-a', suffix: 'a' },
+  { id: 'public_api_gate_org_b', name: 'Public API Gate B', slug: 'public-api-gate-b', suffix: 'b' },
+];
 
 let passed = 0;
 let failed = 0;
@@ -87,12 +92,37 @@ async function waitForReady(child) {
   return false;
 }
 
+async function seedGateOrganizations() {
+  await runAsPlatform('verify-public-api:seed', () => prisma.$transaction(async (tx) => {
+    for (const organization of GATE_ORGANIZATIONS) {
+      await tx.organization.create({
+        data: {
+          id: organization.id,
+          name: organization.name,
+          slug: organization.slug,
+          status: 'ACTIVE',
+        },
+      });
+      await tx.workspace.create({ data: defaultWorkspaceData(organization.id, organization.name) });
+      await tx.organizationConfig.create({ data: { organizationId: organization.id } });
+      await tx.organizationChannel.create({
+        data: {
+          id: `public_api_gate_channel_${organization.suffix}`,
+          organizationId: organization.id,
+          kind: 'OPENWA',
+          baseUrl: '',
+          apiKeyEnc: '',
+          webhookToken: `public-api-gate-token-${organization.suffix}`,
+          status: 'PENDING',
+        },
+      });
+    }
+  }));
+}
+
 async function main() {
-  const orgs = await runAsPlatform('verify-public-api:orgs', () =>
-    prisma.organization.findMany({ orderBy: { id: 'asc' }, take: 2, select: { id: true } }),
-  );
-  if (orgs.length < 2) throw new Error('Need two organizations; found ' + orgs.length);
-  const [orgA, orgB] = orgs;
+  await seedGateOrganizations();
+  const [orgA, orgB] = GATE_ORGANIZATIONS;
 
   // Phone numbers no real contact will hold. E.164-shaped so normalisation
   // accepts them, and prefixed so cleanup can find any stragglers.
@@ -121,8 +151,12 @@ async function main() {
       PUBLIC_API_RATE_PER_SECOND: '10000',
       PUBLIC_API_RATE_PER_MINUTE: '100000',
     },
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
+  child.__harnessStdout = '';
+  child.__harnessStderr = '';
+  child.stdout.on('data', (chunk) => { child.__harnessStdout += chunk.toString(); });
+  child.stderr.on('data', (chunk) => { child.__harnessStderr += chunk.toString(); });
 
   const cleanup = async () => {
     child.kill('SIGKILL');
@@ -135,6 +169,9 @@ async function main() {
       if (sessionId) await prisma.whatsappSession.deleteMany({ where: { id: sessionId } });
       await prisma.apiToken.deleteMany({ where: { id: { in: Object.values(tokens).map((t) => t.id) } } });
       await prisma.tag.deleteMany({ where: { name: { in: ['gate-tag-one', 'gate-tag-two'] } } });
+      await prisma.organization.deleteMany({
+        where: { id: { in: GATE_ORGANIZATIONS.map((organization) => organization.id) } },
+      });
     });
     await prisma.$disconnect();
   };
@@ -142,6 +179,8 @@ async function main() {
   if (!(await waitForReady(child))) {
     console.log('');
     console.log('[ENV] The backend did not become ready on port ' + PORT + '.');
+    console.log('[ENV] Child stdout:\n' + (child.__harnessStdout || '<empty>'));
+    console.error('[ENV] Child stderr:\n' + (child.__harnessStderr || '<empty>'));
     console.log('[ENV] Nothing was tested. This is an environment failure, not a code failure.');
     console.log('[ENV] No summary line follows, deliberately — see the header of this file.');
     await cleanup();
@@ -833,4 +872,4 @@ async function main() {
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
-});
+}).finally(() => prisma.$disconnect());

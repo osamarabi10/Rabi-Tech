@@ -245,7 +245,15 @@ test('view-as requires a substantive reason and expires the tab grant', async ({
     route.fulfill({ json: { notifications: [], unreadCount: 0 } }));
   await page.route('**/api/system/**', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/auth/me**', (route) =>
-    route.fulfill({ json: { ...auth.user, locale: 'en', theme: 'light', isAway: false } }));
+    route.fulfill({ json: {
+      ...auth.user,
+      scope: 'PLATFORM',
+      platformRole: 'OWNER',
+      platformPermissions: ['subscriber:diagnostics', 'billing:view'],
+      locale: 'en',
+      theme: 'light',
+      isAway: false,
+    } }));
   await page.route('**/api/contacts/blocked', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/conversations**', (route) => route.fulfill({ json: [] }));
 

@@ -6,7 +6,18 @@ The P1-A release gate runs from `apps/backend`:
 npm run test:tenancy
 ```
 
-The runner creates a uniquely named PostgreSQL schema, applies the complete migration chain, seeds organization A and an overlapping organization B with ten times the data, runs the checks, and drops the schema. It never writes fixtures into the configured schema.
+The wrapper regenerates Prisma Client from the checked-out schema, verifies the
+generated schema matches it, and then creates a uniquely named PostgreSQL
+database plus a disposable loopback-only Redis container. It applies the
+complete migration chain, seeds organization A and an overlapping organization
+B with ten times the data, runs the checks, and removes both disposable
+services. It never writes fixtures into the configured database.
+
+The run refuses to start while a RabiTech backend process or its fixed test port
+is active. It also refuses to clean a stale disposable database with an active
+session. An explicit, named isolation waiver can force cleanup for recovery,
+but that run exits nonzero even when every assertion passes and cannot be used
+as certification.
 
 ## Coverage
 
@@ -47,10 +58,14 @@ The runner creates a uniquely named PostgreSQL schema, applies the complete migr
 
 The analytics summary response includes a generated response timestamp. The runner replaces only that response-time field with a fixed marker before comparison; persisted timestamps remain byte-compared.
 
-## Current Result — 2026-08-26
+## Current Result — 2026-09-09
 
-`91/91` checks pass as of 2026-08-26. The tenant isolation, provisioning,
+`160/160` checks pass as of 2026-09-09. The tenant isolation, provisioning,
 billing, analytics, workflow, and usage-metering release gate is green.
+
+That denominator describes this revision, not an independently stable suite.
+The harness records known order couplings in its source, and a check is not
+certified until a deliberate mutation has made it fail for the intended reason.
 
 The suite proves composite database ownership, organization-prefixed sockets, organization-owned
 configuration and provider caches, concurrent per-organization sequence allocation, durable

@@ -138,6 +138,15 @@ Design rules do not catch the failures this repository actually has. These do.
   restored file is byte-identical. A green gate that has never gone red is an
   untested assertion.
 
+- **Write the check from the brief before writing the product code it gates.**
+  Run it against the existing product and require it to fail at the intended
+  customer-facing assertion, not at setup, compilation or a missing fixture.
+  Only then implement. Where a schema or type must exist before a normal test
+  can compile, use a raw-SQL or HTTP probe to establish the red first; that is
+  an escape hatch for dependency order, not permission to skip the proof.
+  **A check is not certified until it has been observed to fail for the right
+  reason.** This applies retroactively to every check added here.
+
 - **A test catch-all must fail loudly, not answer plausibly.** A route handler
   that responds to every unmatched request with `{}` converts every fixture gap
   into the same misleading symptom: consumers read fields off an object that is
