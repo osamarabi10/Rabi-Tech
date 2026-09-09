@@ -147,6 +147,12 @@ Design rules do not catch the failures this repository actually has. These do.
   **A check is not certified until it has been observed to fail for the right
   reason.** This applies retroactively to every check added here.
 
+- **A run that cannot name its failure is not a result.** Every non-perfect
+  count must carry every failed check name and its assertion on the same
+  summary line, as well as in the readable failure block. A filter may shorten
+  successful output; it may not separate a red count from the evidence that
+  explains it.
+
 - **A test catch-all must fail loudly, not answer plausibly.** A route handler
   that responds to every unmatched request with `{}` converts every fixture gap
   into the same misleading symptom: consumers read fields off an object that is
@@ -713,8 +719,10 @@ Design rules do not catch the failures this repository actually has. These do.
 
   | Port | Serves | From |
   |---|---|---|
-  | `:8080` | `next dev` | **the working tree**, compiled per request |
-  | `:18080` | compose `frontend` | a built image, stale until rebuilt |
+  | `:8080` | `halla-images-1` | **another project; never RabiTech** |
+  | `:8081` | Playwright's `next start` | the current RabiTech test build, only while the suite runs |
+  | `:18080` | RabiTech compose `frontend` | a built image, stale until rebuilt |
+  | another free port, for example `:8082` | an explicitly started RabiTech `next dev` | **the working tree**, compiled per request |
   | `:4000` (container stopped) | `npm run dev` in `apps/backend` | **the working tree** |
   | `:4000` (container running) | compose `backend` | a built image, stale until rebuilt |
 
@@ -735,7 +743,7 @@ Design rules do not catch the failures this repository actually has. These do.
   tree:
 
       docker compose stop frontend        # then, from apps/frontend:
-      npm run dev                         # http://localhost:8080
+      npx next dev -H 127.0.0.1 -p 8082   # choose a free port other than 8080/8081
 
       docker compose stop backend         # then, from apps/backend:
       npm run dev                         # http://localhost:4000
@@ -743,7 +751,11 @@ Design rules do not catch the failures this repository actually has. These do.
   Leave `postgres`, `redis` and `openwa` running. The frontend dev server
   reaches the backend on `:4000` through the rewrites in `next.config.js`,
   whichever backend is answering there. `localhost:3000` is nothing in this
-  repo; the frontend dev server is on 8080.
+  repo. On this workstation the RabiTech Compose application is
+  `http://localhost:18080`; `localhost:8080` belongs to `halla-images-1` and
+  must not be stopped, reused or cited as RabiTech evidence. Port `:8081` is
+  reserved for Playwright, so source execution uses another explicitly chosen
+  free port.
 
   The same confusion in a different costume is `test:e2e`, which serves a
   production build through `next start`. That one is now enforced by

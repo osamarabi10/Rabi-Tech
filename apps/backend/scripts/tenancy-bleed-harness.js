@@ -8754,11 +8754,22 @@ async function main() {
   await closeLoadedQueues();
 
   const failed = results.filter((result) => !result.passed);
-  process.stdout.write(`\n${results.length - failed.length}/${results.length} checks passed.\n`);
+  const count = `${results.length - failed.length}/${results.length} checks passed.`;
   if (failed.length > 0) {
-    process.stdout.write('Failed checks:\n');
-    failed.forEach((result) => process.stdout.write(`- ${result.name}\n`));
+    const failures = failed.map((result) => ({
+      check: result.name,
+      assertion: result.detail || 'check returned false without an assertion detail',
+    }));
+    // Keep the count and every failure inseparable: even a count-only output
+    // filter now retains the check names and their full assertions.
+    process.stdout.write(`\n${count} FAILURES=${JSON.stringify(failures)}\n`);
+    process.stdout.write('Failure details (name and assertion):\n');
+    failures.forEach((failure) => {
+      process.stdout.write(`[FAIL DETAIL] ${failure.check}: ${JSON.stringify(failure.assertion)}\n`);
+    });
     process.exitCode = 1;
+  } else {
+    process.stdout.write(`\n${count}\n`);
   }
 }
 
