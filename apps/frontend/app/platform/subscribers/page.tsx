@@ -4,10 +4,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, MessageCircle, MoreHorizontal, Pause, Play,
-  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, Eye, Wallet, AlarmClock, Clock, Plug, ArrowLeft,
+  Plus, RefreshCw, RotateCw, Tag, Trash2, Users, Eye, Wallet, AlarmClock, Clock, Plug,
+  Search, CircleAlert, Activity,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import Link from 'next/link';
 import api, { setViewAsOrg } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -239,6 +239,9 @@ export default function SubscribersPage() {
   const router = useRouter();
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [active, setActive] = useState<RiskKey[]>([]);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | Subscriber['status']>('ALL');
+  const [planFilter, setPlanFilter] = useState('ALL');
   /*
     The editions an owner may activate somebody onto.
 
@@ -256,6 +259,7 @@ export default function SubscribersPage() {
   const [saving, setSaving] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
   const [destroyTarget, setDestroyTarget] = useState<Subscriber | null>(null);
+  const [paymentFailureTarget, setPaymentFailureTarget] = useState<Subscriber | null>(null);
   const [termsTarget, setTermsTarget] = useState<Subscriber | null>(null);
   const [viewTarget, setViewTarget] = useState<Subscriber | null>(null);
   const [viewReason, setViewReason] = useState('');
@@ -310,6 +314,11 @@ export default function SubscribersPage() {
     setPlatformSession(user);
     load();
   }, [load, router]);
+
+  useEffect(() => {
+    const initialSearch = new URLSearchParams(window.location.search).get('search');
+    if (initialSearch) setQuery(initialSearch.slice(0, 120));
+  }, []);
 
   useEffect(() => {
     const changing = subscribers.some((subscriber) =>
@@ -460,6 +469,7 @@ export default function SubscribersPage() {
     try {
       await api.post(`/api/platform/subscribers/${subscriber.id}/billing/mark-failed`, { reason: 'Manual payment failure' });
       toast.success('Payment failure applied');
+      setPaymentFailureTarget(null);
       await load();
     } catch (err: any) {
       toast.error(err?.response?.data?.error || 'Failed to mark payment failed');
@@ -480,9 +490,25 @@ export default function SubscribersPage() {
     rather than in the map below so the "showing N of M" line and the rows are
     the same array, and cannot report different totals.
   */
-  const visible = subscribers.filter(
-    (subscriber) => active.every((key) => RISKS[key].match(subscriber)),
-  );
+  const normalizedQuery = query.trim().slice(0, 120).toLocaleLowerCase();
+  const availablePlans = Array.from(new Set(subscribers.map((subscriber) => subscriber.tier))).sort();
+  const visible = subscribers.filter((subscriber) => {
+    if (!active.every((key) => RISKS[key].match(subscriber))) return false;
+    if (statusFilter !== 'ALL' && subscriber.status !== statusFilter) return false;
+    if (planFilter !== 'ALL' && subscriber.tier !== planFilter) return false;
+    if (!normalizedQuery) return true;
+    return [subscriber.name, subscriber.slug, subscriber.tier]
+      .some((candidate) => candidate.toLocaleLowerCase().includes(normalizedQuery));
+  });
+
+  const hasFilters = active.length > 0 || Boolean(normalizedQuery) || statusFilter !== 'ALL' || planFilter !== 'ALL';
+
+  const clearFilters = () => {
+    setActive([]);
+    setQuery('');
+    setStatusFilter('ALL');
+    setPlanFilter('ALL');
+  };
 
   const stateVariant = (state?: ProvisioningState) => {
     if (state === 'ACTIVE') return 'default' as const;
@@ -490,108 +516,234 @@ export default function SubscribersPage() {
     return 'secondary' as const;
   };
 
+  const subscriberActions = (subscriber: Subscriber, expanded = false) => {
+    const channel = subscriber.channels[0];
+    return (
+      <div className={cn('flex items-center gap-1.5', expanded && 'w-full lg:w-auto')}>
+        {canOpenSubscriber ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className={cn('h-8', expanded && 'flex-1 lg:flex-none')}
+            title="Open this subscriber's workspace read-only"
+            onClick={() => setViewTarget(subscriber)}
+          >
+            <Eye className="h-3.5 w-3.5" /> View
+          </Button>
+        ) : null}
+        <Button
+          size="sm"
+          variant="outline"
+          className={cn('h-8 px-2.5', expanded && 'flex-1 lg:flex-none')}
+          title="Plan override, quota, discount and credit"
+          onClick={() => setTermsTarget(subscriber)}
+        >
+          <Tag className="h-3.5 w-3.5" />
+          <span className={expanded ? 'lg:sr-only' : 'sr-only'}>Terms</span>
+          {subscriber.planOverride ? <span className="ms-1 h-1.5 w-1.5 rounded-full bg-warning" aria-label="Has override" /> : null}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className={cn('h-8 px-2.5', expanded && 'flex-1 lg:flex-none')}
+          title="Invoices, payments and receipts"
+          onClick={() => setFinanceTarget(subscriber)}
+        >
+          <Wallet className="h-3.5 w-3.5" />
+          <span className={expanded ? 'lg:sr-only' : 'sr-only'}>Finance</span>
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0"
+              disabled={actionId === subscriber.id}
+              title="Actions"
+            >
+              {actionId === subscriber.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+              <span className="sr-only">More actions</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState !== 'FAILED'} onSelect={() => gatewayAction(subscriber, 'retry')}>
+              <RefreshCw /> Retry provisioning
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState === 'SUSPENDED'} onSelect={() => gatewayAction(subscriber, 'suspend')}>
+              <Pause /> Force suspend
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState !== 'SUSPENDED'} onSelect={() => gatewayAction(subscriber, 'resume')}>
+              <Play /> Resume
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!channel?.managedByProvisioner} onSelect={() => gatewayAction(subscriber, 'restart')}>
+              <RotateCw /> Restart gateway
+            </DropdownMenuItem>
+            {channel && !channel.managedByProvisioner ? (
+              <DropdownMenuItem onSelect={() => setChannelTarget(subscriber)}>
+                <Plug /> Edit OpenWA channel
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuSeparator />
+            {subscriber.subscriptions[0]?.trialEndsAt ? (
+              <>
+                <DropdownMenuItem onSelect={() => extendTrial(subscriber, 3)}>
+                  <Clock /> Extend trial 3h
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => extendTrial(subscriber, 24)}>
+                  <Clock /> Extend trial 24h
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => extendTrial(subscriber, 24 * 7)}>
+                  <Clock /> Extend trial 7 days
+                </DropdownMenuItem>
+              </>
+            ) : null}
+            <DropdownMenuItem onSelect={() => setPaymentFailureTarget(subscriber)}>
+              <Pause /> Mark payment failed
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setDestroyTarget(subscriber)}>
+              <Trash2 /> Destroy subscriber
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
+
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <Building2 className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-sm font-bold">RabiTech</p>
-              <p className="text-xs text-muted-foreground">Platform control</p>
-            </div>
+    <main className="min-h-full bg-background text-foreground">
+      <section className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
+        <header className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase text-muted-foreground">Customer operations</p>
+            <h1 className="mt-1 text-2xl font-semibold">Subscribers</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Monitor service, usage, billing, and channel health.</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className={cn('me-2 h-4 w-4', loading && 'animate-spin')} />
+              Refresh
+            </Button>
             <Button size="sm" onClick={() => setOpen(true)}>
-              <Plus className="h-4 w-4" /> New subscriber
+              <Plus className="me-2 h-4 w-4" /> New subscriber
             </Button>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <section className="mx-auto max-w-7xl px-5 py-6">
-        {/* A console you can only leave with the browser back button is one
-            page wearing a trench coat. */}
-        <Link
-          href="/platform"
-          className="inline-flex items-center gap-1.5 text-caption text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5 rtl:rotate-180" />
-          Platform control
-        </Link>
-        <h1 className="mb-4 mt-2 text-lg font-bold">Subscribers</h1>
-        <GatewayAlerts health={health} />
-
-        {/*
-          The shape of the business, before any row is read.
-
-          Counted from the same predicates the chips filter by, so the number
-          on a tile is always the number of rows the matching chip would show.
-          Two implementations of "at risk" is how a console starts lying at a
-          glance while every individual row stays correct.
-        */}
-        <dl className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <dl className="mt-5 grid overflow-hidden rounded-md border border-border bg-card grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-x-reverse lg:divide-border">
           {([
-            ['Total', subscribers.length, ''],
-            ['Active', subscribers.filter((s) => s.status === 'ACTIVE').length, ''],
-            ['In trial', subscribers.filter(inTrial).length, ''],
-            ['At risk', subscribers.filter(atRisk).length, 'text-warning'],
-          ] as Array<[string, number, string]>).map(([label, value, tone]) => (
-            <div key={label} className="rounded-md border border-border bg-muted/30 px-3 py-2">
-              <dt className="text-caption text-muted-foreground">{label}</dt>
-              <dd className={cn('text-lg font-bold tabular-nums', tone)} dir="ltr">{value}</dd>
+            ['Total', subscribers.length, Building2, ''],
+            ['Active', subscribers.filter((subscriber) => subscriber.status === 'ACTIVE').length, Activity, 'text-success'],
+            ['In trial', subscribers.filter(inTrial).length, Clock, 'text-primary'],
+            ['At risk', subscribers.filter(atRisk).length, CircleAlert, 'text-warning'],
+          ] as Array<[string, number, typeof Building2, string]>).map(([label, value, Icon, tone], index) => (
+            <div
+              key={label}
+              className={cn(
+                'flex min-h-20 items-center gap-3 px-4 py-3',
+                index < 2 && 'border-b border-border lg:border-b-0',
+              )}
+            >
+              <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground', tone)}>
+                <Icon className="h-4 w-4" />
+              </span>
+              <div>
+                <dt className="text-xs text-muted-foreground">{label}</dt>
+                <dd className={cn('mt-0.5 text-xl font-semibold tabular-nums', tone)} dir="ltr">{value}</dd>
+              </div>
             </div>
           ))}
         </dl>
 
-        {/*
-          Chips rather than a select: these combine, and an owner chasing
-          renewals wants "ending soon AND quiet" without learning a query
-          language. Narrowing, not widening — every active chip must match.
-        */}
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          {RISK_KEYS.map((key) => {
-            const on = active.includes(key);
-            return (
-              <Button
-                key={key}
-                size="sm"
-                variant={on ? 'default' : 'outline'}
-                aria-pressed={on}
-                onClick={() => setActive((current) => (
-                  current.includes(key) ? current.filter((k) => k !== key) : [...current, key]
-                ))}
-              >
-                {RISKS[key].label}
-                <span className="ms-1.5 tabular-nums opacity-70" dir="ltr">
-                  {subscribers.filter(RISKS[key].match).length}
-                </span>
-              </Button>
-            );
-          })}
-          {active.length > 0 && (
-            <Button size="sm" variant="ghost" onClick={() => setActive([])}>
-              Clear
-            </Button>
-          )}
-          {/*
-            Say what is hidden. A filtered table that looks like the whole list
-            is how somebody concludes a subscriber has vanished.
-          */}
-          {active.length > 0 && (
-            <span className="text-caption text-muted-foreground" role="status">
-              Showing {visible.length} of {subscribers.length}
-            </span>
-          )}
+        <div className="mt-4">
+          <GatewayAlerts health={health} />
         </div>
-        <div className="overflow-x-auto rounded-md border border-border">
-          <div className="grid min-w-[1696px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_80px_130px_140px_130px_120px_minmax(190px,1.3fr)_92px_70px] gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold text-muted-foreground">
-            <span>Name</span><span>Slug</span><span>Billing</span><span>Users</span><span>WhatsApp</span><span>Branches</span><span>Active contacts</span><span>Outbound messages</span><span>Campaign sends</span><span>Last inbound</span><span>Gateway</span><span title="Left dot: status poll. Right dot: internal self-send probe.">Health</span><span className="sr-only">Actions</span>
+
+        <div className="mt-4 rounded-md border border-border bg-card">
+          <div className="grid gap-3 border-b border-border p-3 lg:grid-cols-[minmax(240px,1fr)_160px_160px_auto]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Label htmlFor="subscriber-search" className="sr-only">Search subscribers</Label>
+              <Input
+                id="subscriber-search"
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search name or slug"
+                maxLength={120}
+                className="h-9 ps-9"
+              />
+            </div>
+            <Label className="sr-only" htmlFor="subscriber-status">Subscriber status</Label>
+            <select
+              id="subscriber-status"
+              className="select-field h-9"
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value as 'ALL' | Subscriber['status'])}
+            >
+              <option value="ALL">All statuses</option>
+              <option value="ACTIVE">Active</option>
+              <option value="SUSPENDED">Suspended</option>
+              <option value="PROVISIONING">Provisioning</option>
+            </select>
+            <Label className="sr-only" htmlFor="subscriber-plan">Subscriber plan</Label>
+            <select
+              id="subscriber-plan"
+              className="select-field h-9"
+              value={planFilter}
+              onChange={(event) => setPlanFilter(event.target.value)}
+            >
+              <option value="ALL">All plans</option>
+              {availablePlans.map((plan) => <option key={plan} value={plan}>{plan}</option>)}
+            </select>
+            {hasFilters ? (
+              <Button size="sm" variant="ghost" onClick={clearFilters}>Clear</Button>
+            ) : <span aria-hidden />}
           </div>
-          {loading && <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading...</p>}
-          {!loading && loadError && (
+
+          <div className="flex flex-wrap items-center gap-2 p-3">
+            <span className="me-1 text-xs font-medium text-muted-foreground">Risk</span>
+            {RISK_KEYS.map((key) => {
+              const selected = active.includes(key);
+              return (
+                <Button
+                  key={key}
+                  size="sm"
+                  variant={selected ? 'default' : 'outline'}
+                  aria-pressed={selected}
+                  onClick={() => setActive((current) => (
+                    current.includes(key) ? current.filter((candidate) => candidate !== key) : [...current, key]
+                  ))}
+                  className="h-8"
+                >
+                  {RISKS[key].label}
+                  <span className="ms-1.5 tabular-nums opacity-70" dir="ltr">
+                    {subscribers.filter(RISKS[key].match).length}
+                  </span>
+                </Button>
+              );
+            })}
+            {hasFilters ? (
+              <span className="ms-auto text-xs text-muted-foreground" role="status">
+                Showing {visible.length} of {subscribers.length}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-4 overflow-x-auto rounded-md border border-border bg-card">
+          <div className="hidden min-w-[1040px] grid-cols-[minmax(175px,1.3fr)_minmax(115px,0.8fr)_minmax(175px,1.1fr)_minmax(140px,0.9fr)_80px_78px_178px] gap-4 border-b border-border bg-muted/40 px-4 py-2.5 text-xs font-semibold text-muted-foreground lg:grid">
+            <span>Subscriber</span>
+            <span>Plan</span>
+            <span>Usage</span>
+            <span>Channel</span>
+            <span>Last inbound</span>
+            <span title="Status poll and internal self-send probe">Health</span>
+            <span className="sr-only">Actions</span>
+          </div>
+
+          {loading ? <p className="px-4 py-10 text-center text-sm text-muted-foreground">Loading subscribers...</p> : null}
+          {!loading && loadError ? (
             <ErrorState
               compact
               title="Could not load subscribers"
@@ -599,217 +751,121 @@ export default function SubscribersPage() {
               retryLabel="Retry"
               onRetry={load}
             />
-          )}
-          {!loading && !loadError && subscribers.length === 0 && (
+          ) : null}
+          {!loading && !loadError && subscribers.length === 0 ? (
             <EmptyState compact title="No subscribers" description="Create a subscriber to see workspaces in this console." />
-          )}
-          {/*
-            An empty filter result is not an empty console, and must not read
-            as one — the way out is named, because a filter you cannot see is a
-            filter you cannot undo.
-          */}
-          {!loading && !loadError && subscribers.length > 0 && visible.length === 0 && (
+          ) : null}
+          {!loading && !loadError && subscribers.length > 0 && visible.length === 0 ? (
             <EmptyState
               compact
               title="No subscribers match these filters"
               description={`All ${subscribers.length} are hidden by the filters above. Clear them to see the full list.`}
             />
-          )}
+          ) : null}
+
           {!loading && !loadError && visible.map((subscriber) => {
             const channel = subscriber.channels[0];
             return (
-              <div key={subscriber.id} className="grid min-w-[1696px] grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_90px_70px_90px_80px_130px_140px_130px_120px_minmax(190px,1.3fr)_92px_70px] items-center gap-3 border-b border-border px-4 py-3 text-sm last:border-0">
-                <span className="truncate font-semibold">{subscriber.name}</span>
-                <span className="truncate font-mono text-xs text-muted-foreground">{subscriber.slug}</span>
-                <div className="min-w-0">
-                  <Badge variant={subscriber.subscriptions[0]?.status === 'ACTIVE' ? 'default' : 'secondary'}>
-                    {subscriber.tier}
-                  </Badge>
-                  <p className="mt-1 truncate text-caption text-muted-foreground">
-                    {subscriber.subscriptions[0]?.status || 'none'}{subscriber.emailVerifiedAt ? '' : ' · email pending'}
-                  </p>
-                  {/*
-                    Where a trial stands. Rendered from the deadline rather than
-                    from a stored 'expired' flag, because nothing writes one —
-                    expiry is decided when someone asks, so this reads the same
-                    source the paywall does and cannot disagree with it.
-                  */}
-                  {trialLabel(subscriber) && (
-                    <p
-                      className={cn(
-                        'mt-1 truncate text-caption',
-                        trialExpired(subscriber) ? 'text-danger' : 'text-warning',
-                      )}
+              <article
+                key={subscriber.id}
+                aria-label={subscriber.name}
+                className={cn(
+                  'grid grid-cols-2 gap-x-4 gap-y-4 border-b border-border px-4 py-4 text-sm last:border-b-0',
+                  'lg:min-w-[1040px] lg:grid-cols-[minmax(175px,1.3fr)_minmax(115px,0.8fr)_minmax(175px,1.1fr)_minmax(140px,0.9fr)_80px_78px_178px] lg:items-center lg:gap-4 lg:py-3',
+                  atRisk(subscriber) && 'bg-warning/[0.025]',
+                )}
+              >
+                <div className="col-span-2 min-w-0 lg:col-span-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-semibold">{subscriber.name}</span>
+                    {subscriber.overLimit ? (
+                      <CircleAlert className="h-4 w-4 shrink-0 text-warning" aria-label="Over a plan limit" />
+                    ) : null}
+                  </div>
+                  <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground" dir="ltr">{subscriber.slug}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1" title="Users"><Users className="h-3.5 w-3.5" />{subscriber._count.users}</span>
+                    <span className="flex items-center gap-1" title="WhatsApp sessions"><MessageCircle className="h-3.5 w-3.5" />{subscriber._count.whatsappSessions}</span>
+                    <span
+                      className={cn('flex items-center gap-1', subscriber.overLimitReasons.includes('workspaces') && 'font-semibold text-warning')}
+                      title="Branches"
                     >
+                      <Building2 className="h-3.5 w-3.5" />{subscriber.workspaceCount}
+                    </span>
+                    {!subscriber.emailVerifiedAt ? <span className="text-warning">Email pending</span> : null}
+                  </div>
+                </div>
+
+                <div className="min-w-0">
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground lg:hidden">Plan</p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant={subscriber.subscriptions[0]?.status === 'ACTIVE' ? 'default' : 'secondary'}>{subscriber.tier}</Badge>
+                    {subscriber.planOverride ? <Badge variant="outline">Override</Badge> : null}
+                  </div>
+                  <p className="mt-1 truncate text-xs text-muted-foreground">{subscriber.subscriptions[0]?.status || 'No subscription'}</p>
+                  {trialLabel(subscriber) ? (
+                    <p className={cn('mt-1 truncate text-xs', trialExpired(subscriber) ? 'text-danger' : 'text-warning')}>
                       {trialLabel(subscriber)}
                     </p>
-                  )}
-                  {/*
-                    Counting down to cut-off. The one thing on this row an
-                    owner has to act on before a date rather than after it, so
-                    it sits with the billing state and not in a dialog.
-                  */}
-                  {subscriber.suspendAt && (
-                    <p
-                      className="mt-1 flex items-center gap-1 text-caption text-destructive"
-                      title={subscriber.suspendReason ?? undefined}
-                    >
-                      <AlarmClock className="h-3 w-3 shrink-0" aria-hidden />
-                      <span className="truncate">
-                        {new Date(subscriber.suspendAt) <= new Date()
-                          ? 'overdue — cut-off due'
-                          : `cut-off ${subscriber.suspendAt.slice(0, 10)}`}
-                      </span>
+                  ) : null}
+                  {subscriber.suspendAt ? (
+                    <p className="mt-1 flex items-center gap-1 truncate text-xs text-destructive" title={subscriber.suspendReason ?? undefined}>
+                      <AlarmClock className="h-3 w-3 shrink-0" />
+                      {new Date(subscriber.suspendAt) <= new Date() ? 'Cut-off due' : `Cut-off ${subscriber.suspendAt.slice(0, 10)}`}
                     </p>
-                  )}
+                  ) : null}
                 </div>
-                <span className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5" />{subscriber._count.users}</span>
-                <span className="flex items-center gap-1.5"><MessageCircle className="h-3.5 w-3.5" />{subscriber._count.whatsappSessions}</span>
-                {/*
-                  Marked when full, from the server’s own decision. The dot is
-                  not a second judgement about the number beside it.
-                */}
-                <span
-                  className={cn(
-                    'flex items-center gap-1.5 tabular-nums',
-                    subscriber.overLimitReasons.includes('workspaces') && 'text-warning font-semibold',
-                  )}
-                  dir="ltr"
-                  title={subscriber.overLimitReasons.includes('workspaces') ? 'At the branch ceiling for this plan' : undefined}
-                >
-                  <Building2 className="h-3.5 w-3.5" />{subscriber.workspaceCount}
-                </span>
-                <span className="font-mono text-xs">{usageValue(subscriber.id, 'active_contacts')}</span>
-                <span className="font-mono text-xs">{usageValue(subscriber.id, 'messages_outbound')}</span>
-                <span className="font-mono text-xs">{usageValue(subscriber.id, 'campaign_sends')}</span>
-                {/*
-                  Silence is a churn signal, and it is invisible in every other
-                  column on this row: a subscriber can be paid up, connected and
-                  inside every limit while nobody has messaged them for a month.
-                */}
-                <span
-                  className={cn(
-                    'truncate text-xs',
-                    RISKS.quiet14.match(subscriber) ? 'text-warning' : 'text-muted-foreground',
-                  )}
-                  title={subscriber.lastInboundAt ?? 'No inbound message has ever arrived'}
-                >
-                  {quietLabel(subscriber)}
-                </span>
-                <div className="min-w-0 space-y-1">
+
+                <div className="col-span-2 min-w-0 lg:col-span-1">
+                  <p className="mb-2 text-xs font-medium text-muted-foreground lg:hidden">Usage</p>
+                  <dl className="grid grid-cols-3 gap-3 lg:block lg:space-y-1.5">
+                    {[
+                      ['Contacts', 'active_contacts'],
+                      ['Outbound', 'messages_outbound'],
+                      ['Campaign', 'campaign_sends'],
+                    ].map(([label, metric]) => (
+                      <div key={metric} className="min-w-0 lg:flex lg:items-center lg:justify-between lg:gap-2">
+                        <dt className="truncate text-xs text-muted-foreground lg:shrink-0">{label}</dt>
+                        <dd className="mt-0.5 break-words font-mono text-[11px] font-medium leading-4 lg:mt-0 lg:shrink-0 lg:whitespace-nowrap" dir="ltr">{usageValue(subscriber.id, metric)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+
+                <div className="min-w-0">
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground lg:hidden">Channel</p>
                   <div className="flex items-center gap-2">
                     <Badge variant={stateVariant(channel?.provisioningState)}>
                       {channel?.provisioningState || subscriber.status}
                     </Badge>
-                    {channel?.apiPort && <span className="font-mono text-xs text-muted-foreground">:{channel.apiPort}</span>}
+                    {channel?.apiPort ? <span className="font-mono text-xs text-muted-foreground">:{channel.apiPort}</span> : null}
                   </div>
-                  <p className="truncate text-xs text-muted-foreground" title={channel?.failureReason || undefined}>
-                    {channel?.failureReason || channel?.provisioningStep?.replaceAll('_', ' ') || 'Unmanaged'}
+                  <p className="mt-1 truncate text-xs text-muted-foreground" title={channel?.failureReason || undefined}>
+                    {channel?.failureReason
+                      || channel?.provisioningStep?.replaceAll('_', ' ')
+                      || (channel?.managedByProvisioner ? 'Managed gateway' : 'Manually configured')}
                   </p>
                 </div>
-                <HealthCell
-                  organizationId={subscriber.id}
-                  health={health}
-                  onRefresh={refreshHealth}
-                />
-                {canOpenSubscriber ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    title="Open this subscriber's workspace read-only"
-                    onClick={() => setViewTarget(subscriber)}
+
+                <div className="min-w-0">
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground lg:hidden">Last inbound</p>
+                  <span
+                    className={cn('text-xs', RISKS.quiet14.match(subscriber) ? 'font-medium text-warning' : 'text-muted-foreground')}
+                    title={subscriber.lastInboundAt ?? 'No inbound message has ever arrived'}
                   >
-                    <Eye className="h-3.5 w-3.5" /> View
-                  </Button>
-                ) : <span aria-hidden />}
-                {/*
-                  A button of its own rather than an item in the menu above:
-                  that menu is disabled whenever the gateway is unmanaged, and
-                  commercial terms have nothing to do with gateway state.
-                */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  title="Plan override, MAC quota, discount and credit"
-                  onClick={() => setTermsTarget(subscriber)}
-                >
-                  <Tag className="h-3.5 w-3.5" /> Terms
-                  {subscriber.planOverride && (
-                    <Badge variant="secondary" className="ms-1 px-1 text-micro">عرض خاص</Badge>
-                  )}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  title="Invoices, payments and receipts"
-                  onClick={() => setFinanceTarget(subscriber)}
-                >
-                  <Wallet className="h-3.5 w-3.5" /> Finance
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    {/*
-                      Enabled regardless of the gateway. This trigger used to
-                      require a provisioner-managed channel, which disabled the
-                      whole menu — including extending a trial and activating a
-                      plan — for every subscriber on a hand-configured gateway.
-                      Billing actions have nothing to do with who provisioned
-                      the channel. The gateway *items* still carry that
-                      condition, individually, below.
-                    */}
-                    <Button size="icon" variant="ghost" disabled={actionId === subscriber.id} title="Actions">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState !== 'FAILED'} onSelect={() => gatewayAction(subscriber, 'retry')}>
-                      <RefreshCw /> Retry provisioning
-                    </DropdownMenuItem>
-                    <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState === 'SUSPENDED'} onSelect={() => gatewayAction(subscriber, 'suspend')}>
-                      <Pause /> Force suspend
-                    </DropdownMenuItem>
-                    <DropdownMenuItem disabled={!channel?.managedByProvisioner || channel?.provisioningState !== 'SUSPENDED'} onSelect={() => gatewayAction(subscriber, 'resume')}>
-                      <Play /> Resume
-                    </DropdownMenuItem>
-                    <DropdownMenuItem disabled={!channel?.managedByProvisioner} onSelect={() => gatewayAction(subscriber, 'restart')}>
-                      <RotateCw /> Restart gateway
-                    </DropdownMenuItem>
-                    {/*
-                      The inverse condition: a managed gateway is changed
-                      through provisioning actions and the endpoint refuses it
-                      with a 409, so offering this there would be a control
-                      that always errors.
-                    */}
-                    {channel && !channel.managedByProvisioner && (
-                      <DropdownMenuItem onSelect={() => setChannelTarget(subscriber)}>
-                        <Plug /> Edit OpenWA channel
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuSeparator />
-                    {/* Only for subscribers who actually have a trial to extend. */}
-                    {subscriber.subscriptions[0]?.trialEndsAt && (
-                      <>
-                        <DropdownMenuItem onSelect={() => extendTrial(subscriber, 3)}>
-                          <Clock /> Extend trial 3h
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => extendTrial(subscriber, 24)}>
-                          <Clock /> Extend trial 24h
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => extendTrial(subscriber, 24 * 7)}>
-                          <Clock /> Extend trial 7 days
-                        </DropdownMenuItem>
-                      </>
-                    )}
-                    <DropdownMenuItem onSelect={() => markPaymentFailed(subscriber)}>
-                      <Pause /> Mark payment failed
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setDestroyTarget(subscriber)}>
-                      <Trash2 /> Destroy subscriber
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
+                    {quietLabel(subscriber)}
+                  </span>
+                </div>
+
+                <div className="min-w-0">
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground lg:hidden">Health</p>
+                  <HealthCell organizationId={subscriber.id} health={health} onRefresh={refreshHealth} />
+                </div>
+
+                <div className="col-span-2 flex justify-end lg:col-span-1">
+                  {subscriberActions(subscriber, true)}
+                </div>
+              </article>
             );
           })}
         </div>
@@ -975,6 +1031,39 @@ export default function SubscribersPage() {
         onClose={() => setTermsTarget(null)}
         onSaved={load}
       />
+
+      <Dialog
+        open={Boolean(paymentFailureTarget)}
+        onOpenChange={(open) => {
+          if (!open && actionId !== paymentFailureTarget?.id) setPaymentFailureTarget(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark payment failed</DialogTitle>
+            <DialogDescription>
+              This suspends service immediately for {paymentFailureTarget?.name}. It does not wait for the normal dunning grace period.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPaymentFailureTarget(null)}
+              disabled={actionId === paymentFailureTarget?.id}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => paymentFailureTarget && markPaymentFailed(paymentFailureTarget)}
+              disabled={actionId === paymentFailureTarget?.id}
+            >
+              <Pause className="h-4 w-4" aria-hidden />
+              Mark payment failed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(destroyTarget)} onOpenChange={(value) => !value && setDestroyTarget(null)}>
         <DialogContent className="max-w-md">

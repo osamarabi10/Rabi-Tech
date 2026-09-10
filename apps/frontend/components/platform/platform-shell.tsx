@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   Building2,
+  ChevronRight,
   CreditCard,
   Database,
   FileText,
@@ -17,24 +18,14 @@ import {
   Shield,
   Users,
   Wrench,
+  X,
 } from 'lucide-react';
 import { setViewAsOrg } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-/**
- * Navigation chrome for the platform console. Chrome only.
- *
- * This shell does not guard anything. Each platform page keeps its own 401/403
- * redirect, and the API refuses on its own terms — requirePlatformOwner and
- * requirePlatformPermission in platform.routes.ts are the boundary. A second
- * gate here would mean two places to reason about when access changes, and a
- * filtered menu is not access control in any case: these routes stay reachable
- * by typing the URL, which is fine precisely because the server says no.
- *
- * So what follows decides what is shown, never what is allowed.
- */
-
 type PlatformSession = {
+  name?: string;
+  email?: string;
   platformRole?: 'OWNER' | 'SUPPORT';
   platformPermissions?: string[];
 };
@@ -46,36 +37,23 @@ type NavItem = {
   icon: typeof LayoutDashboard;
   ownerOnly?: boolean;
   permission?: string;
-  /** False marks a route that exists but is a placeholder; the menu says so. */
   built?: boolean;
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { href: '/platform', label: 'Overview', description: 'Platform health and revenue', icon: LayoutDashboard, ownerOnly: true, built: true },
-  { href: '/platform/subscribers', label: 'Subscribers', description: 'Accounts and gateway status', icon: Users, permission: 'subscriber:diagnostics', built: true },
-  { href: '/platform/editions', label: 'Editions', description: 'Plan catalog and entitlements', icon: BarChart3, ownerOnly: true, built: true },
+  { href: '/platform', label: 'Overview', description: 'Health, revenue, and risk', icon: LayoutDashboard, ownerOnly: true, built: true },
+  { href: '/platform/subscribers', label: 'Subscribers', description: 'Accounts and gateway fleet', icon: Users, permission: 'subscriber:diagnostics', built: true },
+  { href: '/platform/editions', label: 'Editions', description: 'Plan catalogue and quotas', icon: BarChart3, ownerOnly: true, built: true },
   { href: '/platform/finance', label: 'Finance', description: 'Invoices and payments', icon: CreditCard, permission: 'billing:view' },
-  { href: '/platform/operations', label: 'Operations', description: 'Gateway and service operations', icon: Wrench, permission: 'subscriber:diagnostics' },
-  { href: '/platform/data', label: 'Data governance', description: 'Retention and data controls', icon: Database, ownerOnly: true },
+  { href: '/platform/operations', label: 'Operations', description: 'Gateway cluster and logs', icon: Wrench, permission: 'subscriber:diagnostics' },
+  { href: '/platform/data', label: 'Data governance', description: 'Retention and privacy controls', icon: Database, ownerOnly: true },
   { href: '/platform/staff', label: 'Staff', description: 'Platform access and advisors', icon: Shield, ownerOnly: true, built: true },
   { href: '/platform/support', label: 'Support', description: 'Customer diagnostics', icon: HelpCircle, permission: 'subscriber:diagnostics', built: true },
   { href: '/platform/settings', label: 'Settings', description: 'Platform defaults and policy', icon: Settings, ownerOnly: true, built: true },
-  { href: '/platform/legal', label: 'Legal', description: 'Terms and privacy', icon: FileText, ownerOnly: true },
+  { href: '/platform/legal', label: 'Legal', description: 'Terms and compliance', icon: FileText, ownerOnly: true },
 ];
 
-/**
- * Whether to render a destination.
- *
- * A null session means the answer has not been read yet, and everything is
- * shown — the same order app-sidebar.tsx settled on. Hiding first and revealing
- * later flashes a shrunken menu at an owner on every load; the other order can
- * briefly show a support user a link the server will refuse, which is the
- * cheaper mistake.
- *
- * Absent platformPermissions is treated the same way. A session stored before
- * that field shipped carries no array, and an empty sidebar is a worse answer
- * than a permissive one when the server is deciding anyway.
- */
+/** Navigation visibility is presentation; every route remains server-authorized. */
 function canSee(item: NavItem, session: PlatformSession | null) {
   if (!session) return true;
   if (session.platformRole === 'OWNER') return true;
@@ -91,17 +69,6 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<PlatformSession | null>(null);
   const [navOpen, setNavOpen] = useState(false);
 
-  /**
-   * Leaving the console.
-   *
-   * Clears the view-as selection along with the session. A platform user who
-   * was viewing a subscriber and then signs out must not leave that subscriber
-   * selected for whoever signs in next — the console would open scoped to
-   * someone else's organization with no indication why.
-   *
-   * Lives here rather than on a page because the sidebar is on every console
-   * screen, and a way out that exists on exactly one of them is not a way out.
-   */
   const signOut = () => {
     localStorage.removeItem('rabitech_token');
     localStorage.removeItem('rabitech_user');
@@ -109,9 +76,6 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
     router.push('/login');
   };
 
-  // Read after mount, not during render: localStorage does not exist on the
-  // server, and reading it in the component body makes the first client render
-  // disagree with the server-rendered one.
   useEffect(() => {
     try {
       setSession(JSON.parse(localStorage.getItem('rabitech_user') || '{}'));
@@ -126,76 +90,115 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
 
   const visibleItems = useMemo(() => NAV_ITEMS.filter((item) => canSee(item, session)), [session]);
 
+  const currentNav = useMemo(() => {
+    return (
+      visibleItems.find(
+        (item) => item.href === pathname || (item.href !== '/platform' && pathname.startsWith(item.href))
+      ) || visibleItems[0]
+    );
+  }, [visibleItems, pathname]);
+
   return (
-    <div className="flex min-h-screen bg-muted text-foreground">
+    <div className="flex min-h-screen bg-background text-foreground selection:bg-primary/20">
       <aside
         className={cn(
-          'fixed inset-y-0 start-0 z-40 w-64 shrink-0 flex-col border-e border-border bg-card',
-          navOpen ? 'flex' : 'hidden md:static md:flex',
+          'fixed inset-y-0 start-0 z-40 w-64 shrink-0 flex-col border-e border-border bg-card transition-shadow',
+          navOpen ? 'flex shadow-xl' : 'hidden md:flex',
         )}
       >
-        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-border px-5">
-          <div className="rounded-md bg-primary p-2 text-primary-foreground">
-            <Building2 className="h-4 w-4" aria-hidden />
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-small font-semibold">RabiTech</p>
-            <p className="truncate text-caption text-muted-foreground">Owner console</p>
-          </div>
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-border px-5">
+          <Link href="/platform" className="group flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
+              <Building2 className="h-5 w-5" aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-foreground">RabiTech</p>
+              <p className="truncate font-mono text-micro uppercase text-muted-foreground">Platform console</p>
+            </div>
+          </Link>
+
+          {navOpen && (
+            <button
+              type="button"
+              onClick={() => setNavOpen(false)}
+              aria-label="Close navigation"
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-accent md:hidden"
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </button>
+          )}
         </div>
 
-        <nav aria-label="Platform navigation" className="flex-1 overflow-y-auto p-3">
-          <div className="space-y-1">
-            {visibleItems.map((item) => {
-              const Icon = item.icon;
-              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
+        <nav aria-label="Platform navigation" className="flex-1 space-y-1 overflow-y-auto p-3">
+          {visibleItems.map((item) => {
+            const Icon = item.icon;
+            const active =
+              item.href === '/platform'
+                ? pathname === '/platform'
+                : pathname === item.href || pathname.startsWith(`${item.href}/`);
+
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? 'page' : undefined}
+                className={cn(
+                  'group flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium transition-colors',
+                  active
+                    ? 'bg-primary font-semibold text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                )}
+              >
+                <Icon
                   className={cn(
-                    'flex items-center gap-3 rounded-md px-3 py-2.5 text-small transition-colors',
-                    active
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                    'h-4 w-4 shrink-0',
+                    active ? 'text-primary-foreground' : 'text-muted-foreground group-hover:text-foreground',
                   )}
-                >
-                  <Icon className="h-4 w-4 shrink-0" aria-hidden />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{item.label}</span>
-                    <span
-                      className={cn(
-                        'block truncate text-caption',
-                        active ? 'text-primary-foreground/70' : 'text-muted-foreground/70',
-                      )}
-                    >
-                      {item.description}
-                    </span>
+                  aria-hidden
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{item.label}</span>
+                  <span
+                    className={cn(
+                      'block truncate text-[11px]',
+                      active ? 'text-primary-foreground/80' : 'text-muted-foreground/70',
+                    )}
+                  >
+                    {item.description}
                   </span>
-                  {!item.built && (
-                    <span className="text-caption font-medium uppercase text-muted-foreground/70">
-                      Planned
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
+                </span>
+                {!item.built && (
+                  <span className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase text-muted-foreground">
+                    Planned
+                  </span>
+                )}
+              </Link>
+            );
+          })}
         </nav>
 
-        <div className="border-t border-border p-3">
-          {session?.platformRole && (
-            <p className="mb-1 px-3 text-caption text-muted-foreground">
-              {session.platformRole === 'OWNER' ? 'Owner access' : 'Support access'}
-            </p>
-          )}
+        <div className="space-y-2 border-t border-border bg-muted/20 p-3">
+          <div className="flex items-center gap-2.5 px-2 py-1">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary font-bold text-xs">
+              {session?.name ? session.name.slice(0, 2).toUpperCase() : 'OW'}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-semibold text-foreground">
+                {session?.name || 'Platform Owner'}
+              </p>
+              <p className="truncate font-mono text-[10px] text-muted-foreground">
+                {session?.platformRole === 'OWNER' ? 'Owner access' : 'Support access'}
+              </p>
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={signOut}
-            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-small text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
           >
-            <LogOut className="h-4 w-4 shrink-0" aria-hidden />
-            Sign out
+            <LogOut className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>Sign out</span>
           </button>
         </div>
       </aside>
@@ -205,22 +208,37 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           type="button"
           aria-label="Close navigation"
           onClick={() => setNavOpen(false)}
-          className="fixed inset-0 z-30 bg-foreground/40 md:hidden"
+          className="fixed inset-0 z-30 bg-foreground/40 backdrop-blur-sm md:hidden"
         />
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-card px-4 md:hidden">
-          <button
-            type="button"
-            aria-label="Open navigation"
-            onClick={() => setNavOpen(true)}
-            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <Menu className="h-5 w-5" aria-hidden />
-          </button>
-          <span className="text-small font-semibold">Owner console</span>
+      <div className="flex min-w-0 flex-1 flex-col md:ms-64">
+        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/95 px-4 shadow-sm backdrop-blur-md sm:px-6">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Open navigation"
+              onClick={() => setNavOpen(true)}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-accent md:hidden"
+            >
+              <Menu className="h-5 w-5" aria-hidden />
+            </button>
+
+            <nav aria-label="Platform breadcrumb" className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <Link href="/platform" className="hover:text-foreground transition-colors">
+                Platform
+              </Link>
+              <ChevronRight className="h-3 w-3 opacity-40" aria-hidden />
+              <span aria-current="page" className="font-semibold text-foreground">{currentNav.label}</span>
+            </nav>
+          </div>
+
+          <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+            <Shield className="h-3.5 w-3.5" aria-hidden />
+            <span>{session?.platformRole === 'SUPPORT' ? 'Support access' : 'Owner access'}</span>
+          </div>
         </header>
+
         <div className="min-w-0 flex-1 overflow-y-auto">{children}</div>
       </div>
     </div>
