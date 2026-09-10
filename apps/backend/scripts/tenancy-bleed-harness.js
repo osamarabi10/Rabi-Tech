@@ -3550,6 +3550,267 @@ async function databaseAudits() {
         { expiresIn: '10m' },
       );
 
+    await check('platform audit: subscriber destruction is attributed and fails closed before queueing', async () => {
+      const suffix = `${process.pid}_${Date.now()}`;
+      const action = 'platform.subscriber.destruction_requested';
+      const triggerName = `bleed_reject_destroy_audit_${process.pid}`;
+      const functionName = `${triggerName}_fn`;
+      const fixtureIds = [];
+      let owner;
+      let triggerCreated = false;
+      const { gatewayProvisioningQueue } = require('../src/workers/gateway-provisioning.queue');
+      const removeJob = async (organizationId) => {
+        const job = await gatewayProvisioningQueue.getJob(`${organizationId}--gateway--destroy`);
+        if (job) await job.remove();
+      };
+
+      try {
+        owner = await raw.identity.create({
+          data: {
+            email: `destroy-audit-owner-${suffix}@platform.test`,
+            passwordHash: 'not-used-by-token-verification',
+            platformRole: 'OWNER',
+          },
+        });
+        const ownerToken = mintPlatformToken(owner);
+        const destroy = (organizationId) =>
+          fetch(`${baseUrl}/api/platform/subscribers/${organizationId}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${ownerToken}` },
+          });
+
+        const successful = await seedProvisioningOrganization(raw, `destroy_ok_${suffix}`);
+        fixtureIds.push(successful.organizationId);
+        const successfulOrg = await raw.organization.update({
+          where: { id: successful.organizationId },
+          data: { status: 'ACTIVE' },
+          select: { id: true, name: true },
+        });
+        const beforeChannel = await raw.organizationChannel.findUniqueOrThrow({
+          where: { organizationId_kind: { organizationId: successful.organizationId, kind: 'OPENWA' } },
+        });
+
+        let response = await destroy(successful.organizationId);
+        const responseBody = await response.json();
+        assert.equal(response.status, 202, JSON.stringify(responseBody));
+
+        const audit = await raw.platformAuditLog.findFirst({
+          where: { action, targetOrgId: successful.organizationId },
+          orderBy: { timestamp: 'desc' },
+        });
+        assert.ok(
+          audit,
+          'destroying a subscriber queued gateway deletion without an operator-attributed audit record',
+        );
+        assert.equal(audit.actorIdentityId, owner.id);
+        assert.equal(audit.actorEmail, owner.email);
+        assert.equal(audit.targetOrgName, successfulOrg.name);
+        assert.equal(audit.route, `DELETE /api/platform/subscribers/${successful.organizationId}`);
+        assert.equal(audit.reason, 'subscriber destruction requested');
+        assert.deepEqual(audit.beforeState, {
+          organizationStatus: 'ACTIVE',
+          channel: {
+            deletionRequestedAt: null,
+            provisioningState: beforeChannel.provisioningState,
+            provisioningStep: beforeChannel.provisioningStep,
+          },
+        });
+        assert.equal(audit.afterState.organizationStatus, 'SUSPENDED');
+        assert.equal(audit.afterState.channel.provisioningState, 'PROVISIONING');
+        assert.equal(audit.afterState.channel.provisioningStep, 'DESTROY_GATEWAY');
+        assert.ok(audit.afterState.channel.deletionRequestedAt, 'the audit snapshots when destruction was requested');
+        assert.ok(
+          await gatewayProvisioningQueue.getJob(`${successful.organizationId}--gateway--destroy`),
+          'the audited destruction request reaches the gateway queue',
+        );
+
+        const refused = await seedProvisioningOrganization(raw, `destroy_refused_${suffix}`);
+        fixtureIds.push(refused.organizationId);
+        await raw.organization.update({ where: { id: refused.organizationId }, data: { status: 'ACTIVE' } });
+        const refusedBefore = await raw.organizationChannel.findUniqueOrThrow({
+          where: { organizationId_kind: { organizationId: refused.organizationId, kind: 'OPENWA' } },
+        });
+
+        await raw.$executeRawUnsafe(`
+          CREATE FUNCTION "${functionName}"() RETURNS trigger AS $$
+          BEGIN
+            IF NEW."action" = '${action}' THEN
+              RAISE EXCEPTION 'forced subscriber destruction audit failure';
+            END IF;
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql
+        `);
+        await raw.$executeRawUnsafe(`
+          CREATE TRIGGER "${triggerName}"
+          BEFORE INSERT ON "PlatformAuditLog"
+          FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+        `);
+        triggerCreated = true;
+
+        response = await destroy(refused.organizationId);
+        assert.equal(response.status, 503, 'an unaudited subscriber destruction must be refused');
+        const [refusedOrgAfter, refusedChannelAfter, refusedJob] = await Promise.all([
+          raw.organization.findUniqueOrThrow({ where: { id: refused.organizationId } }),
+          raw.organizationChannel.findUniqueOrThrow({
+            where: { organizationId_kind: { organizationId: refused.organizationId, kind: 'OPENWA' } },
+          }),
+          gatewayProvisioningQueue.getJob(`${refused.organizationId}--gateway--destroy`),
+        ]);
+        assert.equal(refusedOrgAfter.status, 'ACTIVE', 'audit failure must roll back subscriber suspension');
+        assert.equal(
+          refusedChannelAfter.deletionRequestedAt?.toISOString() ?? null,
+          refusedBefore.deletionRequestedAt?.toISOString() ?? null,
+          'audit failure must roll back the gateway deletion marker',
+        );
+        assert.equal(refusedChannelAfter.provisioningState, refusedBefore.provisioningState);
+        assert.equal(refusedChannelAfter.provisioningStep, refusedBefore.provisioningStep);
+        assert.equal(refusedJob, undefined, 'audit failure must refuse the destructive queue job');
+      } finally {
+        if (triggerCreated) {
+          await raw.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "PlatformAuditLog"`).catch(() => {});
+          await raw.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`).catch(() => {});
+        }
+        for (const organizationId of fixtureIds) await removeJob(organizationId).catch(() => {});
+        await raw.platformAuditLog.deleteMany({ where: { targetOrgId: { in: fixtureIds } } });
+        await raw.organization.deleteMany({ where: { id: { in: fixtureIds } } });
+        if (owner) await raw.identity.delete({ where: { id: owner.id } });
+      }
+    });
+
+    await check('platform audit: manual payment failure records the operator reason and fails closed', async () => {
+      const suffix = `${process.pid}_${Date.now()}`;
+      const action = 'platform.subscriber.payment_failed';
+      const triggerName = `bleed_reject_payment_audit_${process.pid}`;
+      const functionName = `${triggerName}_fn`;
+      const fixtureIds = [];
+      let owner;
+      let triggerCreated = false;
+      const { gatewayProvisioningQueue } = require('../src/workers/gateway-provisioning.queue');
+      const removeJob = async (organizationId) => {
+        const job = await gatewayProvisioningQueue.getJob(`${organizationId}--gateway--suspend`);
+        if (job) await job.remove();
+      };
+
+      try {
+        owner = await raw.identity.create({
+          data: {
+            email: `payment-audit-owner-${suffix}@platform.test`,
+            passwordHash: 'not-used-by-token-verification',
+            platformRole: 'OWNER',
+          },
+        });
+        const ownerToken = mintPlatformToken(owner);
+        const markFailed = (organizationId, reason) =>
+          fetch(`${baseUrl}/api/platform/subscribers/${organizationId}/billing/mark-failed`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${ownerToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason }),
+          });
+        const seedActiveSubscription = async (key) => {
+          const fixture = await seedProvisioningOrganization(raw, key);
+          fixtureIds.push(fixture.organizationId);
+          const organization = await raw.organization.update({
+            where: { id: fixture.organizationId },
+            data: { status: 'ACTIVE' },
+            select: { id: true, name: true },
+          });
+          const subscription = await raw.subscription.create({
+            data: {
+              organizationId: fixture.organizationId,
+              planVersionId: await currentPlanVersionId(raw, 'GROWTH'),
+              provider: 'manual',
+              status: 'ACTIVE',
+              activatedAt: new Date(),
+            },
+          });
+          return { organization, subscription };
+        };
+
+        const successful = await seedActiveSubscription(`payment_ok_${suffix}`);
+        const reason = 'Customer reported a card reversal during assisted billing review';
+        let response = await markFailed(successful.organization.id, reason);
+        const responseBody = await response.json();
+        assert.equal(response.status, 202, JSON.stringify(responseBody));
+
+        const audit = await raw.platformAuditLog.findFirst({
+          where: { action, targetOrgId: successful.organization.id },
+          orderBy: { timestamp: 'desc' },
+        });
+        assert.ok(
+          audit,
+          'marking payment failed suspended a subscriber without an operator-attributed audit record',
+        );
+        assert.equal(audit.reason, reason, 'the operator reason belongs in the durable action audit');
+        assert.equal(audit.actorIdentityId, owner.id);
+        assert.equal(audit.actorEmail, owner.email);
+        assert.equal(audit.targetOrgName, successful.organization.name);
+        assert.equal(
+          audit.route,
+          `POST /api/platform/subscribers/${successful.organization.id}/billing/mark-failed`,
+        );
+        assert.deepEqual(audit.beforeState, {
+          organizationStatus: 'ACTIVE',
+          subscriptions: [{ id: successful.subscription.id, status: 'ACTIVE' }],
+        });
+        assert.deepEqual(audit.afterState, {
+          organizationStatus: 'SUSPENDED',
+          subscriptions: [{ id: successful.subscription.id, status: 'PAST_DUE' }],
+          alertType: 'PAYMENT_FAILED',
+          gatewayAction: 'suspend',
+        });
+        const alert = await raw.platformAlert.findFirstOrThrow({
+          where: { organizationId: successful.organization.id, type: 'PAYMENT_FAILED' },
+        });
+        assert.equal(alert.message, reason);
+        assert.ok(
+          await gatewayProvisioningQueue.getJob(`${successful.organization.id}--gateway--suspend`),
+          'the audited payment failure reaches the suspension queue',
+        );
+
+        const refused = await seedActiveSubscription(`payment_refused_${suffix}`);
+        await raw.$executeRawUnsafe(`
+          CREATE FUNCTION "${functionName}"() RETURNS trigger AS $$
+          BEGIN
+            IF NEW."action" = '${action}' THEN
+              RAISE EXCEPTION 'forced manual payment failure audit failure';
+            END IF;
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql
+        `);
+        await raw.$executeRawUnsafe(`
+          CREATE TRIGGER "${triggerName}"
+          BEFORE INSERT ON "PlatformAuditLog"
+          FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+        `);
+        triggerCreated = true;
+
+        response = await markFailed(refused.organization.id, 'This unaudited suspension must be refused');
+        assert.equal(response.status, 503, 'an unaudited manual payment failure must be refused');
+        const [refusedOrgAfter, refusedSubscriptionAfter, refusedAlerts, refusedJob] = await Promise.all([
+          raw.organization.findUniqueOrThrow({ where: { id: refused.organization.id } }),
+          raw.subscription.findUniqueOrThrow({ where: { id: refused.subscription.id } }),
+          raw.platformAlert.count({ where: { organizationId: refused.organization.id, type: 'PAYMENT_FAILED' } }),
+          gatewayProvisioningQueue.getJob(`${refused.organization.id}--gateway--suspend`),
+        ]);
+        assert.equal(refusedOrgAfter.status, 'ACTIVE', 'audit failure must roll back organization suspension');
+        assert.equal(refusedSubscriptionAfter.status, 'ACTIVE', 'audit failure must roll back PAST_DUE');
+        assert.equal(refusedAlerts, 0, 'audit failure must roll back the customer payment alert');
+        assert.equal(refusedJob, undefined, 'audit failure must refuse the suspension queue job');
+      } finally {
+        if (triggerCreated) {
+          await raw.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "PlatformAuditLog"`).catch(() => {});
+          await raw.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`).catch(() => {});
+        }
+        for (const organizationId of fixtureIds) await removeJob(organizationId).catch(() => {});
+        await raw.platformAlert.deleteMany({ where: { organizationId: { in: fixtureIds } } });
+        await raw.platformAuditLog.deleteMany({ where: { targetOrgId: { in: fixtureIds } } });
+        await raw.organization.deleteMany({ where: { id: { in: fixtureIds } } });
+        if (owner) await raw.identity.delete({ where: { id: owner.id } });
+      }
+    });
+
     await check('support tickets: submission is tenant-bound and its diagnostic snapshot cannot move', async () => {
       let ticketId;
       try {

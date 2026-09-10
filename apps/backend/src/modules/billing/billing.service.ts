@@ -37,6 +37,7 @@ import { seedDefaultAutoReplies } from '../../utils/seed-auto-replies';
 import { seedLifecycleStages } from '../lifecycle/lifecycle.service';
 import { queueMail } from '../mail/mail.service';
 import { getMailProvider } from '../mail/mail.provider';
+import { auditPlatformScope } from '../../lib/audit';
 
 const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
 /** How long a verification link stays usable. Named once, used at signup and on resend. */
@@ -1096,12 +1097,54 @@ export async function activateManualSubscription(
   written about. There is now one way to start a gateway: the customer asks.
 */
 
-export async function markPaymentFailed(organizationId: string, reason = 'Payment failed'): Promise<void> {
+export interface PaymentFailureAuditContext {
+  actorIdentityId?: string;
+  actorEmail?: string;
+  route?: string;
+  ipAddress?: string;
+}
+
+export async function markPaymentFailed(
+  organizationId: string,
+  reason = 'Payment failed',
+  auditContext: PaymentFailureAuditContext = {},
+): Promise<void> {
   await runAsPlatform(`billing-payment-failed:${organizationId}`, async () => {
     await prisma.$transaction(async (tx) => {
+      const organization = await tx.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        select: { id: true, name: true, status: true },
+      });
+      const subscriptions = await tx.subscription.findMany({
+        where: { organizationId, status: 'ACTIVE' },
+        orderBy: { id: 'asc' },
+        select: { id: true, status: true },
+      });
       await tx.subscription.updateMany({ where: { organizationId, status: 'ACTIVE' }, data: { status: 'PAST_DUE' } });
       await tx.organization.update({ where: { id: organizationId }, data: { status: 'SUSPENDED' } });
       await tx.platformAlert.create({ data: { organizationId, type: 'PAYMENT_FAILED', severity: 'ERROR', message: reason } });
+      await auditPlatformScope(reason, {
+        action: 'platform.subscriber.payment_failed',
+        actorIdentityId: auditContext.actorIdentityId,
+        actorEmail: auditContext.actorEmail,
+        targetOrgId: organization.id,
+        targetOrgName: organization.name,
+        beforeState: {
+          organizationStatus: organization.status,
+          subscriptions,
+        },
+        afterState: {
+          organizationStatus: 'SUSPENDED',
+          subscriptions: subscriptions.map((subscription) => ({
+            id: subscription.id,
+            status: 'PAST_DUE',
+          })),
+          alertType: 'PAYMENT_FAILED',
+          gatewayAction: 'suspend',
+        },
+        route: auditContext.route,
+        ipAddress: auditContext.ipAddress,
+      }, tx);
     });
     await queueGatewayAction(organizationId, 'suspend');
   });

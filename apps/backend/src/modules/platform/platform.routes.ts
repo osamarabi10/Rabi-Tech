@@ -1023,7 +1023,12 @@ router.post('/subscribers/:id/billing/extend-trial', requirePlatformPermission('
 
 router.post('/subscribers/:id/billing/mark-failed', requirePlatformOwner, async (req, res) => {
   try {
-    await markPaymentFailed(req.params.id, String(req.body.reason || 'Manual payment failure'));
+    await markPaymentFailed(req.params.id, String(req.body.reason || 'Manual payment failure'), {
+      actorIdentityId: req.platformUser!.id,
+      actorEmail: req.platformUser!.email,
+      route: `${req.method} ${req.originalUrl.split('?')[0]}`,
+      ipAddress: req.ip,
+    });
     res.status(202).json({ organizationId: req.params.id, status: 'PAST_DUE' });
   } catch (error) {
     logger.error('Payment failure marking failed', { error: error instanceof Error ? error.stack : String(error), requestId: (req as any).id });
@@ -1652,22 +1657,54 @@ router.delete('/subscribers/:id', requirePlatformOwner, async (req, res) => {
   try {
     const channel = await prisma.organizationChannel.findUnique({
       where: { organizationId_kind: { organizationId: req.params.id, kind: 'OPENWA' } },
-      select: { managedByProvisioner: true },
+      select: {
+        managedByProvisioner: true,
+        deletionRequestedAt: true,
+        provisioningState: true,
+        provisioningStep: true,
+        organization: { select: { id: true, name: true, status: true } },
+      },
     });
     if (!channel) return res.status(404).json({ error: 'Subscriber not found' });
     if (!channel.managedByProvisioner) {
       return res.status(409).json({ error: 'Unmanaged subscriber gateways require manual cleanup' });
     }
+    const deletionRequestedAt = new Date();
     await prisma.$transaction(async (tx) => {
       await tx.organizationChannel.update({
         where: { organizationId_kind: { organizationId: req.params.id, kind: 'OPENWA' } },
         data: {
-          deletionRequestedAt: new Date(),
+          deletionRequestedAt,
           provisioningState: 'PROVISIONING',
           provisioningStep: 'DESTROY_GATEWAY',
         },
       });
       await tx.organization.update({ where: { id: req.params.id }, data: { status: 'SUSPENDED' } });
+      await auditPlatformScope('subscriber destruction requested', {
+        action: 'platform.subscriber.destruction_requested',
+        actorIdentityId: req.platformUser!.id,
+        actorEmail: req.platformUser!.email,
+        targetOrgId: channel.organization.id,
+        targetOrgName: channel.organization.name,
+        beforeState: {
+          organizationStatus: channel.organization.status,
+          channel: {
+            deletionRequestedAt: channel.deletionRequestedAt,
+            provisioningState: channel.provisioningState,
+            provisioningStep: channel.provisioningStep,
+          },
+        },
+        afterState: {
+          organizationStatus: 'SUSPENDED',
+          channel: {
+            deletionRequestedAt,
+            provisioningState: 'PROVISIONING',
+            provisioningStep: 'DESTROY_GATEWAY',
+          },
+        },
+        ipAddress: req.ip,
+        route: `${req.method} ${req.originalUrl.split('?')[0]}`,
+      }, tx);
     });
     await queueGatewayAction(req.params.id, 'destroy');
     res.status(202).json({ organizationId: req.params.id, action: 'destroy' });
