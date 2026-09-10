@@ -42,6 +42,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { AudioMessagePlayer } from '@/components/inbox/audio-message-player';
 import { Composer } from '@/components/inbox/composer';
 import { ContactPanel } from '@/components/inbox/contact-panel';
 import { avatarColor, STATUS_CONFIG } from '@/lib/constants';
@@ -173,7 +174,17 @@ function normalizeMediaType(mediaType?: string | null): string {
   return raw;
 }
 
-function MessageMedia({ mediaUrl, mediaType, mediaFileName }: { mediaUrl?: string | null; mediaType?: string | null; mediaFileName?: string | null }) {
+function MessageMedia({
+  mediaUrl,
+  mediaType,
+  mediaFileName,
+  isOutbound = false,
+}: {
+  mediaUrl?: string | null;
+  mediaType?: string | null;
+  mediaFileName?: string | null;
+  isOutbound?: boolean;
+}) {
   const { t } = useT();
   const type = normalizeMediaType(mediaType);
   /**
@@ -222,7 +233,9 @@ function MessageMedia({ mediaUrl, mediaType, mediaFileName }: { mediaUrl?: strin
     );
   }
   if (type === 'video') return <video src={src} controls className="mb-1 max-h-64 max-w-full rounded-lg" />;
-  if (type === 'audio' || type === 'ptt') return <audio src={src} controls className="mb-1 w-full" />;
+  if (type === 'audio' || type === 'ptt') {
+    return <AudioMessagePlayer src={src} isOutbound={isOutbound} fileName={mediaFileName} />;
+  }
   return (
     <a href={src} target="_blank" rel="noopener noreferrer" className="mb-1 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-accent">
       <Paperclip className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -233,6 +246,7 @@ function MessageMedia({ mediaUrl, mediaType, mediaFileName }: { mediaUrl?: strin
 
 
 const PREDEFINED_LABELS: Array<{ text: string; color: string }> = [];
+const CONTACT_PANEL_COLLAPSED_KEY = 'rabitech_contact_panel_collapsed';
 
 function labelColor(text: string): string {
   return PREDEFINED_LABELS.find((l) => l.text === text)?.color ?? '#6B7280';
@@ -496,6 +510,24 @@ export default function InboxPage() {
     return [...byTeam.values()];
   }, [inboxSessions]);
   const [showDetails, setShowDetails] = useState(true);
+
+  useEffect(() => {
+    setShowDetails(localStorage.getItem(CONTACT_PANEL_COLLAPSED_KEY) !== 'true');
+  }, []);
+
+  const setDetailsVisible = useCallback((visible: boolean) => {
+    setShowDetails(visible);
+    localStorage.setItem(CONTACT_PANEL_COLLAPSED_KEY, String(!visible));
+  }, []);
+
+  const toggleDetails = useCallback(() => {
+    setShowDetails((prev) => {
+      const next = !prev;
+      localStorage.setItem(CONTACT_PANEL_COLLAPSED_KEY, String(!next));
+      return next;
+    });
+  }, []);
+
   const [assigning, setAssigning] = useState(false);
   const [isInternalNote, setIsInternalNote] = useState(false);
   const [shortCodeMatches, setShortCodeMatches] = useState<Template[]>([]);
@@ -595,6 +627,49 @@ export default function InboxPage() {
     const query = next.toString();
     window.history.replaceState(null, '', query ? `?${query}` : window.location.pathname);
   }, [unrepliedOnly, sortMode]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in an input, textarea or dialog
+      const target = e.target as HTMLElement | null;
+      const isTyping =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable ||
+          target.closest('[role="dialog"]'));
+
+      if (isTyping) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        const currentIndex = convs.findIndex((conversation) => conversation.id === selId);
+        const nextIndex = currentIndex === -1 ? 0 : Math.min(currentIndex + 1, convs.length - 1);
+        if (convs[nextIndex]) setSelId(convs[nextIndex].id);
+      } else if (e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        const currentIndex = convs.findIndex((conversation) => conversation.id === selId);
+        const previousIndex = currentIndex === -1 ? 0 : Math.max(currentIndex - 1, 0);
+        if (convs[previousIndex]) setSelId(convs[previousIndex].id);
+      } else if (e.key.toLowerCase() === 'r') {
+        // Focus reply box
+        e.preventDefault();
+        const textarea = document.getElementById('inbox-reply-textarea') as HTMLTextAreaElement | null;
+        textarea?.focus();
+      } else if (e.key.toLowerCase() === 'e') {
+        // Resolve conversation
+        if (sel && sel.status !== 'RESOLVED' && !sel.contactBlocked) {
+          e.preventDefault();
+          setShowCloseConfirm(true);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [convs, selId, sel]);
 
   // ── Data loading ────────────────────────────────────────────────────────────
   const loadConvs = useCallback(async (keepSel = false, filter: ConvStatus = convFilter, forceLoad = false) => {
@@ -1830,9 +1905,15 @@ export default function InboxPage() {
 
               <div className="flex items-center gap-1">
                 {/* Toggle details panel */}
-                <Button variant={showDetails ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8"
-                  onClick={() => setShowDetails((v) => !v)} title={t('تفاصيل جهة الاتصال')}>
-                  <PanelRight className="h-4 w-4" />
+                <Button
+                  variant={showDetails ? 'secondary' : 'ghost'}
+                  size="icon"
+                  className="h-8 w-8 transition-colors"
+                  onClick={toggleDetails}
+                  aria-label={showDetails ? t('إخفاء تفاصيل جهة الاتصال') : t('إظهار تفاصيل جهة الاتصال')}
+                  title={showDetails ? t('إخفاء تفاصيل جهة الاتصال') : t('إظهار تفاصيل جهة الاتصال')}
+                >
+                  <PanelRight className={cn('h-4 w-4 transition-transform', !showDetails && 'opacity-60')} />
                 </Button>
               </div>
             </div>
@@ -1900,7 +1981,12 @@ export default function InboxPage() {
                         ⭐ {t('تقييم العميل')}: {m.body}/5
                       </div>
                     )}
-                    <MessageMedia mediaUrl={m.mediaUrl} mediaType={m.mediaType} mediaFileName={m.mediaFileName} />
+                    <MessageMedia
+                      mediaUrl={m.mediaUrl}
+                      mediaType={m.mediaType}
+                      mediaFileName={m.mediaFileName}
+                      isOutbound={m.dir === 'out' && !m.auto && !m.isInternal}
+                    />
                     {/*
                       Direction comes from the message's own content, not the
                       interface language: a Hebrew customer's one English
@@ -2232,7 +2318,7 @@ export default function InboxPage() {
           agents={techs}
           assigning={assigning}
           onAssign={handleAssign}
-          onClose={() => setShowDetails(false)}
+          onClose={() => setDetailsVisible(false)}
           currentUserId={currentUser?.id}
           onOpenConversation={setSelId}
           onConsentChange={(consent) =>

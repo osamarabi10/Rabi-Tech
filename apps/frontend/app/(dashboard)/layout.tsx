@@ -12,6 +12,8 @@ import { DashboardFooter } from '@/components/dashboard-footer';
 import { TrialBanner } from '@/components/trial-banner';
 import { ServiceStateBanner } from '@/components/service-state-banner';
 import { VerifyEmailBanner } from '@/components/verify-email-banner';
+import { CommandPalette } from '@/components/command-palette';
+import { KeyboardShortcutsDialog } from '@/components/keyboard-shortcuts-dialog';
 import { useT } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 
@@ -21,6 +23,39 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Toggle Command Palette on Cmd+K or Ctrl+K
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+        return;
+      }
+
+      const target = e.target as HTMLElement | null;
+      const isTyping =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable ||
+          target.closest('[role="dialog"]'));
+
+      if (isTyping) return;
+
+      // Show shortcuts modal on '?'
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setShortcutsOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem('rabitech_token');
@@ -101,6 +136,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {children}
         <DashboardFooter />
       </main>
+
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
+      />
+      <KeyboardShortcutsDialog
+        open={shortcutsOpen}
+        onOpenChange={setShortcutsOpen}
+      />
     </div>
     </EntitlementsProvider>
   );

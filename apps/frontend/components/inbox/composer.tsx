@@ -393,6 +393,7 @@ export function Composer({
           )}
 
           <Textarea
+            id="inbox-reply-textarea"
             ref={textareaRef}
             rows={1}
             dir="auto"
