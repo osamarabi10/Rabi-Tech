@@ -3,7 +3,14 @@ name: Tenancy bleed gate
 on:
   pull_request:
   push:
-    branches: [main]
+    # Every branch, not only main.
+    #
+    # This said [main] until 2026-09-12, and the cost was eight days of work that
+    # never met CI: the editions-ladder branch carried the whole tenancy harness
+    # rebuild, the inbound durability fix and the terms-pin fix, and the gate saw
+    # none of it until merge time. A gate that only runs where the work has
+    # already landed is a gate that reports on history.
+    branches: ['**']
 
 jobs:
   tenancy-bleed:
