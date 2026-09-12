@@ -26,11 +26,43 @@
  * reported, which is not the same as proving it passed — a manifest that can
  * say PASS about a failure is the exact shape of problem it exists to end.
  *
+ * ## The count is checked too, since 2026-09-11
+ *
+ * On 2026-09-09 the tenancy harness gained a wrapper that gives it a
+ * regenerated client and a disposable database, and refuses direct execution
+ * because direct execution has neither. This script still invoked it directly.
+ * The harness said exactly what was wrong and exited non-zero, so the sweep did
+ * fail — but the number nobody read had gone from `157/157` to `20/21`: the
+ * whole database section, silently not run, for two days.
+ *
+ * Exit codes cannot see that. A gate can pass while testing an eighth of what
+ * it used to. So every gate that reports `N/M` carries a floor here, and a run
+ * that reports fewer checks than the last green one is a failure — not a pass
+ * with a smaller number.
+ *
  * Usage:
  *   node scripts/verify-gate-sweep.js <run-dir> <started-epoch-seconds>
  */
 const fs = require('fs');
 const path = require('path');
+
+/**
+ * The size each gate is known to have reached, from a green run somebody
+ * watched. `null` means the gate does not report a count at all — a
+ * typechecker prints nothing when it is happy — and that is recorded
+ * explicitly rather than omitted, because an omission is how a gate slips in
+ * with no floor and no one notices.
+ *
+ * Raise a floor when a gate legitimately grows; the diff is the review. Never
+ * lower one to make a run pass.
+ */
+const FLOORS = require('./gate-floors');
+
+/** The check count a gate's summary line reports, or null if it reports none. */
+function reportedCount(summary) {
+  const match = /(\d+)\s*\/\s*(\d+)/.exec(summary);
+  return match ? Number(match[2]) : null;
+}
 
 /**
  * The sweep, named once.
@@ -100,7 +132,34 @@ function main() {
       problems.push(`${name}: FAILED exit=${code} — ${summary}`);
       continue;
     }
-    process.stdout.write(`[PASS] ${name}: ${summary}\n`);
+    if (!(name in FLOORS)) {
+      problems.push(
+        `${name}: NO FLOOR — gate-floors.json does not record how large this gate is, `
+        + 'so a run that shrank would read as a pass',
+      );
+      continue;
+    }
+    const floor = FLOORS[name];
+    const count = reportedCount(summary);
+    if (floor === null) {
+      process.stdout.write(`[PASS] ${name}: ${summary}\n`);
+      continue;
+    }
+    if (count === null) {
+      problems.push(
+        `${name}: NO COUNT — a floor of ${floor} is recorded, but the summary reports no N/M: ${summary}`,
+      );
+      continue;
+    }
+    if (count < floor) {
+      problems.push(
+        `${name}: SHRANK — reported ${count} checks, floor is ${floor}. `
+        + 'A gate that passes while testing less than it used to is a failure, not a pass',
+      );
+      continue;
+    }
+    const grew = count > floor ? ` (grew past its floor of ${floor} — raise it in gate-floors.json)` : '';
+    process.stdout.write(`[PASS] ${name}: ${summary}${grew}\n`);
   }
 
   if (problems.length) {

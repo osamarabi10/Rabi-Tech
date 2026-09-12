@@ -185,6 +185,16 @@ Design rules do not catch the failures this repository actually has. These do.
   command, so anything appended replaces the gate's answer. Four defects here
   were gates reporting on their environment rather than on the code.
 
+- **A gate that reports fewer checks than its last green run is a failure, not
+  a pass.** On 2026-09-09 the tenancy harness gained a wrapper that refuses
+  direct execution, and `run-gate-sweep.sh` kept invoking it directly: the
+  count fell from `157/157` to `20/21` — the entire database section, not run —
+  and every sweep for two days certified an eighth of the suite. The exit code
+  could not see it; nobody read the number. `scripts/gate-floors.js` records
+  how large each gate is known to be and the manifest refuses a run that
+  shrank. Raise a floor when a gate genuinely grows, and never lower one to
+  make a run pass.
+
 - **Point the check at the artifact that carries the property.** A source
   assertion cannot see behaviour, and a compiled artifact cannot see a type
   assertion — casts are erased by compilation. A check aimed at the wrong

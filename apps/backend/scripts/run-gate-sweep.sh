@@ -57,7 +57,7 @@ run() {   # run <name> <command...>
 
 cd "$BACKEND"
 run tsc                 npx tsc --noEmit
-run tenancy             node scripts/tenancy-bleed-harness.js
+run tenancy             npm run test:tenancy
 run capabilities        node scripts/verify-capabilities.js
 run entitlement-proof   node scripts/c3-entitlement-snapshot.js
 run lazy-provisioning   node scripts/verify-lazy-provisioning.js

@@ -397,6 +397,18 @@ function applyMigrations(targetUrl) {
   process.stdout.write('Harness preflight: applied migrations to the disposable database.\n');
 }
 
+/**
+ * The harness's own summary line, remembered so it can be printed last.
+ *
+ * The sweep reads a gate's result as the final line of its output, and this
+ * wrapper prints cleanup after the harness has finished — so without this the
+ * gate's recorded summary is `Harness cleanup: removed disposable Redis …`, a
+ * green result that says nothing about how many checks ran. That is how a
+ * suite shrinks unnoticed, which is the defect this wrapper's own history is
+ * about.
+ */
+let harnessSummary = '';
+
 async function runHarness(targetUrl, redisUrl, redisContainerName, databaseName, overrideOwner) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [HARNESS_CONFIG.script], {
@@ -411,7 +423,22 @@ async function runHarness(targetUrl, redisUrl, redisContainerName, databaseName,
         RABITECH_TENANCY_REDIS_CONTAINER: redisContainerName,
         RABITECH_TENANCY_WRAPPER_PID: String(process.pid),
       },
-      stdio: 'inherit',
+      // stdout is piped rather than inherited so the summary line can be
+      // remembered and re-printed after cleanup; it is relayed unchanged as it
+      // arrives, so the run still reads live.
+      stdio: ['inherit', 'pipe', 'inherit'],
+    });
+    let pending = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      process.stdout.write(chunk);
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) if (line.trim()) harnessSummary = line;
+    });
+    child.stdout.on('end', () => {
+      if (pending.trim()) harnessSummary = pending;
     });
     const relay = (signal) => {
       if (child.exitCode === null) child.kill(signal);
@@ -494,6 +521,10 @@ async function main() {
       }
     }
   }
+  // Last line is the result, after every cleanup message. Repeating it is the
+  // point: whatever reads this gate reads its count, not the housekeeping that
+  // happened to come after.
+  if (harnessSummary) process.stdout.write(`${harnessSummary}\n`);
   process.exitCode = exitCode;
 }
 
