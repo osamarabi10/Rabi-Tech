@@ -46,6 +46,9 @@ module.exports = {
   dunning: 14,
   'backup-replication': 30,
 
+  /** Three checks: the response, the recorded outcome, and the recorded reason. */
+  'inbound-durability': 3,
+
   /** Prints nothing when clean. */
   'frontend-tsc': null,
 

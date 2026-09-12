@@ -1558,3 +1558,41 @@ change the public-API gate.
 - **Owner:** UnKnowan
 - **Trigger:** the next time this gate blocks a run.
 - **Landing place:** `apps/backend/scripts/verify-public-api.js`.
+
+---
+
+## D-28 · The Cloud API lane cannot protect an inbound message the queue refused
+
+**Status:** recorded 2026-09-11, not fixed · **Owner:** UnKnowan
+
+`metaWebhookHandler` acknowledges Meta **before** any processing, deliberately:
+a handler that answers non-2xx repeatedly costs the app subscription that every
+tenant on this platform depends on, and neither a malformed body nor an unknown
+number is something a retry could fix. The comment above it says so.
+
+That decision also means the response is spent by the time the message reaches
+the queue. When `queueIncomingMessage` refuses — a Redis fault, a queue that
+cannot accept — the OpenWA lane now answers 503 and the gateway recovers the
+message: it throws on any non-2xx, retries while `attempt < retryCount` (this
+platform registers 3), and holds the event in an outbox its reconciler replays.
+Meta offers the same recovery, but only to a handler that has not already said
+200. On the Cloud API lane the message is logged and gone.
+
+The fix is not a status code. It is a stored inbound record written before the
+acknowledgement, plus a replay path — which is a schema, a retention window, and
+a privacy decision that runs against the content-free stance taken deliberately
+elsewhere: `inboundSummary` records shape and size and never content, precisely
+so the delivery log does not become a second copy of every conversation. A
+durable inbound record is that second copy, with whatever retention the owner
+chooses.
+
+Recorded rather than fixed because it is its own commit and its own decision.
+The OpenWA lane's fix does not depend on it, and this lane's behaviour is
+unchanged by that commit: the enqueue failure is caught at the Meta call site and
+logged, exactly as before.
+
+- **Owner:** UnKnowan
+- **Trigger:** before the Cloud API lane carries a paying subscriber's inbound
+  traffic.
+- **Landing place:** `apps/backend/src/webhooks/meta.webhook.ts` and a stored
+  inbound record in `apps/backend/prisma/schema.prisma`.

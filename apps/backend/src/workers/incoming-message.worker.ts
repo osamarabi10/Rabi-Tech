@@ -47,8 +47,29 @@ export const incomingMessageQueue = new Queue('incoming-message', {
 });
 
 /**
+ * A message the queue never accepted.
+ *
+ * Its own type because "never accepted" and "failed while being processed" are
+ * different facts with different remedies — the first is recoverable by the
+ * sender, the second is not — and an operator must not receive them as one.
+ */
+export class InboundEnqueueError extends Error {
+  readonly reason: unknown;
+
+  constructor(reason: unknown) {
+    super(`inbound enqueue failed: ${reason instanceof Error ? reason.message : String(reason)}`);
+    this.name = 'InboundEnqueueError';
+    this.reason = reason;
+  }
+}
+
+/**
  * Queue an incoming message for async processing.
- * Returns immediately so webhook can respond 200 to OpenWA.
+ *
+ * Throws `InboundEnqueueError` when the queue did not accept it. The caller is
+ * a webhook handler that still holds the response: swallowing here made it
+ * answer 200 and file a *delivered* inbound record for a message nothing would
+ * ever process, which is worse than losing it quietly.
  */
 export async function queueIncomingMessage(payload: {
   session: string;
@@ -69,7 +90,7 @@ export async function queueIncomingMessage(payload: {
     });
   } catch (err) {
     logger.error('Failed to queue incoming message', { error: String(err), waMessageId: payload.waMessageId });
-    // Don't throw — webhook already returned 200 to OpenWA
+    throw new InboundEnqueueError(err);
   }
 }
 

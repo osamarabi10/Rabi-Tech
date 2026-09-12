@@ -81,6 +81,7 @@ const EXPECTED = [
   'secrets',
   'dunning',
   'backup-replication',
+  'inbound-durability',
   'frontend-tsc',
   'frontend-i18n',
   'frontend-mojibake',
@@ -134,7 +135,7 @@ function main() {
     }
     if (!(name in FLOORS)) {
       problems.push(
-        `${name}: NO FLOOR — gate-floors.json does not record how large this gate is, `
+        `${name}: NO FLOOR — gate-floors.js does not record how large this gate is, `
         + 'so a run that shrank would read as a pass',
       );
       continue;
@@ -158,7 +159,7 @@ function main() {
       );
       continue;
     }
-    const grew = count > floor ? ` (grew past its floor of ${floor} — raise it in gate-floors.json)` : '';
+    const grew = count > floor ? ` (grew past its floor of ${floor} — raise it in gate-floors.js)` : '';
     process.stdout.write(`[PASS] ${name}: ${summary}${grew}\n`);
   }
 

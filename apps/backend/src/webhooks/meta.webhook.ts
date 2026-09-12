@@ -211,22 +211,40 @@ async function ingestChange(context: MetaChangeContext): Promise<void> {
     // this value rather than baked into the row.
     if (message.placeholder) mediaType = message.metaType;
 
-    await queueIncomingMessage({
-      organizationId,
-      session,
-      phone: message.phone,
-      contactName: message.contactName,
-      body: message.body,
-      waMessageId: message.waMessageId,
-      // Placeholders are not media: leaving hasMedia false keeps the worker
-      // from writing its own bracketed caption into the body, which is the same
-      // stored-language problem one layer down.
-      hasMedia: Boolean(mediaUrl),
-      mediaUrl,
-      mediaType,
-      mediaFileName,
-      fromMe: false,
-    });
+    try {
+      await queueIncomingMessage({
+        organizationId,
+        session,
+        phone: message.phone,
+        contactName: message.contactName,
+        body: message.body,
+        waMessageId: message.waMessageId,
+        // Placeholders are not media: leaving hasMedia false keeps the worker
+        // from writing its own bracketed caption into the body, which is the same
+        // stored-language problem one layer down.
+        hasMedia: Boolean(mediaUrl),
+        mediaUrl,
+        mediaType,
+        mediaFileName,
+        fromMe: false,
+      });
+    } catch (error) {
+      // This lane cannot protect the message with the response. The handler
+      // acknowledges Meta before any processing, deliberately, because repeated
+      // failures cost the app subscription every tenant on this platform
+      // depends on — so there is no status code left to send by the time this
+      // runs, and a throw here would only drop the rest of the batch as well.
+      //
+      // Behaviour is therefore unchanged on this lane: logged, and the batch
+      // continues. What it needs instead is a stored inbound record written
+      // before the acknowledgement, which is a schema and a retention decision
+      // rather than a status code. Recorded in DECISIONS.md.
+      logger.error('Meta webhook: inbound message was not queued', {
+        organizationId,
+        waMessageId: message.waMessageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   for (const status of statuses) {

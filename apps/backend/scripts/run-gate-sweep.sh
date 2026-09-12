@@ -65,6 +65,7 @@ run session-routing     node scripts/verify-session-routing.js
 run secrets             node scripts/verify-secret-scan.js
 run dunning             node scripts/verify-dunning.js
 run backup-replication  node scripts/verify-backup-replication.js
+run inbound-durability  node scripts/verify-inbound-durability.js
 
 cd "$ROOT/apps/frontend"
 run frontend-tsc        npx tsc --noEmit

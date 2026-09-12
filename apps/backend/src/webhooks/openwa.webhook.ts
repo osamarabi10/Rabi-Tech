@@ -4,7 +4,7 @@ import { prisma } from '../prisma';
 import { OpenWAService, sessionNameById } from '../modules/whatsapp/openwa.service';
 import { getIO, SocketEvents } from '../socket';
 import { socketRoom } from '../socket/rooms';
-import { queueIncomingMessage } from '../workers/incoming-message.worker';
+import { InboundEnqueueError, queueIncomingMessage } from '../workers/incoming-message.worker';
 import logger from '../lib/logger';
 
 import { getTenantId, runAsOrganization, runAsPlatform } from '../lib/tenant-context';
@@ -248,22 +248,34 @@ router.post('/webhooks/openwa/:webhookToken', async (req, res, next) => {
     res.sendStatus(200);
   } catch (err) {
     logger.error('Webhook error', { error: String(err) });
-    // Still a 200 — the gateway must not retry, and a retry storm during an
-    // incident is its own outage. But the delivery is recorded as FAILED,
-    // because the status we return says nothing about whether we processed it.
-    // Inbound health that read only the response code would show a flawless
-    // 100% while every message was being dropped.
+    // A message the queue never accepted is the one case that must not be
+    // acknowledged. The gateway throws on any non-2xx response
+    // (`webhook/utils/deliver-once.js`), retries while `attempt < retryCount` —
+    // this platform registers 3 in `OpenWAService.ensureWebhook` — and holds
+    // the event in an outbox whose reconciler replays it. The queue job id is
+    // `${organizationId}--${waMessageId}`, so a redelivery cannot be processed
+    // twice. Answering 200 threw all of that away for a message we knew we had
+    // dropped, and filed it as delivered.
+    //
+    // Everything else keeps its 200: work that was accepted and then failed is
+    // not something a redelivery fixes, and a retry storm during an incident is
+    // its own outage. Either way the delivery is recorded as FAILED, because
+    // the status we return says nothing about whether we processed it. Inbound
+    // health that read only the response code would show a flawless 100% while
+    // every message was being dropped.
+    const neverAccepted = err instanceof InboundEnqueueError;
+    const statusCode = neverAccepted ? 503 : 200;
     await recordDelivery({
       direction: 'INBOUND',
       webhookId: 'gateway--openwa',
       eventType: String(event || 'unknown'),
-      statusCode: 200,
+      statusCode,
       ok: false,
       errorMessage: String(err),
       requestPayload: inboundSummary(req.body),
       durationMs: Date.now() - receivedAt,
     });
-    res.sendStatus(200);
+    res.sendStatus(statusCode);
   }
 });
 
