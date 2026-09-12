@@ -56,6 +56,21 @@ run() {   # run <name> <command...>
 }
 
 cd "$BACKEND"
+
+# Does the database answer a query? Not: is something accepting connections.
+#
+# On 2026-09-11 the port proxy accepted TCP and forwarded nothing. Every gate
+# that touches the database failed part-way through and exited 1 — the same code
+# a real red carries — so four runs produced no evidence and looked like four
+# failures. A sweep that cannot run must say so before it spends twenty minutes
+# proving it, and must not exit like a sweep that ran and found something.
+if ! node scripts/require-database.js; then
+  echo
+  echo "No gate ran. This is the environment, not a red: fix the database and run again."
+  exit 3
+fi
+echo
+
 run tsc                 npx tsc --noEmit
 run tenancy             npm run test:tenancy
 run capabilities        node scripts/verify-capabilities.js
@@ -75,3 +90,20 @@ run frontend-mojibake   npm run check:mojibake
 cd "$BACKEND"
 echo
 node scripts/verify-gate-sweep.js "$RUN_DIR" "$STARTED"
+MANIFEST=$?
+
+# The environment can also leave *during* a run, which is what happened on
+# 2026-09-11: the daemon wedged mid-sweep and everything after it failed for
+# reasons that had nothing to do with the code. A sweep that started on a
+# healthy box and ends on a broken one has not found anything, and saying so
+# costs one query.
+if [ "$MANIFEST" -ne 0 ]; then
+  if ! node scripts/require-database.js > /dev/null 2>&1; then
+    echo
+    echo "The database stopped answering during this run. Gate results above are not evidence:"
+    echo "the environment left, and this is not a red. Fix it and run again."
+    exit 3
+  fi
+fi
+
+exit $MANIFEST

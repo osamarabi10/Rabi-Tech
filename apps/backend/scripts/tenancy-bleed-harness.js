@@ -143,6 +143,11 @@ function staticAudits() {
     // Seeds through the real signup path and resolves entitlements either
     // side of a migration; it is a gate, not application code (D-18).
     'scripts/c3-entitlement-snapshot.js',
+    // Asks whether the database answers a query before a sweep spends twenty
+    // minutes finding out. It runs before any gate and before a build exists,
+    // so it cannot reach the compiled singleton, and it wants a plain client on
+    // purpose: the subject is the connection, not the tenancy extension.
+    'scripts/require-database.js',
   ]);
   const bareClients = [];
   for (const file of projectFiles) {
@@ -3238,11 +3243,19 @@ async function databaseAudits() {
     });
     await check('editions: the shipped signup rate limit is 3 per hour', async () => {
       /*
-        SIGNUP_RATE_PER_HOUR exists so the C3 entitlement proof can create
-        seven organizations through the real signup path in one run. An
-        override added for a test is one edit away from becoming the shipped
-        default, and the shipped default here is a real defence: each signup
-        can provision a container.
+        The shipped default is a real defence: each signup can provision a
+        container, so three an hour per IP is the product's answer to anyone
+        who would rather create three hundred.
+
+        SIGNUP_RATE_PER_HOUR was added so the C3 entitlement proof could create
+        seven organizations through the endpoint in one run. It no longer has
+        that consumer: the proof builds its fixtures by calling `createSignup`
+        and keeps exactly one scenario on the endpoint (D-29). Nothing in this
+        repository needs the override today.
+
+        This assertion stays regardless, because what it guards is the
+        *default*, not the override — an override added for a test is one edit
+        away from becoming what ships.
       */
       const limiter = fs.readFileSync(
         path.join(ROOT, 'src', 'middleware', 'rate-limit.middleware.ts'), 'utf8');

@@ -1596,3 +1596,97 @@ logged, exactly as before.
   traffic.
 - **Landing place:** `apps/backend/src/webhooks/meta.webhook.ts` and a stored
   inbound record in `apps/backend/prisma/schema.prisma`.
+
+---
+
+## D-29 · A gate whose own execution destroys its preconditions
+
+**Status:** fixed for `entitlement-proof` 2026-09-11; recorded as a class · **Owner:** UnKnowan
+
+`c3-entitlement-snapshot.js` built its eight subjects through `POST
+/api/billing/signup`. That endpoint allows three signups an hour per IP
+(`rate-limit.middleware.ts`), and the limit is a real defence rather than an
+inconvenience: each signup can provision a container. So the gate could never
+seed more than three of its eight scenarios, and refused attempts count against
+the bucket too — a second run inside the hour seeded none. Observed 2026-09-11:
+five scenarios unseeded, then eight on the next run.
+
+Two things were wrong at once, and only one of them was the endpoint.
+
+**The gate consumed a shared, rate-limited resource in order to observe
+something else.** It proves entitlement *resolution*; signup was a fixture. It
+now calls `createSignup` — the same function the endpoint calls, in the same
+process, writing the same eight tables through the same transaction and the
+same service-level throttle — and keeps exactly one scenario on the real
+endpoint so a regression there still fails the gate. That is not an override or
+a bypass flag: the fixture does not use the endpoint.
+
+**And the failure was reported as a count.** "5 scenario(s) could not be seeded"
+names neither which nor why, so a rate limit, a schema change and an edition
+that stopped being sellable all read identically. It now refuses by name with
+the reason attached, in the summary line, which is the only line the sweep
+records.
+
+The class is the part worth keeping: **a check that spends a bounded resource
+to set up its subject damages its own preconditions by running**, and degrades
+in a way that looks like flakiness. Rate limits, quotas, sequence numbers,
+external API budgets and provisioning capacity all have this shape. The
+question to ask of any new gate is not only *could this go red* but *does
+running it make the next run less able to pass*.
+
+Two consequences left standing, deliberately:
+
+- `SIGNUP_RATE_PER_HOUR` now has no consumer. It was added so this gate could
+  create seven organizations through the endpoint in one run, and the tenancy
+  harness asserts the shipped default stays 3. The assertion is still worth
+  keeping — the default is the defence — but the override's stated reason is
+  gone, and a justification that has drifted is trusted or deleted.
+- Nothing records what that variable must be for a gate to pass, which is how
+  `part2-20260908-postcommit` reached `8/8` on a box whose backend must have
+  carried a non-default value. That is D-27's shape and it is unresolved.
+
+- **Owner:** UnKnowan
+- **Trigger:** the next gate that needs more of a rate-limited resource than a
+  customer would use — decide then whether it calls the service or the
+  endpoint, and never by adding an override.
+- **Landing place:** `apps/backend/scripts/c3-entitlement-snapshot.js` and the
+  `SIGNUP_RATE_PER_HOUR` assertion in
+  `apps/backend/scripts/tenancy-bleed-harness.js`.
+
+---
+
+## D-30 · Provisioning executes against organizations that no longer exist
+
+**Status:** recorded 2026-09-12, not fixed · **Owner:** UnKnowan
+
+The gateway worker reconciles every 30 seconds and selects every channel with
+`managedByProvisioner: true` whose `provisioningState` is PENDING, PROVISIONING,
+AWAITING_QR, ACTIVE or a suspended step. It queues an action for each. Nothing
+in that path asks whether the organization it is provisioning for still exists.
+
+Found through a fixture, which is why it reads as a test artefact and is not
+one. `c3-entitlement-snapshot.js` seeded eight organizations and deleted them at
+the end of its run; the gate sweep stops `gateway-worker` for its duration and
+restarts it afterwards; the worker came back, reconciled the channels those
+organizations had left behind, and built sixteen containers — eight
+openwa+redis pairs, 1.16 GB — for rows that had already been deleted. They were
+still running days later.
+
+The same sequence is reachable by a customer. A subscriber whose gateway is
+queued for provisioning and who is then destroyed, cancelled, or suspended
+inside the same window gets a container built for an organization that is gone:
+nothing is watching it, nothing will pair to it, and nothing will reap it. It is
+the cousin of the stranded-organization entry — that one leaves an organization
+half-destroyed with nothing scheduled to finish it; this one leaves
+infrastructure running for an organization that no longer exists.
+
+Not fixed here. The fixture stopped being provisioner-managed, which removes the
+test's exposure and none of the product's: the reconciler must check that the
+organization is present and not deleted before it acts, and the worker must
+refuse — loudly — an action whose subject has gone.
+
+- **Owner:** UnKnowan
+- **Trigger:** before customer self-service account deletion ships, since that
+  path lets a customer reach this window without an operator.
+- **Landing place:** `apps/backend/src/workers/gateway-provisioning.worker.ts`,
+  in the reconcile selection and in the action handler.
