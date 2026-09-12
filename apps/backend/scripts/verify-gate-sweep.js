@@ -82,6 +82,7 @@ const EXPECTED = [
   'dunning',
   'backup-replication',
   'inbound-durability',
+  'terms-pin',
   'frontend-tsc',
   'frontend-i18n',
   'frontend-mojibake',

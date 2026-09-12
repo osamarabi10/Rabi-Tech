@@ -1373,7 +1373,18 @@ override, and there are none.
 
 ## D-23 · Activation can discard a subscription's version pin
 
-**Status:** recorded 2026-09-08, not fixed · **Owner:** UnKnowan
+**Status:** the writer is fixed 2026-09-12; the migration operation it asks for
+is still missing · **Owner:** UnKnowan
+
+*Fixed since:* activation preserves `planVersionId` and writes the pinned
+version's terms when the plan code is unchanged, so a payment webhook and
+provider reconciliation can no longer move a subscriber between versions of the
+edition they bought. Guarded by the `terms-pin` gate.
+
+*Still true:* there is no explicit, audited way to move a subscriber from one
+version to another when terms genuinely must change. Until that exists, the only
+route is an edition change, which is a different act and lands on current terms
+by design.
 
 Part 1 fixed the read path only: entitlement resolution now reads the exact
 `PlanVersion` and active `Price` reached through `Subscription.planVersionId`.
@@ -1690,3 +1701,35 @@ refuse — loudly — an action whose subject has gone.
   path lets a customer reach this window without an operator.
 - **Landing place:** `apps/backend/src/workers/gateway-provisioning.worker.ts`,
   in the reconcile selection and in the action handler.
+
+---
+
+## D-31 · Activation resets a subscriber's AI allowance to the edition's value
+
+**Status:** recorded 2026-09-12, not fixed · **Owner:** UnKnowan
+
+`applyEditionLimits` writes five numbers onto `OrganizationConfig`, and the two
+AI columns are among them. Its own comment says what that does: activating a
+subscription **overwrites** whatever the config held, so a negotiated AI
+allowance would be replaced by the edition's value the next time the customer
+paid.
+
+It is inert today, and only today: all six AI values are null on every
+organization, so the overwrite replaces nothing. The moment one subscriber is
+given a non-null AI number by agreement, the next payment event silently takes
+it back.
+
+This is D-24's defect in the one place D-24 does not reach. D-24 made activation
+preserve the terms of the *version the customer bought*; an AI allowance granted
+by agreement is not part of any version, so preserving the version preserves
+nothing about it. The shape that exists for exactly this problem is
+`macQuotaOverride`: a per-organization value the resolver reads in preference to
+the edition, which activation has no reason to touch. AI needs the same, or it
+needs to stop being writable per subscriber.
+
+- **Owner:** UnKnowan
+- **Trigger:** before any AI allowance is set to a non-null value on any
+  subscription — the defect is unreachable until then and certain afterwards.
+- **Landing place:** `applyEditionLimits` in
+  `apps/backend/src/modules/billing/billing.service.ts`, and an override column
+  alongside `macQuotaOverride` if the answer is per-deal AI numbers.

@@ -49,6 +49,13 @@ module.exports = {
   /** Three checks: the response, the recorded outcome, and the recorded reason. */
   'inbound-durability': 3,
 
+  /**
+   * Six: three that the purchased terms survive a payment, one that an edition
+   * change still moves, and two source checks that both payment paths share the
+   * one writer.
+   */
+  'terms-pin': 6,
+
   /** Prints nothing when clean. */
   'frontend-tsc': null,
 

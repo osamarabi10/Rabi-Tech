@@ -99,6 +99,7 @@ run secrets             node scripts/verify-secret-scan.js
 run dunning             node scripts/verify-dunning.js
 run backup-replication  node scripts/verify-backup-replication.js
 run inbound-durability  node scripts/verify-inbound-durability.js
+run terms-pin           node scripts/verify-terms-pin.js
 
 cd "$ROOT/apps/frontend"
 run frontend-tsc        npx tsc --noEmit

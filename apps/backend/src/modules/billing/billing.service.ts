@@ -23,7 +23,7 @@ import { getPaymentProvider, paymentProviderFor } from './provider-registry';
 // as trial.service.ts's TRIAL_PLAN_DEFAULT, which is a real use, so the constant
 // stays; it simply has no activation consumer any more.
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
-import { cheapestUpgradeGranting, getEdition, getEditions, CATALOGUE_QUERY, createEditionRows, flattenEdition } from './editions.service';
+import { cheapestUpgradeGranting, getEdition, getEditions, CATALOGUE_QUERY, createEditionRows, flattenEdition, SUBSCRIPTION_EDITION_SELECT, subscriptionEditionOf } from './editions.service';
 import { grantsCapability, limitOf, withinLimit, type Capability } from './capabilities';
 import {
   SUBSCRIPTION_PLAN_SELECT,
@@ -222,8 +222,15 @@ export async function listPlans() {
   });
 }
 
-async function applyPlanLimits(organizationId: string, planCode: PlanCode): Promise<void> {
-  const plan = getEdition(planCode);
+/**
+ * Write the terms a subscriber is enforced at.
+ *
+ * Takes the edition itself rather than a code, because a code can only name
+ * today's catalogue, and activation has to be able to write the terms of the
+ * version the customer actually bought (D-24). `applyPlanLimits` below stays as
+ * the code-shaped door, for the callers that genuinely mean "current".
+ */
+async function applyEditionLimits(organizationId: string, plan: PlanEntitlements): Promise<void> {
   const activeContactsLimit = plan.monthlyActiveContactsLimit ?? UNLIMITED_SENTINEL;
   const outboundLimit = plan.monthlyOutboundMessagesLimit ?? UNLIMITED_SENTINEL;
   const campaignLimit = plan.monthlyCampaignSendsLimit ?? UNLIMITED_SENTINEL;
@@ -261,6 +268,11 @@ async function applyPlanLimits(organizationId: string, planCode: PlanCode): Prom
       monthlyAiTokensOutLimit: aiOutLimit,
     },
   });
+}
+
+/** The current terms of an edition, by code. */
+async function applyPlanLimits(organizationId: string, planCode: PlanCode): Promise<void> {
+  return applyEditionLimits(organizationId, getEdition(planCode));
 }
 
 export async function createSignup(input: {
@@ -942,8 +954,36 @@ export async function activateManualSubscription(
     const existing = await prisma.subscription.findFirst({
       where: { organizationId },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, ...SUBSCRIPTION_PLAN_SELECT, provider: true, subscriptionRef: true, customerRef: true },
+      select: {
+        id: true,
+        ...SUBSCRIPTION_PLAN_SELECT,
+        // The version itself, not only the code it resolves to. Activation has
+        // to be able to *keep* a pin, and a plan code cannot express which
+        // version was bought - that is the whole of D-23.
+        ...SUBSCRIPTION_EDITION_SELECT,
+        provider: true,
+        subscriptionRef: true,
+        customerRef: true,
+      },
     });
+
+    /*
+      Paying for what you already bought must not change what you bought.
+
+      `activateManualSubscription` is reached by a payment webhook and by
+      provider reconciliation, both of which derive the plan code from the
+      subscription itself. Re-deriving the version from that code meant a
+      customer who bought v1 and paid after v2 was published silently received
+      v2's price, seats and limits - the pin held at signup and broke at the
+      till (D-23, D-24).
+
+      An edition *change* is a different act: STANDARD -> GROWTH is the customer
+      choosing new terms at today's price, so it correctly lands on the new
+      edition's current version. The distinction is the plan code, and it is the
+      only thing that separates a purchase from a payment.
+    */
+    const pinned = subscriptionEditionOf(existing);
+    const keepsPurchasedTerms = Boolean(pinned && planCodeOf(existing) === planCode);
 
     /*
       The row keeps the provider that created it; only a brand new subscription
@@ -982,7 +1022,9 @@ export async function activateManualSubscription(
       ? await prisma.subscription.update({
           where: { id: existing.id },
           data: {
-            planVersionId: await currentVersionIdForPlan(prisma, planCode),
+            planVersionId: keepsPurchasedTerms
+              ? pinned!.planVersionId
+              : await currentVersionIdForPlan(prisma, planCode),
             provider: providerName,
             status: 'ACTIVE',
             customerRef,
@@ -1006,7 +1048,14 @@ export async function activateManualSubscription(
             currentPeriodEnd: periodEnd,
           },
         });
-    await applyPlanLimits(organizationId, planCode);
+    // The pin alone is not the terms. `applyPlanLimits` reads today's catalogue
+    // from a code, so preserving planVersionId while leaving this call would
+    // have fixed half the defect and read as complete: the subscriber would be
+    // pinned to v1 and enforced at v2's numbers.
+    await applyEditionLimits(
+      organizationId,
+      keepsPurchasedTerms ? pinned!.edition : getEdition(planCode),
+    );
     await prisma.organization.update({
       where: { id: organizationId },
       data: {
