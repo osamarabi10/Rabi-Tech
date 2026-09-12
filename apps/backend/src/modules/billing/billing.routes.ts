@@ -4,6 +4,8 @@ import {
   cancelCurrentSubscription,
   createSignup,
   getCheckoutStatus,
+  getOwnCheckoutStatus,
+  startUpgradeCheckout,
   getBillingSummary,
   getCurrentBilling,
   getEmailVerificationState,
@@ -153,6 +155,39 @@ router.post('/email-verification/resend', async (req, res) => {
   try {
     if (req.user!.role !== 'ADMIN') return res.status(403).json({ error: 'Admin access required' });
     res.json(await resendVerification(req.user!.organizationId));
+  } catch (error) {
+    handleRouteError(res, error);
+  }
+});
+
+/**
+ * Buy, on the organization you already have.
+ *
+ * The organization comes from the session and only from the session. A handler
+ * that accepted an organizationId from the caller would be a way to start
+ * purchases against other people's tenants, and this surface is reached by
+ * anyone with a login.
+ */
+router.post('/upgrade', async (req, res) => {
+  try {
+    res.json(await startUpgradeCheckout(req.user!.organizationId, String(req.body.planCode || '')));
+  } catch (error) {
+    handleRouteError(res, error);
+  }
+});
+
+/**
+ * The same checkout state, for a caller who has a session.
+ *
+ * `/checkout-status/:externalRef` is auth-exempt because a checkout can precede
+ * an organization - that is true of signup and false of an upgrade. Rather than
+ * widen an exemption whose reason no longer applies, an authenticated customer
+ * reads their own organization's checkout here, and gets nothing if the
+ * reference is not theirs.
+ */
+router.get('/checkout', async (req, res) => {
+  try {
+    res.json(await getOwnCheckoutStatus(req.user!.organizationId));
   } catch (error) {
     handleRouteError(res, error);
   }

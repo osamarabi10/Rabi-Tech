@@ -185,6 +185,14 @@ Design rules do not catch the failures this repository actually has. These do.
   command, so anything appended replaces the gate's answer. Four defects here
   were gates reporting on their environment rather than on the code.
 
+- **Apply a mutation as a precise edit, never as a pattern replacement.** The
+  point of a mutation is to change exactly one thing, so that what reddens is
+  attributable to it. On 2026-09-12 a regex substitution meant to restore one
+  hardcoded link also dropped an interpolation and duplicated a branch: the
+  assertion reddened for the right reason, but the state being tested was not
+  the state intended, and only a hash-verified restore showed the difference.
+  A mutation you cannot describe in one sentence has already stopped being one.
+
 - **A gate that reports fewer checks than its last green run is a failure, not
   a pass.** On 2026-09-09 the tenancy harness gained a wrapper that refuses
   direct execution, and `run-gate-sweep.sh` kept invoking it directly: the

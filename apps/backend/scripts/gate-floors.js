@@ -56,6 +56,14 @@ module.exports = {
    */
   'terms-pin': 6,
 
+  /**
+   * Eleven: five on the purchase itself, one that an unreadable checkout is
+   * refused rather than resolved to current, three on the route's scope and
+   * exemption, one that the manual destination exists, and two that a session
+   * is offered a purchase rather than a signup form.
+   */
+  'upgrade-path': 11,
+
   /** Prints nothing when clean. */
   'frontend-tsc': null,
 

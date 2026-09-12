@@ -2558,6 +2558,36 @@ const D: Dict = {
   "Meta credentials": { ar: "بيانات Meta", he: "פרטי Meta", en: "Meta credentials" },
   "The access token is deleted from RabiTech. Your Meta account and its webhook subscription are left untouched.": { ar: "بينحذف التوكن من المنصة. حسابك على Meta وربط الويبهوك بضلوا زي ما هم.", he: "הטוקן נמחק מהפלטפורמה. חשבון Meta שלך וחיבור ה-webhook נשארים כפי שהם.", en: "The access token is deleted from RabiTech. Your Meta account and its webhook subscription are left untouched." },
   "Sending through this channel is not enabled yet.": { ar: "الإرسال عبر هالقناة لسه ما انفعّل.", he: "השליחה בערוץ הזה עדיין לא הופעלה.", en: "Sending through this channel is not enabled yet." },
+  /*
+    The upgrade funnel, added with the purchase path.
+
+    Every string here is new, so Hebrew and English are written rather than
+    inherited. The Arabic is Palestinian colloquial to match the rest of the
+    product and is on UnKnowan's review list; the other two are not placeholders
+    and should read naturally on their own.
+  */
+  "اشترك بهاي الباقة": { he: "מנוי לחבילה הזו", en: "Subscribe to this plan" },
+  "جاري التحويل للدفع": { he: "מעבירים אותך לתשלום", en: "Taking you to payment" },
+  "ما قدرنا نبدأ عملية الدفع. جرّب بعد شوي أو احكي معنا.": { he: "לא הצלחנו להתחיל את התשלום. נסה שוב עוד מעט או דבר איתנו.", en: "We could not start the payment. Try again shortly, or talk to us." },
+  "هاي الباقة بتشتغل على قناة واتساب الرسمية، وهي لسا مش متاحة عندنا.": { he: "החבילה הזו עובדת עם ערוץ הוואטסאפ הרשמי, שעדיין לא זמין אצלנו.", en: "This plan runs on the official WhatsApp channel, which is not available here yet." },
+  "طلبك وصلنا، وبنفعّله يدوياً": { he: "קיבלנו את הבקשה, ונפעיל אותה ידנית", en: "We have your request, and we activate it by hand" },
+  "لسا ما انسحب أي مبلغ. بنتواصل معك لترتيب الدفع، وبعدها منفعّل الباقة على نفس حسابك — شغلك ومحادثاتك بتضل زي ما هي.": { he: "עדיין לא חויבת. ניצור איתך קשר לסידור התשלום, ואז נפעיל את החבילה באותו החשבון — העבודה והשיחות שלך יישארו כפי שהן.", en: "You have not been charged yet. We will contact you to arrange payment, then activate the plan on your same account — your work and conversations stay exactly as they are." },
+  "الباقة المطلوبة": { he: "החבילה המבוקשת", en: "Requested plan" },
+  "رقم الطلب — احتفظ فيه لما تحكي معنا": { he: "מספר הבקשה — שמור אותו לשיחה איתנו", en: "Request reference — keep it for when you contact us" },
+  "عم نتأكد من حالة الدفع": { he: "בודקים את מצב התשלום", en: "Checking the payment status" },
+  "ثواني بس.": { he: "רק כמה שניות.", en: "Just a moment." },
+  "الدفع وصل، والتفعيل لسا ما صار": { he: "התשלום התקבל, ההפעלה עוד לא בוצעה", en: "Payment received, activation has not happened yet" },
+  "منفعّل الاشتراك على نفس حسابك. الصفحة بتحدّث حالها لحالها.": { he: "אנחנו מפעילים את המנוי באותו החשבון. הדף מתעדכן מעצמו.", en: "We are activating the subscription on your same account. This page updates itself." },
+  "تم تفعيل اشتراكك": { he: "המנוי שלך הופעל", en: "Your subscription is active" },
+  "كل إشي محفوظ زي ما كان — نفس الحساب ونفس المحادثات.": { he: "הכול נשמר כפי שהיה — אותו חשבון ואותן שיחות.", en: "Everything is as it was — the same account and the same conversations." },
+  "الدفع ما تم": { he: "התשלום לא בוצע", en: "The payment did not go through" },
+  "ما انسحب أي مبلغ. فيك تجرّب مرة تانية أو تحكي معنا.": { he: "לא חויבת בשום סכום. אפשר לנסות שוב או לדבר איתנו.", en: "You have not been charged. You can try again, or talk to us." },
+  "انلغت عملية الدفع": { he: "התשלום בוטל", en: "The payment was cancelled" },
+  "ما انسحب أي مبلغ. باقتك ما تغيّرت.": { he: "לא חויבת בשום סכום. החבילה שלך לא השתנתה.", en: "You have not been charged. Your plan has not changed." },
+  "ما قدرنا نتأكد من حالة الدفع": { he: "לא הצלחנו לבדוק את מצב התשלום", en: "We could not check the payment status" },
+  "هاي مشكلة بالاتصال مش بالدفع: ما منعرف شو صار، ومنعرفش إذا انسحب مبلغ. جرّب تحدّث الصفحة، وإذا ضلت هيك احكي معنا.": { he: "זו תקלת תקשורת ולא תקלה בתשלום: איננו יודעים מה קרה ואם חויבת. נסה לרענן את הדף, ואם זה נמשך דבר איתנו.", en: "This is a connection problem, not a payment problem: we do not know what happened, and we cannot tell whether you were charged. Try refreshing, and talk to us if it continues." },
+  "رجوع للتطبيق": { he: "חזרה לאפליקציה", en: "Back to the app" },
+  "رجوع للباقات": { he: "חזרה לחבילות", en: "Back to plans" },
 };
 
 type I18nCtx = {

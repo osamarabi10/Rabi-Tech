@@ -23,7 +23,7 @@ import { getPaymentProvider, paymentProviderFor } from './provider-registry';
 // as trial.service.ts's TRIAL_PLAN_DEFAULT, which is a real use, so the constant
 // stays; it simply has no activation consumer any more.
 import { isPaidPlan, normalizePlanCode, PLAN_ENTITLEMENTS, PlanCode, PlanEntitlements, UNLIMITED_SENTINEL } from './plans';
-import { cheapestUpgradeGranting, getEdition, getEditions, CATALOGUE_QUERY, createEditionRows, flattenEdition, SUBSCRIPTION_EDITION_SELECT, subscriptionEditionOf } from './editions.service';
+import { cheapestUpgradeGranting, getEdition, getEditions, CATALOGUE_QUERY, createEditionRows, flattenEdition, SUBSCRIPTION_EDITION_SELECT, subscriptionEditionOf, versionedEditionOf, PLAN_VERSION_EDITION_INCLUDE } from './editions.service';
 import { grantsCapability, limitOf, withinLimit, type Capability } from './capabilities';
 import {
   SUBSCRIPTION_PLAN_SELECT,
@@ -554,8 +554,11 @@ export async function createSignup(input: {
       return { organization, admin, subscription };
     });
 
+    // The version the subscription was just pinned to, not today's lookup
+    // repeated: the checkout must be for the terms this signup agreed to, and
+    // re-deriving it here would be the same re-derivation D-23 is about.
     const checkout = isPaidPlan(planCode)
-      ? await provider.createCheckout(created.organization.id, planCode)
+      ? await provider.createCheckout(created.organization.id, planCode, created.subscription.planVersionId)
       : null;
     if (checkout) {
       await prisma.subscription.update({
@@ -930,10 +933,105 @@ export type ProviderIdentifiers = {
   source?: string;
 };
 
+/**
+ * Start a purchase for an organization that already exists.
+ *
+ * There was no way to do this. `/pricing` offered every visitor
+ * `/signup?plan=X` whether or not they were signed in, and six in-product
+ * routes lead to `/pricing` - the trial banner, the upgrade prompt, Settings,
+ * the abandoned-checkout page, and the access gate's own TRIAL_EXPIRED and
+ * SUBSCRIBER_SUSPENDED redirects. So a customer who decided to buy was sent to
+ * a signup form: with their own address it refused them as already in use, and
+ * with another it built a second organization while their number, contacts and
+ * history stayed on the first.
+ *
+ * The version is resolved here, at the click, and travels with the checkout.
+ * That is what "pinned at purchase" means: the terms the customer agreed to are
+ * the ones they were shown, not the ones current whenever the payment is
+ * confirmed - which with a manual provider is whenever an owner gets to it.
+ */
+export async function startUpgradeCheckout(organizationId: string, planInput: string) {
+  const planCode = normalizePlanCode(planInput);
+  return runAsPlatform(`billing-upgrade-checkout:${organizationId}:${planCode}`, async () => {
+    const subscription = await prisma.subscription.findFirst({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, ...SUBSCRIPTION_PLAN_SELECT },
+    });
+    if (!subscription) {
+      throw Object.assign(
+        new Error('This organization has no subscription to upgrade'),
+        { status: 409, code: 'NO_SUBSCRIPTION' },
+      );
+    }
+    if (!isPaidPlan(planCode)) {
+      throw Object.assign(
+        new Error('That edition is not something to buy'),
+        { status: 400, code: 'NOT_A_PAID_EDITION' },
+      );
+    }
+
+    // The same refusal signup gives, for the same reason: an edition whose only
+    // channel this platform cannot operate is not sellable to anyone, and
+    // routing around that here would sell it through the back door.
+    const offer = editionOfferability(getEdition(planCode).allowedChannels);
+    if (!offer.offerable) {
+      throw Object.assign(
+        new Error('This edition requires a channel that is not available on this platform yet.'),
+        { status: 409, code: 'PLAN_CHANNEL_UNAVAILABLE' },
+      );
+    }
+
+    const planVersionId = await currentVersionIdForPlan(prisma, planCode);
+    const checkout = await getPaymentProvider().createCheckout(organizationId, planCode, planVersionId);
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: { externalRef: checkout.externalRef },
+    });
+    return { ...checkout, planCode, planVersionId };
+  });
+}
+
+/**
+ * The state of this organization's own open checkout.
+ *
+ * Scoped by organization rather than by reference, so a caller can only ever
+ * ask about their own. Returns `none` when there is no open checkout, which is
+ * a different answer from `pending` and has to stay different: a page that
+ * cannot tell "nothing was started" from "started and not settled" is the
+ * screen a customer stares at after paying.
+ */
+export async function getOwnCheckoutStatus(organizationId: string) {
+  return runAsPlatform(`billing-own-checkout:${organizationId}`, async () => {
+    const subscription = await prisma.subscription.findFirst({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      select: { externalRef: true, ...SUBSCRIPTION_PLAN_SELECT },
+    });
+    if (!subscription?.externalRef) return { status: 'none' as const, planCode: planCodeOf(subscription) };
+    const checkout = await getPaymentProvider().getCheckoutStatus(subscription.externalRef);
+    return {
+      status: checkout.status,
+      planCode: planCodeOf(subscription),
+      externalRef: subscription.externalRef,
+    };
+  });
+}
+
 export async function activateManualSubscription(
   organizationId: string,
   planInput: string,
   identifiers: ProviderIdentifiers = {},
+  /**
+   * The version the customer bought, when this activation is settling a
+   * purchase rather than confirming a payment for terms already held.
+   *
+   * Passed by the payment path, which reads it from the checkout. An owner
+   * activating by hand passes nothing and gets the current version, which is
+   * correct: that is an administrative act, not a purchase made at a price the
+   * customer saw.
+   */
+  purchasedVersionId?: string,
 ) {
   const planCode = normalizePlanCode(planInput);
   return runAsPlatform(`billing-manual-activate:${organizationId}:${planCode}`, async () => {
@@ -986,6 +1084,30 @@ export async function activateManualSubscription(
     const keepsPurchasedTerms = Boolean(pinned && planCodeOf(existing) === planCode);
 
     /*
+      Three ways a version gets chosen here, and only one of them is a lookup.
+
+      Paying for terms already held keeps the pin (D-24). Settling a *purchase*
+      uses the version the customer agreed to, which the payment path read from
+      the checkout and passed in - not today's version, because with a manual
+      provider the money can arrive a day after the click and a version can be
+      published in between. Only an administrative activation, with neither,
+      resolves the current version.
+    */
+    const purchasedEdition = purchasedVersionId
+      ? await runAsPlatform('billing-purchased-version', () => prisma.planVersion.findUnique({
+          where: { id: purchasedVersionId },
+          include: PLAN_VERSION_EDITION_INCLUDE,
+        }))
+      : null;
+    if (purchasedVersionId && !purchasedEdition) {
+      throw Object.assign(
+        new Error('The purchased edition version no longer exists'),
+        { status: 409, code: 'PURCHASED_VERSION_MISSING' },
+      );
+    }
+    const purchased = purchasedEdition ? versionedEditionOf(purchasedEdition) : null;
+
+    /*
       The row keeps the provider that created it; only a brand new subscription
       takes the configured one.
 
@@ -1022,9 +1144,11 @@ export async function activateManualSubscription(
       ? await prisma.subscription.update({
           where: { id: existing.id },
           data: {
-            planVersionId: keepsPurchasedTerms
-              ? pinned!.planVersionId
-              : await currentVersionIdForPlan(prisma, planCode),
+            planVersionId: purchased
+              ? purchased.planVersionId
+              : keepsPurchasedTerms
+                ? pinned!.planVersionId
+                : await currentVersionIdForPlan(prisma, planCode),
             provider: providerName,
             status: 'ACTIVE',
             customerRef,
@@ -1038,7 +1162,9 @@ export async function activateManualSubscription(
       : await prisma.subscription.create({
           data: {
             organizationId,
-            planVersionId: await currentVersionIdForPlan(prisma, planCode),
+            planVersionId: purchased
+              ? purchased.planVersionId
+              : await currentVersionIdForPlan(prisma, planCode),
             provider: providerName,
             status: 'ACTIVE',
             customerRef,
@@ -1054,7 +1180,7 @@ export async function activateManualSubscription(
     // pinned to v1 and enforced at v2's numbers.
     await applyEditionLimits(
       organizationId,
-      keepsPurchasedTerms ? pinned!.edition : getEdition(planCode),
+      purchased ? purchased.edition : keepsPurchasedTerms ? pinned!.edition : getEdition(planCode),
     );
     await prisma.organization.update({
       where: { id: organizationId },
@@ -1284,7 +1410,7 @@ async function activateFromPaymentEvent(
   const subscription = await prisma.subscription.findFirst({
     where: { organizationId },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, ...SUBSCRIPTION_PLAN_SELECT, status: true },
+    select: { id: true, ...SUBSCRIPTION_PLAN_SELECT, status: true, externalRef: true },
   });
 
   const park = async (reason: string): Promise<'parked'> => {
@@ -1328,13 +1454,43 @@ async function activateFromPaymentEvent(
   // which throws on a code the catalogue no longer carries — an edition that has
   // since been renamed or removed must park, not crash the webhook.
   const ofRecord = String(planCodeOf(subscription) || '').trim().toUpperCase();
+
+  /*
+    A payment for a plan the subscription does not hold is one of two things.
+
+    It is a **purchase** the customer started here - they chose an edition,
+    the checkout was created against their organization, and this event settles
+    it. Or it is an event nobody in this system asked for, which is what the
+    park below has always been about: a payment must never be able to change
+    what somebody is on.
+
+    The checkout tells the two apart, and it also carries the terms that were on
+    the screen when they clicked. If it cannot say which version was bought -
+    a reference from before this existed, metadata that did not survive - the
+    answer is to park, not to resolve today's version. Falling back would be
+    D-24 reintroduced by the path built to honour it, and it would look correct
+    in every test that only exercises the happy path.
+  */
+  let purchasedVersionId: string | undefined;
   if (requested !== ofRecord) {
-    return park(
-      `Payment event names ${requested} but the subscription of record is ${ofRecord || 'unset'}.`,
-    );
+    if (!subscription.externalRef) {
+      return park(
+        `Payment event names ${requested} but the subscription of record is ${ofRecord || 'unset'}, `
+        + 'and there is no checkout on this organization that asked for it.',
+      );
+    }
+    const checkout = await getPaymentProvider().getCheckoutStatus(subscription.externalRef);
+    purchasedVersionId = checkout.planVersionId;
+    if (!purchasedVersionId) {
+      return park(
+        `Payment event names ${requested} and this organization has an open checkout, but that `
+        + 'checkout does not record which edition version was bought. Refusing rather than pinning '
+        + 'whatever version is current today.',
+      );
+    }
   }
 
-  await activateManualSubscription(organizationId, requested, identifiers);
+  await activateManualSubscription(organizationId, requested, identifiers, purchasedVersionId);
   return 'activated';
 }
 

@@ -83,6 +83,7 @@ const EXPECTED = [
   'backup-replication',
   'inbound-durability',
   'terms-pin',
+  'upgrade-path',
   'frontend-tsc',
   'frontend-i18n',
   'frontend-mojibake',

@@ -1733,3 +1733,45 @@ needs to stop being writable per subscriber.
 - **Landing place:** `applyEditionLimits` in
   `apps/backend/src/modules/billing/billing.service.ts`, and an override column
   alongside `macQuotaOverride` if the answer is per-deal AI numbers.
+
+---
+
+## D-32 · A gate that seeds through a rate-limited path spends the budget it needs
+
+**Status:** recorded 2026-09-12, worked around per gate · **Owner:** UnKnowan
+
+D-29 recorded this at the HTTP signup limiter: three per hour per IP, and the
+entitlement proof needed eight organizations, so it could never seed more than
+three and a second run inside the hour seeded none. The fix there was to stop
+using the endpoint.
+
+**That did not escape it.** The service has a second, independent limit -
+`SIGNUP_IP_LIMIT`, ten per IP per hour, counted from `SignupThrottleEvent` rows
+inside `createSignup` itself. Calling the function rather than the route avoids
+the middleware and walks straight into the service check. On 2026-09-12 an
+evening of gate runs - the entitlement proof, terms-pin, and the new upgrade
+gate, each seeding organizations through the real signup code - exhausted it,
+and every later run failed with "Too many signups from this network". A gate
+that cannot run because of what gates did earlier is reporting on its own
+history.
+
+The part worth remembering: **there were two limiters wearing the same symptom,
+and fixing the first one hid the second for three days.** A 429 from an endpoint
+and a 429 from a service function are the same message about different
+mechanisms.
+
+Worked around rather than fixed: each affected gate now clears the
+`SignupThrottleEvent` rows it and its siblings filed, which resets the service
+counter because the rows *are* the counter. That is honest for a gate and wrong
+as a general answer - it means every gate run resets an anti-abuse counter on
+whatever database it points at, which on a production database would be a real
+weakening. The durable fix is a fixture layer that builds organizations without
+consuming any customer-facing budget, shared by every gate that needs subjects.
+
+- **Owner:** UnKnowan
+- **Trigger:** any new gate that seeds through a public endpoint or through a
+  service path that counts against a customer-facing limit - and before any gate
+  is ever pointed at a database that serves customers.
+- **Landing place:** a shared fixture helper under `apps/backend/scripts/`, and
+  the seeding in `c3-entitlement-snapshot.js`, `verify-terms-pin.js` and
+  `verify-upgrade-path.js`.

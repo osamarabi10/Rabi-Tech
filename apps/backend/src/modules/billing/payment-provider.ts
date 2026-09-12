@@ -9,6 +9,21 @@ export type CheckoutStatusResult = {
   status: CheckoutStatus;
   subscriptionRef?: string;
   customerRef?: string;
+  /**
+   * The edition version this checkout was for.
+   *
+   * A purchase is an agreement to particular terms, and terms are a version -
+   * a plan code only ever names whatever is current. Each provider stores this
+   * wherever it stores the rest of the purchase, and activation pins exactly
+   * this rather than re-deriving today's version from the code, which is the
+   * defect D-23 named and D-24 fixed one step later.
+   *
+   * Absent means the checkout cannot say what was bought: a reference written
+   * before this existed, or metadata that did not survive. Activation must
+   * refuse then, and must never fall back to the current version - that would
+   * be D-24 reintroduced by the door built to close it.
+   */
+  planVersionId?: string;
 };
 
 /**
@@ -70,7 +85,7 @@ export type ProviderInvoice = {
 
 export interface PaymentProvider {
   readonly provider: string;
-  createCheckout(organizationId: string, planCode: string): Promise<CheckoutResult>;
+  createCheckout(organizationId: string, planCode: string, planVersionId: string): Promise<CheckoutResult>;
   getCheckoutStatus(externalRef: string): Promise<CheckoutStatusResult>;
   changeSubscription(subscriptionRef: string, newPlanCode: string): Promise<void>;
   cancelSubscription(subscriptionRef: string): Promise<void>;

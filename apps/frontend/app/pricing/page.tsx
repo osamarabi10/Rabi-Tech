@@ -88,6 +88,53 @@ export default function PricingPage() {
   const trialExpired = params.get('trial') === 'expired';
   const suspended = params.get('account') === 'suspended';
 
+  /*
+    Who is reading this page.
+
+    Read after mount rather than during render: the token lives in
+    localStorage, which does not exist on the server, and a first paint that
+    assumed one answer and corrected itself would flash the wrong button at the
+    customer most likely to press it.
+  */
+  const [signedIn, setSignedIn] = useState(false);
+  const [buying, setBuying] = useState<string | null>(null);
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      setSignedIn(Boolean(localStorage.getItem('rabitech_token')));
+    } catch {
+      // A browser that refuses storage is treated as signed out: the signup
+      // path still works, and guessing the other way would offer a purchase
+      // that cannot be authenticated.
+      setSignedIn(false);
+    }
+  }, []);
+
+  /** Buy on the organization the caller already has. */
+  const startPurchase = async (planCode: string) => {
+    setPurchaseError(null);
+    setBuying(planCode);
+    try {
+      const response = await api.post('/api/billing/upgrade', { planCode });
+      if (response.data?.checkoutUrl) {
+        window.location.href = response.data.checkoutUrl;
+        return;
+      }
+      setPurchaseError(t('ما قدرنا نبدأ عملية الدفع. جرّب بعد شوي أو احكي معنا.'));
+    } catch (error: any) {
+      // The server's machine code decides the sentence, so all three languages
+      // read correctly; the English message is a log fallback, not copy.
+      setPurchaseError(
+        error?.response?.data?.code === 'PLAN_CHANNEL_UNAVAILABLE'
+          ? t('هاي الباقة بتشتغل على قناة واتساب الرسمية، وهي لسا مش متاحة عندنا.')
+          : t('ما قدرنا نبدأ عملية الدفع. جرّب بعد شوي أو احكي معنا.'),
+      );
+    } finally {
+      setBuying(null);
+    }
+  };
+
   useEffect(() => {
     api
       .get('/api/billing/plans')
@@ -132,6 +179,17 @@ export default function PricingPage() {
                   : t('تواصل معنا لإعادة تفعيل الاشتراك. بياناتك محفوظة.')}
               </p>
             </div>
+          </div>
+        )}
+
+        {purchaseError && (
+          <div
+            role="alert"
+            data-testid="purchase-error"
+            className="mb-8 flex items-start gap-2.5 rounded-lg border border-danger/30 bg-danger/10 p-4"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" aria-hidden />
+            <p className="text-caption leading-6 text-danger">{purchaseError}</p>
           </div>
         )}
 
@@ -236,6 +294,29 @@ export default function PricingPage() {
                       {t('غير متاحة حالياً')}
                     </Button>
                   </>
+                ) : signedIn ? (
+                  /*
+                    A customer who is already signed in is buying, not signing
+                    up. Sending them to /signup was sending them to create a
+                    second organization: with their own address it refused them
+                    as already in use, and with another it built an empty
+                    account while their number, contacts and history stayed on
+                    the first. Six in-product routes lead here - the trial
+                    banner, the upgrade prompt, Settings, the abandoned-checkout
+                    page, and the access gate's own trial-expired and suspended
+                    redirects - so this one branch is the whole upgrade funnel.
+                  */
+                  <Button
+                    className="mt-5 w-full"
+                    disabled={buying === plan.code}
+                    onClick={() => startPurchase(plan.code)}
+                  >
+                    {buying === plan.code ? (
+                      <><Loader2 className="me-2 h-4 w-4 animate-spin" />{t('جاري التحويل للدفع')}</>
+                    ) : (
+                      t('اشترك بهاي الباقة')
+                    )}
+                  </Button>
                 ) : (
                   <Button asChild className="mt-5 w-full">
                     <Link href={`/signup?plan=${plan.code}`}>{ctaFor(plan, t)}</Link>

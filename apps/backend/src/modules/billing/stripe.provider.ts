@@ -164,7 +164,7 @@ export class StripeProvider implements PaymentProvider {
     return new Stripe(requiredEnv('STRIPE_SECRET_KEY'));
   }
 
-  async createCheckout(organizationId: string, planCode: string) {
+  async createCheckout(organizationId: string, planCode: string, planVersionId: string) {
     /*
       Resolved before the session is created, so an unmapped edition fails
       before anything exists on Stripe's side to clean up.
@@ -186,8 +186,11 @@ export class StripeProvider implements PaymentProvider {
       // Written twice, on purpose. See metadataOf() above: the session's
       // metadata reaches checkout.session.completed, and the subscription's
       // reaches every later event about that subscription.
-      metadata: { organizationId, planCode },
-      subscription_data: { metadata: { organizationId, planCode } },
+      // planVersionId rides along because a purchase is an agreement to a
+      // version, not to a code: it is what activation pins, and this provider's
+      // metadata is where the rest of the purchase already lives.
+      metadata: { organizationId, planCode, planVersionId },
+      subscription_data: { metadata: { organizationId, planCode, planVersionId } },
     });
 
     if (!session.url) {
@@ -219,7 +222,13 @@ export class StripeProvider implements PaymentProvider {
     const customerRef = typeof session.customer === 'string'
       ? session.customer
       : session.customer?.id;
-    const identifiers = { subscriptionRef, customerRef };
+    const identifiers = {
+      subscriptionRef,
+      customerRef,
+      // Undefined for a session created before this was written, and that is a
+      // real answer: the caller refuses rather than guessing a version.
+      planVersionId: session.metadata?.planVersionId,
+    };
 
     if (session.status === 'expired') return { status: 'canceled', ...identifiers };
     if (session.status === 'complete' && session.payment_status !== 'unpaid') {
