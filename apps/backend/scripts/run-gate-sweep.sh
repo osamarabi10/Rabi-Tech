@@ -31,6 +31,24 @@ echo
 # verify-lazy-provisioning writes to, and it wins the race — building real
 # tenant containers for the gate's fixture organizations. Stopped for the
 # duration, restarted at the end whatever happens.
+#
+# "Whatever happens" is not quite true, and on 2026-09-12 it cost an evening: a
+# sweep killed for memory does not run its EXIT trap, so the worker it stopped
+# stayed stopped. Nothing said so. The next symptom would have been gateways
+# that never get built, with no line anywhere connecting that to a sweep two
+# hours earlier.
+#
+# So the repair belongs at the start of the next run rather than in a person's
+# memory. Finding the worker already stopped means a previous sweep did not
+# finish — said out loud, because it is also the only evidence that run was
+# killed.
+if [ -z "$(docker ps --filter name=gateway-worker --filter status=running --format '{{.Names}}' 2>/dev/null)" ]; then
+  echo "gateway-worker was not running when this sweep started: a previous run was killed before"
+  echo "its trap could restart it. Starting it, then stopping it for this run."
+  ( cd "$ROOT" && docker compose start gateway-worker >/dev/null 2>&1 )
+  echo
+fi
+
 ( cd "$ROOT" && docker compose stop gateway-worker >/dev/null 2>&1 )
 restore_worker() { ( cd "$ROOT" && docker compose start gateway-worker >/dev/null 2>&1 ); }
 trap restore_worker EXIT
