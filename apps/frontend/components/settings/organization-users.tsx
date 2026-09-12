@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Ban, Check, Clock3, Loader2, Mail, MoreHorizontal, Search, ShieldCheck, UserPlus, Users } from 'lucide-react';
+import { AlertCircle, Ban, Check, Clock3, Loader2, Mail, MoreHorizontal, Search, ShieldCheck, UserPlus, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   fetchSeatUsage, fetchTeams, fetchUserInvitations, fetchOrganizationUsers,
@@ -78,6 +78,14 @@ export function OrganizationUsers() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteSaving, setInviteSaving] = useState(false);
   const [invite, setInvite] = useState({ name: '', email: '', role: 'AGENT', primaryTeamId: '' });
+  /*
+    The link, when the transport cannot deliver it.
+
+    Held in state rather than shown only in a toast: a toast disappears, and
+    this is the invited person's only route in. It stays on screen until the
+    owner dismisses it or invites somebody else.
+  */
+  const [inviteLink, setInviteLink] = useState<{ email: string; url: string } | null>(null);
   const [selected, setSelected] = useState<SystemUser | null>(null);
   const [form, setForm] = useState<EditForm | null>(null);
   const [saving, setSaving] = useState(false);
@@ -119,8 +127,26 @@ export function OrganizationUsers() {
     if (!invite.email.trim()) return toast.error(t('Email is required'));
     setInviteSaving(true);
     try {
-      await inviteWorkspaceUser({ email: invite.email, name: invite.name || undefined, role: capabilities.canManage ? invite.role : 'AGENT', primaryTeamId: invite.primaryTeamId || null });
-      toast.success(t('Invitation sent'));
+      const created = await inviteWorkspaceUser({ email: invite.email, name: invite.name || undefined, role: capabilities.canManage ? invite.role : 'AGENT', primaryTeamId: invite.primaryTeamId || null });
+      /*
+        "Invitation sent" was a claim about a delivery nobody had confirmed. The
+        configured provider is the log provider, which writes the message to a
+        file and delivers nothing, so this toast told an owner their colleague
+        had been emailed when no email existed.
+
+        The server now says whether the transport can deliver at all, and hands
+        back the link when it cannot. Three outcomes, and the middle one is the
+        truth today: queued, delivered, or here-is-the-link-because-nothing-will-
+        arrive. The same shape the email-verification banner already uses.
+      */
+      if (created?.delivered) {
+        toast.success(t('Invitation sent'));
+      } else if (created?.inviteUrl) {
+        setInviteLink({ email: created.email, url: created.inviteUrl });
+        toast.success(t('Invitation created. No mail provider is configured, so send this link yourself.'));
+      } else {
+        toast.success(t('Invitation created and queued. It will be sent when a mail provider is configured.'));
+      }
       setInvite({ name: '', email: '', role: 'AGENT', primaryTeamId: '' });
       setInviteOpen(false);
       await load();
@@ -186,6 +212,30 @@ export function OrganizationUsers() {
     />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {inviteLink && (
+          <div
+            role="status"
+            data-testid="invite-link-fallback"
+            className="flex flex-wrap items-start gap-2 border-b border-warning/30 bg-warning/10 px-4 py-3 text-caption sm:px-6"
+          >
+            <AlertCircle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-warning">
+                {t('No mail provider is configured, so nothing was emailed. Send this link to')} {inviteLink.email}
+              </p>
+              {/* A URL is an identifier: left-to-right in every locale. */}
+              <p dir="ltr" className="mt-1 break-all font-mono text-micro text-muted-foreground">{inviteLink.url}</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { navigator.clipboard?.writeText(inviteLink.url); toast.success(t('Link copied')); }}
+            >
+              {t('Copy link')}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setInviteLink(null)}>{t('Dismiss')}</Button>
+          </div>
+        )}
         <div className="space-y-3 border-b border-border px-4 py-3 sm:px-6">
           {seats && <div className="flex flex-wrap items-center gap-3 text-caption"><span className="font-medium">{t('Seats')} · {seats.used}/{seats.limit ?? '∞'}</span><div className="h-1.5 w-32 overflow-hidden rounded-full bg-muted" role="meter" aria-valuenow={seatPercent} aria-valuemin={0} aria-valuemax={100}><div className={cn('h-full', seats.atLimit ? 'bg-warning' : 'bg-primary')} style={{ width: `${seatPercent}%` }} /></div><span className="text-muted-foreground">{seats.planName}</span>{seats.atLimit && <span className="text-warning">{t('No seats available')}</span>}</div>}
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">

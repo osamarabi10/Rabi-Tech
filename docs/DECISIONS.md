@@ -1775,3 +1775,40 @@ consuming any customer-facing budget, shared by every gate that needs subjects.
 - **Landing place:** a shared fixture helper under `apps/backend/scripts/`, and
   the seeding in `c3-entitlement-snapshot.js`, `verify-terms-pin.js` and
   `verify-upgrade-path.js`.
+
+---
+
+## D-33 · A configured transport is a claim; a SENT row is the evidence
+
+**Status:** recorded 2026-09-12, the canary is not built · **Owner:** UnKnowan
+
+`MailProvider.delivers` is a property of whichever class is configured: the log
+provider sets it false, a real one would set it true at construction. That makes
+it a statement that configuration exists, which is precisely what
+`channel-viability.ts` already learned proves nothing - three environment
+variables being present said nothing about whether a channel could carry a
+message, and a configured SMTP host says nothing about whether mail arrives.
+
+The evidence already exists and nothing reads it. `EmailOutbox` carries
+`status` (PENDING | SENT | FAILED), `attempts`, `lastError` and `sentAt`. A row
+at SENT with a recent `sentAt` is a message this system actually handed to a
+transport - observed rather than asserted, durable, and needing no new table.
+
+**The pattern, which is the part worth keeping:** where a capability is
+consumed, prefer the most recent *observation* of that capability over the
+*configuration* that claims it. Mail has `EmailOutbox`. Channels have the
+readiness canary Phase 5 Commit 11 specifies. Both answer the same question the
+same way, and both currently answer it from configuration.
+
+This commit uses `delivers` deliberately, because `delivers` is what the code
+reads today and changing the source of truth is a larger change than making two
+callers agree. What it fixes is that the two callers disagreed: invitations
+decided from `NODE_ENV` while verification decided from the provider.
+
+- **Owner:** UnKnowan
+- **Trigger:** when a real mail provider is first configured - the moment
+  `delivers` becomes true is the moment it starts being believed, and nothing
+  yet distinguishes a transport that accepts from one that delivers.
+- **Landing place:** a shared readiness reader over `EmailOutbox`, consumed by
+  `user-invitations.service.ts`, `billing.service.ts` and the platform console's
+  mail status; and the same shape in `channel-viability.ts`.

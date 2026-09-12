@@ -299,7 +299,10 @@ export type UserInvitation = {
   expiresAt: string;
   createdAt: string;
   primaryTeam?: { id: string; name: string; color: string } | null;
-  inviteUrl?: string;
+  /** Whether the configured transport can deliver at all - not whether it did. */
+  delivered?: boolean;
+  /** Returned when it cannot: the recipient's only way in. */
+  inviteUrl?: string | null;
 };
 export type Session = {
   id: string;

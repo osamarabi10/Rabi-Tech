@@ -567,6 +567,38 @@ export async function createSignup(input: {
       });
     }
 
+    // Named once, so the link that is queued and the link that is returned
+    // cannot drift apart.
+    const verificationUrl = `${appBaseUrl()}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+
+    /*
+      Queue the message this signup just told the customer to expect.
+
+      Until now only `resendVerification` queued anything: signup wrote the
+      token, returned the link on the response and queued nothing at all. With
+      no transport configured that was invisible - nothing was going to arrive
+      either way - and it would have become a silent failure the moment a
+      provider was configured, because the outbox would simply never contain
+      the one message every new customer needs.
+
+      Outside the transaction on purpose. `queueMail` must never fail a signup
+      that has already been recorded: an organization that exists without its
+      confirmation mail is recoverable from the resend endpoint, while a signup
+      rolled back because the outbox was busy is a customer who cannot get in
+      at all. `queueMail` swallows its own failures for the same reason.
+
+      No dedupe key, matching resend: each verification message supersedes the
+      last, and a key here would make the first resend collide with this one
+      and silently do nothing.
+    */
+    await queueMail({
+      organizationId: created.organization.id,
+      to: email,
+      kind: 'email-verification',
+      subject: `Confirm your email address for ${created.organization.name}`,
+      body: `Open this link to confirm your address:\n\n${verificationUrl}\n\nThe link is valid for 48 hours.`,
+    });
+
     /*
       No gateway is built here, and that is the point of lazy provisioning.
 
@@ -584,7 +616,7 @@ export async function createSignup(input: {
       organizationId: created.organization.id,
       adminId: created.admin.id,
       verificationRequired: true,
-      verificationUrl: `${appBaseUrl()}/verify-email?token=${encodeURIComponent(verificationToken)}`,
+      verificationUrl,
       checkoutUrl: checkout?.checkoutUrl ?? null,
       externalRef: checkout?.externalRef ?? null,
     };

@@ -84,6 +84,7 @@ const EXPECTED = [
   'inbound-durability',
   'terms-pin',
   'upgrade-path',
+  'mail-honesty',
   'frontend-tsc',
   'frontend-i18n',
   'frontend-mojibake',

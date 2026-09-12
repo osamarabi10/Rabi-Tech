@@ -2559,6 +2559,19 @@ const D: Dict = {
   "The access token is deleted from RabiTech. Your Meta account and its webhook subscription are left untouched.": { ar: "بينحذف التوكن من المنصة. حسابك على Meta وربط الويبهوك بضلوا زي ما هم.", he: "הטוקן נמחק מהפלטפורמה. חשבון Meta שלך וחיבור ה-webhook נשארים כפי שהם.", en: "The access token is deleted from RabiTech. Your Meta account and its webhook subscription are left untouched." },
   "Sending through this channel is not enabled yet.": { ar: "الإرسال عبر هالقناة لسه ما انفعّل.", he: "השליחה בערוץ הזה עדיין לא הופעלה.", en: "Sending through this channel is not enabled yet." },
   /*
+    Mail honesty: what an owner is told when the transport cannot deliver.
+
+    Three outcomes rather than one claim - sent, queued, or here-is-the-link -
+    so no surface asserts a delivery nothing confirmed. Arabic is on UnKnowan's
+    review list; Hebrew and English are written, not placeholders.
+  */
+  "Invitation created. No mail provider is configured, so send this link yourself.": { ar: "انعملت الدعوة. ما في مزود بريد مركّب، فابعت الرابط بنفسك.", he: "ההזמנה נוצרה. לא מוגדר ספק דואר, אז שלח את הקישור בעצמך.", en: "Invitation created. No mail provider is configured, so send this link yourself." },
+  "Invitation created and queued. It will be sent when a mail provider is configured.": { ar: "انعملت الدعوة وانحطت بالطابور. بتنبعت أول ما ينتركب مزود بريد.", he: "ההזמנה נוצרה ונכנסה לתור. היא תישלח כשיוגדר ספק דואר.", en: "Invitation created and queued. It will be sent when a mail provider is configured." },
+  "No mail provider is configured, so nothing was emailed. Send this link to": { ar: "ما في مزود بريد مركّب، فما انبعت أي إيميل. ابعت هالرابط لـ", he: "לא מוגדר ספק דואר, אז לא נשלח דוא\"ל. שלח את הקישור הזה אל", en: "No mail provider is configured, so nothing was emailed. Send this link to" },
+  "Link copied": { ar: "انتسخ الرابط", he: "הקישור הועתק", en: "Link copied" },
+  "Copy link": { ar: "انسخ الرابط", he: "העתקת קישור", en: "Copy link" },
+  "Dismiss": { ar: "إخفاء", he: "סגירה", en: "Dismiss" },
+  /*
     The upgrade funnel, added with the purchase path.
 
     Every string here is new, so Hebrew and English are written rather than

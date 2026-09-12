@@ -64,6 +64,13 @@ module.exports = {
    */
   'upgrade-path': 11,
 
+  /**
+   * Seven: three that signup queues what it promises and a resend does not
+   * collide with it, two that an invitation reports what the transport can do,
+   * and two source checks that nothing decides delivery from NODE_ENV.
+   */
+  'mail-honesty': 7,
+
   /** Prints nothing when clean. */
   'frontend-tsc': null,
 

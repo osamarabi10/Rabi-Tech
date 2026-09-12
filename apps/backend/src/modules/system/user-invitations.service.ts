@@ -5,6 +5,7 @@ import { prisma } from '../../prisma';
 import { runAsOrganization, runAsPlatform } from '../../lib/tenant-context';
 import { assertSeatAvailable } from '../usage/entitlements';
 import { queueMail } from '../mail/mail.service';
+import { getMailProvider } from '../mail/mail.provider';
 
 const INVITATION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -80,11 +81,29 @@ export async function issueUserInvitation(input: {
     dedupeKey: `user-invitation:${invitation.id}`,
   });
 
+  /*
+    What the caller is told depends on what the transport can do, not on what
+    the environment is called.
+
+    This read `NODE_ENV !== 'production'`, which is the environment's *name*
+    and says nothing about mail. In production with the log provider - which is
+    the configuration today - the link was withheld at exactly the moment it was
+    the recipient's only way in, while the console reported "Invitation sent".
+
+    `resendVerification` already answers this correctly, one file away: it
+    returns `delivered` from the provider and hands back the URL when it cannot
+    deliver. Nothing forced the two to be the same shape, so they were not. They
+    are now.
+
+    `delivers` is the provider's own claim rather than proof of a delivery; a
+    message actually recorded SENT is the evidence, and D-33 records that as the
+    canary this and channel viability both need.
+  */
+  const delivers = getMailProvider().delivers;
   return {
     ...invitation,
-    // Useful for the local/manual mail provider. Production clients do not
-    // need to render it; the same link is in the queued email.
-    ...(process.env.NODE_ENV === 'production' ? {} : { inviteUrl }),
+    delivered: delivers,
+    inviteUrl: delivers ? null : inviteUrl,
   };
 }
 
