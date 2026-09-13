@@ -1812,3 +1812,40 @@ decided from `NODE_ENV` while verification decided from the provider.
 - **Landing place:** a shared readiness reader over `EmailOutbox`, consumed by
   `user-invitations.service.ts`, `billing.service.ts` and the platform console's
   mail status; and the same shape in `channel-viability.ts`.
+
+---
+
+## D-34 · A campaign can be scheduled that the edition forbids
+
+**Status:** recorded 2026-09-13, not fixed · **Owner:** UnKnowan
+
+`campaign.worker.ts:131` resolves entitlements inside the send job and paces
+sends from them, and its failure handling distinguishes carefully between a
+quota that will reset - the recipient goes back to `pending` - and a capability
+the edition never included, which fails terminally because there is no reset
+date to wait for.
+
+Nothing refuses the *scheduling*. There is no equivalent check in
+`modules/campaigns/`, so a customer on an edition without campaigns, or with a
+campaign allowance smaller than the audience they selected, can schedule the
+work and have it accepted. What they get back is not a refusal at the point of
+asking but scattered per-recipient failures hours later, spread across a report
+they have to read to discover that the feature was never theirs.
+
+Evaluating at send time is the right default and should stay: a campaign
+scheduled under one edition and executed after a downgrade must obey the edition
+in force when the message leaves. The gap is that this is the *only* evaluation,
+so an impossible request is accepted rather than answered.
+
+Not fixed here because the answer is a product decision rather than a missing
+guard: whether scheduling beyond the allowance should be refused outright,
+accepted with the overflow visibly queued for the next period, or accepted with
+a warning that names the ceiling.
+
+- **Owner:** UnKnowan
+- **Trigger:** before campaigns are sold on any tier whose campaign allowance is
+  lower than its outbound-message allowance - until then the two ceilings cannot
+  disagree, and the failure is unreachable.
+- **Landing place:** the campaign scheduling route in
+  `apps/backend/src/modules/campaigns/`, alongside the send-time check in
+  `apps/backend/src/workers/campaign.worker.ts`.

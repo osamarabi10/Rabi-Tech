@@ -71,6 +71,19 @@ module.exports = {
    */
   'mail-honesty': 7,
 
+  /**
+   * 75, hermetic: every declared trigger and action checked three ways against
+   * the compiled output. Invoked through its npm script so the build is fresh -
+   * it reads dist, and a stale dist would prove yesterday's wiring.
+   */
+  'workflow-schema': 75,
+
+  /**
+   * Six: four that a real event reaches a real effect through the queue, one
+   * that boot still starts the worker, one that the hermetic gate is registered.
+   */
+  'automation-runs': 6,
+
   /** Prints nothing when clean. */
   'frontend-tsc': null,
 
